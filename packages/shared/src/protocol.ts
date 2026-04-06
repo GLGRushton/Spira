@@ -15,6 +15,7 @@ export type ClientMessage =
 export type ServerMessage =
   | { type: "pong" }
   | { type: "state:change"; state: AssistantState }
+  | { type: "voice:muted"; muted: boolean }
   | { type: "chat:token"; token: string; conversationId: string }
   | { type: "chat:complete"; conversationId: string; messageId: string }
   | { type: "chat:message"; message: ChatMessage }
@@ -32,5 +33,5 @@ export interface UserSettings {
   ttsProvider: "elevenlabs" | "piper";
   whisperModel: "tiny.en" | "base.en" | "small.en";
   elevenLabsVoiceId: string;
-  theme: "dark";
+  theme: "ffx";
 }

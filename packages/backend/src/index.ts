@@ -137,18 +137,12 @@ const handleClientMessage = async (message: ClientMessage): Promise<void> => {
   }
 
   if (message.type === "voice:mute") {
-    await voicePipeline?.stop();
-    voiceEnabled = false;
+    voicePipeline?.setMuted(true);
     return;
   }
 
   if (message.type === "voice:unmute") {
-    if (!voicePipeline) {
-      return;
-    }
-
-    await voicePipeline.start();
-    voiceEnabled = true;
+    voicePipeline?.setMuted(false);
     return;
   }
 

@@ -39,44 +39,53 @@ export class McpRegistry {
   }
 
   async initialize(): Promise<void> {
-    const configFile = await this.loadConfig();
-    this.servers.clear();
+    try {
+      const configFile = await this.loadConfig();
+      this.servers.clear();
 
-    for (const config of configFile.servers) {
-      this.servers.set(config.id, {
-        config,
-        status: {
-          id: config.id,
-          name: config.name,
-          state: config.enabled ? "starting" : "disconnected",
-          toolCount: 0,
-          tools: [],
-        },
-      });
+      for (const config of configFile.servers) {
+        this.servers.set(config.id, {
+          config,
+          status: {
+            id: config.id,
+            name: config.name,
+            state: config.enabled ? "starting" : "disconnected",
+            toolCount: 0,
+            tools: [],
+          },
+        });
+      }
+
+      this.publishStatuses();
+
+      const enabledServers = configFile.servers.filter((config) => config.enabled);
+      await Promise.allSettled(enabledServers.map((config) => this.connectServer(config)));
+    } catch (error) {
+      this.logger.error({ error }, "Failed to initialize MCP registry");
+      throw error;
     }
-
-    this.publishStatuses();
-
-    const enabledServers = configFile.servers.filter((config) => config.enabled);
-    await Promise.allSettled(enabledServers.map((config) => this.connectServer(config)));
   }
 
   async shutdown(): Promise<void> {
-    await this.pool.disconnectAll();
+    try {
+      await this.pool.disconnectAll();
+    } catch (error) {
+      this.logger.warn({ error }, "Failed to disconnect MCP clients cleanly");
+    } finally {
+      for (const entry of this.servers.values()) {
+        entry.connectedAt = undefined;
+        entry.status = {
+          ...entry.status,
+          state: "disconnected",
+          toolCount: 0,
+          tools: [],
+          error: undefined,
+          uptimeMs: undefined,
+        };
+      }
 
-    for (const entry of this.servers.values()) {
-      entry.connectedAt = undefined;
-      entry.status = {
-        ...entry.status,
-        state: "disconnected",
-        toolCount: 0,
-        tools: [],
-        error: undefined,
-        uptimeMs: undefined,
-      };
+      this.publishStatuses();
     }
-
-    this.publishStatuses();
   }
 
   getStatus(): McpServerStatus[] {

@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@spira/shared": "workspace:*",
+    "electron-store": "^10.0.0",
     "electron-updater": "^6.0.0",
     "ws": "^8.18.0"
   },

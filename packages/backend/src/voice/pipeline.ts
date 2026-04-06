@@ -20,6 +20,7 @@ const DEFAULT_SAMPLE_RATE = 16_000;
 export class VoicePipeline {
   private state: VoicePipelineState = "idle";
   private started = false;
+  private muted = false;
   private pushToTalkActive = false;
   private wakeWordReady = false;
   private audioFrames: Int16Array[] = [];
@@ -73,7 +74,10 @@ export class VoicePipeline {
       });
 
       const responseEndHandler = ({ text }: { text: string; messageId: string }) => {
-        void this.handleCopilotResponse(text);
+        void this.handleCopilotResponse(text).catch((error) => {
+          this.logger.error({ error }, "Voice pipeline failed while handling Copilot response");
+          this.handleError(error);
+        });
       };
       this.bus.on("copilot:response-end", responseEndHandler);
       this.unsubscribeResponseEnd = () => {
@@ -82,6 +86,7 @@ export class VoicePipeline {
 
       this.capture.start();
       this.emitState(this.state);
+      this.emitMutedState();
       this.logger.info({ wakeWordReady: this.wakeWordReady }, "Voice pipeline started");
     } catch (error) {
       this.started = false;
@@ -114,6 +119,10 @@ export class VoicePipeline {
   }
 
   activatePushToTalk(): void {
+    if (this.muted) {
+      return;
+    }
+
     this.pushToTalkActive = true;
     if (!this.started) {
       return;
@@ -131,8 +140,26 @@ export class VoicePipeline {
     }
   }
 
+  setMuted(muted: boolean): void {
+    if (this.muted === muted) {
+      return;
+    }
+
+    this.muted = muted;
+    this.pushToTalkActive = false;
+    if (muted && this.state === "listening") {
+      this.resetToIdle();
+    }
+    this.emitMutedState();
+    this.logger.info({ muted }, "Voice pipeline mute state updated");
+  }
+
+  isMuted(): boolean {
+    return this.muted;
+  }
+
   private handleFrame(frame: Int16Array): void {
-    if (!this.started) {
+    if (!this.started || this.muted) {
       return;
     }
 
@@ -284,6 +311,8 @@ export class VoicePipeline {
 
   private handleError(error: unknown): void {
     this.logger.error({ error }, "Voice pipeline error");
+    this.playback.stop();
+    this.resetListeningState();
     this.transitionTo("error");
     this.recoveryTimer = setTimeout(() => {
       this.transitionTo("idle");
@@ -315,6 +344,10 @@ export class VoicePipeline {
 
   private emitState(state: VoicePipelineState): void {
     this.bus.emit("voice:pipeline", { state });
+  }
+
+  private emitMutedState(): void {
+    this.bus.emit("voice:muted", { muted: this.muted });
   }
 
   private clearTimers(): void {

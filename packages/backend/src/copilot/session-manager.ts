@@ -47,9 +47,13 @@ export class CopilotSessionManager {
   }
 
   async clearSession(): Promise<void> {
-    await this.disconnectSession();
-    this.streamAssembler.clear();
-    this.transitionTo("idle");
+    try {
+      await this.disconnectSession();
+      this.streamAssembler.clear();
+      this.transitionTo("idle");
+    } catch (error) {
+      throw this.reportAndWrapError(error, "Failed to clear the GitHub Copilot session");
+    }
   }
 
   async shutdown(): Promise<void> {

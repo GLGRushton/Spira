@@ -3,6 +3,7 @@ import type { AssistantState, ClientMessage, McpServerStatus, VoicePipelineState
 
 export interface EventMap {
   "voice:pipeline": [{ state: VoicePipelineState }];
+  "voice:muted": [{ muted: boolean }];
   "state:change": [previous: AssistantState, current: AssistantState];
   "audio:level": [{ level: number }];
   "tts:amplitude": [{ amplitude: number }];

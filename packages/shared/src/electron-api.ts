@@ -19,6 +19,8 @@ export interface ElectronApi {
   clearChat(): void;
   toggleVoice(): void;
   updateSettings(settings: Partial<UserSettings>): void;
+  getSettings(): Promise<Partial<UserSettings>>;
+  setSettings(data: Partial<UserSettings>): Promise<void>;
   minimize(): void;
   maximize(): void;
   close(): void;
@@ -35,4 +37,6 @@ export interface ElectronApi {
   onError(handler: (payload: { code: string; message: string }) => void): () => void;
   onSettingsCurrent(handler: (settings: UserSettings) => void): () => void;
   onConnectionStatus(handler: (status: ConnectionStatus) => void): () => void;
+  onUpdateAvailable(callback: (info: unknown) => void): void;
+  onUpdateDownloaded(callback: (info: unknown) => void): void;
 }

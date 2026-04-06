@@ -4,6 +4,8 @@ import type { IpcRendererEvent } from "electron";
 
 const WINDOW_CONTROL_CHANNEL = "spira:window-control";
 const CONNECTION_STATUS_CHANNEL = "spira:connection-status";
+const SETTINGS_GET_CHANNEL = "settings:get";
+const SETTINGS_SET_CHANNEL = "settings:set";
 
 type WindowControlAction = "minimize" | "maximize" | "close";
 
@@ -48,6 +50,12 @@ const electronAPI: ElectronApi = {
   },
   updateSettings(settings) {
     electronAPI.send({ type: "settings:update", settings });
+  },
+  getSettings() {
+    return ipcRenderer.invoke(SETTINGS_GET_CHANNEL);
+  },
+  setSettings(data) {
+    return ipcRenderer.invoke(SETTINGS_SET_CHANNEL, data);
   },
   minimize() {
     sendWindowControl("minimize");
@@ -130,6 +138,16 @@ const electronAPI: ElectronApi = {
     });
   },
   onConnectionStatus,
+  onUpdateAvailable(callback) {
+    ipcRenderer.on("update:available", (_event, info) => {
+      callback(info);
+    });
+  },
+  onUpdateDownloaded(callback) {
+    ipcRenderer.on("update:downloaded", (_event, info) => {
+      callback(info);
+    });
+  },
 };
 
 contextBridge.exposeInMainWorld("electronAPI", electronAPI);

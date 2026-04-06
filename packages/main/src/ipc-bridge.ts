@@ -2,6 +2,7 @@ import type { ClientMessage, ConnectionStatus, ServerMessage } from "@spira/shar
 import type { BrowserWindow, IpcMainEvent } from "electron";
 import { ipcMain } from "electron";
 import WebSocket from "ws";
+import { updateTrayMuteState } from "./tray.js";
 
 export function setupIpcBridge(win: BrowserWindow, backendPort: number): () => void {
   const socket = new WebSocket(`ws://127.0.0.1:${backendPort}`);
@@ -35,6 +36,10 @@ export function setupIpcBridge(win: BrowserWindow, backendPort: number): () => v
   };
 
   const forwardToRenderer = (message: ServerMessage) => {
+    if (message.type === "voice:muted") {
+      updateTrayMuteState(message.muted);
+    }
+
     if (!win.isDestroyed()) {
       win.webContents.send("spira:from-backend", message);
     }

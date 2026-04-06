@@ -11,6 +11,7 @@ export class WsServer {
   private client: WebSocket | null = null;
   private readonly busListeners: Array<() => void>;
   private readonly toolCalls = new Map<string, { name: string; args: Record<string, unknown> }>();
+  private voiceMuted = false;
 
   constructor(
     private readonly bus: SpiraEventBus,
@@ -60,6 +61,10 @@ export class WsServer {
       }),
       this.registerBusHandler("voice:pipeline", ({ state }) => {
         this.send({ type: "state:change", state: mapVoiceStateToAssistantState(state) });
+      }),
+      this.registerBusHandler("voice:muted", ({ muted }) => {
+        this.voiceMuted = muted;
+        this.send({ type: "voice:muted", muted });
       }),
       this.registerBusHandler("audio:level", ({ level }) => {
         this.send({ type: "audio:level", level });
@@ -134,6 +139,7 @@ export class WsServer {
     this.client = socket;
     this.bus.emit("transport:client-connected");
     logger.info("Renderer connected");
+    this.send({ type: "voice:muted", muted: this.voiceMuted });
 
     socket.on("message", (raw) => {
       const parsed = this.parseClientMessage(raw.toString());

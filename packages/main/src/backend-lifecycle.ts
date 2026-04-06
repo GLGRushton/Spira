@@ -2,9 +2,13 @@ import type { ChildProcess } from "node:child_process";
 import { fork } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { app } from "electron";
 import WebSocket from "ws";
 
 type Callback = () => void;
+interface BackendLifecycleOptions {
+  onFatal?: Callback;
+}
 
 const currentFile = fileURLToPath(import.meta.url);
 const currentDir = path.dirname(currentFile);
@@ -21,9 +25,12 @@ export class BackendLifecycle {
   private stopping = false;
   private ready = false;
   private generation = 0;
+  private stopPromise: Promise<void> | null = null;
+  private readonly onFatal?: Callback;
 
-  constructor(backendPort = 9720) {
+  constructor(backendPort = 9720, options: BackendLifecycleOptions = {}) {
     this.backendPort = backendPort;
+    this.onFatal = options.onFatal;
   }
 
   get isReady(): boolean {
@@ -35,7 +42,11 @@ export class BackendLifecycle {
     this.spawnChild();
   }
 
-  stop(): void {
+  async stop(): Promise<void> {
+    if (this.stopPromise) {
+      return this.stopPromise;
+    }
+
     this.stopping = true;
     this.ready = false;
     const child = this.child;
@@ -44,16 +55,31 @@ export class BackendLifecycle {
       return;
     }
     const childEvents = child as ChildProcess & NodeJS.EventEmitter;
+    this.stopPromise = new Promise((resolve) => {
+      const finish = () => {
+        clearTimeout(killTimer);
+        this.stopPromise = null;
+        resolve();
+      };
 
-    child.send({ type: "shutdown" });
-    const killTimer = setTimeout(() => {
-      if (!child.killed) {
-        child.kill("SIGKILL");
+      const killTimer = setTimeout(() => {
+        if (!child.killed) {
+          child.kill("SIGKILL");
+        }
+      }, 5_000);
+
+      childEvents.once("exit", finish);
+
+      try {
+        child.send({ type: "shutdown" });
+      } catch {
+        if (!child.killed) {
+          child.kill("SIGKILL");
+        }
       }
-    }, 5_000);
-    childEvents.once("exit", () => {
-      clearTimeout(killTimer);
     });
+
+    await this.stopPromise;
   }
 
   onReady(cb: Callback): void {
@@ -69,17 +95,21 @@ export class BackendLifecycle {
       return;
     }
 
-    const isDevelopment = process.env.NODE_ENV !== "production";
-    const modulePath = isDevelopment
-      ? path.resolve(repoRoot, "packages/backend/src/index.ts")
-      : path.resolve(repoRoot, "packages/backend/dist/index.js");
-    const execArgv = isDevelopment ? ["--import", "tsx"] : [];
+    const backendEntryPath = this.getBackendEntryPath();
+    const isPackaged = app.isPackaged;
+    const execArgv = isPackaged ? [] : ["--import", "tsx"];
 
-    this.child = fork(modulePath, [], {
-      cwd: repoRoot,
+    this.child = fork(backendEntryPath, [], {
+      cwd: isPackaged ? app.getPath("userData") : repoRoot,
       env: {
         ...process.env,
         SPIRA_PORT: String(this.backendPort),
+        ...(isPackaged
+          ? {
+              SPIRA_MCP_CONFIG_PATH:
+                process.env.SPIRA_MCP_CONFIG_PATH ?? path.join(process.resourcesPath, "mcp-servers.json"),
+            }
+          : {}),
       },
       execArgv,
       stdio: ["pipe", "pipe", "pipe", "ipc"],
@@ -108,6 +138,8 @@ export class BackendLifecycle {
       }
 
       if (this.restartCount >= this.MAX_RETRIES) {
+        process.stderr.write("[backend] failed to restart after maximum retries; manual restart required\n");
+        this.onFatal?.();
         return;
       }
 
@@ -121,6 +153,14 @@ export class BackendLifecycle {
 
       process.stderr.write(`[backend] exited unexpectedly (${signal ?? "no signal"}); restarting in ${delay}ms\n`);
     });
+  }
+
+  private getBackendEntryPath(): string {
+    if (app.isPackaged) {
+      return path.join(process.resourcesPath, "app.asar.unpacked", "packages", "backend", "dist", "index.js");
+    }
+
+    return path.resolve(repoRoot, "packages", "backend", "src", "index.ts");
   }
 
   private async waitForReady(generation: number): Promise<void> {
@@ -173,7 +213,14 @@ export class BackendLifecycle {
           return;
         }
         settled = true;
-        const message = JSON.parse(raw.toString()) as { type?: string };
+        let message: { type?: string };
+        try {
+          message = JSON.parse(raw.toString()) as { type?: string };
+        } catch {
+          cleanup();
+          resolve(false);
+          return;
+        }
         cleanup();
         resolve(message.type === "pong");
       });

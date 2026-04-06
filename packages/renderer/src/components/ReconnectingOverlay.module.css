@@ -1,0 +1,35 @@
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: grid;
+  place-items: center;
+  background: radial-gradient(circle at center, rgba(0, 229, 255, 0.08), transparent 42%), rgba(10, 14, 39, 0.74);
+  backdrop-filter: blur(12px);
+}
+
+.panel {
+  display: grid;
+  justify-items: center;
+  gap: 1rem;
+  min-width: 280px;
+  padding: 2rem 2.5rem;
+  border: 1px solid rgba(0, 229, 255, 0.18);
+  border-radius: var(--radius-lg);
+  background: linear-gradient(180deg, rgba(17, 22, 56, 0.92), rgba(10, 14, 39, 0.9));
+  box-shadow: 0 0 40px rgba(0, 212, 170, 0.16);
+}
+
+.orb {
+  width: 3rem;
+  height: 3rem;
+  border-radius: 999px;
+  background: radial-gradient(circle at 35% 35%, #9ef8ff 0%, #00e5ff 45%, #00d4aa 100%);
+  box-shadow: 0 0 12px rgba(0, 229, 255, 0.8), 0 0 32px rgba(0, 212, 170, 0.45);
+}
+
+.text {
+  color: var(--text-primary);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
