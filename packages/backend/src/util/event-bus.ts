@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import type { AssistantState, McpServerStatus, VoicePipelineEvent } from "@spira/shared";
+import type { AssistantState, ClientMessage, McpServerStatus, VoicePipelineEvent } from "@spira/shared";
 
 export interface EventMap {
   "voice:pipeline": [VoicePipelineEvent];
@@ -12,6 +12,9 @@ export interface EventMap {
   "copilot:tool-call": [callId: string, toolName: string, args: Record<string, unknown>];
   "copilot:tool-result": [callId: string, result: unknown];
   "mcp:servers-changed": [statuses: McpServerStatus[]];
+  "transport:client-message": [message: ClientMessage];
+  "transport:client-connected": [];
+  "transport:client-disconnected": [reason: string];
 }
 
 export class SpiraEventBus extends EventEmitter {

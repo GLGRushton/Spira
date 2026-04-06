@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "tsx scripts/dev.ts",
     "dev:backend": "pnpm -F @spira/backend dev",
+    "dev:main": "pnpm -F @spira/main dev",
     "dev:renderer": "pnpm -F @spira/renderer dev",
     "dev:mcp-windows": "pnpm -F @spira/mcp-windows dev",
     "typecheck": "tsc --build && tsc --noEmit -p packages/renderer/tsconfig.json",

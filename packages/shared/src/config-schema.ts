@@ -1,5 +1,8 @@
 import { z } from "zod";
 
+type EnvInput = Record<string, string | undefined>;
+const defaultEnvInput: EnvInput = (globalThis as { process?: { env?: EnvInput } }).process?.env ?? {};
+
 export const McpServerConfigSchema = z.object({
   id: z.string().regex(/^[a-z0-9-]+$/, "Lowercase alphanumeric and hyphens only"),
   name: z.string().min(1),
@@ -19,7 +22,7 @@ export const McpServersFileSchema = z.object({
 
 /** Validates environment variables loaded from .env */
 export const EnvSchema = z.object({
-  GITHUB_TOKEN: z.string().min(1),
+  GITHUB_TOKEN: z.string().default(""),
   PICOVOICE_ACCESS_KEY: z.string().optional(),
   ELEVENLABS_API_KEY: z.string().optional(),
   ELEVENLABS_VOICE_ID: z.string().optional(),
@@ -30,3 +33,5 @@ export const EnvSchema = z.object({
 
 export type Env = z.infer<typeof EnvSchema>;
 export type McpServersFile = z.infer<typeof McpServersFileSchema>;
+
+export const parseEnv = (input: EnvInput = defaultEnvInput): Env => EnvSchema.parse(input);

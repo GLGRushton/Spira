@@ -4,13 +4,16 @@
   "private": true,
   "type": "module",
   "main": "./src/index.ts",
+  "scripts": {
+    "dev": "electron --import tsx src/index.ts"
+  },
   "dependencies": {
     "@spira/shared": "workspace:*",
     "electron-updater": "^6.0.0",
     "ws": "^8.18.0"
   },
   "devDependencies": {
-    "electron": "^33.0.0",
-    "@types/ws": "^8.5.0"
+    "@types/ws": "^8.5.0",
+    "electron": "^33.0.0"
   }
 }
