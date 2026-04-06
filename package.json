@@ -7,7 +7,7 @@
     "dev:backend": "pnpm -F @spira/backend dev",
     "dev:renderer": "pnpm -F @spira/renderer dev",
     "dev:mcp-windows": "pnpm -F @spira/mcp-windows dev",
-    "typecheck": "tsc --build",
+    "typecheck": "tsc --build && tsc --noEmit -p packages/renderer/tsconfig.json",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "format": "biome format --write .",

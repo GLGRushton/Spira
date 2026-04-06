@@ -15,19 +15,19 @@ export interface EventMap {
 }
 
 export class SpiraEventBus extends EventEmitter {
-  emit<K extends keyof EventMap>(event: K, ...args: EventMap[K]): boolean {
+  override emit<K extends keyof EventMap>(event: K, ...args: EventMap[K]): boolean {
     return super.emit(event, ...args);
   }
 
-  on<K extends keyof EventMap>(event: K, listener: (...args: EventMap[K]) => void): this {
+  override on<K extends keyof EventMap>(event: K, listener: (...args: EventMap[K]) => void): this {
     return super.on(event, listener as (...args: unknown[]) => void);
   }
 
-  off<K extends keyof EventMap>(event: K, listener: (...args: EventMap[K]) => void): this {
+  override off<K extends keyof EventMap>(event: K, listener: (...args: EventMap[K]) => void): this {
     return super.off(event, listener as (...args: unknown[]) => void);
   }
 
-  once<K extends keyof EventMap>(event: K, listener: (...args: EventMap[K]) => void): this {
+  override once<K extends keyof EventMap>(event: K, listener: (...args: EventMap[K]) => void): this {
     return super.once(event, listener as (...args: unknown[]) => void);
   }
 }

@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 export const McpServerConfigSchema = z.object({
-  id: z.string().min(1),
+  id: z.string().regex(/^[a-z0-9-]+$/, "Lowercase alphanumeric and hyphens only"),
   name: z.string().min(1),
   transport: z.literal("stdio"),
   command: z.string().min(1),
@@ -9,10 +9,11 @@ export const McpServerConfigSchema = z.object({
   env: z.record(z.string()).optional(),
   enabled: z.boolean(),
   autoRestart: z.boolean(),
-  maxRestarts: z.number().int().nonnegative().optional(),
+  maxRestarts: z.number().int().min(0).max(10).optional().default(3),
 });
 
 export const McpServersFileSchema = z.object({
+  $schema: z.string().optional(),
   servers: z.array(McpServerConfigSchema),
 });
 
@@ -26,3 +27,6 @@ export const EnvSchema = z.object({
   WHISPER_MODEL: z.enum(["tiny.en", "base.en", "small.en"]).default("base.en"),
   WAKE_WORD_MODEL: z.string().default("assets/wake-word/shinra.ppn"),
 });
+
+export type Env = z.infer<typeof EnvSchema>;
+export type McpServersFile = z.infer<typeof McpServersFileSchema>;

@@ -1,5 +1,6 @@
 export type VoicePipelineEvent =
   | { type: "wake-word:detected" }
+  | { type: "wake-word:error"; error: string }
   | { type: "capture:start" }
   | { type: "capture:end"; durationMs: number }
   | { type: "capture:level"; level: number }
