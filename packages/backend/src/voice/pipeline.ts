@@ -1,0 +1,318 @@
+import type { VoicePipelineState } from "@spira/shared";
+import type { Logger } from "pino";
+import type { SpiraEventBus } from "../util/event-bus.js";
+import type { AudioCapture } from "./audio-capture.js";
+import type { AudioPlayback } from "./audio-playback.js";
+import type { ISttProvider } from "./stt-provider.js";
+import type { ITtsProvider } from "./tts-provider.js";
+import type { WakeWordDetector } from "./wake-word.js";
+
+const LISTEN_TIMEOUT_MS = 10_000;
+const SILENCE_TIMEOUT_MS = 1_500;
+const MIN_SPEECH_DURATION_MS = 300;
+const THINKING_TIMEOUT_MS = 30_000;
+const ERROR_RECOVERY_MS = 2_000;
+const DEFAULT_SAMPLE_RATE = 16_000;
+
+export class VoicePipeline {
+  private state: VoicePipelineState = "idle";
+  private started = false;
+  private pushToTalkActive = false;
+  private wakeWordReady = false;
+  private audioFrames: Int16Array[] = [];
+  private listeningStartedAt = 0;
+  private firstSpeechAt: number | null = null;
+  private lastSpeechAt: number | null = null;
+  private lastLevelAt = 0;
+  private responseTimer: NodeJS.Timeout | null = null;
+  private recoveryTimer: NodeJS.Timeout | null = null;
+  private unsubscribeFrame: (() => void) | null = null;
+  private unsubscribeResponseEnd: (() => void) | null = null;
+
+  constructor(
+    private readonly capture: AudioCapture,
+    private readonly wakeWord: WakeWordDetector,
+    private readonly stt: ISttProvider,
+    private readonly tts: ITtsProvider,
+    private readonly playback: AudioPlayback,
+    private readonly bus: SpiraEventBus,
+    private readonly logger: Logger,
+  ) {}
+
+  async start(): Promise<void> {
+    if (this.started) {
+      return;
+    }
+
+    this.started = true;
+
+    try {
+      try {
+        await this.wakeWord.initialize();
+        this.wakeWordReady = true;
+      } catch (error) {
+        this.wakeWordReady = false;
+        this.logger.warn({ error }, "Wake word initialization failed; push-to-talk remains available");
+      }
+
+      this.unsubscribeFrame = this.capture.onFrame((frame) => {
+        this.handleFrame(frame);
+      });
+
+      const responseEndHandler = ({ text }: { text: string; messageId: string }) => {
+        void this.handleCopilotResponse(text);
+      };
+      this.bus.on("copilot:response-end", responseEndHandler);
+      this.unsubscribeResponseEnd = () => {
+        this.bus.off("copilot:response-end", responseEndHandler);
+      };
+
+      this.capture.start();
+      this.emitState(this.state);
+      this.logger.info({ wakeWordReady: this.wakeWordReady }, "Voice pipeline started");
+    } catch (error) {
+      this.started = false;
+      this.unsubscribeFrame?.();
+      this.unsubscribeResponseEnd?.();
+      this.unsubscribeFrame = null;
+      this.unsubscribeResponseEnd = null;
+      this.capture.stop();
+      this.wakeWord.dispose();
+      throw error;
+    }
+  }
+
+  async stop(): Promise<void> {
+    this.started = false;
+    this.pushToTalkActive = false;
+    this.clearTimers();
+    this.unsubscribeFrame?.();
+    this.unsubscribeResponseEnd?.();
+    this.unsubscribeFrame = null;
+    this.unsubscribeResponseEnd = null;
+    this.playback.stop();
+    this.capture.stop();
+    this.wakeWord.dispose();
+    this.stt.dispose();
+    this.tts.dispose();
+    this.resetListeningState();
+    this.transitionTo("idle");
+    this.logger.info("Voice pipeline stopped");
+  }
+
+  activatePushToTalk(): void {
+    this.pushToTalkActive = true;
+    if (!this.started) {
+      return;
+    }
+
+    if (this.state === "idle") {
+      this.beginListening("push-to-talk");
+    }
+  }
+
+  deactivatePushToTalk(): void {
+    this.pushToTalkActive = false;
+    if (this.state === "listening") {
+      void this.beginTranscription();
+    }
+  }
+
+  private handleFrame(frame: Int16Array): void {
+    if (!this.started) {
+      return;
+    }
+
+    if (this.state === "idle") {
+      if (this.pushToTalkActive) {
+        this.beginListening("push-to-talk");
+        return;
+      }
+
+      if (this.wakeWordReady && this.wakeWord.processFrame(frame)) {
+        this.logger.info("Wake word detected");
+        this.beginListening("wake-word");
+      }
+      return;
+    }
+
+    if (this.state !== "listening") {
+      return;
+    }
+
+    const now = Date.now();
+    this.audioFrames.push(new Int16Array(frame));
+
+    if (now - this.lastLevelAt >= 33) {
+      this.lastLevelAt = now;
+      this.bus.emit("audio:level", { level: VoicePipeline.calculateLevel(frame) });
+    }
+
+    if (!this.capture.isSilent(frame)) {
+      if (this.firstSpeechAt === null) {
+        this.firstSpeechAt = now;
+      }
+      this.lastSpeechAt = now;
+    }
+
+    if (this.firstSpeechAt === null && now - this.listeningStartedAt >= LISTEN_TIMEOUT_MS) {
+      this.logger.info("Listening timed out before speech was detected");
+      this.resetToIdle();
+      return;
+    }
+
+    if (
+      !this.pushToTalkActive &&
+      this.firstSpeechAt !== null &&
+      this.lastSpeechAt !== null &&
+      now - this.firstSpeechAt >= MIN_SPEECH_DURATION_MS &&
+      now - this.lastSpeechAt >= SILENCE_TIMEOUT_MS
+    ) {
+      void this.beginTranscription();
+    }
+  }
+
+  private beginListening(trigger: "wake-word" | "push-to-talk"): void {
+    this.resetListeningState();
+    this.listeningStartedAt = Date.now();
+    this.transitionTo("listening");
+    this.logger.info({ trigger }, "Voice pipeline is listening");
+  }
+
+  private async beginTranscription(): Promise<void> {
+    if (this.state !== "listening") {
+      return;
+    }
+
+    const audioFrames = this.audioFrames;
+    this.transitionTo("transcribing");
+    this.resetListeningState();
+
+    if (audioFrames.length === 0) {
+      this.transitionTo("idle");
+      return;
+    }
+
+    try {
+      const pcmAudio = VoicePipeline.toPcmBuffer(audioFrames);
+      const transcript = (await this.stt.transcribe(pcmAudio, DEFAULT_SAMPLE_RATE)).trim();
+
+      if (!transcript) {
+        this.logger.info("STT returned an empty transcript");
+        this.transitionTo("idle");
+        return;
+      }
+
+      this.transitionTo("thinking");
+      this.bus.emit("voice:transcript", { text: transcript });
+      this.responseTimer = setTimeout(() => {
+        this.logger.warn("Voice pipeline timed out waiting for Copilot response");
+        this.transitionTo("idle");
+      }, THINKING_TIMEOUT_MS);
+    } catch (error) {
+      this.handleError(error);
+    }
+  }
+
+  private async handleCopilotResponse(text: string): Promise<void> {
+    if (this.state !== "thinking") {
+      return;
+    }
+
+    this.clearResponseTimer();
+
+    if (!text.trim()) {
+      this.transitionTo("idle");
+      return;
+    }
+
+    this.transitionTo("speaking");
+
+    try {
+      const sampleRate = VoicePipeline.resolveTtsSampleRate(this.tts);
+      await this.playback.playStream(
+        this.tts.synthesize(text),
+        "pcm",
+        { sampleRate, channels: 1, bitDepth: 16 },
+        (amplitude) => {
+          this.bus.emit("tts:amplitude", { amplitude });
+        },
+      );
+      this.transitionTo("idle");
+    } catch (error) {
+      this.handleError(error);
+    }
+  }
+
+  private handleError(error: unknown): void {
+    this.logger.error({ error }, "Voice pipeline error");
+    this.transitionTo("error");
+    this.recoveryTimer = setTimeout(() => {
+      this.transitionTo("idle");
+    }, ERROR_RECOVERY_MS);
+  }
+
+  private resetToIdle(): void {
+    this.resetListeningState();
+    this.transitionTo("idle");
+  }
+
+  private resetListeningState(): void {
+    this.audioFrames = [];
+    this.listeningStartedAt = 0;
+    this.firstSpeechAt = null;
+    this.lastSpeechAt = null;
+    this.lastLevelAt = 0;
+  }
+
+  private transitionTo(nextState: VoicePipelineState): void {
+    if (this.state === nextState) {
+      return;
+    }
+
+    this.clearTimers();
+    this.state = nextState;
+    this.emitState(nextState);
+  }
+
+  private emitState(state: VoicePipelineState): void {
+    this.bus.emit("voice:pipeline", { state });
+  }
+
+  private clearTimers(): void {
+    this.clearResponseTimer();
+
+    if (this.recoveryTimer) {
+      clearTimeout(this.recoveryTimer);
+      this.recoveryTimer = null;
+    }
+  }
+
+  private clearResponseTimer(): void {
+    if (this.responseTimer) {
+      clearTimeout(this.responseTimer);
+      this.responseTimer = null;
+    }
+  }
+
+  private static toPcmBuffer(frames: Int16Array[]): Buffer {
+    const pcmChunks = frames.map((frame) =>
+      Buffer.from(frame.buffer.slice(frame.byteOffset, frame.byteOffset + frame.byteLength)),
+    );
+    return Buffer.concat(pcmChunks);
+  }
+
+  private static calculateLevel(frame: Int16Array): number {
+    let sumSquares = 0;
+    for (const sample of frame) {
+      const normalized = sample / 32_768;
+      sumSquares += normalized * normalized;
+    }
+    return Math.min(1, Math.sqrt(sumSquares / Math.max(frame.length, 1)));
+  }
+
+  private static resolveTtsSampleRate(tts: ITtsProvider): number {
+    const sampleRate = (tts as ITtsProvider & { sampleRate?: number }).sampleRate;
+    return typeof sampleRate === "number" ? sampleRate : DEFAULT_SAMPLE_RATE;
+  }
+}
