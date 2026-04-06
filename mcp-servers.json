@@ -1,0 +1,14 @@
+{
+  "servers": [
+    {
+      "id": "windows-system",
+      "name": "Windows System Controls",
+      "transport": "stdio",
+      "command": "node",
+      "args": ["packages/mcp-windows/dist/index.js"],
+      "enabled": false,
+      "autoRestart": true,
+      "maxRestarts": 3
+    }
+  ]
+}

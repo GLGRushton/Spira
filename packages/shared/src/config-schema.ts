@@ -1,0 +1,28 @@
+import { z } from "zod";
+
+export const McpServerConfigSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+  transport: z.literal("stdio"),
+  command: z.string().min(1),
+  args: z.array(z.string()),
+  env: z.record(z.string()).optional(),
+  enabled: z.boolean(),
+  autoRestart: z.boolean(),
+  maxRestarts: z.number().int().nonnegative().optional(),
+});
+
+export const McpServersFileSchema = z.object({
+  servers: z.array(McpServerConfigSchema),
+});
+
+/** Validates environment variables loaded from .env */
+export const EnvSchema = z.object({
+  GITHUB_TOKEN: z.string().min(1),
+  PICOVOICE_ACCESS_KEY: z.string().optional(),
+  ELEVENLABS_API_KEY: z.string().optional(),
+  ELEVENLABS_VOICE_ID: z.string().optional(),
+  SPIRA_PORT: z.coerce.number().int().positive().default(9720),
+  WHISPER_MODEL: z.enum(["tiny.en", "base.en", "small.en"]).default("base.en"),
+  WAKE_WORD_MODEL: z.string().default("assets/wake-word/shinra.ppn"),
+});

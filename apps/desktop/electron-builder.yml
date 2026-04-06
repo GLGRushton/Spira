@@ -1,0 +1,18 @@
+appId: com.spira.app
+productName: Spira
+directories:
+  output: ../../dist
+win:
+  target:
+    - nsis
+  icon: ../../assets/icons/spira.ico
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+files:
+  - packages/main/dist/**
+  - packages/renderer/dist/**
+  - packages/backend/dist/**
+  - packages/mcp-windows/dist/**
+  - mcp-servers.json
+  - assets/**

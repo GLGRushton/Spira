@@ -1,0 +1,30 @@
+{
+  "name": "spira",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "tsx scripts/dev.ts",
+    "dev:backend": "pnpm -F @spira/backend dev",
+    "dev:renderer": "pnpm -F @spira/renderer dev",
+    "dev:mcp-windows": "pnpm -F @spira/mcp-windows dev",
+    "typecheck": "tsc --build",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "format": "biome format --write .",
+    "test": "vitest run",
+    "test:watch": "vitest watch",
+    "build": "tsx scripts/build.ts",
+    "package": "pnpm build && electron-builder --config apps/desktop/electron-builder.yml",
+    "whisper:setup": "npx nodejs-whisper download",
+    "new-mcp-server": "tsx scripts/new-mcp-server.ts"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.9.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.4.0",
+    "vitest": "^2.0.0",
+    "concurrently": "^9.0.0",
+    "electron-builder": "^25.0.0"
+  },
+  "packageManager": "pnpm@10.33.0+sha512.10568bb4a6afb58c9eb3630da90cc9516417abebd3fabbe6739f0ae795728da1491e9db5a544c76ad8eb7570f5c4bb3d6c637b2cb41bfdcdb47fa823c8649319"
+}

@@ -1,0 +1,16 @@
+{
+  "name": "@spira/main",
+  "version": "0.1.0",
+  "private": true,
+  "type": "commonjs",
+  "main": "./src/index.ts",
+  "dependencies": {
+    "@spira/shared": "workspace:*",
+    "electron-updater": "^6.0.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "@types/ws": "^8.5.0"
+  }
+}
