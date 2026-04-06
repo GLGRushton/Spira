@@ -18,7 +18,7 @@ export type ServerMessage =
   | { type: "chat:token"; token: string; conversationId: string }
   | { type: "chat:complete"; conversationId: string; messageId: string }
   | { type: "chat:message"; message: ChatMessage }
-  | { type: "tool:call"; callId: string; name: string; status: ToolCallStatus; details?: string }
+  | { type: "tool:call"; callId: string; name: string; status: ToolCallStatus; args?: unknown; details?: string }
   | { type: "mcp:status"; servers: McpServerStatus[] }
   | { type: "voice:transcript"; text: string }
   | { type: "audio:level"; level: number }

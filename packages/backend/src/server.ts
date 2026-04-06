@@ -10,7 +10,7 @@ export class WsServer {
   private server: WebSocketServer | null = null;
   private client: WebSocket | null = null;
   private readonly busListeners: Array<() => void>;
-  private readonly toolCallNames = new Map<string, string>();
+  private readonly toolCalls = new Map<string, { name: string; args: Record<string, unknown> }>();
 
   constructor(
     private readonly bus: SpiraEventBus,
@@ -36,21 +36,22 @@ export class WsServer {
         this.send({ type: "chat:complete", conversationId: messageId, messageId });
       }),
       this.registerBusHandler("copilot:error", (code, message) => {
-        this.toolCallNames.clear();
+        this.toolCalls.clear();
         this.send({ type: "error", code, message });
       }),
-      this.registerBusHandler("copilot:tool-call", (callId, toolName) => {
-        this.toolCallNames.set(callId, toolName);
-        this.send({ type: "tool:call", callId, name: toolName, status: "running" });
+      this.registerBusHandler("copilot:tool-call", (callId, toolName, args) => {
+        this.toolCalls.set(callId, { name: toolName, args });
+        this.send({ type: "tool:call", callId, name: toolName, status: "running", args });
       }),
       this.registerBusHandler("copilot:tool-result", (callId, result) => {
-        const toolName = this.toolCallNames.get(callId) ?? "unknown";
-        this.toolCallNames.delete(callId);
+        const toolCall = this.toolCalls.get(callId) ?? { name: "unknown", args: {} };
+        this.toolCalls.delete(callId);
         this.send({
           type: "tool:call",
           callId,
-          name: toolName,
+          name: toolCall.name,
           status: "success",
+          args: toolCall.args,
           details: typeof result === "string" ? result : JSON.stringify(result),
         });
       }),

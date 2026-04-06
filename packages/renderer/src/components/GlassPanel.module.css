@@ -1,0 +1,25 @@
+.panel {
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  background: linear-gradient(180deg, rgba(17, 22, 56, 0.96), rgba(10, 14, 39, 0.94));
+  box-shadow: var(--shadow-panel);
+  backdrop-filter: blur(16px);
+  min-height: 0;
+}
+
+.glow {
+  border-color: var(--border-glow);
+  box-shadow: var(--shadow-panel), var(--shadow-glow);
+}
+
+.sm {
+  padding: 8px;
+}
+
+.md {
+  padding: 16px;
+}
+
+.lg {
+  padding: 24px;
+}

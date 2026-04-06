@@ -1,0 +1,110 @@
+.panel {
+  height: 100%;
+  overflow: auto;
+  display: grid;
+  gap: 18px;
+  padding-right: 4px;
+}
+
+.section {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  background: rgba(17, 22, 56, 0.52);
+}
+
+.sectionHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.sectionHeader h2 {
+  font-size: 16px;
+}
+
+.sectionHeader p {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px;
+  border: 1px solid rgba(30, 45, 74, 0.88);
+  border-radius: var(--radius-sm);
+  background: rgba(10, 14, 39, 0.58);
+}
+
+.label {
+  display: block;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.caption {
+  display: block;
+  margin-top: 2px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.toggle,
+.select,
+.ghostButton {
+  border: 1px solid var(--border-default);
+  border-radius: 999px;
+  background: rgba(26, 32, 72, 0.88);
+  color: var(--text-primary);
+}
+
+.toggle,
+.ghostButton {
+  padding: 8px 14px;
+  cursor: pointer;
+}
+
+.toggleActive {
+  border-color: rgba(0, 212, 170, 0.4);
+  color: var(--accent-teal);
+}
+
+.select {
+  min-width: 140px;
+  padding: 8px 12px;
+}
+
+.serverList {
+  display: grid;
+  gap: 10px;
+}
+
+.empty {
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.keyGrid {
+  display: grid;
+  gap: 10px;
+}
+
+.keyRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px;
+  border-radius: var(--radius-sm);
+  background: rgba(10, 14, 39, 0.58);
+}
+
+.keyRow code {
+  color: var(--accent-cyan);
+}

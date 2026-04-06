@@ -1,0 +1,89 @@
+.app {
+  display: grid;
+  grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+  grid-template-rows: var(--titlebar-height) minmax(0, 1fr);
+  width: 100%;
+  height: 100%;
+}
+
+.titleBarSlot {
+  grid-column: 1 / -1;
+}
+
+.sidebarSlot {
+  min-height: 0;
+}
+
+.main {
+  grid-column: 2;
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  gap: 16px;
+  padding: 16px;
+  grid-template-rows: minmax(220px, 40fr) minmax(280px, 60fr);
+}
+
+.orbPanel {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 12px;
+}
+
+.orbHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.eyebrow {
+  color: var(--text-secondary);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.state {
+  font-size: clamp(24px, 4vw, 36px);
+  text-transform: capitalize;
+}
+
+.caption {
+  max-width: 360px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.6;
+  text-align: right;
+}
+
+.orbStage {
+  min-height: 0;
+}
+
+.contentPanel {
+  min-height: 0;
+}
+
+.contentInner {
+  height: 100%;
+}
+
+@media (max-width: 960px) {
+  .app {
+    grid-template-columns: 220px minmax(0, 1fr);
+  }
+
+  .main {
+    grid-template-rows: minmax(200px, 35fr) minmax(320px, 65fr);
+  }
+
+  .orbHeader {
+    flex-direction: column;
+  }
+
+  .caption {
+    max-width: none;
+    text-align: left;
+  }
+}

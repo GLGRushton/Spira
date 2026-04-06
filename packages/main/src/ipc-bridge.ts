@@ -1,4 +1,4 @@
-import type { ClientMessage, ServerMessage } from "@spira/shared";
+import type { ClientMessage, ConnectionStatus, ServerMessage } from "@spira/shared";
 import type { BrowserWindow, IpcMainEvent } from "electron";
 import { ipcMain } from "electron";
 import WebSocket from "ws";
@@ -8,8 +8,17 @@ export function setupIpcBridge(win: BrowserWindow, backendPort: number): () => v
   const pending: string[] = [];
   let socketReady = false;
 
+  const emitConnectionStatus = (status: ConnectionStatus) => {
+    if (!win.isDestroyed()) {
+      win.webContents.send("spira:connection-status", status);
+    }
+  };
+
+  emitConnectionStatus("connecting");
+
   socket.once("open", () => {
     socketReady = true;
+    emitConnectionStatus("connected");
     for (const message of pending) {
       socket.send(message);
     }
@@ -44,11 +53,13 @@ export function setupIpcBridge(win: BrowserWindow, backendPort: number): () => v
   });
 
   socket.on("error", (error) => {
+    emitConnectionStatus("disconnected");
     forwardToRenderer({ type: "error", code: "BACKEND_SOCKET_ERROR", message: error.message });
   });
 
   socket.on("close", () => {
     socketReady = false;
+    emitConnectionStatus("disconnected");
     ipcMain.off("spira:to-backend", handleRendererMessage);
   });
 

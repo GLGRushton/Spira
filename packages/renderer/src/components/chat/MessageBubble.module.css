@@ -1,0 +1,44 @@
+.bubble {
+  max-width: min(720px, 100%);
+  padding: 14px 16px;
+  border: 1px solid var(--border-default);
+  border-radius: 14px;
+  box-shadow: 0 12px 36px rgba(5, 10, 30, 0.25);
+}
+
+.user {
+  margin-left: auto;
+  background: linear-gradient(180deg, rgba(0, 212, 170, 0.18), rgba(0, 140, 112, 0.24));
+  border-color: rgba(0, 212, 170, 0.35);
+}
+
+.assistant {
+  margin-right: auto;
+  background: rgba(17, 22, 56, 0.82);
+}
+
+.meta {
+  margin-bottom: 8px;
+  color: var(--text-secondary);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.content {
+  color: var(--text-primary);
+  line-height: 1.6;
+}
+
+.content p + p {
+  margin-top: 0.75rem;
+}
+
+.content ul,
+.content ol {
+  padding-left: 1.2rem;
+}
+
+.content code {
+  color: var(--accent-cyan);
+}

@@ -1,0 +1,107 @@
+:root {
+  --bg-primary: #0a0e27;
+  --bg-secondary: #111638;
+  --bg-tertiary: #1a2048;
+  --accent-teal: #00d4aa;
+  --accent-cyan: #00e5ff;
+  --accent-gold: #cc9900;
+  --accent-purple: #7c3aed;
+  --text-primary: #e8eaf6;
+  --text-secondary: #8892b0;
+  --text-muted: #4a5568;
+  --border-default: #1e2d4a;
+  --border-glow: #00d4aa33;
+  --state-idle: #00d4aa;
+  --state-thinking: #7c3aed;
+  --state-listening: #00e5ff;
+  --state-transcribing: #00e5ff;
+  --state-speaking: #cc9900;
+  --state-error: #ef4444;
+  --shadow-panel: 0 16px 48px rgba(5, 10, 30, 0.35);
+  --shadow-glow: 0 0 32px rgba(0, 212, 170, 0.18);
+  --titlebar-height: 32px;
+  --sidebar-width: 240px;
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 18px;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+html {
+  color-scheme: dark;
+}
+
+body {
+  font-family: "Segoe UI", system-ui, sans-serif;
+  background: radial-gradient(circle at top, rgba(0, 229, 255, 0.06), transparent 28%), var(--bg-primary);
+  color: var(--text-primary);
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  border: 0;
+  background: none;
+}
+
+textarea,
+input,
+select,
+button {
+  outline: none;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent-teal);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+::selection {
+  background: rgba(0, 212, 170, 0.35);
+  color: var(--text-primary);
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: rgba(17, 22, 56, 0.9);
+}
+
+::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  border: 2px solid rgba(17, 22, 56, 0.9);
+  background: linear-gradient(180deg, rgba(0, 212, 170, 0.88), rgba(0, 229, 255, 0.7));
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, rgba(0, 212, 170, 1), rgba(0, 229, 255, 0.88));
+}
+
+#root {
+  isolation: isolate;
+}

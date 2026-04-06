@@ -1,0 +1,36 @@
+.container {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(30, 45, 74, 0.88);
+}
+
+.input {
+  resize: none;
+  min-height: 70px;
+  padding: 12px 14px;
+  border: 1px solid rgba(30, 45, 74, 0.88);
+  border-radius: 12px;
+  background: rgba(26, 32, 72, 0.75);
+  color: var(--text-primary);
+}
+
+.input::placeholder {
+  color: var(--text-muted);
+}
+
+.send {
+  align-self: flex-end;
+  padding: 0 18px;
+  border-radius: 12px;
+  background: linear-gradient(180deg, rgba(0, 212, 170, 0.95), rgba(0, 170, 136, 0.95));
+  color: #041018;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.send:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
