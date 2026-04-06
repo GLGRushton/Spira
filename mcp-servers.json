@@ -2,11 +2,12 @@
   "servers": [
     {
       "id": "windows-system",
-      "name": "Windows System Controls",
+      "name": "Windows System",
       "transport": "stdio",
       "command": "node",
       "args": ["packages/mcp-windows/dist/index.js"],
-      "enabled": false,
+      "env": {},
+      "enabled": true,
       "autoRestart": true,
       "maxRestarts": 3
     }

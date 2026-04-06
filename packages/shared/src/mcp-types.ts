@@ -10,6 +10,29 @@ export interface McpServerConfig {
   maxRestarts?: number;
 }
 
+export interface McpToolAnnotations {
+  title?: string;
+  readOnlyHint?: boolean;
+  destructiveHint?: boolean;
+  idempotentHint?: boolean;
+  openWorldHint?: boolean;
+}
+
+export interface McpToolExecution {
+  taskSupport?: "optional" | "required" | "forbidden";
+}
+
+export interface McpTool {
+  serverId: string;
+  serverName: string;
+  name: string;
+  description?: string;
+  inputSchema: Record<string, unknown>;
+  outputSchema?: Record<string, unknown>;
+  annotations?: McpToolAnnotations;
+  execution?: McpToolExecution;
+}
+
 export interface McpServerStatus {
   id: string;
   name: string;

@@ -1,6 +1,9 @@
 import { type ClientMessage, parseEnv } from "@spira/shared";
 import { ZodError } from "zod";
 import { CopilotSessionManager } from "./copilot/session-manager.js";
+import { McpClientPool } from "./mcp/client-pool.js";
+import { McpRegistry } from "./mcp/registry.js";
+import { McpToolAggregator } from "./mcp/tool-aggregator.js";
 import { WsServer } from "./server.js";
 import { ConfigError, SpiraError } from "./util/errors.js";
 import { SpiraEventBus } from "./util/event-bus.js";
@@ -12,6 +15,7 @@ const logger = createLogger("backend");
 let server: WsServer | null = null;
 let bus: SpiraEventBus | null = null;
 let copilotManager: CopilotSessionManager | null = null;
+let mcpRegistry: McpRegistry | null = null;
 let transport: WsTransport | null = null;
 let unsubscribeTransport: (() => void) | null = null;
 let shuttingDown = false;
@@ -26,11 +30,13 @@ const shutdown = async (signal: NodeJS.Signals | "manual") => {
 
   unsubscribeTransport?.();
   await copilotManager?.shutdown();
+  await mcpRegistry?.shutdown();
   transport?.close();
   bus?.removeAllListeners();
 
   unsubscribeTransport = null;
   copilotManager = null;
+  mcpRegistry = null;
   transport = null;
   server = null;
   bus = null;
@@ -76,7 +82,7 @@ const handleClientMessage = async (message: ClientMessage): Promise<void> => {
   logger.debug({ message }, "Received client message");
 };
 
-const bootstrap = () => {
+const bootstrap = async () => {
   const env = (() => {
     try {
       return parseEnv();
@@ -93,7 +99,10 @@ const bootstrap = () => {
   bus = new SpiraEventBus();
   server = new WsServer(bus, env.SPIRA_PORT);
   transport = new WsTransport(server);
-  copilotManager = new CopilotSessionManager(bus, env);
+  const pool = new McpClientPool(bus, logger);
+  const aggregator = new McpToolAggregator(pool);
+  mcpRegistry = new McpRegistry(bus, logger, pool);
+  copilotManager = new CopilotSessionManager(bus, env, aggregator);
 
   unsubscribeTransport = transport.onMessage((message) => {
     handleClientMessage(message).catch((error) => {
@@ -102,12 +111,13 @@ const bootstrap = () => {
     });
   });
 
+  await mcpRegistry.initialize();
   server.start();
   logger.info("Spira backend ready");
 };
 
 try {
-  bootstrap();
+  await bootstrap();
 } catch (error) {
   const wrapped = error instanceof ConfigError ? error : new ConfigError("Failed to start backend", error);
   logger.error({ error: wrapped }, wrapped.message);

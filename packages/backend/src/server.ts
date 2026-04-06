@@ -35,6 +35,7 @@ export class WsServer {
         this.send({ type: "chat:complete", conversationId: messageId, messageId });
       }),
       this.registerBusHandler("copilot:error", (code, message) => {
+        this.toolCallNames.clear();
         this.send({ type: "error", code, message });
       }),
       this.registerBusHandler("copilot:tool-call", (callId, toolName) => {
@@ -51,6 +52,9 @@ export class WsServer {
           status: "success",
           details: typeof result === "string" ? result : JSON.stringify(result),
         });
+      }),
+      this.registerBusHandler("mcp:servers-changed", (servers) => {
+        this.send({ type: "mcp:status", servers });
       }),
       this.registerBusHandler("voice:pipeline", (event) => {
         if (event.type === "stt:result") {

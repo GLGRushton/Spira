@@ -12,6 +12,7 @@ export interface EventMap {
   "copilot:error": [code: string, message: string];
   "copilot:tool-call": [callId: string, toolName: string, args: Record<string, unknown>];
   "copilot:tool-result": [callId: string, result: unknown];
+  "mcp:server-crashed": [serverId: string];
   "mcp:servers-changed": [statuses: McpServerStatus[]];
   "transport:client-message": [message: ClientMessage];
   "transport:client-connected": [];

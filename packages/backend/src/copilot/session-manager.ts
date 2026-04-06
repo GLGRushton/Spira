@@ -1,5 +1,6 @@
 import { CopilotClient, type CopilotSession, type SessionEvent, approveAll } from "@github/copilot-sdk";
 import type { AssistantState, Env } from "@spira/shared";
+import type { McpToolAggregator } from "../mcp/tool-aggregator.js";
 import { CopilotError } from "../util/errors.js";
 import type { SpiraEventBus } from "../util/event-bus.js";
 import { createLogger } from "../util/logger.js";
@@ -23,6 +24,7 @@ export class CopilotSessionManager {
   constructor(
     private readonly bus: SpiraEventBus,
     private readonly env: Env,
+    private readonly toolAggregator: McpToolAggregator,
   ) {}
 
   async sendMessage(text: string): Promise<void> {
@@ -137,7 +139,7 @@ export class CopilotSessionManager {
       throw error;
     }
 
-    registerTools(session);
+    registerTools(session, this.toolAggregator);
     logger.info({ sessionId: session.sessionId }, "GitHub Copilot session created");
 
     return session;
