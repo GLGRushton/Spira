@@ -26,6 +26,8 @@ export const EnvSchema = z.object({
   PICOVOICE_ACCESS_KEY: z.string().optional(),
   ELEVENLABS_API_KEY: z.string().optional(),
   ELEVENLABS_VOICE_ID: z.string().optional(),
+  PIPER_EXECUTABLE: z.string().optional(),
+  PIPER_MODEL: z.string().optional(),
   SPIRA_PORT: z.coerce.number().int().positive().default(9720),
   WHISPER_MODEL: z.enum(["tiny.en", "base.en", "small.en"]).default("base.en"),
   WAKE_WORD_MODEL: z.string().default("assets/wake-word/shinra.ppn"),

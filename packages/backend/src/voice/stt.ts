@@ -1,15 +1,17 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import type { Logger } from "pino";
 import { VoiceError } from "../util/errors.js";
 import type { ISttProvider } from "./stt-provider.js";
 
-const RUNTIME_DIR = path.join(process.cwd(), ".spira-runtime", "whisper");
+const RUNTIME_DIR = path.join(os.tmpdir(), "spira-runtime", "whisper");
 
 export class WhisperSttProvider implements ISttProvider {
   private initialized = false;
   private initializing: Promise<void> | null = null;
+  private initError: Error | null = null;
   private readonly modelName: string;
 
   constructor(
@@ -20,6 +22,10 @@ export class WhisperSttProvider implements ISttProvider {
   }
 
   async initialize(): Promise<void> {
+    if (this.initError) {
+      throw this.initError;
+    }
+
     if (this.initialized) {
       return;
     }
@@ -28,22 +34,29 @@ export class WhisperSttProvider implements ISttProvider {
       return this.initializing;
     }
 
-    this.initializing = this.prewarmModel();
+    this.initializing = (async () => {
+      try {
+        await this.prewarmModel();
+        this.initialized = true;
+      } catch (error) {
+        this.initError = error instanceof Error ? error : new Error(String(error));
+        throw this.initError;
+      } finally {
+        this.initializing = null;
+      }
+    })();
 
-    try {
-      await this.initializing;
-      this.initialized = true;
-    } finally {
-      this.initializing = null;
-    }
+    return this.initializing;
   }
 
   async transcribe(audio: Buffer, sampleRate: number): Promise<string> {
     await this.initialize();
 
-    const wavPath = await this.writeWavFile(audio, sampleRate);
+    const wavPath = path.join(RUNTIME_DIR, `whisper-${randomUUID()}.wav`);
+    await mkdir(RUNTIME_DIR, { recursive: true });
 
     try {
+      await this.writeWavFile(wavPath, audio, sampleRate);
       const { nodewhisper } = await import("nodejs-whisper");
       const result = await nodewhisper(wavPath, {
         modelName: this.modelName,
@@ -58,13 +71,19 @@ export class WhisperSttProvider implements ISttProvider {
     }
   }
 
-  dispose(): void {}
+  dispose(): void {
+    this.initError = null;
+    this.initialized = false;
+    this.initializing = null;
+  }
 
   private async prewarmModel(): Promise<void> {
     const silentAudio = Buffer.alloc(1_600 * 2);
-    const wavPath = await this.writeWavFile(silentAudio, 16_000);
+    const wavPath = path.join(RUNTIME_DIR, `whisper-${randomUUID()}.wav`);
+    await mkdir(RUNTIME_DIR, { recursive: true });
 
     try {
+      await this.writeWavFile(wavPath, silentAudio, 16_000);
       const { nodewhisper } = await import("nodejs-whisper");
       await nodewhisper(wavPath, {
         modelName: this.modelName,
@@ -79,12 +98,8 @@ export class WhisperSttProvider implements ISttProvider {
     }
   }
 
-  private async writeWavFile(audio: Buffer, sampleRate: number): Promise<string> {
-    await mkdir(RUNTIME_DIR, { recursive: true });
-
-    const wavPath = path.join(RUNTIME_DIR, `${randomUUID()}.wav`);
+  private async writeWavFile(wavPath: string, audio: Buffer, sampleRate: number): Promise<void> {
     await writeFile(wavPath, WhisperSttProvider.createWavBuffer(audio, sampleRate));
-    return wavPath;
   }
 
   private static createWavBuffer(audio: Buffer, sampleRate: number): Buffer {

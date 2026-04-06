@@ -159,7 +159,7 @@ export class CopilotSessionManager {
       case "assistant.message": {
         const assembledText = this.streamAssembler.finalize(event.data.messageId);
         const fullText = event.data.content || assembledText;
-        this.bus.emit("copilot:response-end", event.data.messageId, fullText);
+        this.bus.emit("copilot:response-end", { messageId: event.data.messageId, text: fullText });
         return;
       }
 

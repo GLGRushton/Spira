@@ -1,3 +1,7 @@
+import type { AssistantState } from "./assistant-state.js";
+
+export type VoicePipelineState = AssistantState;
+
 export type VoicePipelineEvent =
   | { type: "wake-word:detected" }
   | { type: "wake-word:error"; error: string }

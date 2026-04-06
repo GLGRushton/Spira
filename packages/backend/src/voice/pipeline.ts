@@ -1,5 +1,6 @@
 import type { VoicePipelineState } from "@spira/shared";
 import type { Logger } from "pino";
+import { SpiraError } from "../util/errors.js";
 import type { SpiraEventBus } from "../util/event-bus.js";
 import type { AudioCapture } from "./audio-capture.js";
 import type { AudioPlayback } from "./audio-playback.js";
@@ -10,7 +11,9 @@ import type { WakeWordDetector } from "./wake-word.js";
 const LISTEN_TIMEOUT_MS = 10_000;
 const SILENCE_TIMEOUT_MS = 1_500;
 const MIN_SPEECH_DURATION_MS = 300;
+const STT_TIMEOUT_MS = 30_000;
 const THINKING_TIMEOUT_MS = 30_000;
+const SPEAKING_TIMEOUT_MS = 120_000;
 const ERROR_RECOVERY_MS = 2_000;
 const DEFAULT_SAMPLE_RATE = 16_000;
 
@@ -51,8 +54,18 @@ export class VoicePipeline {
         await this.wakeWord.initialize();
         this.wakeWordReady = true;
       } catch (error) {
+        if (error instanceof SpiraError && error.code === "VOICE_CONFIG_ERROR") {
+          throw error;
+        }
         this.wakeWordReady = false;
         this.logger.warn({ error }, "Wake word initialization failed; push-to-talk remains available");
+      }
+
+      if (this.wakeWordReady && this.capture.frameLength !== this.wakeWord.frameLength) {
+        throw new SpiraError(
+          "VOICE_CONFIG_ERROR",
+          `Audio frame length mismatch: capture=${this.capture.frameLength} wakeWord=${this.wakeWord.frameLength}`,
+        );
       }
 
       this.unsubscribeFrame = this.capture.onFrame((frame) => {
@@ -195,7 +208,17 @@ export class VoicePipeline {
 
     try {
       const pcmAudio = VoicePipeline.toPcmBuffer(audioFrames);
-      const transcript = (await this.stt.transcribe(pcmAudio, DEFAULT_SAMPLE_RATE)).trim();
+      const transcript = (
+        await VoicePipeline.withTimeout(
+          this.stt.transcribe(pcmAudio, DEFAULT_SAMPLE_RATE),
+          STT_TIMEOUT_MS,
+          "STT timed out after 30s",
+        )
+      ).trim();
+
+      if (!this.isActiveState("transcribing")) {
+        return;
+      }
 
       if (!transcript) {
         this.logger.info("STT returned an empty transcript");
@@ -210,6 +233,9 @@ export class VoicePipeline {
         this.transitionTo("idle");
       }, THINKING_TIMEOUT_MS);
     } catch (error) {
+      if (!this.isActiveState("transcribing")) {
+        return;
+      }
       this.handleError(error);
     }
   }
@@ -230,16 +256,28 @@ export class VoicePipeline {
 
     try {
       const sampleRate = VoicePipeline.resolveTtsSampleRate(this.tts);
-      await this.playback.playStream(
-        this.tts.synthesize(text),
-        "pcm",
-        { sampleRate, channels: 1, bitDepth: 16 },
-        (amplitude) => {
-          this.bus.emit("tts:amplitude", { amplitude });
-        },
+      await VoicePipeline.withTimeout(
+        this.playback.playStream(
+          this.tts.synthesize(text),
+          "pcm",
+          { sampleRate, channels: 1, bitDepth: 16 },
+          (amplitude) => {
+            this.bus.emit("tts:amplitude", { amplitude });
+          },
+        ),
+        SPEAKING_TIMEOUT_MS,
+        "TTS playback timed out",
       );
+
+      if (!this.isActiveState("speaking")) {
+        return;
+      }
+
       this.transitionTo("idle");
     } catch (error) {
+      if (!this.isActiveState("speaking")) {
+        return;
+      }
       this.handleError(error);
     }
   }
@@ -295,6 +333,10 @@ export class VoicePipeline {
     }
   }
 
+  private isActiveState(state: VoicePipelineState): boolean {
+    return this.started && this.state === state;
+  }
+
   private static toPcmBuffer(frames: Int16Array[]): Buffer {
     const pcmChunks = frames.map((frame) =>
       Buffer.from(frame.buffer.slice(frame.byteOffset, frame.byteOffset + frame.byteLength)),
@@ -314,5 +356,22 @@ export class VoicePipeline {
   private static resolveTtsSampleRate(tts: ITtsProvider): number {
     const sampleRate = (tts as ITtsProvider & { sampleRate?: number }).sampleRate;
     return typeof sampleRate === "number" ? sampleRate : DEFAULT_SAMPLE_RATE;
+  }
+
+  private static async withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+    let timeout: NodeJS.Timeout | null = null;
+
+    try {
+      return await Promise.race([
+        promise,
+        new Promise<never>((_, reject) => {
+          timeout = setTimeout(() => reject(new Error(message)), timeoutMs);
+        }),
+      ]);
+    } finally {
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+    }
   }
 }

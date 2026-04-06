@@ -1,9 +1,10 @@
-import type { ClientMessage, ServerMessage } from "@spira/shared";
+import type { AssistantState, ClientMessage, ServerMessage, VoicePipelineState } from "@spira/shared";
 import WebSocket, { WebSocketServer } from "ws";
 import type { EventMap, SpiraEventBus } from "./util/event-bus.js";
 import { createLogger } from "./util/logger.js";
 
 const logger = createLogger("ws-server");
+const mapVoiceStateToAssistantState = (state: VoicePipelineState): AssistantState => state;
 
 export class WsServer {
   private server: WebSocketServer | null = null;
@@ -22,13 +23,13 @@ export class WsServer {
       this.registerBusHandler("copilot:delta", (messageId, delta) => {
         this.send({ type: "chat:token", token: delta, conversationId: messageId });
       }),
-      this.registerBusHandler("copilot:response-end", (messageId, fullText) => {
+      this.registerBusHandler("copilot:response-end", ({ messageId, text }) => {
         this.send({
           type: "chat:message",
           message: {
             id: messageId,
             role: "assistant",
-            content: fullText,
+            content: text,
             timestamp: Date.now(),
           },
         });
@@ -56,10 +57,17 @@ export class WsServer {
       this.registerBusHandler("mcp:servers-changed", (servers) => {
         this.send({ type: "mcp:status", servers });
       }),
-      this.registerBusHandler("voice:pipeline", (event) => {
-        if (event.type === "stt:result") {
-          this.send({ type: "voice:transcript", text: event.text, isFinal: true });
-        }
+      this.registerBusHandler("voice:pipeline", ({ state }) => {
+        this.send({ type: "state:change", state: mapVoiceStateToAssistantState(state) });
+      }),
+      this.registerBusHandler("audio:level", ({ level }) => {
+        this.send({ type: "audio:level", level });
+      }),
+      this.registerBusHandler("tts:amplitude", ({ amplitude }) => {
+        this.send({ type: "tts:amplitude", amplitude });
+      }),
+      this.registerBusHandler("voice:transcript", ({ text }) => {
+        this.send({ type: "voice:transcript", text });
       }),
     ];
   }

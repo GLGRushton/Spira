@@ -43,6 +43,7 @@ export class BackendLifecycle {
     if (!child) {
       return;
     }
+    const childEvents = child as ChildProcess & NodeJS.EventEmitter;
 
     child.send({ type: "shutdown" });
     const killTimer = setTimeout(() => {
@@ -50,7 +51,7 @@ export class BackendLifecycle {
         child.kill("SIGKILL");
       }
     }, 5_000);
-    child.once("exit", () => {
+    childEvents.once("exit", () => {
       clearTimeout(killTimer);
     });
   }
@@ -90,11 +91,12 @@ export class BackendLifecycle {
     this.child.stderr?.on("data", (chunk: Buffer) => {
       process.stderr.write(`[backend] ${chunk.toString()}`);
     });
+    const childEvents = this.child as ChildProcess & NodeJS.EventEmitter;
 
     const myGeneration = ++this.generation;
     void this.waitForReady(myGeneration);
 
-    this.child.once("exit", (_code, signal) => {
+    childEvents.once("exit", (_code: number | null, signal: NodeJS.Signals | null) => {
       this.child = null;
       this.ready = false;
       if (this.stopping) {

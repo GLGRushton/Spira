@@ -1,14 +1,15 @@
 import { EventEmitter } from "node:events";
-import type { AssistantState, ClientMessage, McpServerStatus, VoicePipelineEvent } from "@spira/shared";
+import type { AssistantState, ClientMessage, McpServerStatus, VoicePipelineState } from "@spira/shared";
 
 export interface EventMap {
-  "voice:pipeline": [VoicePipelineEvent];
+  "voice:pipeline": [{ state: VoicePipelineState }];
   "state:change": [previous: AssistantState, current: AssistantState];
-  "audio:level": [level: number];
-  "tts:amplitude": [amplitude: number];
+  "audio:level": [{ level: number }];
+  "tts:amplitude": [{ amplitude: number }];
+  "voice:transcript": [{ text: string }];
   "copilot:response-start": [messageId: string];
   "copilot:delta": [messageId: string, delta: string];
-  "copilot:response-end": [messageId: string, fullText: string];
+  "copilot:response-end": [{ text: string; messageId: string }];
   "copilot:error": [code: string, message: string];
   "copilot:tool-call": [callId: string, toolName: string, args: Record<string, unknown>];
   "copilot:tool-result": [callId: string, result: unknown];

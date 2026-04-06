@@ -5,6 +5,8 @@ import type { McpServerStatus } from "./mcp-types.js";
 export type ClientMessage =
   | { type: "chat:send"; text: string; conversationId?: string }
   | { type: "chat:clear" }
+  | { type: "voice:toggle" }
+  | { type: "voice:push-to-talk"; active: boolean }
   | { type: "voice:mute" }
   | { type: "voice:unmute" }
   | { type: "settings:update"; settings: Partial<UserSettings> }
@@ -18,7 +20,9 @@ export type ServerMessage =
   | { type: "chat:message"; message: ChatMessage }
   | { type: "tool:call"; callId: string; name: string; status: ToolCallStatus; details?: string }
   | { type: "mcp:status"; servers: McpServerStatus[] }
-  | { type: "voice:transcript"; text: string; isFinal: boolean }
+  | { type: "voice:transcript"; text: string }
+  | { type: "audio:level"; level: number }
+  | { type: "tts:amplitude"; amplitude: number }
   | { type: "error"; code: string; message: string }
   | { type: "settings:current"; settings: UserSettings };
 
