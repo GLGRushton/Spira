@@ -9,6 +9,7 @@ export class WsServer {
   private server: WebSocketServer | null = null;
   private client: WebSocket | null = null;
   private readonly busListeners: Array<() => void>;
+  private readonly toolCallNames = new Map<string, string>();
 
   constructor(
     private readonly bus: SpiraEventBus,
@@ -33,13 +34,20 @@ export class WsServer {
         });
         this.send({ type: "chat:complete", conversationId: messageId, messageId });
       }),
-      this.registerBusHandler("copilot:tool-call", (_callId, toolName) => {
-        this.send({ type: "tool:call", name: toolName, status: "running" });
+      this.registerBusHandler("copilot:error", (code, message) => {
+        this.send({ type: "error", code, message });
+      }),
+      this.registerBusHandler("copilot:tool-call", (callId, toolName) => {
+        this.toolCallNames.set(callId, toolName);
+        this.send({ type: "tool:call", callId, name: toolName, status: "running" });
       }),
       this.registerBusHandler("copilot:tool-result", (callId, result) => {
+        const toolName = this.toolCallNames.get(callId) ?? "unknown";
+        this.toolCallNames.delete(callId);
         this.send({
           type: "tool:call",
-          name: callId,
+          callId,
+          name: toolName,
           status: "success",
           details: typeof result === "string" ? result : JSON.stringify(result),
         });

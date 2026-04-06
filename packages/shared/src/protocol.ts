@@ -15,7 +15,7 @@ export type ServerMessage =
   | { type: "chat:token"; token: string; conversationId: string }
   | { type: "chat:complete"; conversationId: string; messageId: string }
   | { type: "chat:message"; message: ChatMessage }
-  | { type: "tool:call"; name: string; status: ToolCallStatus; details?: string }
+  | { type: "tool:call"; callId: string; name: string; status: ToolCallStatus; details?: string }
   | { type: "voice:transcript"; text: string; isFinal: boolean }
   | { type: "error"; code: string; message: string }
   | { type: "settings:current"; settings: UserSettings };

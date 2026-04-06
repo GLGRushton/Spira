@@ -9,6 +9,7 @@ export interface EventMap {
   "copilot:response-start": [messageId: string];
   "copilot:delta": [messageId: string, delta: string];
   "copilot:response-end": [messageId: string, fullText: string];
+  "copilot:error": [code: string, message: string];
   "copilot:tool-call": [callId: string, toolName: string, args: Record<string, unknown>];
   "copilot:tool-result": [callId: string, result: unknown];
   "mcp:servers-changed": [statuses: McpServerStatus[]];
