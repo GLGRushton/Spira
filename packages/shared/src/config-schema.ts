@@ -30,7 +30,13 @@ export const EnvSchema = z.object({
   PIPER_MODEL: z.string().optional(),
   SPIRA_PORT: z.coerce.number().int().positive().default(9720),
   WHISPER_MODEL: z.enum(["tiny.en", "base.en", "small.en"]).default("base.en"),
+  WAKE_WORD_PROVIDER: z.enum(["openwakeword", "porcupine", "none"]).default("openwakeword"),
   WAKE_WORD_MODEL: z.string().default("assets/wake-word/shinra.ppn"),
+  OPENWAKEWORD_RUNTIME_DIR: z.string().default("assets/wake-word/openwakeword-runtime"),
+  OPENWAKEWORD_WORKER_PATH: z.string().default("assets/wake-word/openwakeword/worker.py"),
+  OPENWAKEWORD_MODEL_PATH: z.string().optional(),
+  OPENWAKEWORD_MODEL_NAME: z.string().default("hey_jarvis"),
+  OPENWAKEWORD_THRESHOLD: z.coerce.number().min(0).max(1).default(0.5),
 });
 
 export type Env = z.infer<typeof EnvSchema>;

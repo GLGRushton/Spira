@@ -12,6 +12,7 @@ dist/
 # Wake-word and ML model binaries
 *.ppn
 *.onnx
+assets/wake-word/openwakeword-runtime/
 
 # OS artifacts
 .DS_Store

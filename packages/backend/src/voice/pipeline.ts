@@ -6,11 +6,12 @@ import type { AudioCapture } from "./audio-capture.js";
 import type { AudioPlayback } from "./audio-playback.js";
 import type { ISttProvider } from "./stt-provider.js";
 import type { ITtsProvider } from "./tts-provider.js";
-import type { WakeWordDetector } from "./wake-word.js";
+import type { WakeWordProvider } from "./wake-word.js";
 
 const LISTEN_TIMEOUT_MS = 10_000;
 const SILENCE_TIMEOUT_MS = 1_500;
 const MIN_SPEECH_DURATION_MS = 300;
+const MAX_SPEECH_CAPTURE_MS = 8_000;
 const STT_TIMEOUT_MS = 30_000;
 const THINKING_TIMEOUT_MS = 30_000;
 const SPEAKING_TIMEOUT_MS = 120_000;
@@ -35,7 +36,7 @@ export class VoicePipeline {
 
   constructor(
     private readonly capture: AudioCapture,
-    private readonly wakeWord: WakeWordDetector,
+    private readonly wakeWord: WakeWordProvider,
     private readonly stt: ISttProvider,
     private readonly tts: ITtsProvider,
     private readonly playback: AudioPlayback,
@@ -62,7 +63,18 @@ export class VoicePipeline {
         this.logger.warn({ error }, "Wake word initialization failed; push-to-talk remains available");
       }
 
-      if (this.wakeWordReady && this.capture.frameLength !== this.wakeWord.frameLength) {
+      if (this.wakeWordReady && this.capture.sampleRate !== this.wakeWord.sampleRate) {
+        throw new SpiraError(
+          "VOICE_CONFIG_ERROR",
+          `Audio sample rate mismatch: capture=${this.capture.sampleRate} wakeWord=${this.wakeWord.sampleRate}`,
+        );
+      }
+
+      if (
+        this.wakeWordReady &&
+        this.wakeWord.requiresExactFrameLength &&
+        this.capture.frameLength !== this.wakeWord.frameLength
+      ) {
         throw new SpiraError(
           "VOICE_CONFIG_ERROR",
           `Audio frame length mismatch: capture=${this.capture.frameLength} wakeWord=${this.wakeWord.frameLength}`,
@@ -87,7 +99,13 @@ export class VoicePipeline {
       this.capture.start();
       this.emitState(this.state);
       this.emitMutedState();
-      this.logger.info({ wakeWordReady: this.wakeWordReady }, "Voice pipeline started");
+      this.logger.info(
+        {
+          wakeWordReady: this.wakeWordReady,
+          wakeWordProvider: this.wakeWord.providerName,
+        },
+        "Voice pipeline started",
+      );
     } catch (error) {
       this.started = false;
       this.unsubscribeFrame?.();
@@ -201,6 +219,15 @@ export class VoicePipeline {
       return;
     }
 
+    if (!this.pushToTalkActive && this.firstSpeechAt !== null && now - this.firstSpeechAt >= MAX_SPEECH_CAPTURE_MS) {
+      this.logger.info(
+        { captureDurationMs: now - this.firstSpeechAt },
+        "Forcing transcription after maximum speech capture duration",
+      );
+      void this.beginTranscription();
+      return;
+    }
+
     if (
       !this.pushToTalkActive &&
       this.firstSpeechAt !== null &&
@@ -208,6 +235,13 @@ export class VoicePipeline {
       now - this.firstSpeechAt >= MIN_SPEECH_DURATION_MS &&
       now - this.lastSpeechAt >= SILENCE_TIMEOUT_MS
     ) {
+      this.logger.info(
+        {
+          silenceDurationMs: now - this.lastSpeechAt,
+          utteranceDurationMs: now - this.firstSpeechAt,
+        },
+        "Silence detected; starting transcription",
+      );
       void this.beginTranscription();
     }
   }

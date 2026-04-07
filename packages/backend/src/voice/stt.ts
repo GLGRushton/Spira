@@ -1,12 +1,47 @@
+import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
 import { mkdir, rm, writeFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import type { Logger } from "pino";
 import { VoiceError } from "../util/errors.js";
 import type { ISttProvider } from "./stt-provider.js";
 
 const RUNTIME_DIR = path.join(os.tmpdir(), "spira-runtime", "whisper");
+const execFileAsync = promisify(execFile);
+const require = createRequire(import.meta.url);
+
+const findWhisperCppPath = (): string => {
+  const packageJsonPath = require.resolve("nodejs-whisper/package.json");
+  return path.join(path.dirname(packageJsonPath), "cpp", "whisper.cpp");
+};
+
+const WHISPER_CPP_PATH = findWhisperCppPath();
+const WHISPER_EXECUTABLE_PATHS = [
+  path.join(WHISPER_CPP_PATH, "build", "bin", "whisper-cli"),
+  path.join(WHISPER_CPP_PATH, "build", "bin", "whisper-cli.exe"),
+  path.join(WHISPER_CPP_PATH, "build", "bin", "Release", "whisper-cli.exe"),
+  path.join(WHISPER_CPP_PATH, "build", "bin", "Debug", "whisper-cli.exe"),
+  path.join(WHISPER_CPP_PATH, "build", "whisper-cli.exe"),
+  path.join(WHISPER_CPP_PATH, "whisper-cli.exe"),
+] as const;
+
+const CMAKE_CANDIDATE_PATHS = [
+  process.env.CMAKE_PATH,
+  "C:\\Program Files\\CMake\\bin\\cmake.exe",
+  "C:\\Program Files (x86)\\CMake\\bin\\cmake.exe",
+  "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\CMake\\bin\\cmake.exe",
+  "C:\\Program Files\\Microsoft Visual Studio\\2022\\Professional\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\CMake\\bin\\cmake.exe",
+  "C:\\Program Files\\Microsoft Visual Studio\\2022\\Enterprise\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\CMake\\bin\\cmake.exe",
+  "C:\\Program Files\\Microsoft Visual Studio\\2022\\BuildTools\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\CMake\\bin\\cmake.exe",
+  "C:\\Program Files\\Microsoft Visual Studio\\2019\\Community\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\CMake\\bin\\cmake.exe",
+  "C:\\Program Files\\Microsoft Visual Studio\\2019\\Professional\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\CMake\\bin\\cmake.exe",
+  "C:\\Program Files\\Microsoft Visual Studio\\2019\\Enterprise\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\CMake\\bin\\cmake.exe",
+  "C:\\Program Files\\Microsoft Visual Studio\\2019\\BuildTools\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\CMake\\bin\\cmake.exe",
+].filter((candidate): candidate is string => typeof candidate === "string" && candidate.length > 0);
 
 export class WhisperSttProvider implements ISttProvider {
   private initialized = false;
@@ -78,23 +113,56 @@ export class WhisperSttProvider implements ISttProvider {
   }
 
   private async prewarmModel(): Promise<void> {
-    const silentAudio = Buffer.alloc(1_600 * 2);
+    const silentAudio = Buffer.alloc(16_000 * 2);
     const wavPath = path.join(RUNTIME_DIR, `whisper-${randomUUID()}.wav`);
     await mkdir(RUNTIME_DIR, { recursive: true });
 
     try {
+      await this.ensureWhisperExecutable();
       await this.writeWavFile(wavPath, silentAudio, 16_000);
       const { nodewhisper } = await import("nodejs-whisper");
-      await nodewhisper(wavPath, {
-        modelName: this.modelName,
-        autoDownloadModelName: this.modelName,
-        removeWavFileAfterTranscription: false,
-      });
+      try {
+        await nodewhisper(wavPath, {
+          modelName: this.modelName,
+          autoDownloadModelName: this.modelName,
+          removeWavFileAfterTranscription: false,
+        });
+      } catch (error) {
+        this.logger.warn({ error, modelName: this.modelName }, "Whisper warmup produced no transcript; continuing");
+      }
       this.logger.info({ modelName: this.modelName }, "Whisper model is ready");
     } catch (error) {
       throw new VoiceError(`Failed to initialize Whisper model "${this.modelName}"`, error);
     } finally {
       await rm(wavPath, { force: true }).catch(() => undefined);
+    }
+  }
+
+  private async ensureWhisperExecutable(): Promise<void> {
+    if (WHISPER_EXECUTABLE_PATHS.some((candidate) => existsSync(candidate))) {
+      return;
+    }
+
+    const cmakePath = CMAKE_CANDIDATE_PATHS.find((candidate) => existsSync(candidate));
+    if (!cmakePath) {
+      throw new VoiceError(
+        "Whisper CLI is not built and CMake could not be found. Install CMake or set CMAKE_PATH to cmake.exe.",
+      );
+    }
+
+    this.logger.info({ cmakePath }, "Building whisper-cli for STT");
+
+    try {
+      await execFileAsync(cmakePath, ["-B", "build"], { cwd: WHISPER_CPP_PATH });
+      await execFileAsync(cmakePath, ["--build", "build", "--config", "Release"], {
+        cwd: WHISPER_CPP_PATH,
+      });
+    } catch (error) {
+      throw new VoiceError("Failed to build whisper-cli for STT", error);
+    }
+
+    if (!WHISPER_EXECUTABLE_PATHS.some((candidate) => existsSync(candidate))) {
+      throw new VoiceError("Whisper CLI build completed but whisper-cli.exe was not found");
     }
   }
 

@@ -57,9 +57,36 @@ export class AudioCapture {
     }
 
     const { PvRecorder } = this.loadRecorderModule();
+    const availableDevices = PvRecorder.getAvailableDevices();
+    let actualDeviceIndex = this.options.deviceIndex;
+    if (availableDevices.length === 0) {
+      throw new VoiceError("No audio input devices are available for voice capture");
+    }
 
     try {
       this.recorder = new PvRecorder(this.options.frameLength, this.options.deviceIndex);
+    } catch (error) {
+      if (this.options.deviceIndex === -1 && availableDevices.length > 0) {
+        this.logger.warn(
+          { fallbackDeviceIndex: 0, availableDeviceCount: availableDevices.length },
+          "Default audio input device failed; retrying first available microphone",
+        );
+        try {
+          this.recorder = new PvRecorder(this.options.frameLength, 0);
+          actualDeviceIndex = 0;
+        } catch (fallbackError) {
+          this.running = false;
+          this.recorder = null;
+          throw new VoiceError("Failed to start audio capture", fallbackError);
+        }
+      } else {
+        this.running = false;
+        this.recorder = null;
+        throw new VoiceError("Failed to start audio capture", error);
+      }
+    }
+
+    try {
       this.recorder.start();
       this.running = true;
       this.readLoopPromise = this.readLoop();
@@ -67,7 +94,8 @@ export class AudioCapture {
         {
           frameLength: this.options.frameLength,
           sampleRate: this.options.sampleRate,
-          deviceIndex: this.options.deviceIndex,
+          deviceIndex: actualDeviceIndex,
+          availableDeviceCount: availableDevices.length,
         },
         "Audio capture started",
       );
@@ -115,6 +143,10 @@ export class AudioCapture {
 
   get frameLength(): number {
     return this.options.frameLength;
+  }
+
+  get sampleRate(): number {
+    return this.options.sampleRate;
   }
 
   getDeviceList(): string[] {

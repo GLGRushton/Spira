@@ -13,6 +13,8 @@ files:
   - packages/backend/dist/**/*
   - packages/mcp-vision/dist/**/*
   - packages/mcp-windows/dist/**/*
+  - assets/wake-word/openwakeword/**/*
+  - assets/wake-word/openwakeword-runtime/**/*
   - mcp-servers.json
   - "!node_modules/.cache"
   - "!**/*.ts"
@@ -23,6 +25,8 @@ asarUnpack:
   - packages/backend/dist/**/*
   - packages/mcp-vision/dist/**/*
   - packages/mcp-windows/dist/**/*
+  - assets/wake-word/openwakeword/**/*
+  - assets/wake-word/openwakeword-runtime/**/*
   - node_modules/@picovoice/**/*
   - node_modules/nodejs-whisper/**/*
   - node_modules/speaker/**/*

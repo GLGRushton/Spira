@@ -17,7 +17,9 @@ import { WhisperSttProvider } from "./voice/stt.js";
 import { PiperTtsProvider } from "./voice/tts-piper.js";
 import { TtsPlaybackService } from "./voice/tts-playback-service.js";
 import { ElevenLabsTtsProvider } from "./voice/tts.js";
-import { WakeWordDetector } from "./voice/wake-word.js";
+import { NullWakeWordProvider } from "./voice/wake-word-null.js";
+import { OpenWakeWordProvider } from "./voice/wake-word-openwakeword.js";
+import { PorcupineWakeWordProvider, type WakeWordProvider } from "./voice/wake-word.js";
 import { WsTransport } from "./ws-transport.js";
 
 const logger = createLogger("backend");
@@ -54,6 +56,44 @@ const createEnv = (): Env => {
     }
     throw error;
   }
+};
+
+const createWakeWordProvider = (env: Env): WakeWordProvider => {
+  if (env.WAKE_WORD_PROVIDER === "none") {
+    return new NullWakeWordProvider();
+  }
+
+  if (env.WAKE_WORD_PROVIDER === "porcupine") {
+    if (!env.PICOVOICE_ACCESS_KEY?.trim()) {
+      logger.warn("WAKE_WORD_PROVIDER=porcupine but PICOVOICE_ACCESS_KEY is missing; wake word disabled");
+      return new NullWakeWordProvider();
+    }
+
+    const wakeWordModelPath = env.WAKE_WORD_MODEL ? resolveAppPath(env.WAKE_WORD_MODEL) : undefined;
+    if (wakeWordModelPath && !existsSync(wakeWordModelPath)) {
+      logger.warn({ wakeWordModelPath }, "Wake word model file not found; falling back to built-in Porcupine keyword");
+    }
+
+    return new PorcupineWakeWordProvider(
+      {
+        accessKey: env.PICOVOICE_ACCESS_KEY,
+        keyword: "porcupine",
+        keywordPath: wakeWordModelPath && existsSync(wakeWordModelPath) ? wakeWordModelPath : undefined,
+      },
+      logger,
+    );
+  }
+
+  return new OpenWakeWordProvider(
+    {
+      runtimeDir: env.OPENWAKEWORD_RUNTIME_DIR,
+      workerPath: env.OPENWAKEWORD_WORKER_PATH,
+      modelPath: env.OPENWAKEWORD_MODEL_PATH,
+      modelName: env.OPENWAKEWORD_MODEL_NAME,
+      threshold: env.OPENWAKEWORD_THRESHOLD,
+    },
+    logger,
+  );
 };
 
 const shutdown = async (signal: NodeJS.Signals | "manual") => {
@@ -254,44 +294,29 @@ const bootstrap = async () => {
 
   await mcpRegistry.initialize();
 
-  if (!env.PICOVOICE_ACCESS_KEY?.trim()) {
-    logger.warn("PICOVOICE_ACCESS_KEY is missing; voice pipeline disabled");
-  } else {
-    try {
-      const capture = new AudioCapture({}, logger);
-      const wakeWordModelPath = env.WAKE_WORD_MODEL ? resolveAppPath(env.WAKE_WORD_MODEL) : undefined;
-      const piperModelPath = env.PIPER_MODEL ? resolveAppPath(env.PIPER_MODEL) : "";
-      if (wakeWordModelPath && !existsSync(wakeWordModelPath)) {
-        logger.warn({ wakeWordModelPath }, "Wake word model file not found; falling back to built-in keyword");
-      }
-      const wakeWord = new WakeWordDetector(
-        {
-          accessKey: env.PICOVOICE_ACCESS_KEY,
-          keyword: "porcupine",
-          keywordPath: wakeWordModelPath && existsSync(wakeWordModelPath) ? wakeWordModelPath : undefined,
-        },
-        logger,
-      );
-      const stt = new WhisperSttProvider(env.WHISPER_MODEL, logger);
-      const tts = env.ELEVENLABS_API_KEY
-        ? new ElevenLabsTtsProvider(
-            {
-              apiKey: env.ELEVENLABS_API_KEY,
-              voiceId: env.ELEVENLABS_VOICE_ID ?? "21m00Tcm4TlvDq8ikWAM",
-            },
-            logger,
-          )
-        : new PiperTtsProvider(env.PIPER_EXECUTABLE ?? "piper", piperModelPath, logger);
-      const playback = new AudioPlayback(logger);
+  try {
+    const capture = new AudioCapture({}, logger);
+    const wakeWord = createWakeWordProvider(env);
+    const piperModelPath = env.PIPER_MODEL ? resolveAppPath(env.PIPER_MODEL) : "";
+    const stt = new WhisperSttProvider(env.WHISPER_MODEL, logger);
+    const tts = env.ELEVENLABS_API_KEY
+      ? new ElevenLabsTtsProvider(
+          {
+            apiKey: env.ELEVENLABS_API_KEY,
+            voiceId: env.ELEVENLABS_VOICE_ID ?? "21m00Tcm4TlvDq8ikWAM",
+          },
+          logger,
+        )
+      : new PiperTtsProvider(env.PIPER_EXECUTABLE ?? "piper", piperModelPath, logger);
+    const playback = new AudioPlayback(logger);
 
-      voicePipeline = new VoicePipeline(capture, wakeWord, stt, tts, playback, bus, logger);
-      await voicePipeline.start();
-      voiceEnabled = true;
-    } catch (error) {
-      voicePipeline = null;
-      voiceEnabled = false;
-      logger.warn({ error }, "Voice pipeline initialization failed; continuing without voice");
-    }
+    voicePipeline = new VoicePipeline(capture, wakeWord, stt, tts, playback, bus, logger);
+    await voicePipeline.start();
+    voiceEnabled = true;
+  } catch (error) {
+    voicePipeline = null;
+    voiceEnabled = false;
+    logger.warn({ error }, "Voice pipeline initialization failed; continuing without voice");
   }
 
   server.start();

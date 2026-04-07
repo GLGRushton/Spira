@@ -106,6 +106,7 @@ export class BackendLifecycle {
         SPIRA_PORT: String(this.backendPort),
         ...(isPackaged
           ? {
+              SPIRA_RESOURCES_PATH: process.resourcesPath,
               SPIRA_MCP_CONFIG_PATH:
                 process.env.SPIRA_MCP_CONFIG_PATH ?? path.join(process.resourcesPath, "mcp-servers.json"),
             }

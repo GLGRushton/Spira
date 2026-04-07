@@ -28,13 +28,25 @@ export interface WakeWordOptions {
   sensitivity?: number;
 }
 
+export interface WakeWordProvider {
+  readonly frameLength: number;
+  readonly sampleRate: number;
+  readonly providerName: string;
+  readonly requiresExactFrameLength: boolean;
+  initialize(): Promise<void>;
+  dispose(): void;
+  processFrame(frame: Int16Array): boolean;
+}
+
 const DEFAULT_KEYWORD: NonNullable<WakeWordOptions["keyword"]> = "porcupine";
 const DEFAULT_SENSITIVITY = 0.5;
 const DEFAULT_FRAME_LENGTH = 512;
 const DEFAULT_SAMPLE_RATE = 16_000;
 
-export class WakeWordDetector {
+export class PorcupineWakeWordProvider implements WakeWordProvider {
   private porcupine: InstanceType<PorcupineModule["Porcupine"]> | null = null;
+  readonly providerName = "porcupine";
+  readonly requiresExactFrameLength = true;
 
   constructor(
     private readonly options: WakeWordOptions,
@@ -61,7 +73,7 @@ export class WakeWordDetector {
           frameLength: this.porcupine.frameLength,
           sampleRate: this.porcupine.sampleRate,
         },
-        "Wake word detector initialized",
+        "Porcupine wake word provider initialized",
       );
     } catch (error) {
       throw new VoiceError("Failed to initialize wake word detection", error);

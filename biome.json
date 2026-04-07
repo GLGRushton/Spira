@@ -21,6 +21,6 @@
     }
   },
   "files": {
-    "ignore": ["**/dist/**", "**/node_modules/**", "**/*.glsl"]
+    "ignore": ["**/dist/**", "**/node_modules/**", "**/*.glsl", "assets/wake-word/openwakeword-runtime/**"]
   }
 }

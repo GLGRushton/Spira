@@ -16,8 +16,9 @@
     "test": "vitest run",
     "test:watch": "vitest watch",
     "build": "tsx scripts/build.ts",
-    "package": "pnpm build && electron-builder --config apps/desktop/electron-builder.yml",
+    "package": "pnpm wakeword:setup && pnpm build && electron-builder --config apps/desktop/electron-builder.yml",
     "whisper:setup": "npx nodejs-whisper download",
+    "wakeword:setup": "powershell -ExecutionPolicy Bypass -File .\\scripts\\setup-openwakeword-runtime.ps1",
     "new-mcp-server": "tsx scripts/new-mcp-server.ts"
   },
   "devDependencies": {

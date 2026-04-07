@@ -4,7 +4,7 @@
 
 ## Features
 - 🤖 GitHub Copilot AI (streaming, tool-calling)
-- 🎙️ Voice control with wake word "Shinra" (Porcupine + Whisper STT + ElevenLabs TTS)
+- 🎙️ Voice control with configurable wake-word providers (openWakeWord or Porcupine + Whisper STT + ElevenLabs TTS)
 - 🖥️ Windows system control via MCP (volume, brightness, apps, power, notifications)
 - ✨ FFX/X-2 themed UI with living orb visualisation
 - 🔌 Extensible MCP server framework
@@ -21,9 +21,12 @@
 2. `pnpm install`
 3. Copy `.env.example` to `.env` and fill in:
    - `GITHUB_TOKEN` — Optional GitHub personal access token if you want token-based Copilot auth
-   - `PICOVOICE_ACCESS_KEY` — From [Picovoice Console](https://console.picovoice.ai/) (free tier)
+   - `WAKE_WORD_PROVIDER` — `openwakeword`, `porcupine`, or `none` (defaults to `openwakeword`)
+   - `PICOVOICE_ACCESS_KEY` — Required only when `WAKE_WORD_PROVIDER=porcupine`
    - `ELEVENLABS_API_KEY` — From [ElevenLabs](https://elevenlabs.io/) (optional, enables high-quality TTS)
    - `ELEVENLABS_VOICE_ID` — Voice ID from ElevenLabs dashboard
+   - `OPENWAKEWORD_MODEL_NAME` — Built-in openWakeWord model name (defaults to `hey_jarvis`)
+   - `OPENWAKEWORD_MODEL_PATH` — Optional path to a custom `.onnx` wake-word model such as a trained `Shinra` model
 
 If you already use GitHub Copilot CLI locally, Spira will prefer that logged-in Copilot session automatically.
 
@@ -34,6 +37,12 @@ pnpm dev          # Start renderer + Electron; Electron starts the backend child
 pnpm typecheck    # Type check all packages
 pnpm lint         # Lint all packages
 pnpm test         # Run tests
+```
+
+To provision the bundled local openWakeWord runtime for development:
+
+```powershell
+pnpm wakeword:setup
 ```
 
 ## Building

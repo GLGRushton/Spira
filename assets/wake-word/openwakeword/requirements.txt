@@ -1,0 +1,3 @@
+numpy>=1.26,<3
+onnxruntime>=1.17,<2
+openwakeword>=0.6,<0.7
