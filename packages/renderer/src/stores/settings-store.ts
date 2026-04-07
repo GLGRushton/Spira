@@ -70,7 +70,6 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
       ...settings,
     };
     set(nextSettings);
-    persistSettings(nextSettings);
   },
 }));
 
@@ -78,11 +77,8 @@ if (typeof window !== "undefined") {
   void window.electronAPI
     .getSettings()
     .then((settings) => {
-      if (Object.keys(settings).length === 0) {
-        return;
-      }
-
       useSettingsStore.getState().applySettings(settings);
+      window.electronAPI.updateSettings(settings);
     })
     .catch((error) => {
       console.error("[Spira:settings-load]", error);

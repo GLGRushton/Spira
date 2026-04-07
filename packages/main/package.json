@@ -5,7 +5,8 @@
   "type": "module",
   "main": "./src/index.ts",
   "scripts": {
-    "dev": "electron --import tsx src/index.ts"
+    "dev": "electron ./dev-main.mjs",
+    "dev:external": "node -e \"process.env.SPIRA_EXTERNAL_BACKEND='1'; require('node:child_process').spawn('electron', ['./dev-main.mjs'], { stdio: 'inherit', shell: true, env: process.env }).on('exit', (code) => process.exit(code ?? 0));\""
   },
   "dependencies": {
     "@spira/shared": "workspace:*",

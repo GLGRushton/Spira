@@ -20,15 +20,17 @@
 1. Clone the repo
 2. `pnpm install`
 3. Copy `.env.example` to `.env` and fill in:
-   - `GITHUB_TOKEN` — GitHub personal access token with Copilot access
+   - `GITHUB_TOKEN` — Optional GitHub personal access token if you want token-based Copilot auth
    - `PICOVOICE_ACCESS_KEY` — From [Picovoice Console](https://console.picovoice.ai/) (free tier)
    - `ELEVENLABS_API_KEY` — From [ElevenLabs](https://elevenlabs.io/) (optional, enables high-quality TTS)
    - `ELEVENLABS_VOICE_ID` — Voice ID from ElevenLabs dashboard
 
+If you already use GitHub Copilot CLI locally, Spira will prefer that logged-in Copilot session automatically.
+
 ## Development
 
 ```bash
-pnpm dev          # Start backend + renderer + Electron concurrently
+pnpm dev          # Start renderer + Electron; Electron starts the backend child
 pnpm typecheck    # Type check all packages
 pnpm lint         # Lint all packages
 pnpm test         # Run tests

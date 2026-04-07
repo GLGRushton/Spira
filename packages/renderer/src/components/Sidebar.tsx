@@ -10,7 +10,7 @@ interface SidebarProps {
 }
 
 const items: Array<{ id: SidebarView; label: string; caption: string }> = [
-  { id: "chat", label: "Chat", caption: "Copilot relay" },
+  { id: "chat", label: "Chat", caption: "Shinra relay" },
   { id: "settings", label: "Settings", caption: "Voice + MCP" },
 ];
 

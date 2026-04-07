@@ -5,6 +5,33 @@ import { BrowserWindow } from "electron";
 const currentFile = fileURLToPath(import.meta.url);
 const currentDir = path.dirname(currentFile);
 const isDevelopment = process.env.NODE_ENV !== "production";
+const devServerUrl = "http://localhost:5173";
+const devServerRetryDelayMs = 250;
+const devServerMaxAttempts = 80;
+const preloadPath = isDevelopment
+  ? path.resolve(currentDir, "../dev-preload.cjs")
+  : path.join(currentDir, "preload.js");
+
+async function loadDevelopmentRenderer(window: BrowserWindow): Promise<void> {
+  for (let attempt = 1; attempt <= devServerMaxAttempts; attempt += 1) {
+    if (window.isDestroyed()) {
+      return;
+    }
+
+    try {
+      await window.loadURL(devServerUrl);
+      return;
+    } catch (error) {
+      if (attempt === devServerMaxAttempts) {
+        throw error;
+      }
+
+      await new Promise((resolve) => {
+        setTimeout(resolve, devServerRetryDelayMs);
+      });
+    }
+  }
+}
 
 export function createWindow(): BrowserWindow {
   const window = new BrowserWindow({
@@ -13,17 +40,24 @@ export function createWindow(): BrowserWindow {
     minWidth: 800,
     minHeight: 600,
     frame: false,
+    show: false,
     backgroundColor: "#0a0e27",
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: true,
-      preload: path.join(currentDir, "preload.js"),
+      sandbox: !isDevelopment,
+      preload: preloadPath,
     },
   });
 
+  window.once("ready-to-show", () => {
+    window.show();
+  });
+
   if (isDevelopment) {
-    void window.loadURL("http://localhost:5173");
+    void loadDevelopmentRenderer(window).catch((error: unknown) => {
+      console.error("Failed to load development renderer", error);
+    });
   } else {
     void window.loadFile(path.join(currentDir, "../renderer/index.html"));
   }

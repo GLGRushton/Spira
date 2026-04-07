@@ -7,11 +7,12 @@ export interface EventMap {
   "state:change": [previous: AssistantState, current: AssistantState];
   "audio:level": [{ level: number }];
   "tts:amplitude": [{ amplitude: number }];
+  "tts:audio": [{ audioBase64: string; mimeType: "audio/wav" }];
   "voice:transcript": [{ text: string }];
   "copilot:response-start": [messageId: string];
   "copilot:delta": [messageId: string, delta: string];
   "copilot:response-end": [{ text: string; messageId: string }];
-  "copilot:error": [code: string, message: string];
+  "copilot:error": [code: string, message: string, details?: string, source?: string];
   "copilot:tool-call": [callId: string, toolName: string, args: Record<string, unknown>];
   "copilot:tool-result": [callId: string, result: unknown];
   "mcp:server-crashed": [serverId: string];

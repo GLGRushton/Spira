@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "concurrently --names backend,renderer,electron --prefix-colors cyan,teal,blue \"pnpm --filter @spira/backend dev\" \"pnpm --filter @spira/renderer dev\" \"pnpm --filter @spira/main dev\"",
+    "dev": "concurrently --names backend,renderer,electron --prefix-colors cyan,teal,blue \"pnpm --filter @spira/backend dev\" \"pnpm --filter @spira/renderer dev\" \"pnpm --filter @spira/main dev:external\"",
     "dev:backend": "pnpm -F @spira/backend dev",
     "dev:main": "pnpm -F @spira/main dev",
     "dev:renderer": "pnpm -F @spira/renderer dev",

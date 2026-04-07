@@ -1,6 +1,8 @@
 import type { BrowserWindow } from "electron";
 import { app } from "electron";
-import { autoUpdater } from "electron-updater";
+import electronUpdater from "electron-updater";
+
+const { autoUpdater } = electronUpdater;
 
 function logAutoUpdateError(context: string, error: unknown): void {
   const details = error instanceof Error ? { message: error.message, stack: error.stack } : { message: String(error) };

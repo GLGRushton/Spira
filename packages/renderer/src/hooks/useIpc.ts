@@ -25,6 +25,10 @@ export function useIpc(): void {
     let activeAssistantMessageId: string | null = null;
     const toolCallMessageIds = new Map<string, string>();
 
+    void window.electronAPI.getConnectionStatus().then((status) => {
+      setConnectionStatus(status);
+    });
+
     const unsubscribers = [
       window.electronAPI.onStateChange((state) => {
         setAssistantState(state);
@@ -103,10 +107,15 @@ export function useIpc(): void {
       window.electronAPI.onConnectionStatus((status) => {
         setConnectionStatus(status);
       }),
-      window.electronAPI.onError(({ code, message }) => {
-        console.error(`[Spira:${code}] ${message}`);
-        setAssistantState("error");
-        if (code === "BACKEND_SOCKET_ERROR" || code === "BACKEND_CRASHED") {
+      window.electronAPI.onError((payload) => {
+        console.error(`[Spira:${payload.source ?? "unknown"}:${payload.code}] ${payload.message}`, payload);
+        if (payload.details) {
+          console.error(payload.details);
+        }
+        if (payload.source !== "tts") {
+          setAssistantState("error");
+        }
+        if (payload.code === "BACKEND_SOCKET_ERROR" || payload.code === "BACKEND_CRASHED") {
           setConnectionStatus("disconnected");
         }
       }),

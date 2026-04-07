@@ -2,9 +2,18 @@ import type { AssistantState } from "./assistant-state.js";
 import type { ChatMessage, ToolCallStatus } from "./chat-types.js";
 import type { McpServerStatus } from "./mcp-types.js";
 
+export interface ErrorPayload {
+  code: string;
+  message: string;
+  source?: string;
+  details?: string;
+}
+
 export type ClientMessage =
   | { type: "chat:send"; text: string; conversationId?: string }
   | { type: "chat:clear" }
+  | { type: "tts:speak"; text: string }
+  | { type: "tts:stop" }
   | { type: "voice:toggle" }
   | { type: "voice:push-to-talk"; active: boolean }
   | { type: "voice:mute" }
@@ -24,7 +33,8 @@ export type ServerMessage =
   | { type: "voice:transcript"; text: string }
   | { type: "audio:level"; level: number }
   | { type: "tts:amplitude"; amplitude: number }
-  | { type: "error"; code: string; message: string }
+  | { type: "tts:audio"; audioBase64: string; mimeType: "audio/wav" }
+  | ({ type: "error" } & ErrorPayload)
   | { type: "settings:current"; settings: UserSettings };
 
 export interface UserSettings {

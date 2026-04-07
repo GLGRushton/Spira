@@ -4,6 +4,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import type { Tool as SdkMcpTool } from "@modelcontextprotocol/sdk/types.js";
 import type { McpServerConfig, McpTool } from "@spira/shared";
 import type { Logger } from "pino";
+import { appRootDir } from "../util/app-paths.js";
 import { McpError } from "../util/errors.js";
 import type { SpiraEventBus } from "../util/event-bus.js";
 
@@ -75,7 +76,7 @@ export class McpClientPool {
     const transport = new StdioClientTransport({
       command: config.command,
       args: config.args,
-      cwd: process.cwd(),
+      cwd: appRootDir,
       env: normalizeEnv({ ...process.env, ...config.env }),
       stderr: "pipe",
     });

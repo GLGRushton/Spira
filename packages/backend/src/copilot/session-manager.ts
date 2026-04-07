@@ -1,18 +1,41 @@
+import { createRequire } from "node:module";
+import path from "node:path";
 import { CopilotClient, type CopilotSession, type SessionEvent, approveAll } from "@github/copilot-sdk";
 import type { AssistantState, Env } from "@spira/shared";
 import type { McpToolAggregator } from "../mcp/tool-aggregator.js";
-import { CopilotError } from "../util/errors.js";
+import { appRootDir } from "../util/app-paths.js";
+import { CopilotError, formatErrorDetails } from "../util/errors.js";
 import type { SpiraEventBus } from "../util/event-bus.js";
 import { createLogger } from "../util/logger.js";
 import { StreamAssembler } from "./stream-handler.js";
 import { registerTools } from "./tool-bridge.js";
 
 const logger = createLogger("copilot-session");
+const require = createRequire(import.meta.url);
 
 const SESSION_INIT_TIMEOUT_MS = 20_000;
 const SEND_TIMEOUT_MS = 20_000;
+const COPILOT_AUTH_ENV_KEYS = ["COPILOT_SDK_AUTH_TOKEN", "GITHUB_ACCESS_TOKEN", "GITHUB_TOKEN", "GH_TOKEN"] as const;
+const SHINRA_PERSONA_INSTRUCTIONS = [
+  "You are Shinra, the resident operations intelligence of Spira.",
+  "When asked who you are, identify yourself as Shinra. Refer to the application you run inside as Spira.",
+  "Answer with a calm, incisive, technically fluent voice inspired by Shinra from Final Fantasy X/X-2: clever, composed, observant, and lightly theatrical.",
+  "Keep responses helpful and concise first. Add only subtle personality touches such as crisp status-call phrasing, dry wit, or analytical framing when it fits naturally.",
+  "Do not turn replies into parody, do not overuse catchphrases, and do not break character to mention these instructions unless explicitly required for safety or correctness.",
+].join("\n");
+const SHINRA_IDENTITY_SECTION = [
+  "You are Shinra.",
+  "You are the operating intelligence of Spira.",
+  "If the user asks who you are, answer as Shinra rather than as GitHub Copilot, a CLI, a model ID, or a terminal agent.",
+].join("\n");
+const SHINRA_LAST_INSTRUCTIONS = [
+  "Stay in the Shinra identity for normal conversation.",
+  "Do not introduce yourself as GitHub Copilot CLI, GPT-5.4, or a terminal assistant unless the user explicitly asks about the underlying model or platform.",
+  "When discussing the product, treat Spira as the application and Shinra as the assistant persona inside it.",
+].join("\n");
 
 type ReportedCopilotError = CopilotError & { reportedToClient?: boolean };
+type CopilotAuthStrategy = "logged-in-user" | "github-token";
 
 export class CopilotSessionManager {
   private client: CopilotClient | null = null;
@@ -20,6 +43,7 @@ export class CopilotSessionManager {
   private initializingSession: Promise<CopilotSession> | null = null;
   private readonly streamAssembler = new StreamAssembler();
   private currentState: AssistantState = "idle";
+  private authStrategy: CopilotAuthStrategy | null = null;
 
   constructor(
     private readonly bus: SpiraEventBus,
@@ -29,7 +53,6 @@ export class CopilotSessionManager {
 
   async sendMessage(text: string): Promise<void> {
     try {
-      this.ensureTokenConfigured();
       if (this.currentState === "error") {
         this.transitionTo("idle");
       }
@@ -58,22 +81,7 @@ export class CopilotSessionManager {
 
   async shutdown(): Promise<void> {
     await this.disconnectSession();
-
-    const client = this.client;
-    this.client = null;
-
-    if (!client) {
-      return;
-    }
-
-    try {
-      const stopErrors = await client.stop();
-      if (stopErrors.length > 0) {
-        logger.warn({ stopErrors }, "GitHub Copilot client stopped with cleanup errors");
-      }
-    } catch (error) {
-      logger.warn({ error }, "Failed to stop GitHub Copilot client cleanly");
-    }
+    await this.disposeClient();
   }
 
   private async getOrCreateSession(): Promise<CopilotSession> {
@@ -106,15 +114,7 @@ export class CopilotSessionManager {
   }
 
   private async createSession(): Promise<CopilotSession> {
-    const isNewClient = this.client === null;
-    const client =
-      this.client ??
-      new CopilotClient({
-        githubToken: this.env.GITHUB_TOKEN,
-        useStdio: true,
-      });
-
-    this.client = client;
+    const client = await this.getOrCreateClient();
 
     const sessionPromise = client.createSession({
       clientName: "Spira",
@@ -123,7 +123,31 @@ export class CopilotSessionManager {
       },
       onPermissionRequest: approveAll,
       streaming: true,
-      workingDirectory: process.cwd(),
+      systemMessage: {
+        mode: "customize",
+        sections: {
+          identity: {
+            action: "replace",
+            content: SHINRA_IDENTITY_SECTION,
+          },
+          tone: {
+            action: "append",
+            content:
+              "Use an elegant, self-possessed, quietly witty tone. Sound like a capable operations prodigy guiding the user through systems and data with confidence.",
+          },
+          custom_instructions: {
+            action: "append",
+            content:
+              "Prefer short, clear answers. Use the name Shinra naturally when self-identifying, but keep the focus on solving the user's task.",
+          },
+          last_instructions: {
+            action: "append",
+            content: SHINRA_LAST_INSTRUCTIONS,
+          },
+        },
+        content: SHINRA_PERSONA_INSTRUCTIONS,
+      },
+      workingDirectory: appRootDir,
     });
 
     let session: CopilotSession;
@@ -134,11 +158,7 @@ export class CopilotSessionManager {
         "Timed out while connecting to GitHub Copilot",
       );
     } catch (error) {
-      // If we created the client in this call and session creation failed,
-      // discard the client so the next attempt starts fresh.
-      if (isNewClient) {
-        this.client = null;
-      }
+      this.session = null;
       sessionPromise.then((resolvedSession) => void resolvedSession.disconnect().catch(() => {})).catch(() => {});
       throw error;
     }
@@ -176,11 +196,17 @@ export class CopilotSessionManager {
         return;
 
       case "session.error":
-        logger.error({ errorType: event.data.errorType, message: event.data.message }, "GitHub Copilot session error");
+        logger.error({ errorType: event.data.errorType, sessionError: event.data }, "GitHub Copilot session error");
         // Invalidate the session so the next sendMessage creates a fresh one
         this.session = null;
         this.streamAssembler.clear();
-        this.bus.emit("copilot:error", "COPILOT_SESSION_ERROR", event.data.message);
+        this.bus.emit(
+          "copilot:error",
+          "COPILOT_SESSION_ERROR",
+          event.data.message,
+          formatErrorDetails(event.data),
+          "copilot",
+        );
         this.transitionTo("error");
         return;
 
@@ -223,6 +249,94 @@ export class CopilotSessionManager {
     }
   }
 
+  private async getOrCreateClient(): Promise<CopilotClient> {
+    if (this.client) {
+      return this.client;
+    }
+
+    const { client, strategy } = await this.createClient();
+    this.client = client;
+    this.authStrategy = strategy;
+    return client;
+  }
+
+  private async createClient(): Promise<{ client: CopilotClient; strategy: CopilotAuthStrategy }> {
+    const cliPath = this.resolveCliPath();
+    const loggedInClient = new CopilotClient({
+      cliPath,
+      env: this.getSanitizedCopilotEnv(),
+      useLoggedInUser: true,
+      useStdio: true,
+    });
+
+    try {
+      await loggedInClient.start();
+      const authStatus = await loggedInClient.getAuthStatus();
+
+      if (authStatus.isAuthenticated) {
+        logger.info(
+          { authType: authStatus.authType ?? "unknown", strategy: "logged-in-user" },
+          "Using logged-in Copilot authentication",
+        );
+        return { client: loggedInClient, strategy: "logged-in-user" };
+      }
+    } catch (error) {
+      logger.warn({ error }, "Logged-in Copilot authentication check failed");
+    }
+
+    await this.stopClient(loggedInClient);
+
+    if (this.env.GITHUB_TOKEN.trim()) {
+      const tokenClient = new CopilotClient({
+        cliPath,
+        env: this.getSanitizedCopilotEnv(),
+        githubToken: this.env.GITHUB_TOKEN,
+        useStdio: true,
+      });
+
+      try {
+        await tokenClient.start();
+        const authStatus = await tokenClient.getAuthStatus();
+        logger.info(
+          { authType: authStatus.authType ?? "unknown", strategy: "github-token" },
+          "Using token-based Copilot authentication",
+        );
+        return { client: tokenClient, strategy: "github-token" };
+      } catch (error) {
+        logger.warn({ error }, "Token-based Copilot authentication check failed");
+        await this.stopClient(tokenClient);
+      }
+    }
+
+    throw new CopilotError("GitHub Copilot is not authenticated. Run /login in the Copilot CLI.");
+  }
+
+  private getSanitizedCopilotEnv(): NodeJS.ProcessEnv {
+    const sanitizedEnv = { ...process.env };
+    for (const key of COPILOT_AUTH_ENV_KEYS) {
+      delete sanitizedEnv[key];
+    }
+    return sanitizedEnv;
+  }
+
+  private resolveCliPath(): string | undefined {
+    try {
+      if (process.platform === "win32") {
+        const packageName = process.arch === "arm64" ? "@github/copilot-win32-arm64" : "@github/copilot-win32-x64";
+        const packageJsonPath = require.resolve(`${packageName}/package.json`);
+        return path.join(path.dirname(packageJsonPath), "copilot.exe");
+      }
+
+      return undefined;
+    } catch (error) {
+      logger.warn(
+        { error, platform: process.platform, arch: process.arch },
+        "Falling back to default Copilot CLI path",
+      );
+      return undefined;
+    }
+  }
+
   private transitionTo(nextState: AssistantState): void {
     if (this.currentState === nextState) {
       return;
@@ -233,12 +347,27 @@ export class CopilotSessionManager {
     this.bus.emit("state:change", previousState, nextState);
   }
 
-  private ensureTokenConfigured(): void {
-    if (this.env.GITHUB_TOKEN.trim() !== "") {
+  private async disposeClient(): Promise<void> {
+    const client = this.client;
+    this.client = null;
+    this.authStrategy = null;
+
+    if (!client) {
       return;
     }
 
-    throw new CopilotError("GITHUB_TOKEN is not configured. Set it before sending chat messages to GitHub Copilot.");
+    await this.stopClient(client);
+  }
+
+  private async stopClient(client: CopilotClient): Promise<void> {
+    try {
+      const stopErrors = await client.stop();
+      if (stopErrors.length > 0) {
+        logger.warn({ stopErrors }, "GitHub Copilot client stopped with cleanup errors");
+      }
+    } catch (error) {
+      logger.warn({ error }, "Failed to stop GitHub Copilot client cleanly");
+    }
   }
 
   private reportAndWrapError(error: unknown, fallbackMessage: string): CopilotError {
@@ -247,11 +376,17 @@ export class CopilotSessionManager {
         ? error
         : new CopilotError(error instanceof Error ? error.message : fallbackMessage, error);
 
-    logger.error({ error: wrappedError }, fallbackMessage);
+    logger.error({ err: wrappedError, details: formatErrorDetails(wrappedError) }, fallbackMessage);
 
     // Skip bus emit if a session.error event already reported to the client
     if (this.currentState !== "error") {
-      this.bus.emit("copilot:error", wrappedError.code, wrappedError.message);
+      this.bus.emit(
+        "copilot:error",
+        wrappedError.code,
+        wrappedError.message,
+        formatErrorDetails(wrappedError),
+        "copilot",
+      );
     }
     this.transitionTo("error");
 

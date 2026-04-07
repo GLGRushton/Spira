@@ -7,7 +7,7 @@ export function TitleBar() {
       <div className={styles.brand}>
         <div>
           <div className={styles.logo}>Spira</div>
-          <div className={styles.subtitle}>Powered by GitHub Copilot</div>
+          <div className={styles.subtitle}>Shinra interface</div>
         </div>
         <ConnectionDot />
       </div>

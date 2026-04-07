@@ -1,13 +1,13 @@
 import { existsSync } from "node:fs";
-import path from "node:path";
-import { type ClientMessage, parseEnv } from "@spira/shared";
+import { type ClientMessage, type Env, parseEnv } from "@spira/shared";
 import { ZodError } from "zod";
 import { CopilotSessionManager } from "./copilot/session-manager.js";
 import { McpClientPool } from "./mcp/client-pool.js";
 import { McpRegistry } from "./mcp/registry.js";
 import { McpToolAggregator } from "./mcp/tool-aggregator.js";
 import { WsServer } from "./server.js";
-import { ConfigError, SpiraError } from "./util/errors.js";
+import { resolveAppPath } from "./util/app-paths.js";
+import { ConfigError, SpiraError, toErrorPayload } from "./util/errors.js";
 import { SpiraEventBus } from "./util/event-bus.js";
 import { createLogger } from "./util/logger.js";
 import { AudioCapture } from "./voice/audio-capture.js";
@@ -15,6 +15,7 @@ import { AudioPlayback } from "./voice/audio-playback.js";
 import { VoicePipeline } from "./voice/pipeline.js";
 import { WhisperSttProvider } from "./voice/stt.js";
 import { PiperTtsProvider } from "./voice/tts-piper.js";
+import { TtsPlaybackService } from "./voice/tts-playback-service.js";
 import { ElevenLabsTtsProvider } from "./voice/tts.js";
 import { WakeWordDetector } from "./voice/wake-word.js";
 import { WsTransport } from "./ws-transport.js";
@@ -28,8 +29,32 @@ let mcpRegistry: McpRegistry | null = null;
 let transport: WsTransport | null = null;
 let unsubscribeTransport: (() => void) | null = null;
 let voicePipeline: VoicePipeline | null = null;
+let ttsPlayback: TtsPlaybackService | null = null;
 let voiceEnabled = false;
 let shuttingDown = false;
+
+const loadEnvFromFile = () => {
+  try {
+    process.loadEnvFile(resolveAppPath(".env"));
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== "ENOENT") {
+      throw error;
+    }
+  }
+};
+
+const createEnv = (): Env => {
+  loadEnvFromFile();
+  try {
+    return parseEnv();
+  } catch (error) {
+    if (error instanceof ZodError) {
+      throw new ConfigError("Invalid backend environment configuration", error);
+    }
+    throw error;
+  }
+};
 
 const shutdown = async (signal: NodeJS.Signals | "manual") => {
   if (shuttingDown) {
@@ -41,6 +66,7 @@ const shutdown = async (signal: NodeJS.Signals | "manual") => {
 
   unsubscribeTransport?.();
   await voicePipeline?.stop();
+  ttsPlayback?.dispose();
   await copilotManager?.shutdown();
   await mcpRegistry?.shutdown();
   transport?.close();
@@ -51,6 +77,7 @@ const shutdown = async (signal: NodeJS.Signals | "manual") => {
   mcpRegistry = null;
   transport = null;
   voicePipeline = null;
+  ttsPlayback = null;
   voiceEnabled = false;
   server = null;
   bus = null;
@@ -66,14 +93,17 @@ const handleClientMessage = async (message: ClientMessage): Promise<void> => {
     try {
       await copilotManager?.sendMessage(message.text);
     } catch (error) {
+      logger.error(
+        { err: error, messageType: message.type, textLength: message.text.length },
+        "Copilot chat request failed",
+      );
       const alreadyReported =
         error instanceof SpiraError && (error as { reportedToClient?: boolean }).reportedToClient === true;
 
       if (!alreadyReported) {
         transport?.send({
           type: "error",
-          code: error instanceof SpiraError ? error.code : "UNKNOWN_ERROR",
-          message: error instanceof Error ? error.message : String(error),
+          ...toErrorPayload(error, "UNKNOWN_ERROR", "Failed to send message to GitHub Copilot", "copilot"),
         });
       }
     }
@@ -81,15 +111,37 @@ const handleClientMessage = async (message: ClientMessage): Promise<void> => {
   }
 
   if (message.type === "chat:clear") {
+    ttsPlayback?.stop();
     try {
       await copilotManager?.clearSession();
     } catch (error) {
+      logger.error({ err: error, messageType: message.type }, "Failed to clear chat session");
       transport?.send({
         type: "error",
-        code: error instanceof SpiraError ? error.code : "UNKNOWN_ERROR",
-        message: error instanceof Error ? error.message : String(error),
+        ...toErrorPayload(error, "UNKNOWN_ERROR", "Failed to clear chat session", "copilot"),
       });
     }
+    return;
+  }
+
+  if (message.type === "tts:speak") {
+    try {
+      await ttsPlayback?.speak(message.text);
+    } catch (error) {
+      logger.error(
+        { err: error, messageType: message.type, textLength: message.text.length },
+        "Chat TTS synthesis failed",
+      );
+      transport?.send({
+        type: "error",
+        ...toErrorPayload(error, "UNKNOWN_ERROR", "Failed to synthesize chat speech", "tts"),
+      });
+    }
+    return;
+  }
+
+  if (message.type === "tts:stop") {
+    ttsPlayback?.stop();
     return;
   }
 
@@ -110,6 +162,11 @@ const handleClientMessage = async (message: ClientMessage): Promise<void> => {
     } catch (error) {
       logger.warn({ error }, "Failed to toggle voice pipeline");
     }
+    return;
+  }
+
+  if (message.type === "settings:update") {
+    ttsPlayback?.updateSettings(message.settings);
     return;
   }
 
@@ -150,16 +207,7 @@ const handleClientMessage = async (message: ClientMessage): Promise<void> => {
 };
 
 const bootstrap = async () => {
-  const env = (() => {
-    try {
-      return parseEnv();
-    } catch (error) {
-      if (error instanceof ZodError) {
-        throw new ConfigError("Invalid backend environment configuration", error);
-      }
-      throw error;
-    }
-  })();
+  const env = createEnv();
 
   logger.info({ nodeEnv: process.env.NODE_ENV ?? "development", port: env.SPIRA_PORT }, "Starting Spira backend");
 
@@ -170,22 +218,25 @@ const bootstrap = async () => {
   const aggregator = new McpToolAggregator(pool);
   mcpRegistry = new McpRegistry(bus, logger, pool);
   copilotManager = new CopilotSessionManager(bus, env, aggregator);
+  ttsPlayback = new TtsPlaybackService(env, bus, logger);
 
   bus.on("voice:transcript", ({ text }) => {
     void copilotManager?.sendMessage(text).catch((error) => {
-      logger.error({ error }, "Failed to forward voice transcript to Copilot");
+      logger.error({ err: error, transcriptLength: text.length }, "Failed to forward voice transcript to Copilot");
       transport?.send({
         type: "error",
-        code: error instanceof SpiraError ? error.code : "UNKNOWN_ERROR",
-        message: error instanceof Error ? error.message : String(error),
+        ...toErrorPayload(error, "UNKNOWN_ERROR", "Failed to forward voice transcript to GitHub Copilot", "copilot"),
       });
     });
   });
 
   unsubscribeTransport = transport.onMessage((message) => {
     handleClientMessage(message).catch((error) => {
-      logger.error({ error }, "Unhandled error in message handler");
-      transport?.send({ type: "error", code: "UNKNOWN_ERROR", message: String(error) });
+      logger.error({ err: error, clientMessage: message }, "Unhandled error in message handler");
+      transport?.send({
+        type: "error",
+        ...toErrorPayload(error, "UNKNOWN_ERROR", "Unhandled backend error", "backend"),
+      });
     });
   });
 
@@ -196,7 +247,8 @@ const bootstrap = async () => {
   } else {
     try {
       const capture = new AudioCapture({}, logger);
-      const wakeWordModelPath = env.WAKE_WORD_MODEL ? path.resolve(env.WAKE_WORD_MODEL) : undefined;
+      const wakeWordModelPath = env.WAKE_WORD_MODEL ? resolveAppPath(env.WAKE_WORD_MODEL) : undefined;
+      const piperModelPath = env.PIPER_MODEL ? resolveAppPath(env.PIPER_MODEL) : "";
       if (wakeWordModelPath && !existsSync(wakeWordModelPath)) {
         logger.warn({ wakeWordModelPath }, "Wake word model file not found; falling back to built-in keyword");
       }
@@ -217,7 +269,7 @@ const bootstrap = async () => {
             },
             logger,
           )
-        : new PiperTtsProvider(env.PIPER_EXECUTABLE ?? "piper", env.PIPER_MODEL ?? "", logger);
+        : new PiperTtsProvider(env.PIPER_EXECUTABLE ?? "piper", piperModelPath, logger);
       const playback = new AudioPlayback(logger);
 
       voicePipeline = new VoicePipeline(capture, wakeWord, stt, tts, playback, bus, logger);

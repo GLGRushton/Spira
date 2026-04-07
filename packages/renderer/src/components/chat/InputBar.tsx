@@ -23,7 +23,7 @@ export function InputBar() {
       <textarea
         className={styles.input}
         rows={2}
-        placeholder="Transmit to GitHub Copilot…"
+        placeholder="Transmit to Shinra…"
         value={value}
         disabled={isStreaming}
         onChange={(event) => setValue(event.target.value)}

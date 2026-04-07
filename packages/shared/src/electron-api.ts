@@ -1,7 +1,7 @@
 import type { AssistantState } from "./assistant-state.js";
 import type { ChatMessage, ToolCallStatus } from "./chat-types.js";
 import type { McpServerStatus } from "./mcp-types.js";
-import type { ClientMessage, ServerMessage, UserSettings } from "./protocol.js";
+import type { ClientMessage, ErrorPayload, ServerMessage, UserSettings } from "./protocol.js";
 
 export type ConnectionStatus = "connecting" | "connected" | "disconnected";
 
@@ -20,6 +20,7 @@ export interface ElectronApi {
   toggleVoice(): void;
   updateSettings(settings: Partial<UserSettings>): void;
   getSettings(): Promise<Partial<UserSettings>>;
+  getConnectionStatus(): Promise<ConnectionStatus>;
   setSettings(data: Partial<UserSettings>): Promise<void>;
   minimize(): void;
   maximize(): void;
@@ -34,7 +35,7 @@ export interface ElectronApi {
   onAudioLevel(handler: (level: number) => void): () => void;
   onTtsAmplitude(handler: (amplitude: number) => void): () => void;
   onVoiceTranscript(handler: (text: string) => void): () => void;
-  onError(handler: (payload: { code: string; message: string }) => void): () => void;
+  onError(handler: (payload: ErrorPayload) => void): () => void;
   onSettingsCurrent(handler: (settings: UserSettings) => void): () => void;
   onConnectionStatus(handler: (status: ConnectionStatus) => void): () => void;
   onUpdateAvailable(callback: (info: unknown) => void): void;

@@ -1,6 +1,4 @@
-import type { ConnectionStatus, ElectronApi, ServerMessage } from "@spira/shared";
-import { contextBridge, ipcRenderer } from "electron";
-import type { IpcRendererEvent } from "electron";
+const { contextBridge, ipcRenderer } = require("electron");
 
 const WINDOW_CONTROL_CHANNEL = "spira:window-control";
 const CONNECTION_STATUS_CHANNEL = "spira:connection-status";
@@ -8,21 +6,16 @@ const CONNECTION_STATUS_GET_CHANNEL = "connection-status:get";
 const SETTINGS_GET_CHANNEL = "settings:get";
 const SETTINGS_SET_CHANNEL = "settings:set";
 
-type WindowControlAction = "minimize" | "maximize" | "close";
-
-const onServerMessage = <T extends ServerMessage["type"]>(
-  type: T,
-  handler: (message: Extract<ServerMessage, { type: T }>) => void,
-): (() => void) => {
+function onServerMessage(type, handler) {
   return electronAPI.onMessage((message) => {
     if (message.type === type) {
-      handler(message as Extract<ServerMessage, { type: T }>);
+      handler(message);
     }
   });
-};
+}
 
-const onConnectionStatus = (handler: (status: ConnectionStatus) => void): (() => void) => {
-  const listener = (_event: IpcRendererEvent, status: ConnectionStatus) => {
+function onConnectionStatus(handler) {
+  const listener = (_event, status) => {
     handler(status);
   };
 
@@ -30,13 +23,13 @@ const onConnectionStatus = (handler: (status: ConnectionStatus) => void): (() =>
   return () => {
     ipcRenderer.off(CONNECTION_STATUS_CHANNEL, listener);
   };
-};
+}
 
-const sendWindowControl = (action: WindowControlAction): void => {
+function sendWindowControl(action) {
   ipcRenderer.send(WINDOW_CONTROL_CHANNEL, action);
-};
+}
 
-const electronAPI: ElectronApi = {
+const electronAPI = {
   send(message) {
     ipcRenderer.send("spira:to-backend", message);
   },
@@ -71,7 +64,7 @@ const electronAPI: ElectronApi = {
     sendWindowControl("close");
   },
   onMessage(handler) {
-    const listener = (_event: IpcRendererEvent, message: ServerMessage) => {
+    const listener = (_event, message) => {
       handler(message);
     };
 
@@ -133,12 +126,7 @@ const electronAPI: ElectronApi = {
   },
   onError(handler) {
     return onServerMessage("error", (message) => {
-      handler({
-        code: message.code,
-        message: message.message,
-        details: message.details,
-        source: message.source,
-      });
+      handler({ code: message.code, message: message.message });
     });
   },
   onSettingsCurrent(handler) {

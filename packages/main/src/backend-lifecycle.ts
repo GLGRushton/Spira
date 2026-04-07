@@ -208,21 +208,25 @@ export class BackendLifecycle {
       socket.once("open", () => {
         socket.send(JSON.stringify({ type: "ping" }));
       });
-      socket.once("message", (raw) => {
+      socket.on("message", (raw) => {
         if (settled) {
           return;
         }
-        settled = true;
         let message: { type?: string };
         try {
           message = JSON.parse(raw.toString()) as { type?: string };
         } catch {
           cleanup();
+          settled = true;
           resolve(false);
           return;
         }
+        if (message.type !== "pong") {
+          return;
+        }
+        settled = true;
         cleanup();
-        resolve(message.type === "pong");
+        resolve(true);
       });
       socket.once("error", () => {
         if (settled) {

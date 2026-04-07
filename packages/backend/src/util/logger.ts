@@ -3,6 +3,14 @@ import pino from "pino";
 
 const isProduction = process.env.NODE_ENV === "production";
 const require = createRequire(import.meta.url);
+const baseOptions: pino.LoggerOptions = {
+  name: "spira",
+  level: isProduction ? "info" : "debug",
+  serializers: {
+    err: pino.stdSerializers.err,
+    error: pino.stdSerializers.err,
+  },
+};
 
 const createTransport = () => {
   if (isProduction) {
@@ -25,18 +33,17 @@ const createTransport = () => {
 
 export const createLogger = (name: string) => {
   const transport = createTransport();
+  const options: pino.LoggerOptions = {
+    ...baseOptions,
+    name,
+    level: "debug",
+  };
 
   return transport
-    ? pino(
-        {
-          name,
-          level: "debug",
-        },
-        transport,
-      )
+    ? pino(options, transport)
     : pino({
+        ...baseOptions,
         name,
-        level: isProduction ? "info" : "debug",
       });
 };
 

@@ -4,12 +4,17 @@ import { ipcMain } from "electron";
 import WebSocket from "ws";
 import { updateTrayMuteState } from "./tray.js";
 
-export function setupIpcBridge(win: BrowserWindow, backendPort: number): () => void {
+interface IpcBridgeOptions {
+  onConnectionStatusChange?: (status: ConnectionStatus) => void;
+}
+
+export function setupIpcBridge(win: BrowserWindow, backendPort: number, options: IpcBridgeOptions = {}): () => void {
   const socket = new WebSocket(`ws://127.0.0.1:${backendPort}`);
   const pending: string[] = [];
   let socketReady = false;
 
   const emitConnectionStatus = (status: ConnectionStatus) => {
+    options.onConnectionStatusChange?.(status);
     if (!win.isDestroyed()) {
       win.webContents.send("spira:connection-status", status);
     }
@@ -59,7 +64,13 @@ export function setupIpcBridge(win: BrowserWindow, backendPort: number): () => v
 
   socket.on("error", (error) => {
     emitConnectionStatus("disconnected");
-    forwardToRenderer({ type: "error", code: "BACKEND_SOCKET_ERROR", message: error.message });
+    forwardToRenderer({
+      type: "error",
+      code: "BACKEND_SOCKET_ERROR",
+      message: error.message,
+      details: error.stack,
+      source: "transport",
+    });
   });
 
   socket.on("close", () => {

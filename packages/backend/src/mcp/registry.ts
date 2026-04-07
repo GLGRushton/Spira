@@ -1,8 +1,8 @@
 import { readFile } from "node:fs/promises";
-import { resolve } from "node:path";
 import { type McpServerConfig, type McpServerStatus, type McpServersFile, McpServersFileSchema } from "@spira/shared";
 import type { Logger } from "pino";
 import { z } from "zod";
+import { resolveAppPath } from "../util/app-paths.js";
 import { ConfigError } from "../util/errors.js";
 import type { SpiraEventBus } from "../util/event-bus.js";
 import type { McpClientPool } from "./client-pool.js";
@@ -100,7 +100,7 @@ export class McpRegistry {
   }
 
   private async loadConfig(): Promise<z.infer<typeof McpServersFileSchema>> {
-    const configPath = resolve(process.env.SPIRA_MCP_CONFIG_PATH ?? resolve(process.cwd(), "mcp-servers.json"));
+    const configPath = resolveAppPath(process.env.SPIRA_MCP_CONFIG_PATH ?? "mcp-servers.json");
 
     try {
       const raw = await readFile(configPath, "utf8");

@@ -36,9 +36,9 @@ export class WsServer {
         });
         this.send({ type: "chat:complete", conversationId: messageId, messageId });
       }),
-      this.registerBusHandler("copilot:error", (code, message) => {
+      this.registerBusHandler("copilot:error", (code, message, details, source) => {
         this.toolCalls.clear();
-        this.send({ type: "error", code, message });
+        this.send({ type: "error", code, message, details, source });
       }),
       this.registerBusHandler("copilot:tool-call", (callId, toolName, args) => {
         this.toolCalls.set(callId, { name: toolName, args });
@@ -71,6 +71,9 @@ export class WsServer {
       }),
       this.registerBusHandler("tts:amplitude", ({ amplitude }) => {
         this.send({ type: "tts:amplitude", amplitude });
+      }),
+      this.registerBusHandler("tts:audio", ({ audioBase64, mimeType }) => {
+        this.send({ type: "tts:audio", audioBase64, mimeType });
       }),
       this.registerBusHandler("voice:transcript", ({ text }) => {
         this.send({ type: "voice:transcript", text });
@@ -168,7 +171,13 @@ export class WsServer {
       return JSON.parse(raw) as ClientMessage;
     } catch (error) {
       logger.warn({ error, raw }, "Ignoring invalid client payload");
-      this.send({ type: "error", code: "INVALID_MESSAGE", message: "Invalid client message payload" });
+      this.send({
+        type: "error",
+        code: "INVALID_MESSAGE",
+        message: "Invalid client message payload",
+        details: String(error),
+        source: "transport",
+      });
       return null;
     }
   }
