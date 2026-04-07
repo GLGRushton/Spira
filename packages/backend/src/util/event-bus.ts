@@ -1,5 +1,11 @@
 import { EventEmitter } from "node:events";
-import type { AssistantState, ClientMessage, McpServerStatus, VoicePipelineState } from "@spira/shared";
+import type {
+  AssistantState,
+  ClientMessage,
+  McpServerStatus,
+  PermissionRequestPayload,
+  VoicePipelineState,
+} from "@spira/shared";
 
 export interface EventMap {
   "voice:pipeline": [{ state: VoicePipelineState }];
@@ -15,6 +21,8 @@ export interface EventMap {
   "copilot:error": [code: string, message: string, details?: string, source?: string];
   "copilot:tool-call": [callId: string, toolName: string, args: Record<string, unknown>];
   "copilot:tool-result": [callId: string, result: unknown];
+  "copilot:permission-request": [request: PermissionRequestPayload];
+  "copilot:permission-complete": [requestId: string, result: "approved" | "denied" | "expired"];
   "mcp:server-crashed": [serverId: string];
   "mcp:servers-changed": [statuses: McpServerStatus[]];
   "transport:client-message": [message: ClientMessage];

@@ -1,0 +1,41 @@
+.banner {
+  position: fixed;
+  top: calc(var(--titlebar-height) + 18px);
+  right: 24px;
+  z-index: 9998;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  border: 1px solid rgba(0, 229, 255, 0.24);
+  border-radius: 999px;
+  background: rgba(10, 14, 39, 0.88);
+  box-shadow: 0 0 28px rgba(0, 212, 170, 0.14);
+  backdrop-filter: blur(10px);
+}
+
+.pulse {
+  width: 11px;
+  height: 11px;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #00e5ff, #00d4aa);
+  box-shadow: 0 0 12px rgba(0, 229, 255, 0.8);
+}
+
+.copy {
+  display: grid;
+  gap: 2px;
+}
+
+.copy strong {
+  color: var(--text-primary);
+  font-size: 12px;
+  letter-spacing: 0.02em;
+}
+
+.eyebrow {
+  color: var(--text-secondary);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}

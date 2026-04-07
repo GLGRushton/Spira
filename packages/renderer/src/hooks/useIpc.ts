@@ -4,7 +4,9 @@ import { useAudioStore } from "../stores/audio-store.js";
 import { PENDING_ASSISTANT_ID, useChatStore } from "../stores/chat-store.js";
 import { useConnectionStore } from "../stores/connection-store.js";
 import { useMcpStore } from "../stores/mcp-store.js";
+import { usePermissionStore } from "../stores/permission-store.js";
 import { useSettingsStore } from "../stores/settings-store.js";
+import { useVisionStore } from "../stores/vision-store.js";
 
 export function useIpc(): void {
   const setAssistantState = useAssistantStore((store) => store.setState);
@@ -20,6 +22,12 @@ export function useIpc(): void {
   const setTtsAmplitude = useAudioStore((store) => store.setTtsAmplitude);
   const applySettings = useSettingsStore((store) => store.applySettings);
   const setConnectionStatus = useConnectionStore((store) => store.setStatus);
+  const addPermissionRequest = usePermissionStore((store) => store.addRequest);
+  const removePermissionRequest = usePermissionStore((store) => store.removeRequest);
+  const clearPermissionRequests = usePermissionStore((store) => store.clearRequests);
+  const setActiveCapture = useVisionStore((store) => store.setActiveCapture);
+  const clearActiveCapture = useVisionStore((store) => store.clearActiveCapture);
+  const clearAllActiveCaptures = useVisionStore((store) => store.clearAllActiveCaptures);
 
   useEffect(() => {
     let activeAssistantMessageId: string | null = null;
@@ -67,6 +75,13 @@ export function useIpc(): void {
       }),
       window.electronAPI.onToolCall((payload) => {
         const messageId = activeAssistantMessageId ?? PENDING_ASSISTANT_ID;
+        if (payload.name.startsWith("vision_")) {
+          if (payload.status === "running" || payload.status === "pending") {
+            setActiveCapture(payload.callId, payload.name, payload.args);
+          } else {
+            clearActiveCapture(payload.callId);
+          }
+        }
 
         if (payload.status === "running" || payload.status === "pending") {
           toolCallMessageIds.set(payload.callId, messageId);
@@ -89,6 +104,12 @@ export function useIpc(): void {
         });
         toolCallMessageIds.delete(payload.callId);
       }),
+      window.electronAPI.onPermissionRequest((payload) => {
+        addPermissionRequest(payload);
+      }),
+      window.electronAPI.onPermissionComplete(({ requestId }) => {
+        removePermissionRequest(requestId);
+      }),
       window.electronAPI.onMcpStatus((servers) => {
         setServers(servers);
       }),
@@ -106,6 +127,10 @@ export function useIpc(): void {
       }),
       window.electronAPI.onConnectionStatus((status) => {
         setConnectionStatus(status);
+        if (status !== "connected") {
+          clearPermissionRequests();
+          clearAllActiveCaptures();
+        }
       }),
       window.electronAPI.onError((payload) => {
         console.error(`[Spira:${payload.source ?? "unknown"}:${payload.code}] ${payload.message}`, payload);
@@ -117,6 +142,8 @@ export function useIpc(): void {
         }
         if (payload.code === "BACKEND_SOCKET_ERROR" || payload.code === "BACKEND_CRASHED") {
           setConnectionStatus("disconnected");
+          clearPermissionRequests();
+          clearAllActiveCaptures();
         }
       }),
     ];
@@ -129,11 +156,17 @@ export function useIpc(): void {
   }, [
     addToolCall,
     addUserMessage,
+    addPermissionRequest,
     appendDelta,
     applySettings,
+    clearActiveCapture,
+    clearAllActiveCaptures,
+    clearPermissionRequests,
     completeMessage,
     finaliseMessage,
+    removePermissionRequest,
     setAssistantState,
+    setActiveCapture,
     setAudioLevel,
     setConnectionStatus,
     setServers,

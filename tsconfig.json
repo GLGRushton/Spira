@@ -4,6 +4,7 @@
     { "path": "packages/shared" },
     { "path": "packages/backend" },
     { "path": "packages/main" },
+    { "path": "packages/mcp-vision" },
     { "path": "packages/mcp-windows" }
   ]
 }

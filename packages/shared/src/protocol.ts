@@ -9,6 +9,17 @@ export interface ErrorPayload {
   details?: string;
 }
 
+export interface PermissionRequestPayload {
+  requestId: string;
+  kind: "mcp";
+  toolCallId?: string;
+  serverName: string;
+  toolName: string;
+  toolTitle: string;
+  args?: Record<string, unknown>;
+  readOnly: boolean;
+}
+
 export type ClientMessage =
   | { type: "chat:send"; text: string; conversationId?: string }
   | { type: "chat:clear" }
@@ -19,6 +30,7 @@ export type ClientMessage =
   | { type: "voice:mute" }
   | { type: "voice:unmute" }
   | { type: "settings:update"; settings: Partial<UserSettings> }
+  | { type: "permission:respond"; requestId: string; approved: boolean }
   | { type: "ping" };
 
 export type ServerMessage =
@@ -29,6 +41,8 @@ export type ServerMessage =
   | { type: "chat:complete"; conversationId: string; messageId: string }
   | { type: "chat:message"; message: ChatMessage }
   | { type: "tool:call"; callId: string; name: string; status: ToolCallStatus; args?: unknown; details?: string }
+  | { type: "permission:request"; request: PermissionRequestPayload }
+  | { type: "permission:complete"; requestId: string; result: "approved" | "denied" | "expired" }
   | { type: "mcp:status"; servers: McpServerStatus[] }
   | { type: "voice:transcript"; text: string }
   | { type: "audio:level"; level: number }

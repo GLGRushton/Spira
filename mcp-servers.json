@@ -10,6 +10,17 @@
       "enabled": true,
       "autoRestart": true,
       "maxRestarts": 3
+    },
+    {
+      "id": "vision",
+      "name": "Spira Vision",
+      "transport": "stdio",
+      "command": "node",
+      "args": ["packages/mcp-vision/dist/index.js"],
+      "env": {},
+      "enabled": true,
+      "autoRestart": true,
+      "maxRestarts": 3
     }
   ]
 }

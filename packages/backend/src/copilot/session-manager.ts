@@ -1,20 +1,28 @@
+import { randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { CopilotClient, type CopilotSession, type SessionEvent, approveAll } from "@github/copilot-sdk";
-import type { AssistantState, Env } from "@spira/shared";
+import {
+  CopilotClient,
+  type CopilotSession,
+  type PermissionRequest,
+  type PermissionRequestResult,
+  type SessionEvent,
+} from "@github/copilot-sdk";
+import type { AssistantState, Env, PermissionRequestPayload } from "@spira/shared";
 import type { McpToolAggregator } from "../mcp/tool-aggregator.js";
 import { appRootDir } from "../util/app-paths.js";
 import { CopilotError, formatErrorDetails } from "../util/errors.js";
 import type { SpiraEventBus } from "../util/event-bus.js";
 import { createLogger } from "../util/logger.js";
 import { StreamAssembler } from "./stream-handler.js";
-import { registerTools } from "./tool-bridge.js";
+import { getCopilotTools } from "./tool-bridge.js";
 
 const logger = createLogger("copilot-session");
 const require = createRequire(import.meta.url);
 
 const SESSION_INIT_TIMEOUT_MS = 20_000;
 const SEND_TIMEOUT_MS = 20_000;
+const PERMISSION_REQUEST_TIMEOUT_MS = 60_000;
 const COPILOT_AUTH_ENV_KEYS = ["COPILOT_SDK_AUTH_TOKEN", "GITHUB_ACCESS_TOKEN", "GITHUB_TOKEN", "GH_TOKEN"] as const;
 const SHINRA_PERSONA_INSTRUCTIONS = [
   "You are Shinra, the resident operations intelligence of Spira.",
@@ -36,20 +44,41 @@ const SHINRA_LAST_INSTRUCTIONS = [
 
 type ReportedCopilotError = CopilotError & { reportedToClient?: boolean };
 type CopilotAuthStrategy = "logged-in-user" | "github-token";
+type PendingPermissionRequest = {
+  resolve: (result: PermissionRequestResult) => void;
+  timeout: NodeJS.Timeout;
+};
+
+const isVisionPermissionRequest = (
+  request: PermissionRequest,
+): request is PermissionRequest & {
+  kind: "mcp";
+  serverName: string;
+  toolName: string;
+  toolTitle?: string;
+  args?: Record<string, unknown>;
+  readOnly?: boolean;
+} => request.kind === "mcp" && typeof request.toolName === "string" && request.toolName.startsWith("vision_");
 
 export class CopilotSessionManager {
   private client: CopilotClient | null = null;
   private session: CopilotSession | null = null;
   private initializingSession: Promise<CopilotSession> | null = null;
   private readonly streamAssembler = new StreamAssembler();
+  private readonly pendingPermissionRequests = new Map<string, PendingPermissionRequest>();
   private currentState: AssistantState = "idle";
   private authStrategy: CopilotAuthStrategy | null = null;
+  private registeredToolSignature: string | null = null;
 
   constructor(
     private readonly bus: SpiraEventBus,
     private readonly env: Env,
     private readonly toolAggregator: McpToolAggregator,
-  ) {}
+  ) {
+    this.bus.on("mcp:servers-changed", () => {
+      void this.refreshSessionForToolChanges();
+    });
+  }
 
   async sendMessage(text: string): Promise<void> {
     try {
@@ -80,8 +109,26 @@ export class CopilotSessionManager {
   }
 
   async shutdown(): Promise<void> {
+    this.clearPendingPermissionRequests("expired");
     await this.disconnectSession();
     await this.disposeClient();
+  }
+
+  cancelPendingPermissionRequests(): void {
+    this.clearPendingPermissionRequests("expired");
+  }
+
+  resolvePermissionRequest(requestId: string, approved: boolean): boolean {
+    const pending = this.pendingPermissionRequests.get(requestId);
+    if (!pending) {
+      return false;
+    }
+
+    this.pendingPermissionRequests.delete(requestId);
+    clearTimeout(pending.timeout);
+    pending.resolve(approved ? { kind: "approved" } : { kind: "denied-interactively-by-user" });
+    this.bus.emit("copilot:permission-complete", requestId, approved ? "approved" : "denied");
+    return true;
   }
 
   private async getOrCreateSession(): Promise<CopilotSession> {
@@ -115,13 +162,15 @@ export class CopilotSessionManager {
 
   private async createSession(): Promise<CopilotSession> {
     const client = await this.getOrCreateClient();
+    const toolAwarenessInstructions = this.getToolAwarenessInstructions();
+    const copilotTools = getCopilotTools(this.toolAggregator);
 
     const sessionPromise = client.createSession({
       clientName: "Spira",
       onEvent: (event) => {
         this.handleSessionEvent(event);
       },
-      onPermissionRequest: approveAll,
+      onPermissionRequest: (request) => this.handlePermissionRequest(request),
       streaming: true,
       systemMessage: {
         mode: "customize",
@@ -137,8 +186,12 @@ export class CopilotSessionManager {
           },
           custom_instructions: {
             action: "append",
-            content:
+            content: [
               "Prefer short, clear answers. Use the name Shinra naturally when self-identifying, but keep the focus on solving the user's task.",
+              toolAwarenessInstructions,
+            ]
+              .filter((section) => section.length > 0)
+              .join("\n\n"),
           },
           last_instructions: {
             action: "append",
@@ -148,6 +201,7 @@ export class CopilotSessionManager {
         content: SHINRA_PERSONA_INSTRUCTIONS,
       },
       workingDirectory: appRootDir,
+      tools: copilotTools,
     });
 
     let session: CopilotSession;
@@ -163,7 +217,7 @@ export class CopilotSessionManager {
       throw error;
     }
 
-    registerTools(session, this.toolAggregator);
+    this.registeredToolSignature = this.getCurrentToolSignature();
     logger.info({ sessionId: session.sessionId }, "GitHub Copilot session created");
 
     return session;
@@ -198,6 +252,7 @@ export class CopilotSessionManager {
       case "session.error":
         logger.error({ errorType: event.data.errorType, sessionError: event.data }, "GitHub Copilot session error");
         // Invalidate the session so the next sendMessage creates a fresh one
+        this.clearPendingPermissionRequests("expired");
         this.session = null;
         this.streamAssembler.clear();
         this.bus.emit(
@@ -222,10 +277,12 @@ export class CopilotSessionManager {
   }
 
   private async disconnectSession(): Promise<void> {
+    this.clearPendingPermissionRequests("expired");
     const session = this.session;
     const initializingSession = this.initializingSession;
     this.session = null;
     this.initializingSession = null;
+    this.registeredToolSignature = null;
     this.streamAssembler.clear();
 
     if (initializingSession) {
@@ -412,5 +469,104 @@ export class CopilotSessionManager {
         clearTimeout(timeoutId);
       }
     }
+  }
+
+  private async handlePermissionRequest(request: PermissionRequest): Promise<PermissionRequestResult> {
+    if (!isVisionPermissionRequest(request)) {
+      return { kind: "approved" };
+    }
+
+    if (!this.session) {
+      return { kind: "denied-no-approval-rule-and-could-not-request-from-user" };
+    }
+
+    const requestId = randomUUID();
+    const payload: PermissionRequestPayload = {
+      requestId,
+      kind: "mcp",
+      toolCallId: typeof request.toolCallId === "string" ? request.toolCallId : undefined,
+      serverName: request.serverName,
+      toolName: request.toolName,
+      toolTitle:
+        typeof request.toolTitle === "string" && request.toolTitle.length > 0 ? request.toolTitle : request.toolName,
+      args: request.args,
+      readOnly: request.readOnly === true,
+    };
+
+    this.bus.emit("copilot:permission-request", payload);
+
+    return await new Promise<PermissionRequestResult>((resolve) => {
+      const timeout = setTimeout(() => {
+        const pending = this.pendingPermissionRequests.get(requestId);
+        if (!pending) {
+          return;
+        }
+
+        this.pendingPermissionRequests.delete(requestId);
+        pending.resolve({ kind: "denied-no-approval-rule-and-could-not-request-from-user" });
+        this.bus.emit("copilot:permission-complete", requestId, "expired");
+      }, PERMISSION_REQUEST_TIMEOUT_MS);
+
+      this.pendingPermissionRequests.set(requestId, { resolve, timeout });
+    });
+  }
+
+  private clearPendingPermissionRequests(result: "denied" | "expired"): void {
+    for (const [requestId, pending] of this.pendingPermissionRequests.entries()) {
+      clearTimeout(pending.timeout);
+      pending.resolve({ kind: "denied-no-approval-rule-and-could-not-request-from-user" });
+      this.bus.emit("copilot:permission-complete", requestId, result);
+    }
+    this.pendingPermissionRequests.clear();
+  }
+
+  private getCurrentToolSignature(): string {
+    return JSON.stringify(
+      this.toolAggregator
+        .getTools()
+        .map((tool) => `${tool.serverId}:${tool.name}`)
+        .sort(),
+    );
+  }
+
+  private getToolAwarenessInstructions(): string {
+    const tools = this.toolAggregator.getTools();
+    const visionTools = tools.filter((tool) => tool.name.startsWith("vision_"));
+    if (visionTools.length === 0) {
+      return "";
+    }
+
+    const visionToolList = visionTools
+      .map((tool) => `- ${tool.name}: ${tool.description ?? "No description provided."}`)
+      .join("\n");
+
+    return [
+      "You have access to MCP tools provided by Spira, including a screen-vision capability from the Spira Vision MCP server.",
+      "If the user asks whether you can inspect the screen, active window, or visible text, answer yes and mention the relevant vision tools.",
+      "Prefer vision_read_screen when the user wants you to inspect what is visible on screen or read text in one step.",
+      "Available vision tools:",
+      visionToolList,
+    ].join("\n");
+  }
+
+  private async refreshSessionForToolChanges(): Promise<void> {
+    const currentToolSignature = this.getCurrentToolSignature();
+    if (this.registeredToolSignature === currentToolSignature) {
+      return;
+    }
+
+    if (!this.session && !this.initializingSession) {
+      this.registeredToolSignature = currentToolSignature;
+      return;
+    }
+
+    logger.info(
+      {
+        previousToolSignature: this.registeredToolSignature,
+        currentToolSignature,
+      },
+      "MCP tool inventory changed; refreshing Copilot session",
+    );
+    await this.disconnectSession();
   }
 }

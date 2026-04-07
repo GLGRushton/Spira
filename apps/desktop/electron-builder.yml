@@ -11,6 +11,7 @@ files:
   - packages/renderer/dist/**/*
   - packages/shared/dist/**/*
   - packages/backend/dist/**/*
+  - packages/mcp-vision/dist/**/*
   - packages/mcp-windows/dist/**/*
   - mcp-servers.json
   - "!node_modules/.cache"
@@ -20,6 +21,7 @@ files:
 
 asarUnpack:
   - packages/backend/dist/**/*
+  - packages/mcp-vision/dist/**/*
   - packages/mcp-windows/dist/**/*
   - node_modules/@picovoice/**/*
   - node_modules/nodejs-whisper/**/*

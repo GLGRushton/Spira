@@ -4,7 +4,9 @@ import { useIpc } from "../hooks/useIpc.js";
 import { useAssistantStore } from "../stores/assistant-store.js";
 import styles from "./AppShell.module.css";
 import { GlassPanel } from "./GlassPanel.js";
+import { PermissionPrompt } from "./PermissionPrompt.js";
 import { ReconnectingOverlay } from "./ReconnectingOverlay.js";
+import { ScreenCaptureIndicator } from "./ScreenCaptureIndicator.js";
 import { SettingsPanel } from "./SettingsPanel.js";
 import { Sidebar, type SidebarView } from "./Sidebar.js";
 import { TitleBar } from "./TitleBar.js";
@@ -54,6 +56,8 @@ export function AppShell() {
           </AnimatePresence>
         </GlassPanel>
       </main>
+      <ScreenCaptureIndicator />
+      <PermissionPrompt />
       <ReconnectingOverlay />
     </div>
   );

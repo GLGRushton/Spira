@@ -1,7 +1,7 @@
 import type { AssistantState } from "./assistant-state.js";
 import type { ChatMessage, ToolCallStatus } from "./chat-types.js";
 import type { McpServerStatus } from "./mcp-types.js";
-import type { ClientMessage, ErrorPayload, ServerMessage, UserSettings } from "./protocol.js";
+import type { ClientMessage, ErrorPayload, PermissionRequestPayload, ServerMessage, UserSettings } from "./protocol.js";
 
 export type ConnectionStatus = "connecting" | "connected" | "disconnected";
 
@@ -31,6 +31,10 @@ export interface ElectronApi {
   onChatMessage(handler: (message: ChatMessage) => void): () => void;
   onChatComplete(handler: (payload: { conversationId: string; messageId: string }) => void): () => void;
   onToolCall(handler: (payload: ToolCallPayload) => void): () => void;
+  onPermissionRequest(handler: (payload: PermissionRequestPayload) => void): () => void;
+  onPermissionComplete(
+    handler: (payload: { requestId: string; result: "approved" | "denied" | "expired" }) => void,
+  ): () => void;
   onMcpStatus(handler: (servers: McpServerStatus[]) => void): () => void;
   onAudioLevel(handler: (level: number) => void): () => void;
   onTtsAmplitude(handler: (amplitude: number) => void): () => void;

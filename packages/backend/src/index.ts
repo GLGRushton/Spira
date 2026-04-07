@@ -170,6 +170,14 @@ const handleClientMessage = async (message: ClientMessage): Promise<void> => {
     return;
   }
 
+  if (message.type === "permission:respond") {
+    const handled = copilotManager?.resolvePermissionRequest(message.requestId, message.approved) ?? false;
+    if (!handled) {
+      logger.warn({ requestId: message.requestId }, "Received response for unknown permission request");
+    }
+    return;
+  }
+
   if (message.type === "voice:push-to-talk") {
     if (!voicePipeline) {
       return;
@@ -228,6 +236,10 @@ const bootstrap = async () => {
         ...toErrorPayload(error, "UNKNOWN_ERROR", "Failed to forward voice transcript to GitHub Copilot", "copilot"),
       });
     });
+  });
+
+  bus.on("transport:client-disconnected", () => {
+    copilotManager?.cancelPendingPermissionRequests();
   });
 
   unsubscribeTransport = transport.onMessage((message) => {

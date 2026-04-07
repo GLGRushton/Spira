@@ -1,0 +1,116 @@
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: radial-gradient(circle at center, rgba(0, 229, 255, 0.1), transparent 40%), rgba(6, 9, 27, 0.78);
+  backdrop-filter: blur(12px);
+}
+
+.panel {
+  display: grid;
+  gap: 18px;
+  width: min(560px, 100%);
+  padding: 24px;
+  border: 1px solid rgba(0, 229, 255, 0.24);
+  border-radius: var(--radius-lg);
+  background: linear-gradient(180deg, rgba(17, 22, 56, 0.96), rgba(10, 14, 39, 0.94));
+  box-shadow: 0 0 42px rgba(0, 212, 170, 0.18);
+}
+
+.header {
+  display: grid;
+  gap: 8px;
+}
+
+.eyebrow {
+  color: var(--text-secondary);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.title {
+  font-size: 24px;
+  line-height: 1.2;
+}
+
+.copy {
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.meta {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.meta div {
+  padding: 12px;
+  border: 1px solid rgba(204, 153, 0, 0.2);
+  border-radius: var(--radius-sm);
+  background: rgba(10, 14, 39, 0.6);
+}
+
+.meta dt,
+.label {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--text-secondary);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.meta dd {
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.args {
+  display: grid;
+  gap: 8px;
+}
+
+.args pre {
+  max-height: 220px;
+  overflow: auto;
+  padding: 12px;
+  border-radius: var(--radius-sm);
+  background: rgba(10, 14, 39, 0.82);
+  border: 1px solid rgba(204, 153, 0, 0.16);
+  color: var(--text-secondary);
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+}
+
+.deny,
+.approve {
+  min-width: 120px;
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  font-weight: 600;
+}
+
+.deny {
+  border: 1px solid rgba(255, 107, 107, 0.35);
+  color: #ffb4b4;
+  background: rgba(90, 24, 36, 0.3);
+}
+
+.approve {
+  border: 1px solid rgba(0, 229, 255, 0.35);
+  color: #03111b;
+  background: linear-gradient(135deg, #00e5ff, #00d4aa);
+}

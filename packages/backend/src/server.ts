@@ -56,6 +56,12 @@ export class WsServer {
           details: typeof result === "string" ? result : JSON.stringify(result),
         });
       }),
+      this.registerBusHandler("copilot:permission-request", (request) => {
+        this.send({ type: "permission:request", request });
+      }),
+      this.registerBusHandler("copilot:permission-complete", (requestId, result) => {
+        this.send({ type: "permission:complete", requestId, result });
+      }),
       this.registerBusHandler("mcp:servers-changed", (servers) => {
         this.send({ type: "mcp:status", servers });
       }),

@@ -111,6 +111,16 @@ const electronAPI: ElectronApi = {
       });
     });
   },
+  onPermissionRequest(handler) {
+    return onServerMessage("permission:request", (message) => {
+      handler(message.request);
+    });
+  },
+  onPermissionComplete(handler) {
+    return onServerMessage("permission:complete", (message) => {
+      handler({ requestId: message.requestId, result: message.result });
+    });
+  },
   onMcpStatus(handler) {
     return onServerMessage("mcp:status", (message) => {
       handler(message.servers);
