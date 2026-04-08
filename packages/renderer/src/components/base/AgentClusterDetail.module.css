@@ -1,0 +1,145 @@
+.panel {
+  height: 100%;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  gap: 16px;
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.eyebrow,
+.metricLabel,
+.roomMeta {
+  color: var(--text-secondary);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.title {
+  font-size: clamp(22px, 3vw, 32px);
+}
+
+.caption {
+  max-width: 420px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.6;
+  text-align: right;
+}
+
+.metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.metricCard,
+.roomCard,
+.emptyState {
+  padding: 14px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  background: rgba(8, 12, 30, 0.52);
+}
+
+.metricValue {
+  display: block;
+  margin-top: 8px;
+  font-size: 18px;
+}
+
+.roster {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px;
+  overflow-y: auto;
+}
+
+.roomCard {
+  text-align: left;
+  cursor: pointer;
+  transition: transform 0.18s ease, border-color 0.18s ease;
+}
+
+.roomCard:hover {
+  transform: translateY(-2px);
+  border-color: rgba(0, 212, 170, 0.24);
+}
+
+.roomTopline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.statePill {
+  padding: 6px 10px;
+  border: 1px solid var(--border-default);
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.launching {
+  border-color: rgba(0, 229, 255, 0.24);
+  color: var(--accent-cyan);
+}
+
+.active {
+  border-color: rgba(0, 212, 170, 0.28);
+  color: var(--accent-teal);
+}
+
+.idle {
+  border-color: rgba(136, 146, 176, 0.24);
+  color: var(--text-secondary);
+}
+
+.error {
+  border-color: rgba(239, 68, 68, 0.28);
+  color: #fecaca;
+}
+
+.roomName {
+  margin-top: 12px;
+  font-size: 18px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.roomDetail {
+  margin-top: 10px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.emptyState {
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+@media (max-width: 960px) {
+  .header {
+    flex-direction: column;
+  }
+
+  .caption {
+    max-width: none;
+    text-align: left;
+  }
+
+  .metrics {
+    grid-template-columns: 1fr;
+  }
+}

@@ -342,11 +342,17 @@ const bootstrap = async () => {
   logger.info({ nodeEnv: process.env.NODE_ENV ?? "development", port: env.SPIRA_PORT }, "Starting Spira backend");
 
   bus = new SpiraEventBus();
-  server = new WsServer(bus, env.SPIRA_PORT, BACKEND_GENERATION, BACKEND_BUILD_ID);
-  transport = new WsTransport(server);
   const pool = new McpClientPool(bus, logger);
   const aggregator = new McpToolAggregator(pool);
   mcpRegistry = new McpRegistry(bus, logger, pool);
+  server = new WsServer(
+    bus,
+    env.SPIRA_PORT,
+    BACKEND_GENERATION,
+    BACKEND_BUILD_ID,
+    () => mcpRegistry?.getStatus() ?? [],
+  );
+  transport = new WsTransport(server);
   copilotManager = new CopilotSessionManager(bus, env, aggregator, requestUpgradeProposal, async () => {
     if (!mcpRegistry) {
       throw new Error("MCP registry is unavailable");

@@ -1,6 +1,7 @@
 import {
   type AssistantState,
   type ClientMessage,
+  type McpServerStatus,
   PROTOCOL_VERSION,
   type ServerMessage,
   type VoicePipelineState,
@@ -24,6 +25,7 @@ export class WsServer {
     private readonly port = 9720,
     private readonly generation = 0,
     private readonly buildId = "dev",
+    private readonly getMcpStatuses: () => McpServerStatus[] = () => [],
   ) {
     this.busListeners = [
       this.registerBusHandler("state:change", (_previous, current) => {
@@ -163,6 +165,7 @@ export class WsServer {
       backendBuildId: this.buildId,
     });
     this.send({ type: "voice:muted", muted: this.voiceMuted });
+    this.send({ type: "mcp:status", servers: this.getMcpStatuses() });
 
     socket.on("message", (raw) => {
       const parsed = this.parseClientMessage(raw.toString());

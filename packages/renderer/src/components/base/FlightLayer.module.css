@@ -1,0 +1,42 @@
+.layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.flight {
+  position: absolute;
+  inset: 0;
+}
+
+.trail {
+  position: absolute;
+  height: 2px;
+  transform-origin: 0 50%;
+  opacity: 0.32;
+}
+
+.orb {
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  box-shadow: 0 0 18px currentColor;
+}
+
+.pending,
+.running {
+  color: var(--accent-cyan);
+  background: radial-gradient(circle, rgba(0, 229, 255, 0.95), rgba(0, 229, 255, 0.18));
+}
+
+.success {
+  color: var(--accent-teal);
+  background: radial-gradient(circle, rgba(0, 212, 170, 0.95), rgba(0, 212, 170, 0.2));
+}
+
+.error {
+  color: #ef4444;
+  background: radial-gradient(circle, rgba(239, 68, 68, 0.95), rgba(239, 68, 68, 0.18));
+}

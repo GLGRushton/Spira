@@ -2,7 +2,7 @@ import { McpStatus } from "./McpStatus.js";
 import styles from "./Sidebar.module.css";
 import { VoiceIndicator } from "./VoiceIndicator.js";
 
-export type SidebarView = "chat" | "settings";
+export type SidebarView = "ship" | "bridge" | "mcp" | "agents" | "settings" | `mcp:${string}` | `agent:${string}`;
 
 interface SidebarProps {
   activeView: SidebarView;
@@ -10,11 +10,27 @@ interface SidebarProps {
 }
 
 const items: Array<{ id: SidebarView; label: string; caption: string }> = [
-  { id: "chat", label: "Chat", caption: "Shinra relay" },
-  { id: "settings", label: "Settings", caption: "Voice + MCP" },
+  { id: "ship", label: "Ship", caption: "Base overview" },
+  { id: "bridge", label: "Bridge", caption: "Command + Shinra" },
+  { id: "mcp", label: "MCP Servers", caption: "Grouped local tools" },
+  { id: "agents", label: "Sub Agents", caption: "Field teams" },
+  { id: "settings", label: "Operations", caption: "Voice + MCP" },
 ];
 
 export function Sidebar({ activeView, onViewChange }: SidebarProps) {
+  const isActive = (itemId: SidebarView): boolean => {
+    if (itemId === "mcp") {
+      return activeView === "mcp" || activeView.startsWith("mcp:");
+    }
+    if (itemId === "agents") {
+      return activeView === "agents" || activeView.startsWith("agent:");
+    }
+    if (itemId === "ship") {
+      return activeView === "ship";
+    }
+    return activeView === itemId;
+  };
+
   return (
     <aside className={styles.sidebar}>
       <div className={styles.logoBlock}>
@@ -30,7 +46,7 @@ export function Sidebar({ activeView, onViewChange }: SidebarProps) {
           <button
             key={item.id}
             type="button"
-            className={`${styles.navItem} ${activeView === item.id ? styles.active : ""}`}
+            className={`${styles.navItem} ${isActive(item.id) ? styles.active : ""}`}
             onClick={() => onViewChange(item.id)}
           >
             <span className={styles.navLabel}>{item.label}</span>

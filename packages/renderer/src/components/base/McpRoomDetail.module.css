@@ -1,0 +1,142 @@
+.panel {
+  height: 100%;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  gap: 16px;
+}
+
+.header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.eyebrow {
+  color: var(--text-secondary);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.title {
+  font-size: clamp(22px, 3vw, 32px);
+}
+
+.statePill {
+  padding: 8px 12px;
+  border: 1px solid var(--border-default);
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.starting {
+  border-color: rgba(0, 229, 255, 0.28);
+  color: var(--accent-cyan);
+}
+
+.connected {
+  border-color: rgba(0, 212, 170, 0.28);
+  color: var(--accent-teal);
+}
+
+.disconnected,
+.error {
+  border-color: rgba(239, 68, 68, 0.32);
+  color: #fda4af;
+}
+
+.metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.metricCard {
+  padding: 14px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  background: rgba(8, 12, 30, 0.52);
+}
+
+.metricLabel {
+  display: block;
+  color: var(--text-secondary);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.metricValue {
+  display: block;
+  margin-top: 8px;
+  font-size: 18px;
+}
+
+.toolSection {
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 12px;
+}
+
+.toolHeader {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.toolTitle {
+  font-weight: 600;
+}
+
+.toolCaption {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.toolGrid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-content: flex-start;
+  overflow-y: auto;
+}
+
+.toolChip {
+  padding: 10px 12px;
+  border: 1px solid rgba(0, 229, 255, 0.14);
+  border-radius: var(--radius-sm);
+  background: rgba(17, 22, 56, 0.74);
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+.empty {
+  color: var(--text-secondary);
+}
+
+.errorBox {
+  padding: 12px 14px;
+  border: 1px solid rgba(239, 68, 68, 0.24);
+  border-radius: var(--radius-sm);
+  background: rgba(127, 29, 29, 0.18);
+  color: #fecaca;
+  font-size: 13px;
+}
+
+@media (max-width: 960px) {
+  .header,
+  .toolHeader {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .metrics {
+    grid-template-columns: 1fr;
+  }
+}

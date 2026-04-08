@@ -199,6 +199,15 @@ export function ChatPanel() {
 
   useEffect(() => {
     const node = scrollRef.current;
+    if (!node) {
+      return;
+    }
+
+    node.scrollTo({ top: node.scrollHeight, behavior: "instant" as ScrollBehavior });
+  }, []);
+
+  useEffect(() => {
+    const node = scrollRef.current;
     if (!node || !lastMessage) {
       return;
     }

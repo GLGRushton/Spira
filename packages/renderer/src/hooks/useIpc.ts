@@ -6,6 +6,7 @@ import { PENDING_ASSISTANT_ID, useChatStore } from "../stores/chat-store.js";
 import { useConnectionStore } from "../stores/connection-store.js";
 import { useMcpStore } from "../stores/mcp-store.js";
 import { usePermissionStore } from "../stores/permission-store.js";
+import { useRoomStore } from "../stores/room-store.js";
 import { useSettingsStore } from "../stores/settings-store.js";
 import { useUpgradeStore } from "../stores/upgrade-store.js";
 import { useVisionStore } from "../stores/vision-store.js";
@@ -21,6 +22,10 @@ export function useIpc(): void {
   const addToolCall = useChatStore((store) => store.addToolCall);
   const updateToolResult = useChatStore((store) => store.updateToolResult);
   const setServers = useMcpStore((store) => store.setServers);
+  const clearRoomState = useRoomStore((store) => store.clearAll);
+  const syncRoomsFromServers = useRoomStore((store) => store.syncServers);
+  const handleRoomToolCall = useRoomStore((store) => store.handleToolCall);
+  const pruneRoomFlights = useRoomStore((store) => store.pruneFlights);
   const setAudioLevel = useAudioStore((store) => store.setAudioLevel);
   const setTtsAmplitude = useAudioStore((store) => store.setTtsAmplitude);
   const applySettings = useSettingsStore((store) => store.applySettings);
@@ -50,6 +55,7 @@ export function useIpc(): void {
           clearStreamingState();
           clearPermissionRequests();
           clearAllActiveCaptures();
+          clearRoomState();
           if (message.protocolVersion === PROTOCOL_VERSION) {
             clearProtocolMismatch();
           } else {
@@ -142,6 +148,7 @@ export function useIpc(): void {
             details: payload.details,
             status: payload.status,
           });
+          handleRoomToolCall(payload, useMcpStore.getState().servers);
           return;
         }
 
@@ -151,6 +158,7 @@ export function useIpc(): void {
           status: payload.status,
           value: payload.details,
         });
+        handleRoomToolCall(payload, useMcpStore.getState().servers);
         toolCallMessageIds.delete(payload.callId);
       }),
       window.electronAPI.onPermissionRequest((payload) => {
@@ -161,6 +169,7 @@ export function useIpc(): void {
       }),
       window.electronAPI.onMcpStatus((servers) => {
         setServers(servers);
+        syncRoomsFromServers(servers);
       }),
       window.electronAPI.onAudioLevel((level) => {
         setAudioLevel(level);
@@ -180,6 +189,7 @@ export function useIpc(): void {
           clearStreamingState();
           clearPermissionRequests();
           clearAllActiveCaptures();
+          clearRoomState();
         }
       }),
       window.electronAPI.onError((payload) => {
@@ -194,13 +204,19 @@ export function useIpc(): void {
           setConnectionStatus("disconnected");
           clearPermissionRequests();
           clearAllActiveCaptures();
+          clearRoomState();
         }
       }),
     ];
 
     window.electronAPI.send({ type: "ping" });
 
+    const pruneInterval = window.setInterval(() => {
+      pruneRoomFlights();
+    }, 1000);
+
     return () => {
+      window.clearInterval(pruneInterval);
       for (const unsubscribe of unsubscribers) {
         unsubscribe();
       }
@@ -216,6 +232,7 @@ export function useIpc(): void {
     clearStreamingState,
     clearProtocolMismatch,
     clearPermissionRequests,
+    clearRoomState,
     completeMessage,
     finaliseMessage,
     removePermissionRequest,
@@ -223,12 +240,15 @@ export function useIpc(): void {
     setActiveCapture,
     setAudioLevel,
     setConnectionStatus,
+    syncRoomsFromServers,
     setProtocolMismatch,
     setServers,
     setTtsAmplitude,
     showUpgradeProposal,
     showUpgradeStatus,
     startAssistantMessage,
+    handleRoomToolCall,
+    pruneRoomFlights,
     updateToolResult,
   ]);
 }

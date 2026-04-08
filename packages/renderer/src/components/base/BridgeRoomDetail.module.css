@@ -1,0 +1,160 @@
+.panel {
+  height: 100%;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 16px;
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.eyebrow {
+  color: var(--text-secondary);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.title {
+  font-size: clamp(24px, 4vw, 36px);
+  text-transform: capitalize;
+}
+
+.caption {
+  max-width: 420px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.6;
+  text-align: right;
+}
+
+.layout {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 3fr) minmax(240px, 1fr);
+  gap: 16px;
+}
+
+.chatStage,
+.shinraStage,
+.placeholderStage {
+  min-height: 0;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  background: rgba(8, 12, 30, 0.48);
+  overflow: hidden;
+}
+
+.chatStage {
+  padding: 16px;
+}
+
+.visualColumn {
+  min-height: 0;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 16px;
+}
+
+.shinraStage,
+.placeholderStage {
+  padding: 14px;
+  display: grid;
+  align-content: start;
+  gap: 12px;
+}
+
+.sectionEyebrow {
+  color: var(--text-secondary);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.orbWrap {
+  min-height: 0;
+  display: grid;
+  place-items: center;
+  padding: 12px 0;
+}
+
+.statePill {
+  justify-self: start;
+  padding: 8px 12px;
+  border: 1px solid var(--border-default);
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.idle,
+.connected {
+  border-color: rgba(0, 212, 170, 0.28);
+  color: var(--accent-teal);
+}
+
+.thinking {
+  border-color: rgba(167, 139, 250, 0.28);
+  color: var(--accent-purple);
+}
+
+.listening,
+.transcribing,
+.starting {
+  border-color: rgba(0, 229, 255, 0.28);
+  color: var(--accent-cyan);
+}
+
+.speaking {
+  border-color: rgba(245, 158, 11, 0.28);
+  color: var(--accent-gold);
+}
+
+.error,
+.disconnected {
+  border-color: rgba(239, 68, 68, 0.3);
+  color: #fecaca;
+}
+
+.placeholderTitle {
+  font-size: 18px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.placeholderCopy {
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+@media (max-width: 960px) {
+  .header {
+    flex-direction: column;
+  }
+
+  .caption {
+    max-width: none;
+    text-align: left;
+  }
+
+  .layout {
+    grid-template-columns: 1fr;
+  }
+
+  .visualColumn {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-rows: none;
+  }
+}
+
+@media (max-width: 720px) {
+  .visualColumn {
+    grid-template-columns: 1fr;
+  }
+}

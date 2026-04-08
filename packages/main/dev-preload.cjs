@@ -6,12 +6,29 @@ const CONNECTION_STATUS_GET_CHANNEL = "connection-status:get";
 const SETTINGS_GET_CHANNEL = "settings:get";
 const SETTINGS_SET_CHANNEL = "settings:set";
 
+const serverMessageListeners = new Set();
+const latestServerMessages = new Map();
+
+ipcRenderer.on("spira:from-backend", (_event, message) => {
+  latestServerMessages.set(message.type, message);
+  for (const listener of serverMessageListeners) {
+    listener(message);
+  }
+});
+
 function onServerMessage(type, handler) {
-  return electronAPI.onMessage((message) => {
+  const unsubscribe = electronAPI.onMessage((message) => {
     if (message.type === type) {
       handler(message);
     }
   });
+
+  const cached = latestServerMessages.get(type);
+  if (cached) {
+    handler(cached);
+  }
+
+  return unsubscribe;
 }
 
 function onConnectionStatus(handler) {
@@ -64,13 +81,9 @@ const electronAPI = {
     sendWindowControl("close");
   },
   onMessage(handler) {
-    const listener = (_event, message) => {
-      handler(message);
-    };
-
-    ipcRenderer.on("spira:from-backend", listener);
+    serverMessageListeners.add(handler);
     return () => {
-      ipcRenderer.off("spira:from-backend", listener);
+      serverMessageListeners.delete(handler);
     };
   },
   onStateChange(handler) {

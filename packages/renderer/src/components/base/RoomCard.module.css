@@ -1,0 +1,150 @@
+.card {
+  position: relative;
+  min-height: 134px;
+  display: grid;
+  grid-template-rows: auto 1fr;
+  gap: 14px;
+  padding: 16px 16px 18px;
+  border: 1px solid rgba(0, 229, 255, 0.14);
+  border-radius: var(--radius-md);
+  background: linear-gradient(180deg, rgba(17, 22, 56, 0.92), rgba(8, 12, 30, 0.94));
+  text-align: left;
+  cursor: pointer;
+  transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.card::before,
+.card::after {
+  content: "";
+  position: absolute;
+  width: 18px;
+  height: 18px;
+  border-color: rgba(0, 229, 255, 0.22);
+  border-style: solid;
+  pointer-events: none;
+}
+
+.card::before {
+  top: 8px;
+  left: 8px;
+  border-width: 1px 0 0 1px;
+}
+
+.card::after {
+  right: 8px;
+  bottom: 8px;
+  border-width: 0 1px 1px 0;
+}
+
+.card:hover {
+  transform: translateY(-2px);
+  border-color: rgba(0, 229, 255, 0.26);
+}
+
+.active {
+  border-color: rgba(0, 212, 170, 0.38);
+  box-shadow: 0 0 0 1px rgba(0, 212, 170, 0.18), var(--shadow-glow);
+}
+
+.bridge {
+  background: linear-gradient(180deg, rgba(17, 22, 56, 0.98), rgba(9, 17, 43, 0.98));
+}
+
+.command {
+  background: linear-gradient(180deg, rgba(17, 22, 56, 0.96), rgba(18, 17, 52, 0.98));
+}
+
+.mcp {
+  background: linear-gradient(180deg, rgba(14, 24, 54, 0.96), rgba(8, 12, 30, 0.98));
+}
+
+.ops {
+  background: linear-gradient(180deg, rgba(20, 20, 54, 0.96), rgba(12, 10, 33, 0.98));
+}
+
+.agent {
+  background: linear-gradient(180deg, rgba(12, 28, 48, 0.96), rgba(8, 18, 32, 0.98));
+}
+
+.topline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.statusDot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  box-shadow: 0 0 14px currentColor;
+}
+
+.idle,
+.connected {
+  color: var(--accent-teal);
+  background: var(--accent-teal);
+}
+
+.thinking {
+  color: var(--accent-purple);
+  background: var(--accent-purple);
+}
+
+.listening,
+.transcribing,
+.starting {
+  color: var(--accent-cyan);
+  background: var(--accent-cyan);
+}
+
+.speaking {
+  color: var(--accent-gold);
+  background: var(--accent-gold);
+}
+
+.error,
+.disconnected {
+  color: #ef4444;
+  background: #ef4444;
+}
+
+.caption {
+  color: var(--text-secondary);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.badge {
+  margin-left: auto;
+  padding: 4px 8px;
+  border: 1px solid rgba(0, 229, 255, 0.16);
+  border-radius: 999px;
+  color: var(--text-secondary);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.body {
+  display: grid;
+  gap: 8px;
+  align-content: start;
+}
+
+.title {
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.metric {
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.preview {
+  color: var(--text-muted);
+  font-size: 12px;
+}

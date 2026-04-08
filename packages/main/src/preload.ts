@@ -11,15 +11,32 @@ const UPGRADE_RESPONSE_CHANNEL = "upgrade:respond";
 
 type WindowControlAction = "minimize" | "maximize" | "close";
 
+const serverMessageListeners = new Set<(message: ServerMessage) => void>();
+const latestServerMessages = new Map<ServerMessage["type"], ServerMessage>();
+
+ipcRenderer.on("spira:from-backend", (_event: IpcRendererEvent, message: ServerMessage) => {
+  latestServerMessages.set(message.type, message);
+  for (const listener of serverMessageListeners) {
+    listener(message);
+  }
+});
+
 const onServerMessage = <T extends ServerMessage["type"]>(
   type: T,
   handler: (message: Extract<ServerMessage, { type: T }>) => void,
 ): (() => void) => {
-  return electronAPI.onMessage((message) => {
+  const unsubscribe = electronAPI.onMessage((message) => {
     if (message.type === type) {
       handler(message as Extract<ServerMessage, { type: T }>);
     }
   });
+
+  const cached = latestServerMessages.get(type);
+  if (cached) {
+    handler(cached as Extract<ServerMessage, { type: T }>);
+  }
+
+  return unsubscribe;
 };
 
 const onConnectionStatus = (handler: (status: ConnectionStatus) => void): (() => void) => {
@@ -75,13 +92,9 @@ const electronAPI: ElectronApi = {
     sendWindowControl("close");
   },
   onMessage(handler) {
-    const listener = (_event: IpcRendererEvent, message: ServerMessage) => {
-      handler(message);
-    };
-
-    ipcRenderer.on("spira:from-backend", listener);
+    serverMessageListeners.add(handler);
     return () => {
-      ipcRenderer.off("spira:from-backend", listener);
+      serverMessageListeners.delete(handler);
     };
   },
   onStateChange(handler) {
