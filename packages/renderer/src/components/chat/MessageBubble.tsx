@@ -1,4 +1,5 @@
 import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import type { ChatMessage } from "../../stores/chat-store.js";
 import styles from "./MessageBubble.module.css";
 import { StreamingText } from "./StreamingText.js";
@@ -18,7 +19,7 @@ export function MessageBubble({ message }: MessageBubbleProps) {
         {message.isStreaming && !isUser ? (
           <StreamingText content={message.content} />
         ) : (
-          <ReactMarkdown>{message.content}</ReactMarkdown>
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
         )}
       </div>
       {message.toolCalls?.map((entry) => (

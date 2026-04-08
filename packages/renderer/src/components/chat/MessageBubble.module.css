@@ -42,3 +42,25 @@
 .content code {
   color: var(--accent-cyan);
 }
+
+.content table {
+  display: block;
+  width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  margin: 0.75rem 0;
+}
+
+.content th,
+.content td {
+  padding: 0.45rem 0.65rem;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  text-align: left;
+  vertical-align: top;
+}
+
+.content th {
+  color: var(--accent-cyan);
+  font-weight: 600;
+  background: rgba(38, 50, 92, 0.45);
+}
