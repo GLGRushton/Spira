@@ -2,12 +2,21 @@ import type { ChildProcess } from "node:child_process";
 import { fork } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import type { UpgradeProposal } from "@spira/shared";
 import { app } from "electron";
 import WebSocket from "ws";
 
 type Callback = () => void;
+type BackendLifecycleMessage = { type: "upgrade:propose"; proposal: UpgradeProposal };
+type BackendLifecycleResponse = {
+  type: "upgrade:proposal-response";
+  proposalId: string;
+  accepted: boolean;
+  reason?: string;
+};
 interface BackendLifecycleOptions {
   onFatal?: Callback;
+  onMessage?: (message: BackendLifecycleMessage) => void;
 }
 
 const currentFile = fileURLToPath(import.meta.url);
@@ -27,10 +36,12 @@ export class BackendLifecycle {
   private generation = 0;
   private stopPromise: Promise<void> | null = null;
   private readonly onFatal?: Callback;
+  private readonly onMessage?: (message: BackendLifecycleMessage) => void;
 
   constructor(backendPort = 9720, options: BackendLifecycleOptions = {}) {
     this.backendPort = backendPort;
     this.onFatal = options.onFatal;
+    this.onMessage = options.onMessage;
   }
 
   get isReady(): boolean {
@@ -82,12 +93,56 @@ export class BackendLifecycle {
     await this.stopPromise;
   }
 
-  onReady(cb: Callback): void {
+  onReady(cb: Callback): () => void {
     this.readyCallbacks.add(cb);
+    return () => {
+      this.readyCallbacks.delete(cb);
+    };
   }
 
-  onCrash(cb: Callback): void {
+  onCrash(cb: Callback): () => void {
     this.crashCallbacks.add(cb);
+    return () => {
+      this.crashCallbacks.delete(cb);
+    };
+  }
+
+  async waitUntilReady(timeoutMs = 15_000): Promise<void> {
+    if (this.ready) {
+      return;
+    }
+
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        cleanup();
+        reject(new Error("Timed out waiting for backend readiness"));
+      }, timeoutMs);
+      const offReady = this.onReady(() => {
+        cleanup();
+        resolve();
+      });
+      const offCrash = this.onCrash(() => {
+        cleanup();
+        reject(new Error("Backend crashed before becoming ready"));
+      });
+
+      const cleanup = () => {
+        clearTimeout(timer);
+        offReady();
+        offCrash();
+      };
+    });
+  }
+
+  async restart(): Promise<void> {
+    await this.stop();
+    this.restartCount = 0;
+    this.start();
+    await this.waitUntilReady();
+  }
+
+  send(message: BackendLifecycleResponse): void {
+    this.child?.send(message);
   }
 
   private spawnChild(): void {
@@ -95,15 +150,20 @@ export class BackendLifecycle {
       return;
     }
 
+    const myGeneration = ++this.generation;
     const backendEntryPath = this.getBackendEntryPath();
     const isPackaged = app.isPackaged;
+    const execPath = isPackaged ? process.execPath : process.env.SPIRA_BACKEND_EXEC_PATH?.trim() || process.execPath;
     const execArgv = isPackaged ? [] : ["--import", "tsx"];
 
     this.child = fork(backendEntryPath, [], {
       cwd: isPackaged ? app.getPath("userData") : repoRoot,
+      execPath,
       env: {
         ...process.env,
         SPIRA_PORT: String(this.backendPort),
+        SPIRA_GENERATION: String(myGeneration),
+        SPIRA_BUILD_ID: this.getBuildId(),
         ...(isPackaged
           ? {
               SPIRA_RESOURCES_PATH: process.resourcesPath,
@@ -123,8 +183,17 @@ export class BackendLifecycle {
       process.stderr.write(`[backend] ${chunk.toString()}`);
     });
     const childEvents = this.child as ChildProcess & NodeJS.EventEmitter;
+    childEvents.on("message", (message: unknown) => {
+      if (
+        message &&
+        typeof message === "object" &&
+        (message as { type?: string }).type === "upgrade:propose" &&
+        "proposal" in (message as Record<string, unknown>)
+      ) {
+        this.onMessage?.(message as BackendLifecycleMessage);
+      }
+    });
 
-    const myGeneration = ++this.generation;
     void this.waitForReady(myGeneration);
 
     childEvents.once("exit", (_code: number | null, signal: NodeJS.Signals | null) => {
@@ -162,6 +231,10 @@ export class BackendLifecycle {
     }
 
     return path.resolve(repoRoot, "packages", "backend", "src", "index.ts");
+  }
+
+  private getBuildId(): string {
+    return process.env.SPIRA_BUILD_ID?.trim() || (app.isPackaged ? app.getVersion() : "dev");
   }
 
   private async waitForReady(generation: number): Promise<void> {

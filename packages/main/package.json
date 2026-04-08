@@ -5,7 +5,7 @@
   "type": "module",
   "main": "./src/index.ts",
   "scripts": {
-    "dev": "electron ./dev-main.mjs",
+    "dev": "node -e \"process.env.SPIRA_BACKEND_EXEC_PATH=process.execPath; require('node:child_process').spawn('electron', ['./dev-main.mjs'], { stdio: 'inherit', shell: true, env: process.env }).on('exit', (code) => process.exit(code ?? 0));\"",
     "dev:external": "node -e \"process.env.SPIRA_EXTERNAL_BACKEND='1'; require('node:child_process').spawn('electron', ['./dev-main.mjs'], { stdio: 'inherit', shell: true, env: process.env }).on('exit', (code) => process.exit(code ?? 0));\""
   },
   "dependencies": {

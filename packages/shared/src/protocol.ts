@@ -1,6 +1,8 @@
 import type { AssistantState } from "./assistant-state.js";
 import type { ChatMessage, ToolCallStatus } from "./chat-types.js";
+import type { McpServerConfig } from "./mcp-types.js";
 import type { McpServerStatus } from "./mcp-types.js";
+import type { UpgradeProposal, UpgradeStatus } from "./upgrade.js";
 
 export interface ErrorPayload {
   code: string;
@@ -20,6 +22,8 @@ export interface PermissionRequestPayload {
   readOnly: boolean;
 }
 
+export const PROTOCOL_VERSION = 1;
+
 export type ClientMessage =
   | { type: "chat:send"; text: string; conversationId?: string }
   | { type: "chat:clear" }
@@ -31,10 +35,16 @@ export type ClientMessage =
   | { type: "voice:unmute" }
   | { type: "settings:update"; settings: Partial<UserSettings> }
   | { type: "permission:respond"; requestId: string; approved: boolean }
+  | { type: "mcp:add-server"; config: McpServerConfig }
+  | { type: "mcp:remove-server"; serverId: string }
+  | { type: "handshake"; protocolVersion: number; rendererBuildId: string }
   | { type: "ping" };
 
 export type ServerMessage =
-  | { type: "pong" }
+  | { type: "pong"; protocolVersion: number; backendBuildId: string }
+  | { type: "backend:hello"; generation: number; protocolVersion: number; backendBuildId: string }
+  | { type: "upgrade:proposal"; proposal: UpgradeProposal; message: string }
+  | ({ type: "upgrade:status" } & UpgradeStatus)
   | { type: "state:change"; state: AssistantState }
   | { type: "voice:muted"; muted: boolean }
   | { type: "chat:token"; token: string; conversationId: string }

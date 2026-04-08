@@ -1,6 +1,6 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { UserSettings } from "@spira/shared";
+import type { ConnectionStatus, UpgradeProposal, UserSettings } from "@spira/shared";
 import type { IpcMainEvent, IpcMainInvokeEvent, Tray } from "electron";
 import { BrowserWindow, app, ipcMain } from "electron";
 import WebSocket from "ws";
@@ -8,6 +8,7 @@ import { setupAutoUpdater } from "./auto-update.js";
 import { BackendLifecycle } from "./backend-lifecycle.js";
 import { setupIpcBridge } from "./ipc-bridge.js";
 import { createTray } from "./tray.js";
+import { UpgradeOrchestrator } from "./upgrade-orchestrator.js";
 import { createWindow } from "./window.js";
 
 const BACKEND_PORT = 9720;
@@ -15,6 +16,7 @@ const WINDOW_CONTROL_CHANNEL = "spira:window-control";
 const CONNECTION_STATUS_GET_CHANNEL = "connection-status:get";
 const SETTINGS_GET_CHANNEL = "settings:get";
 const SETTINGS_SET_CHANNEL = "settings:set";
+const UPGRADE_RESPONSE_CHANNEL = "upgrade:respond";
 const EXTERNAL_BACKEND_READY_TIMEOUT_MS = 30_000;
 const currentFile = fileURLToPath(import.meta.url);
 const currentDir = path.dirname(currentFile);
@@ -40,9 +42,10 @@ let mainWindow: BrowserWindow | null = null;
 let cleanupBridge: (() => void) | null = null;
 let tray: Tray | null = null;
 let settingsStore: SettingsStoreInstance | null = null;
+let upgradeOrchestrator: UpgradeOrchestrator | null = null;
 let isQuitting = false;
 let shutdownPromise: Promise<void> | null = null;
-let currentConnectionStatus: "connecting" | "connected" | "disconnected" = "connecting";
+let currentConnectionStatus: ConnectionStatus = "connecting";
 
 const loadEnvFromFile = () => {
   try {
@@ -65,6 +68,29 @@ const getDefaultSettings = (): UserSettings => ({
 });
 
 const useExternalBackend = (): boolean => process.env.SPIRA_EXTERNAL_BACKEND === "1";
+const getRendererBuildId = (): string =>
+  process.env.SPIRA_BUILD_ID?.trim() || (app.isPackaged ? app.getVersion() : "dev");
+
+const emitConnectionStatus = (status: ConnectionStatus) => {
+  currentConnectionStatus = status;
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    return;
+  }
+  mainWindow.webContents.send("spira:connection-status", status);
+};
+
+const emitUpgradeProposal = (proposal: UpgradeProposal) => {
+  const decision = upgradeOrchestrator?.handleProposal(proposal) ?? {
+    accepted: false,
+    reason: "Upgrade orchestrator is unavailable.",
+  };
+  lifecycle?.send({
+    type: "upgrade:proposal-response",
+    proposalId: proposal.proposalId,
+    accepted: decision.accepted,
+    reason: decision.reason,
+  });
+};
 
 type WindowControlAction = "minimize" | "maximize" | "close";
 
@@ -107,16 +133,22 @@ const ensureWindow = () => {
       cleanupBridge = null;
       mainWindow = null;
     });
+    mainWindow.webContents.on("did-start-loading", () => {
+      upgradeOrchestrator?.clearPendingProposal();
+    });
     tray = createTray(mainWindow, app);
     setupAutoUpdater(mainWindow);
   }
 
-  cleanupBridge?.();
-  cleanupBridge = setupIpcBridge(mainWindow, BACKEND_PORT, {
-    onConnectionStatusChange: (status) => {
-      currentConnectionStatus = status;
-    },
-  });
+  if (!cleanupBridge) {
+    cleanupBridge = setupIpcBridge(mainWindow, BACKEND_PORT, {
+      onConnectionStatusChange: (status) => {
+        currentConnectionStatus = status;
+      },
+      rendererBuildId: getRendererBuildId(),
+      isUpgrading: () => upgradeOrchestrator?.isRestartInProgress() ?? false,
+    });
+  }
 };
 
 const handleGetSettings = () => ({
@@ -124,6 +156,16 @@ const handleGetSettings = () => ({
   ...(settingsStore?.store ?? {}),
 });
 const handleGetConnectionStatus = () => currentConnectionStatus;
+const handleUpgradeResponse = async (
+  _event: IpcMainInvokeEvent,
+  payload: { proposalId?: string; approved?: boolean },
+) => {
+  if (typeof payload?.proposalId !== "string" || typeof payload?.approved !== "boolean") {
+    return;
+  }
+
+  await upgradeOrchestrator?.respondToProposal(payload.proposalId, payload.approved);
+};
 
 const VALID_SETTINGS_KEYS: ReadonlySet<keyof UserSettings> = new Set([
   "voiceEnabled",
@@ -249,6 +291,7 @@ const shutdownApp = async (): Promise<void> => {
     ipcMain.removeHandler(CONNECTION_STATUS_GET_CHANNEL);
     ipcMain.removeHandler(SETTINGS_GET_CHANNEL);
     ipcMain.removeHandler(SETTINGS_SET_CHANNEL);
+    ipcMain.removeHandler(UPGRADE_RESPONSE_CHANNEL);
   })().finally(() => {
     shutdownPromise = null;
   });
@@ -264,6 +307,7 @@ void app.whenReady().then(() => {
   ipcMain.handle(CONNECTION_STATUS_GET_CHANNEL, handleGetConnectionStatus);
   ipcMain.handle(SETTINGS_GET_CHANNEL, handleGetSettings);
   ipcMain.handle(SETTINGS_SET_CHANNEL, handleSetSettings);
+  ipcMain.handle(UPGRADE_RESPONSE_CHANNEL, handleUpgradeResponse);
 
   if (useExternalBackend()) {
     void waitForExternalBackend(BACKEND_PORT)
@@ -288,6 +332,16 @@ void app.whenReady().then(() => {
         mainWindow.webContents.send("spira:from-backend", { type: "state:change", state: "error" });
       }
     },
+    onMessage: (message) => {
+      if (message.type === "upgrade:propose") {
+        emitUpgradeProposal(message.proposal);
+      }
+    },
+  });
+  upgradeOrchestrator = new UpgradeOrchestrator({
+    lifecycle,
+    getWindow: () => mainWindow,
+    emitConnectionStatus,
   });
   lifecycle.onReady(() => {
     ensureWindow();
@@ -300,8 +354,7 @@ void app.whenReady().then(() => {
         message: "The backend process crashed.",
       });
       mainWindow.webContents.send("spira:from-backend", { type: "state:change", state: "error" });
-      mainWindow.webContents.send("spira:connection-status", "disconnected");
-      currentConnectionStatus = "disconnected";
+      emitConnectionStatus("disconnected");
     }
   });
   lifecycle.start();

@@ -5,6 +5,12 @@ import styles from "./ReconnectingOverlay.module.css";
 export function ReconnectingOverlay() {
   const status = useConnectionStore((store) => store.status);
   const visible = status !== "connected";
+  const text =
+    status === "upgrading"
+      ? "Applying Shinra upgrade..."
+      : status === "connecting"
+        ? "Connecting to Spira..."
+        : "Reconnecting to Spira...";
 
   return (
     <AnimatePresence initial={false}>
@@ -22,7 +28,7 @@ export function ReconnectingOverlay() {
               animate={{ scale: [1, 1.12, 1], opacity: [0.7, 1, 0.7] }}
               transition={{ duration: 1.4, repeat: Number.POSITIVE_INFINITY, ease: "easeInOut" }}
             />
-            <p className={styles.text}>Reconnecting to Spira...</p>
+            <p className={styles.text}>{text}</p>
           </div>
         </motion.div>
       ) : null}

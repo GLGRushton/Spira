@@ -26,6 +26,7 @@ interface ChatStore {
   appendDelta: (id: string, delta: string) => void;
   finaliseMessage: (id: string, content: string) => void;
   completeMessage: (id: string) => void;
+  clearStreamingState: () => void;
   addToolCall: (messageId: string, entry: ToolCallEntry) => void;
   updateToolResult: (messageId: string, toolName: string, result: unknown) => void;
   clearMessages: () => void;
@@ -33,6 +34,7 @@ interface ChatStore {
 
 export const PENDING_ASSISTANT_ID = "pending-assistant";
 const MAX_MESSAGES = 500;
+const CHAT_STORAGE_KEY = "spira-chat-v1";
 
 const createMessageId = (): string => {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
@@ -50,6 +52,12 @@ const createAssistantMessage = (id: string): ChatMessage => ({
   toolCalls: [],
   timestamp: Date.now(),
 });
+
+const normalizeMessages = (messages: ChatMessage[]): ChatMessage[] =>
+  messages.slice(-MAX_MESSAGES).map((message) => ({
+    ...message,
+    isStreaming: false,
+  }));
 
 const ensureAssistantMessage = (messages: ChatMessage[], id: string): ChatMessage[] => {
   if (messages.some((message) => message.id === id)) {
@@ -87,8 +95,56 @@ const updateMessage = (
   });
 };
 
+const loadPersistedMessages = (): ChatMessage[] => {
+  if (typeof window === "undefined") {
+    return [];
+  }
+
+  try {
+    const raw = window.sessionStorage.getItem(CHAT_STORAGE_KEY);
+    if (!raw) {
+      return [];
+    }
+
+    const parsed = JSON.parse(raw) as { messages?: ChatMessage[] };
+    return normalizeMessages(parsed.messages ?? []);
+  } catch (error) {
+    console.warn("Failed to read chat session storage", error);
+    return [];
+  }
+};
+
+const persistMessages = (messages: ChatMessage[]): void => {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  try {
+    window.sessionStorage.setItem(
+      CHAT_STORAGE_KEY,
+      JSON.stringify({
+        messages: normalizeMessages(messages),
+      }),
+    );
+  } catch (error) {
+    console.warn("Failed to persist chat session storage", error);
+  }
+};
+
+const clearPersistedMessages = (): void => {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  try {
+    window.sessionStorage.removeItem(CHAT_STORAGE_KEY);
+  } catch (error) {
+    console.warn("Failed to clear chat session storage", error);
+  }
+};
+
 export const useChatStore = create<ChatStore>((set) => ({
-  messages: [],
+  messages: loadPersistedMessages(),
   isStreaming: false,
   addUserMessage: (text) => {
     const trimmed = text.trim();
@@ -106,7 +162,9 @@ export const useChatStore = create<ChatStore>((set) => ({
           timestamp: Date.now(),
         },
       ];
-      return { messages: next.length > MAX_MESSAGES ? next.slice(-MAX_MESSAGES) : next };
+      const messages = next.length > MAX_MESSAGES ? next.slice(-MAX_MESSAGES) : next;
+      persistMessages(messages);
+      return { messages };
     });
   },
   startAssistantMessage: (id) => {
@@ -131,59 +189,77 @@ export const useChatStore = create<ChatStore>((set) => ({
   finaliseMessage: (id, content) => {
     set((state) => {
       const ensuredMessages = ensureAssistantMessage(state.messages, id);
+      const messages = updateMessage(ensuredMessages, id, (message) => ({
+        ...message,
+        content,
+        isStreaming: false,
+      }));
+      persistMessages(messages);
       return {
-        messages: updateMessage(ensuredMessages, id, (message) => ({
-          ...message,
-          content,
-          isStreaming: false,
-        })),
+        messages,
         isStreaming: false,
       };
     });
   },
   completeMessage: (id) => {
-    set((state) => ({
-      messages: updateMessage(state.messages, id, (message) => ({
+    set((state) => {
+      const messages = updateMessage(state.messages, id, (message) => ({
         ...message,
         isStreaming: false,
-      })),
-      isStreaming: false,
-    }));
+      }));
+      persistMessages(messages);
+      return {
+        messages,
+        isStreaming: false,
+      };
+    });
+  },
+  clearStreamingState: () => {
+    set((state) => {
+      const messages = normalizeMessages(state.messages);
+      persistMessages(messages);
+      return {
+        messages,
+        isStreaming: false,
+      };
+    });
   },
   addToolCall: (messageId, entry) => {
     set((state) => {
       const ensuredMessages = ensureAssistantMessage(state.messages, messageId);
-      return {
-        messages: updateMessage(ensuredMessages, messageId, (message) => {
-          const toolCalls = message.toolCalls ?? [];
-          const existingIndex = entry.callId ? toolCalls.findIndex((toolCall) => toolCall.callId === entry.callId) : -1;
-          if (existingIndex >= 0) {
-            return {
-              ...message,
-              toolCalls: toolCalls.map((toolCall, index) => {
-                if (index !== existingIndex) {
-                  return toolCall;
-                }
-
-                return {
-                  ...toolCall,
-                  ...entry,
-                };
-              }),
-            };
-          }
-
+      const messages = updateMessage(ensuredMessages, messageId, (message) => {
+        const toolCalls = message.toolCalls ?? [];
+        const existingIndex = entry.callId ? toolCalls.findIndex((toolCall) => toolCall.callId === entry.callId) : -1;
+        if (existingIndex >= 0) {
           return {
             ...message,
-            toolCalls: [...toolCalls, entry],
+            toolCalls: toolCalls.map((toolCall, index) => {
+              if (index !== existingIndex) {
+                return toolCall;
+              }
+
+              return {
+                ...toolCall,
+                ...entry,
+              };
+            }),
           };
-        }),
+        }
+
+        return {
+          ...message,
+          toolCalls: [...toolCalls, entry],
+        };
+      });
+      persistMessages(messages);
+      return {
+        messages,
       };
     });
   },
   updateToolResult: (messageId, toolName, result) => {
-    set((state) => ({
-      messages: updateMessage(state.messages, messageId, (message) => {
+    set((state) => {
+      const messages = updateMessage(state.messages, messageId, (message) => {
         const toolCalls = message.toolCalls ?? [];
         const resultPayload =
           result && typeof result === "object"
@@ -213,10 +289,15 @@ export const useChatStore = create<ChatStore>((set) => ({
             };
           }),
         };
-      }),
-    }));
+      });
+      persistMessages(messages);
+      return {
+        messages,
+      };
+    });
   },
   clearMessages: () => {
+    clearPersistedMessages();
     set({ messages: [], isStreaming: false });
   },
 }));

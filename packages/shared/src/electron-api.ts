@@ -3,7 +3,7 @@ import type { ChatMessage, ToolCallStatus } from "./chat-types.js";
 import type { McpServerStatus } from "./mcp-types.js";
 import type { ClientMessage, ErrorPayload, PermissionRequestPayload, ServerMessage, UserSettings } from "./protocol.js";
 
-export type ConnectionStatus = "connecting" | "connected" | "disconnected";
+export type ConnectionStatus = "connecting" | "connected" | "disconnected" | "upgrading";
 
 export interface ToolCallPayload {
   callId: string;
@@ -22,6 +22,7 @@ export interface ElectronApi {
   getSettings(): Promise<Partial<UserSettings>>;
   getConnectionStatus(): Promise<ConnectionStatus>;
   setSettings(data: Partial<UserSettings>): Promise<void>;
+  respondToUpgradeProposal(proposalId: string, approved: boolean): Promise<void>;
   minimize(): void;
   maximize(): void;
   close(): void;

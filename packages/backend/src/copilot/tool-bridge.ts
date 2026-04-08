@@ -1,9 +1,18 @@
+import { randomUUID } from "node:crypto";
 import { type Tool, type ToolResultObject, defineTool } from "@github/copilot-sdk";
-import type { McpTool } from "@spira/shared";
+import { type McpTool, type UpgradeProposal, classifyUpgradeScope } from "@spira/shared";
 import type { McpToolAggregator } from "../mcp/tool-aggregator.js";
 import { createLogger } from "../util/logger.js";
 
 const logger = createLogger("tool-bridge");
+
+interface ToolBridgeOptions {
+  requestUpgradeProposal?: (proposal: UpgradeProposal) => Promise<void> | void;
+  applyHotCapabilityUpgrade?: () => Promise<void> | void;
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null;
+
 const isPermissionlessTool = (tool: McpTool): boolean =>
   !tool.name.startsWith("vision_") &&
   tool.annotations?.readOnlyHint === true &&
@@ -38,8 +47,69 @@ const buildTool = (tool: McpTool, aggregator: McpToolAggregator) =>
     },
   });
 
-export function getCopilotTools(aggregator: McpToolAggregator): Tool[] {
+const buildUpgradeProposalTool = (
+  requestUpgradeProposal: NonNullable<ToolBridgeOptions["requestUpgradeProposal"]>,
+  applyHotCapabilityUpgrade?: ToolBridgeOptions["applyHotCapabilityUpgrade"],
+) =>
+  defineTool("spira_propose_upgrade", {
+    description:
+      "Ask Spira to apply local code or configuration changes. Provide the changed project-relative file paths and Spira will classify and apply the safest upgrade path automatically.",
+    parameters: {
+      type: "object",
+      properties: {
+        summary: {
+          type: "string",
+          description: "Short user-facing summary of the upgrade.",
+        },
+        changedFiles: {
+          type: "array",
+          items: { type: "string" },
+          description: "Project-relative file paths touched by this upgrade.",
+        },
+      },
+      required: ["summary", "changedFiles"],
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      try {
+        const payload = isRecord(args) ? args : {};
+        const summary = typeof payload.summary === "string" ? payload.summary : "Spira upgrade";
+        const changedFiles = Array.isArray(payload.changedFiles)
+          ? payload.changedFiles.filter((value: unknown): value is string => typeof value === "string")
+          : [];
+        const scope = classifyUpgradeScope(changedFiles);
+
+        if (scope === "hot-capability") {
+          if (!applyHotCapabilityUpgrade) {
+            throw new Error("Hot-capability upgrades are unavailable in this backend mode");
+          }
+
+          await applyHotCapabilityUpgrade();
+          return toSuccessResult(
+            "MCP capability update applied without restarting the backend. Newly added MCP tools will be available on the next turn after this response finishes.",
+          );
+        }
+
+        await requestUpgradeProposal({
+          proposalId: randomUUID(),
+          scope,
+          summary,
+          changedFiles,
+          requestedAt: Date.now(),
+        });
+        return toSuccessResult("Upgrade proposal sent to the user for approval.");
+      } catch (error) {
+        logger.error({ error }, "Failed to apply or propose upgrade");
+        return toFailureResult("spira_propose_upgrade", error);
+      }
+    },
+  });
+
+export function getCopilotTools(aggregator: McpToolAggregator, options: ToolBridgeOptions = {}): Tool[] {
   const tools = aggregator.getTools().map((tool) => buildTool(tool, aggregator));
+  if (options.requestUpgradeProposal) {
+    tools.push(buildUpgradeProposalTool(options.requestUpgradeProposal, options.applyHotCapabilityUpgrade));
+  }
   logger.info({ toolCount: tools.length }, "Registered MCP tools with Copilot session");
   return tools;
 }

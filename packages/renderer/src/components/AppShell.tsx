@@ -10,6 +10,7 @@ import { ScreenCaptureIndicator } from "./ScreenCaptureIndicator.js";
 import { SettingsPanel } from "./SettingsPanel.js";
 import { Sidebar, type SidebarView } from "./Sidebar.js";
 import { TitleBar } from "./TitleBar.js";
+import { UpgradeBanner } from "./UpgradeBanner.js";
 import { ChatPanel } from "./chat/ChatPanel.js";
 import { ShinraOrb } from "./orb/ShinraOrb.js";
 
@@ -58,6 +59,7 @@ export function AppShell() {
       </main>
       <ScreenCaptureIndicator />
       <PermissionPrompt />
+      <UpgradeBanner />
       <ReconnectingOverlay />
     </div>
   );

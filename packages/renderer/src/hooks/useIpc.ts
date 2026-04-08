@@ -1,3 +1,4 @@
+import { PROTOCOL_VERSION } from "@spira/shared";
 import { useEffect } from "react";
 import { useAssistantStore } from "../stores/assistant-store.js";
 import { useAudioStore } from "../stores/audio-store.js";
@@ -6,6 +7,7 @@ import { useConnectionStore } from "../stores/connection-store.js";
 import { useMcpStore } from "../stores/mcp-store.js";
 import { usePermissionStore } from "../stores/permission-store.js";
 import { useSettingsStore } from "../stores/settings-store.js";
+import { useUpgradeStore } from "../stores/upgrade-store.js";
 import { useVisionStore } from "../stores/vision-store.js";
 
 export function useIpc(): void {
@@ -15,6 +17,7 @@ export function useIpc(): void {
   const appendDelta = useChatStore((store) => store.appendDelta);
   const finaliseMessage = useChatStore((store) => store.finaliseMessage);
   const completeMessage = useChatStore((store) => store.completeMessage);
+  const clearStreamingState = useChatStore((store) => store.clearStreamingState);
   const addToolCall = useChatStore((store) => store.addToolCall);
   const updateToolResult = useChatStore((store) => store.updateToolResult);
   const setServers = useMcpStore((store) => store.setServers);
@@ -28,6 +31,10 @@ export function useIpc(): void {
   const setActiveCapture = useVisionStore((store) => store.setActiveCapture);
   const clearActiveCapture = useVisionStore((store) => store.clearActiveCapture);
   const clearAllActiveCaptures = useVisionStore((store) => store.clearAllActiveCaptures);
+  const setProtocolMismatch = useUpgradeStore((store) => store.setProtocolMismatch);
+  const clearProtocolMismatch = useUpgradeStore((store) => store.clearProtocolMismatch);
+  const showUpgradeProposal = useUpgradeStore((store) => store.showProposal);
+  const showUpgradeStatus = useUpgradeStore((store) => store.showStatus);
 
   useEffect(() => {
     let activeAssistantMessageId: string | null = null;
@@ -38,6 +45,48 @@ export function useIpc(): void {
     });
 
     const unsubscribers = [
+      window.electronAPI.onMessage((message) => {
+        if (message.type === "backend:hello") {
+          clearStreamingState();
+          clearPermissionRequests();
+          clearAllActiveCaptures();
+          if (message.protocolVersion === PROTOCOL_VERSION) {
+            clearProtocolMismatch();
+          } else {
+            setProtocolMismatch(message.protocolVersion, message.backendBuildId);
+          }
+          activeAssistantMessageId = null;
+          return;
+        }
+
+        if (message.type === "pong") {
+          if (message.protocolVersion === PROTOCOL_VERSION) {
+            clearProtocolMismatch();
+          } else {
+            setProtocolMismatch(message.protocolVersion, message.backendBuildId);
+          }
+          return;
+        }
+
+        if (message.type === "upgrade:proposal") {
+          showUpgradeProposal(message.proposal, message.message);
+          return;
+        }
+
+        if (message.type === "upgrade:status") {
+          if (message.scope === "backend-reload") {
+            const currentConnectionStatus = useConnectionStore.getState().status;
+            if (message.status === "applying") {
+              setConnectionStatus("upgrading");
+            } else if (message.status === "completed" && currentConnectionStatus === "upgrading") {
+              setConnectionStatus("connecting");
+            } else if (message.status === "failed") {
+              setConnectionStatus("disconnected");
+            }
+          }
+          showUpgradeStatus(message);
+        }
+      }),
       window.electronAPI.onStateChange((state) => {
         setAssistantState(state);
       }),
@@ -128,6 +177,7 @@ export function useIpc(): void {
       window.electronAPI.onConnectionStatus((status) => {
         setConnectionStatus(status);
         if (status !== "connected") {
+          clearStreamingState();
           clearPermissionRequests();
           clearAllActiveCaptures();
         }
@@ -148,6 +198,8 @@ export function useIpc(): void {
       }),
     ];
 
+    window.electronAPI.send({ type: "ping" });
+
     return () => {
       for (const unsubscribe of unsubscribers) {
         unsubscribe();
@@ -161,6 +213,8 @@ export function useIpc(): void {
     applySettings,
     clearActiveCapture,
     clearAllActiveCaptures,
+    clearStreamingState,
+    clearProtocolMismatch,
     clearPermissionRequests,
     completeMessage,
     finaliseMessage,
@@ -169,8 +223,11 @@ export function useIpc(): void {
     setActiveCapture,
     setAudioLevel,
     setConnectionStatus,
+    setProtocolMismatch,
     setServers,
     setTtsAmplitude,
+    showUpgradeProposal,
+    showUpgradeStatus,
     startAssistantMessage,
     updateToolResult,
   ]);

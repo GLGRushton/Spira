@@ -1,4 +1,10 @@
-import type { AssistantState, ClientMessage, ServerMessage, VoicePipelineState } from "@spira/shared";
+import {
+  type AssistantState,
+  type ClientMessage,
+  PROTOCOL_VERSION,
+  type ServerMessage,
+  type VoicePipelineState,
+} from "@spira/shared";
 import WebSocket, { WebSocketServer } from "ws";
 import type { EventMap, SpiraEventBus } from "./util/event-bus.js";
 import { createLogger } from "./util/logger.js";
@@ -16,6 +22,8 @@ export class WsServer {
   constructor(
     private readonly bus: SpiraEventBus,
     private readonly port = 9720,
+    private readonly generation = 0,
+    private readonly buildId = "dev",
   ) {
     this.busListeners = [
       this.registerBusHandler("state:change", (_previous, current) => {
@@ -148,6 +156,12 @@ export class WsServer {
     this.client = socket;
     this.bus.emit("transport:client-connected");
     logger.info("Renderer connected");
+    this.send({
+      type: "backend:hello",
+      generation: this.generation,
+      protocolVersion: PROTOCOL_VERSION,
+      backendBuildId: this.buildId,
+    });
     this.send({ type: "voice:muted", muted: this.voiceMuted });
 
     socket.on("message", (raw) => {

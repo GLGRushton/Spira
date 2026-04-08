@@ -33,7 +33,7 @@ If you already use GitHub Copilot CLI locally, Spira will prefer that logged-in 
 ## Development
 
 ```bash
-pnpm dev          # Start renderer + Electron; Electron starts the backend child
+pnpm dev          # Start renderer + Electron in production-like child-backed mode
 pnpm typecheck    # Type check all packages
 pnpm lint         # Lint all packages
 pnpm test         # Run tests

@@ -7,6 +7,7 @@ const CONNECTION_STATUS_CHANNEL = "spira:connection-status";
 const CONNECTION_STATUS_GET_CHANNEL = "connection-status:get";
 const SETTINGS_GET_CHANNEL = "settings:get";
 const SETTINGS_SET_CHANNEL = "settings:set";
+const UPGRADE_RESPONSE_CHANNEL = "upgrade:respond";
 
 type WindowControlAction = "minimize" | "maximize" | "close";
 
@@ -60,6 +61,9 @@ const electronAPI: ElectronApi = {
   },
   setSettings(data) {
     return ipcRenderer.invoke(SETTINGS_SET_CHANNEL, data);
+  },
+  respondToUpgradeProposal(proposalId, approved) {
+    return ipcRenderer.invoke(UPGRADE_RESPONSE_CHANNEL, { proposalId, approved });
   },
   minimize() {
     sendWindowControl("minimize");

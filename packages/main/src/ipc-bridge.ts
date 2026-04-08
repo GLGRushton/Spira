@@ -1,4 +1,4 @@
-import type { ClientMessage, ConnectionStatus, ServerMessage } from "@spira/shared";
+import { type ClientMessage, type ConnectionStatus, PROTOCOL_VERSION, type ServerMessage } from "@spira/shared";
 import type { BrowserWindow, IpcMainEvent } from "electron";
 import { ipcMain } from "electron";
 import WebSocket from "ws";
@@ -6,12 +6,25 @@ import { updateTrayMuteState } from "./tray.js";
 
 interface IpcBridgeOptions {
   onConnectionStatusChange?: (status: ConnectionStatus) => void;
+  rendererBuildId?: string;
+  isUpgrading?: () => boolean;
 }
 
 export function setupIpcBridge(win: BrowserWindow, backendPort: number, options: IpcBridgeOptions = {}): () => void {
-  const socket = new WebSocket(`ws://127.0.0.1:${backendPort}`);
   const pending: string[] = [];
+  const rendererBuildId = options.rendererBuildId ?? "dev";
+  const handshakeMessage = JSON.stringify({
+    type: "handshake",
+    protocolVersion: PROTOCOL_VERSION,
+    rendererBuildId,
+  } satisfies ClientMessage);
+
+  let socket: WebSocket | null = null;
   let socketReady = false;
+  let disposed = false;
+  let reconnectAttempt = 0;
+  let reconnectTimer: NodeJS.Timeout | null = null;
+  let lastBackendGeneration: number | null = null;
 
   const emitConnectionStatus = (status: ConnectionStatus) => {
     options.onConnectionStatusChange?.(status);
@@ -20,24 +33,13 @@ export function setupIpcBridge(win: BrowserWindow, backendPort: number, options:
     }
   };
 
-  emitConnectionStatus("connecting");
-
-  socket.once("open", () => {
-    socketReady = true;
-    emitConnectionStatus("connected");
-    for (const message of pending) {
-      socket.send(message);
-    }
-    pending.length = 0;
-  });
-
   const handleRendererMessage = (_event: IpcMainEvent, message: ClientMessage) => {
     const serialized = JSON.stringify(message);
-    if (socketReady && socket.readyState === WebSocket.OPEN) {
+    if (socketReady && socket?.readyState === WebSocket.OPEN) {
       socket.send(serialized);
-    } else {
-      pending.push(serialized);
+      return;
     }
+    pending.push(serialized);
   };
 
   const forwardToRenderer = (message: ServerMessage) => {
@@ -50,38 +52,90 @@ export function setupIpcBridge(win: BrowserWindow, backendPort: number, options:
     }
   };
 
-  ipcMain.on("spira:to-backend", handleRendererMessage);
-
-  socket.on("message", (raw) => {
-    let parsed: ServerMessage;
-    try {
-      parsed = JSON.parse(raw.toString()) as ServerMessage;
-    } catch {
+  const clearReconnectTimer = () => {
+    if (!reconnectTimer) {
       return;
     }
-    forwardToRenderer(parsed);
-  });
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  };
 
-  socket.on("error", (error) => {
-    emitConnectionStatus("disconnected");
-    forwardToRenderer({
-      type: "error",
-      code: "BACKEND_SOCKET_ERROR",
-      message: error.message,
-      details: error.stack,
-      source: "transport",
-    });
-  });
+  const scheduleReconnect = () => {
+    if (disposed || win.isDestroyed()) {
+      return;
+    }
 
-  socket.on("close", () => {
+    clearReconnectTimer();
+    const delay = Math.min(250 * 2 ** reconnectAttempt, 2_000);
+    reconnectAttempt += 1;
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null;
+      connect();
+    }, delay);
+  };
+
+  const connect = () => {
+    if (disposed || win.isDestroyed()) {
+      return;
+    }
+
+    emitConnectionStatus("connecting");
     socketReady = false;
-    emitConnectionStatus("disconnected");
-    ipcMain.off("spira:to-backend", handleRendererMessage);
-  });
+    socket = new WebSocket(`ws://127.0.0.1:${backendPort}`);
+
+    socket.once("open", () => {
+      socket?.send(handshakeMessage);
+    });
+
+    socket.on("message", (raw) => {
+      let parsed: ServerMessage;
+      try {
+        parsed = JSON.parse(raw.toString()) as ServerMessage;
+      } catch {
+        return;
+      }
+
+      if (parsed.type === "backend:hello") {
+        if (lastBackendGeneration !== null && parsed.generation !== lastBackendGeneration) {
+          pending.length = 0;
+        }
+        lastBackendGeneration = parsed.generation;
+        socketReady = true;
+        reconnectAttempt = 0;
+        emitConnectionStatus("connected");
+        for (const message of pending) {
+          socket?.send(message);
+        }
+        pending.length = 0;
+      }
+
+      forwardToRenderer(parsed);
+    });
+
+    socket.on("error", () => {
+      socketReady = false;
+    });
+
+    socket.on("close", () => {
+      socketReady = false;
+      socket = null;
+      if (disposed) {
+        return;
+      }
+      emitConnectionStatus(options.isUpgrading?.() ? "upgrading" : "disconnected");
+      scheduleReconnect();
+    });
+  };
+
+  ipcMain.on("spira:to-backend", handleRendererMessage);
+  connect();
 
   return () => {
+    disposed = true;
+    clearReconnectTimer();
     ipcMain.off("spira:to-backend", handleRendererMessage);
-    if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
+    socketReady = false;
+    if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
       socket.close();
     }
   };

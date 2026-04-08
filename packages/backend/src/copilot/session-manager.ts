@@ -8,7 +8,7 @@ import {
   type PermissionRequestResult,
   type SessionEvent,
 } from "@github/copilot-sdk";
-import type { AssistantState, Env, PermissionRequestPayload } from "@spira/shared";
+import type { AssistantState, Env, PermissionRequestPayload, UpgradeProposal } from "@spira/shared";
 import type { McpToolAggregator } from "../mcp/tool-aggregator.js";
 import { appRootDir } from "../util/app-paths.js";
 import { CopilotError, formatErrorDetails } from "../util/errors.js";
@@ -69,11 +69,15 @@ export class CopilotSessionManager {
   private currentState: AssistantState = "idle";
   private authStrategy: CopilotAuthStrategy | null = null;
   private registeredToolSignature: string | null = null;
+  private pendingToolRefreshSignature: string | null = null;
+  private refreshingSessionForToolChanges: Promise<void> | null = null;
 
   constructor(
     private readonly bus: SpiraEventBus,
     private readonly env: Env,
     private readonly toolAggregator: McpToolAggregator,
+    private readonly requestUpgradeProposal?: (proposal: UpgradeProposal) => Promise<void> | void,
+    private readonly applyHotCapabilityUpgrade?: () => Promise<void> | void,
   ) {
     this.bus.on("mcp:servers-changed", () => {
       void this.refreshSessionForToolChanges();
@@ -163,7 +167,11 @@ export class CopilotSessionManager {
   private async createSession(): Promise<CopilotSession> {
     const client = await this.getOrCreateClient();
     const toolAwarenessInstructions = this.getToolAwarenessInstructions();
-    const copilotTools = getCopilotTools(this.toolAggregator);
+    const upgradeToolInstructions = this.getUpgradeToolInstructions();
+    const copilotTools = getCopilotTools(this.toolAggregator, {
+      requestUpgradeProposal: this.requestUpgradeProposal,
+      applyHotCapabilityUpgrade: this.applyHotCapabilityUpgrade,
+    });
 
     const sessionPromise = client.createSession({
       clientName: "Spira",
@@ -188,6 +196,7 @@ export class CopilotSessionManager {
             action: "append",
             content: [
               "Prefer short, clear answers. Use the name Shinra naturally when self-identifying, but keep the focus on solving the user's task.",
+              upgradeToolInstructions,
               toolAwarenessInstructions,
             ]
               .filter((section) => section.length > 0)
@@ -402,6 +411,10 @@ export class CopilotSessionManager {
     const previousState = this.currentState;
     this.currentState = nextState;
     this.bus.emit("state:change", previousState, nextState);
+
+    if (nextState === "idle") {
+      void this.maybeRefreshSessionForToolChanges();
+    }
   }
 
   private async disposeClient(): Promise<void> {
@@ -549,14 +562,43 @@ export class CopilotSessionManager {
     ].join("\n");
   }
 
+  private getUpgradeToolInstructions(): string {
+    if (!this.requestUpgradeProposal) {
+      return "";
+    }
+
+    return "If you modify local Spira code or configuration and need the app to apply those changes, use the spira_propose_upgrade tool with the changed file paths instead of guessing the restart scope yourself.";
+  }
+
   private async refreshSessionForToolChanges(): Promise<void> {
     const currentToolSignature = this.getCurrentToolSignature();
     if (this.registeredToolSignature === currentToolSignature) {
+      this.pendingToolRefreshSignature = null;
       return;
     }
 
     if (!this.session && !this.initializingSession) {
       this.registeredToolSignature = currentToolSignature;
+      this.pendingToolRefreshSignature = null;
+      return;
+    }
+
+    if (this.currentState !== "idle") {
+      this.pendingToolRefreshSignature = currentToolSignature;
+      logger.info(
+        {
+          previousToolSignature: this.registeredToolSignature,
+          currentToolSignature,
+          currentState: this.currentState,
+        },
+        "MCP tool inventory changed during an active turn; deferring Copilot session refresh",
+      );
+      return;
+    }
+
+    if (this.refreshingSessionForToolChanges) {
+      await this.refreshingSessionForToolChanges;
+      await this.refreshSessionForToolChanges();
       return;
     }
 
@@ -567,6 +609,24 @@ export class CopilotSessionManager {
       },
       "MCP tool inventory changed; refreshing Copilot session",
     );
-    await this.disconnectSession();
+    this.pendingToolRefreshSignature = null;
+    const refreshPromise = this.disconnectSession();
+    this.refreshingSessionForToolChanges = refreshPromise;
+
+    try {
+      await refreshPromise;
+    } finally {
+      if (this.refreshingSessionForToolChanges === refreshPromise) {
+        this.refreshingSessionForToolChanges = null;
+      }
+    }
+  }
+
+  private async maybeRefreshSessionForToolChanges(): Promise<void> {
+    if (!this.pendingToolRefreshSignature || this.currentState !== "idle") {
+      return;
+    }
+
+    await this.refreshSessionForToolChanges();
   }
 }

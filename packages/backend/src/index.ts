@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { type ClientMessage, type Env, parseEnv } from "@spira/shared";
+import { type ClientMessage, type Env, PROTOCOL_VERSION, type UpgradeProposal, parseEnv } from "@spira/shared";
 import { ZodError } from "zod";
 import { CopilotSessionManager } from "./copilot/session-manager.js";
 import { McpClientPool } from "./mcp/client-pool.js";
@@ -33,7 +33,18 @@ let unsubscribeTransport: (() => void) | null = null;
 let voicePipeline: VoicePipeline | null = null;
 let ttsPlayback: TtsPlaybackService | null = null;
 let voiceEnabled = false;
+
+const BACKEND_BUILD_ID = process.env.SPIRA_BUILD_ID?.trim() || "dev";
+const BACKEND_GENERATION = Number(process.env.SPIRA_GENERATION ?? "0");
 let shuttingDown = false;
+const pendingUpgradeProposalResponses = new Map<
+  string,
+  {
+    resolve: () => void;
+    reject: (error: Error) => void;
+    timeout: NodeJS.Timeout;
+  }
+>();
 
 const loadEnvFromFile = () => {
   try {
@@ -96,6 +107,36 @@ const createWakeWordProvider = (env: Env): WakeWordProvider => {
   );
 };
 
+const requestUpgradeProposal = async (proposal: UpgradeProposal): Promise<void> => {
+  if (!process.send) {
+    throw new Error("Upgrade proposals are unavailable without a parent process");
+  }
+
+  await new Promise<void>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      pendingUpgradeProposalResponses.delete(proposal.proposalId);
+      reject(new Error("Timed out waiting for upgrade proposal acknowledgement"));
+    }, 5_000);
+
+    pendingUpgradeProposalResponses.set(proposal.proposalId, {
+      resolve: () => {
+        clearTimeout(timeout);
+        resolve();
+      },
+      reject: (error) => {
+        clearTimeout(timeout);
+        reject(error);
+      },
+      timeout,
+    });
+
+    process.send?.({
+      type: "upgrade:propose",
+      proposal,
+    });
+  });
+};
+
 const shutdown = async (signal: NodeJS.Signals | "manual") => {
   if (shuttingDown) {
     return;
@@ -124,8 +165,23 @@ const shutdown = async (signal: NodeJS.Signals | "manual") => {
 };
 
 const handleClientMessage = async (message: ClientMessage): Promise<void> => {
-  if (message.type === "ping") {
-    transport?.send({ type: "pong" });
+  if (message.type === "ping" || message.type === "handshake") {
+    transport?.send({
+      type: "pong",
+      protocolVersion: PROTOCOL_VERSION,
+      backendBuildId: BACKEND_BUILD_ID,
+    });
+    if (message.type === "handshake" && message.protocolVersion !== PROTOCOL_VERSION) {
+      logger.warn(
+        {
+          rendererProtocolVersion: message.protocolVersion,
+          backendProtocolVersion: PROTOCOL_VERSION,
+          rendererBuildId: message.rendererBuildId,
+          backendBuildId: BACKEND_BUILD_ID,
+        },
+        "Renderer protocol version mismatch",
+      );
+    }
     return;
   }
 
@@ -159,6 +215,32 @@ const handleClientMessage = async (message: ClientMessage): Promise<void> => {
       transport?.send({
         type: "error",
         ...toErrorPayload(error, "UNKNOWN_ERROR", "Failed to clear chat session", "copilot"),
+      });
+    }
+    return;
+  }
+
+  if (message.type === "mcp:add-server") {
+    try {
+      await mcpRegistry?.addServer(message.config);
+    } catch (error) {
+      logger.error({ err: error, serverId: message.config.id }, "Failed to add MCP server");
+      transport?.send({
+        type: "error",
+        ...toErrorPayload(error, "MCP_ADD_FAILED", `Failed to add MCP server ${message.config.name}`, "mcp"),
+      });
+    }
+    return;
+  }
+
+  if (message.type === "mcp:remove-server") {
+    try {
+      await mcpRegistry?.removeServer(message.serverId);
+    } catch (error) {
+      logger.error({ err: error, serverId: message.serverId }, "Failed to remove MCP server");
+      transport?.send({
+        type: "error",
+        ...toErrorPayload(error, "MCP_REMOVE_FAILED", `Failed to remove MCP server ${message.serverId}`, "mcp"),
       });
     }
     return;
@@ -260,12 +342,18 @@ const bootstrap = async () => {
   logger.info({ nodeEnv: process.env.NODE_ENV ?? "development", port: env.SPIRA_PORT }, "Starting Spira backend");
 
   bus = new SpiraEventBus();
-  server = new WsServer(bus, env.SPIRA_PORT);
+  server = new WsServer(bus, env.SPIRA_PORT, BACKEND_GENERATION, BACKEND_BUILD_ID);
   transport = new WsTransport(server);
   const pool = new McpClientPool(bus, logger);
   const aggregator = new McpToolAggregator(pool);
   mcpRegistry = new McpRegistry(bus, logger, pool);
-  copilotManager = new CopilotSessionManager(bus, env, aggregator);
+  copilotManager = new CopilotSessionManager(bus, env, aggregator, requestUpgradeProposal, async () => {
+    if (!mcpRegistry) {
+      throw new Error("MCP registry is unavailable");
+    }
+
+    await mcpRegistry.reloadFromDisk();
+  });
   ttsPlayback = new TtsPlaybackService(env, bus, logger);
 
   bus.on("voice:transcript", ({ text }) => {
@@ -338,6 +426,33 @@ process.on("message", (message: unknown) => {
     void shutdown("manual").finally(() => {
       process.exit(0);
     });
+    return;
+  }
+
+  if (
+    message &&
+    typeof message === "object" &&
+    (message as { type?: string }).type === "upgrade:proposal-response" &&
+    typeof (message as { proposalId?: unknown }).proposalId === "string"
+  ) {
+    const response = message as {
+      proposalId: string;
+      accepted: boolean;
+      reason?: string;
+    };
+    const pending = pendingUpgradeProposalResponses.get(response.proposalId);
+    if (!pending) {
+      return;
+    }
+
+    pendingUpgradeProposalResponses.delete(response.proposalId);
+    clearTimeout(pending.timeout);
+    if (response.accepted) {
+      pending.resolve();
+      return;
+    }
+
+    pending.reject(new Error(response.reason ?? "Upgrade proposal was rejected"));
   }
 });
 

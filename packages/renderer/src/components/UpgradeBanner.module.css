@@ -1,0 +1,82 @@
+.banner {
+  display: block;
+  position: fixed;
+  top: calc(var(--titlebar-height) + 12px);
+  right: 16px;
+  z-index: 30;
+  max-width: min(420px, calc(100vw - 32px));
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, rgba(255, 255, 255, 0.12));
+  border-radius: 16px;
+  background: rgba(8, 12, 24, 0.88);
+  backdrop-filter: blur(20px);
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.28);
+}
+
+.warning {
+  border-color: rgba(255, 204, 102, 0.35);
+}
+
+.error {
+  border-color: rgba(255, 110, 110, 0.4);
+}
+
+.success {
+  border-color: rgba(127, 255, 196, 0.35);
+}
+
+.inner {
+  display: grid;
+  gap: 6px;
+  padding: 14px 16px;
+}
+
+.header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.title {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.message {
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.button {
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-primary);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 8px 12px;
+}
+
+.buttonPrimary {
+  border-color: color-mix(in srgb, var(--accent) 40%, rgba(255, 255, 255, 0.12));
+  background: color-mix(in srgb, var(--accent) 14%, rgba(255, 255, 255, 0.06));
+}
+
+.dismiss {
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+}
