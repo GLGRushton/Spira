@@ -10,7 +10,9 @@ files:
   - packages/main/dist/**/*
   - packages/renderer/dist/**/*
   - packages/shared/dist/**/*
+  - packages/memory-db/dist/**/*
   - packages/backend/dist/**/*
+  - packages/mcp-memories/dist/**/*
   - packages/mcp-vision/dist/**/*
   - packages/mcp-windows/dist/**/*
   - assets/wake-word/openwakeword/**/*
@@ -23,11 +25,14 @@ files:
 
 asarUnpack:
   - packages/backend/dist/**/*
+  - packages/memory-db/dist/**/*
   - packages/mcp-vision/dist/**/*
+  - packages/mcp-memories/dist/**/*
   - packages/mcp-windows/dist/**/*
   - assets/wake-word/openwakeword/**/*
   - assets/wake-word/openwakeword-runtime/**/*
   - node_modules/@picovoice/**/*
+  - node_modules/better-sqlite3/**/*
   - node_modules/nodejs-whisper/**/*
   - node_modules/speaker/**/*
   - node_modules/@github/copilot-sdk/**/*

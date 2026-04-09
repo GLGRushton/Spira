@@ -6,9 +6,12 @@ import { updateTrayMuteState } from "./tray.js";
 
 interface IpcBridgeOptions {
   onConnectionStatusChange?: (status: ConnectionStatus) => void;
+  onBackendHello?: () => void;
   rendererBuildId?: string;
   isUpgrading?: () => boolean;
 }
+
+const REPLAYABLE_SERVER_MESSAGES = new Set<ServerMessage["type"]>(["mcp:status"]);
 
 export function setupIpcBridge(win: BrowserWindow, backendPort: number, options: IpcBridgeOptions = {}): () => void {
   const pending: string[] = [];
@@ -25,6 +28,7 @@ export function setupIpcBridge(win: BrowserWindow, backendPort: number, options:
   let reconnectAttempt = 0;
   let reconnectTimer: NodeJS.Timeout | null = null;
   let lastBackendGeneration: number | null = null;
+  const latestServerMessages = new Map<ServerMessage["type"], ServerMessage>();
 
   const emitConnectionStatus = (status: ConnectionStatus) => {
     options.onConnectionStatusChange?.(status);
@@ -47,7 +51,21 @@ export function setupIpcBridge(win: BrowserWindow, backendPort: number, options:
       updateTrayMuteState(message.muted);
     }
 
+    if (REPLAYABLE_SERVER_MESSAGES.has(message.type)) {
+      latestServerMessages.set(message.type, message);
+    }
+
     if (!win.isDestroyed()) {
+      win.webContents.send("spira:from-backend", message);
+    }
+  };
+
+  const replayLatestServerMessages = () => {
+    if (win.isDestroyed()) {
+      return;
+    }
+
+    for (const message of latestServerMessages.values()) {
       win.webContents.send("spira:from-backend", message);
     }
   };
@@ -110,6 +128,9 @@ export function setupIpcBridge(win: BrowserWindow, backendPort: number, options:
       }
 
       forwardToRenderer(parsed);
+      if (parsed.type === "backend:hello") {
+        options.onBackendHello?.();
+      }
     });
 
     socket.on("error", () => {
@@ -128,12 +149,14 @@ export function setupIpcBridge(win: BrowserWindow, backendPort: number, options:
   };
 
   ipcMain.on("spira:to-backend", handleRendererMessage);
+  win.webContents.on("did-finish-load", replayLatestServerMessages);
   connect();
 
   return () => {
     disposed = true;
     clearReconnectTimer();
     ipcMain.off("spira:to-backend", handleRendererMessage);
+    win.webContents.off("did-finish-load", replayLatestServerMessages);
     socketReady = false;
     if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
       socket.close();

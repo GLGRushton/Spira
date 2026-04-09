@@ -1,22 +1,33 @@
-import { type Env, type UserSettings, markdownToSpeechText } from "@spira/shared";
+import {
+  type Env,
+  type TtsProvider,
+  type UserSettings,
+  markdownToSpeechText,
+  normalizeTtsProvider,
+} from "@spira/shared";
 import type { Logger } from "pino";
-import { resolveAppPath } from "../util/app-paths.js";
 import { SpiraError, VoiceError } from "../util/errors.js";
 import type { SpiraEventBus } from "../util/event-bus.js";
-import { PiperTtsProvider } from "./tts-piper.js";
+import { KokoroTtsProvider } from "./tts-kokoro.js";
 import type { ITtsProvider } from "./tts-provider.js";
 import { ElevenLabsTtsProvider } from "./tts.js";
 
 type TtsPlaybackSettings = Pick<UserSettings, "ttsProvider" | "elevenLabsVoiceId">;
 
 const DEFAULT_VOICE_ID = "21m00Tcm4TlvDq8ikWAM";
+const DEFAULT_KOKORO_MODEL_ID = "onnx-community/Kokoro-82M-v1.0-ONNX";
+const DEFAULT_KOKORO_VOICE = "bm_fable";
+const DEFAULT_KOKORO_DTYPE = "q8";
+const DEFAULT_KOKORO_SPEED = 1;
 
 export class TtsPlaybackService {
-  private readonly piperExecutable: string;
-  private readonly piperModelPath: string;
   private readonly elevenLabsApiKey: string;
   private readonly defaultVoiceId: string;
-  private readonly defaultProvider: UserSettings["ttsProvider"];
+  private readonly defaultProvider: TtsProvider;
+  private readonly kokoroModelId: string;
+  private readonly kokoroVoice: string;
+  private readonly kokoroDtype: "fp32" | "fp16" | "q8" | "q4" | "q4f16";
+  private readonly kokoroSpeed: number;
   private settings: TtsPlaybackSettings;
   private activeProvider: ITtsProvider | null = null;
   private playbackSequence = 0;
@@ -26,11 +37,13 @@ export class TtsPlaybackService {
     private readonly bus: SpiraEventBus,
     private readonly logger: Logger,
   ) {
-    this.piperExecutable = env.PIPER_EXECUTABLE ?? "piper";
-    this.piperModelPath = env.PIPER_MODEL ? resolveAppPath(env.PIPER_MODEL) : "";
     this.elevenLabsApiKey = env.ELEVENLABS_API_KEY?.trim() ?? "";
     this.defaultVoiceId = env.ELEVENLABS_VOICE_ID?.trim() || DEFAULT_VOICE_ID;
-    this.defaultProvider = this.elevenLabsApiKey ? "elevenlabs" : "piper";
+    this.kokoroModelId = env.KOKORO_MODEL_ID?.trim() || DEFAULT_KOKORO_MODEL_ID;
+    this.kokoroVoice = env.KOKORO_VOICE?.trim() || DEFAULT_KOKORO_VOICE;
+    this.kokoroDtype = env.KOKORO_DTYPE ?? DEFAULT_KOKORO_DTYPE;
+    this.kokoroSpeed = env.KOKORO_SPEED ?? DEFAULT_KOKORO_SPEED;
+    this.defaultProvider = this.elevenLabsApiKey ? "elevenlabs" : "kokoro";
     this.settings = {
       ttsProvider: this.defaultProvider,
       elevenLabsVoiceId: env.ELEVENLABS_VOICE_ID?.trim() ?? "",
@@ -39,7 +52,10 @@ export class TtsPlaybackService {
 
   updateSettings(settings: Partial<UserSettings>): void {
     this.settings = {
-      ttsProvider: settings.ttsProvider ?? this.settings.ttsProvider,
+      ttsProvider:
+        typeof settings.ttsProvider === "string"
+          ? normalizeTtsProvider(settings.ttsProvider)
+          : this.settings.ttsProvider,
       elevenLabsVoiceId: settings.elevenLabsVoiceId ?? this.settings.elevenLabsVoiceId,
     };
   }
@@ -55,13 +71,82 @@ export class TtsPlaybackService {
     this.activeProvider = null;
     this.bus.emit("tts:amplitude", { amplitude: 0 });
     const sequence = ++this.playbackSequence;
-    const provider = this.createProvider();
+    try {
+      const primaryProvider =
+        this.settings.ttsProvider === "elevenlabs" ? this.createElevenLabsProvider() : this.createKokoroProvider();
+      await this.speakWithProvider(trimmed, sequence, primaryProvider, this.settings.ttsProvider);
+      return;
+    } catch (error) {
+      if (
+        this.playbackSequence !== sequence ||
+        this.settings.ttsProvider !== "elevenlabs" ||
+        !this.canUseKokoroFallback()
+      ) {
+        throw error;
+      }
+
+      this.logger.warn({ error }, "Preferred ElevenLabs TTS failed; falling back to Kokoro");
+      await this.speakWithProvider(trimmed, sequence, this.createKokoroProvider(), "kokoro");
+    } finally {
+      if (this.playbackSequence === sequence) {
+        this.bus.emit("tts:amplitude", { amplitude: 0 });
+      }
+    }
+  }
+
+  stop(): void {
+    this.playbackSequence += 1;
+    this.activeProvider?.dispose();
+    this.activeProvider = null;
+    this.bus.emit("tts:amplitude", { amplitude: 0 });
+  }
+
+  dispose(): void {
+    this.stop();
+  }
+
+  private createKokoroProvider(): ITtsProvider {
+    return new KokoroTtsProvider(
+      {
+        modelId: this.kokoroModelId,
+        voice: this.kokoroVoice,
+        dtype: this.kokoroDtype,
+        speed: this.kokoroSpeed,
+      },
+      this.logger,
+    );
+  }
+
+  private createElevenLabsProvider(): ITtsProvider {
+    if (!this.elevenLabsApiKey) {
+      throw new SpiraError("ELEVENLABS_NOT_CONFIGURED", "ElevenLabs TTS is selected but no API key is configured");
+    }
+
+    return new ElevenLabsTtsProvider(
+      {
+        apiKey: this.elevenLabsApiKey,
+        voiceId: this.settings.elevenLabsVoiceId.trim() || this.defaultVoiceId,
+      },
+      this.logger,
+    );
+  }
+
+  private canUseKokoroFallback(): boolean {
+    return this.kokoroModelId.length > 0;
+  }
+
+  private async speakWithProvider(
+    text: string,
+    sequence: number,
+    provider: ITtsProvider,
+    providerName: TtsProvider,
+  ): Promise<void> {
     this.activeProvider = provider;
     const sampleRate = TtsPlaybackService.resolveSampleRate(provider);
     const chunks: Buffer[] = [];
 
     try {
-      for await (const chunk of provider.synthesize(trimmed)) {
+      for await (const chunk of provider.synthesize(text)) {
         if (this.playbackSequence !== sequence) {
           return;
         }
@@ -80,55 +165,16 @@ export class TtsPlaybackService {
 
       const wavAudio = TtsPlaybackService.createWavAudio(pcmAudio, sampleRate);
       this.logger.info(
-        { provider: this.settings.ttsProvider, sampleRate, audioBytes: wavAudio.length },
+        { provider: providerName, sampleRate, audioBytes: wavAudio.length },
         "Prepared chat TTS audio for renderer playback",
       );
       this.bus.emit("tts:audio", { audioBase64: wavAudio.toString("base64"), mimeType: "audio/wav" });
-    } catch (error) {
-      if (this.playbackSequence !== sequence) {
-        return;
-      }
-
-      throw error;
     } finally {
       if (this.activeProvider === provider) {
         provider.dispose();
         this.activeProvider = null;
       }
-
-      if (this.playbackSequence === sequence) {
-        this.bus.emit("tts:amplitude", { amplitude: 0 });
-      }
     }
-  }
-
-  stop(): void {
-    this.playbackSequence += 1;
-    this.activeProvider?.dispose();
-    this.activeProvider = null;
-    this.bus.emit("tts:amplitude", { amplitude: 0 });
-  }
-
-  dispose(): void {
-    this.stop();
-  }
-
-  private createProvider(): ITtsProvider {
-    if (this.settings.ttsProvider === "elevenlabs") {
-      if (!this.elevenLabsApiKey) {
-        throw new SpiraError("ELEVENLABS_NOT_CONFIGURED", "ElevenLabs TTS is selected but no API key is configured");
-      }
-
-      return new ElevenLabsTtsProvider(
-        {
-          apiKey: this.elevenLabsApiKey,
-          voiceId: this.settings.elevenLabsVoiceId.trim() || this.defaultVoiceId,
-        },
-        this.logger,
-      );
-    }
-
-    return new PiperTtsProvider(this.piperExecutable, this.piperModelPath, this.logger);
   }
 
   private static resolveSampleRate(provider: ITtsProvider): number {

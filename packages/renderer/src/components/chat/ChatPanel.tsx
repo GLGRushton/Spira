@@ -1,203 +1,47 @@
 import { AnimatePresence, motion } from "framer-motion";
-import { useCallback, useEffect, useRef } from "react";
-import { useAudioStore } from "../../stores/audio-store.js";
-import { useChatStore } from "../../stores/chat-store.js";
-import { useSettingsStore } from "../../stores/settings-store.js";
+import { useLayoutEffect, useRef, useState } from "react";
+import { getAwaitingAssistantQuestion, useChatStore } from "../../stores/chat-store.js";
 import styles from "./ChatPanel.module.css";
+import { ConversationArchivePanel } from "./ConversationArchivePanel.js";
 import { InputBar } from "./InputBar.js";
 import { MessageBubble } from "./MessageBubble.js";
 
+const EXAMPLE_PROMPTS = [
+  "Trace how the bridge chat state flows end to end.",
+  "Refine the current UI without losing the existing tone.",
+  "Find the slowest part of the renderer path and tighten it.",
+];
+
 export function ChatPanel() {
   const messages = useChatStore((store) => store.messages);
-  const setTtsAmplitude = useAudioStore((store) => store.setTtsAmplitude);
-  const voiceEnabled = useSettingsStore((store) => store.voiceEnabled);
+  const activeConversationId = useChatStore((store) => store.activeConversationId);
+  const activeConversationTitle = useChatStore((store) => store.activeConversationTitle);
+  const isStreaming = useChatStore((store) => store.isStreaming);
+  const isResetting = useChatStore((store) => store.isResetting);
+  const requestComposerFocus = useChatStore((store) => store.requestComposerFocus);
+  const sessionNotice = useChatStore((store) => store.sessionNotice);
+  const setSessionNotice = useChatStore((store) => store.setSessionNotice);
+  const setDraft = useChatStore((store) => store.setDraft);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const lastSpokenMessageIdRef = useRef<string | null>(null);
-  const audioContextRef = useRef<AudioContext | null>(null);
-  const audioElementRef = useRef<HTMLAudioElement | null>(null);
-  const sourceNodeRef = useRef<MediaElementAudioSourceNode | null>(null);
-  const analyserRef = useRef<AnalyserNode | null>(null);
-  const objectUrlRef = useRef<string | null>(null);
-  const amplitudeFrameRef = useRef<number | null>(null);
-  const playbackGenerationRef = useRef(0);
   const lastMessage = messages.at(-1);
+  const awaitingQuestion = getAwaitingAssistantQuestion(messages);
+  const latestAssistantMessage = [...messages]
+    .reverse()
+    .find((message) => message.role === "assistant" && !message.isStreaming);
+  const retryPrompt = latestAssistantMessage
+    ? [
+        ...messages.slice(
+          0,
+          messages.findIndex((message) => message.id === latestAssistantMessage.id),
+        ),
+      ]
+        .reverse()
+        .find((message) => message.role === "user")
+        ?.content.trim()
+    : undefined;
+  const [archiveOpen, setArchiveOpen] = useState(false);
 
-  const disposeAudioResources = useCallback(
-    (
-      audio: HTMLAudioElement | null,
-      objectUrl: string | null,
-      sourceNode: MediaElementAudioSourceNode | null,
-      analyserNode: AnalyserNode | null,
-    ) => {
-      sourceNode?.disconnect();
-      analyserNode?.disconnect();
-
-      if (audio) {
-        audio.pause();
-        audio.src = "";
-      }
-
-      if (objectUrl) {
-        URL.revokeObjectURL(objectUrl);
-      }
-    },
-    [],
-  );
-
-  const stopPlayback = useCallback(() => {
-    playbackGenerationRef.current += 1;
-
-    if (amplitudeFrameRef.current !== null) {
-      window.cancelAnimationFrame(amplitudeFrameRef.current);
-      amplitudeFrameRef.current = null;
-    }
-
-    setTtsAmplitude(0);
-
-    disposeAudioResources(audioElementRef.current, objectUrlRef.current, sourceNodeRef.current, analyserRef.current);
-
-    sourceNodeRef.current = null;
-    analyserRef.current = null;
-    audioElementRef.current = null;
-    objectUrlRef.current = null;
-  }, [disposeAudioResources, setTtsAmplitude]);
-
-  const startAmplitudeLoop = useCallback(
-    (generation: number) => {
-      const analyser = analyserRef.current;
-      const audio = audioElementRef.current;
-      if (!analyser || !audio) {
-        setTtsAmplitude(0);
-        return;
-      }
-
-      const data = new Uint8Array(analyser.fftSize);
-      const tick = () => {
-        if (
-          playbackGenerationRef.current !== generation ||
-          !audioElementRef.current ||
-          audioElementRef.current.paused ||
-          audioElementRef.current.ended
-        ) {
-          setTtsAmplitude(0);
-          amplitudeFrameRef.current = null;
-          return;
-        }
-
-        analyser.getByteTimeDomainData(data);
-        let sumSquares = 0;
-        for (const value of data) {
-          const sample = (value - 128) / 128;
-          sumSquares += sample * sample;
-        }
-        setTtsAmplitude(Math.min(1, Math.sqrt(sumSquares / data.length) * 1.5));
-        amplitudeFrameRef.current = window.requestAnimationFrame(tick);
-      };
-
-      amplitudeFrameRef.current = window.requestAnimationFrame(tick);
-    },
-    [setTtsAmplitude],
-  );
-
-  const playAudio = useCallback(
-    async (audioBase64: string, mimeType: "audio/wav") => {
-      if (!voiceEnabled) {
-        return;
-      }
-
-      const generation = playbackGenerationRef.current + 1;
-      playbackGenerationRef.current = generation;
-
-      if (amplitudeFrameRef.current !== null) {
-        window.cancelAnimationFrame(amplitudeFrameRef.current);
-        amplitudeFrameRef.current = null;
-      }
-      setTtsAmplitude(0);
-
-      disposeAudioResources(audioElementRef.current, objectUrlRef.current, sourceNodeRef.current, analyserRef.current);
-      sourceNodeRef.current = null;
-      analyserRef.current = null;
-      audioElementRef.current = null;
-      objectUrlRef.current = null;
-
-      const binary = Uint8Array.from(window.atob(audioBase64), (character) => character.charCodeAt(0));
-      const blob = new Blob([binary], { type: mimeType });
-      const objectUrl = URL.createObjectURL(blob);
-      const audio = new Audio(objectUrl);
-      let sourceNode: MediaElementAudioSourceNode | null = null;
-      let analyserNode: AnalyserNode | null = null;
-
-      audio.preload = "auto";
-
-      const AudioContextCtor =
-        typeof window.AudioContext !== "undefined"
-          ? window.AudioContext
-          : ((window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext ?? undefined);
-
-      if (AudioContextCtor) {
-        const audioContext = audioContextRef.current ?? new AudioContextCtor();
-        audioContextRef.current = audioContext;
-        await audioContext.resume();
-
-        if (playbackGenerationRef.current !== generation) {
-          disposeAudioResources(audio, objectUrl, sourceNode, analyserNode);
-          return;
-        }
-
-        analyserNode = audioContext.createAnalyser();
-        analyserNode.fftSize = 2048;
-        sourceNode = audioContext.createMediaElementSource(audio);
-        sourceNode.connect(analyserNode);
-        analyserNode.connect(audioContext.destination);
-      }
-
-      if (playbackGenerationRef.current !== generation) {
-        disposeAudioResources(audio, objectUrl, sourceNode, analyserNode);
-        return;
-      }
-
-      objectUrlRef.current = objectUrl;
-      audioElementRef.current = audio;
-      sourceNodeRef.current = sourceNode;
-      analyserRef.current = analyserNode;
-
-      audio.addEventListener(
-        "ended",
-        () => {
-          if (playbackGenerationRef.current !== generation) {
-            return;
-          }
-          stopPlayback();
-        },
-        { once: true },
-      );
-      audio.addEventListener(
-        "error",
-        () => {
-          console.error("[Spira:tts:renderer] Failed to play synthesized audio", {
-            error: audio.error,
-            currentSrc: audio.currentSrc,
-          });
-          if (playbackGenerationRef.current !== generation) {
-            return;
-          }
-          stopPlayback();
-        },
-        { once: true },
-      );
-
-      await audio.play();
-      if (playbackGenerationRef.current !== generation) {
-        disposeAudioResources(audio, objectUrl, sourceNode, analyserNode);
-        return;
-      }
-
-      startAmplitudeLoop(generation);
-    },
-    [disposeAudioResources, setTtsAmplitude, startAmplitudeLoop, stopPlayback, voiceEnabled],
-  );
-
-  useEffect(() => {
+  useLayoutEffect(() => {
     const node = scrollRef.current;
     if (!node) {
       return;
@@ -206,7 +50,7 @@ export function ChatPanel() {
     node.scrollTo({ top: node.scrollHeight, behavior: "instant" as ScrollBehavior });
   }, []);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const node = scrollRef.current;
     if (!node || !lastMessage) {
       return;
@@ -214,74 +58,92 @@ export function ChatPanel() {
 
     const isNearBottom = node.scrollHeight - node.scrollTop - node.clientHeight < 100;
     if (isNearBottom) {
-      node.scrollTo({ top: node.scrollHeight, behavior: "smooth" });
+      node.scrollTo({
+        top: node.scrollHeight,
+        behavior: lastMessage.isStreaming ? ("instant" as ScrollBehavior) : "smooth",
+      });
     }
   }, [lastMessage]);
 
-  useEffect(() => {
-    return () => {
-      stopPlayback();
-      window.electronAPI.send({ type: "tts:stop" });
-    };
-  }, [stopPlayback]);
-
-  useEffect(() => {
-    if (voiceEnabled) {
-      return;
-    }
-
-    stopPlayback();
-    window.electronAPI.send({ type: "tts:stop" });
-  }, [stopPlayback, voiceEnabled]);
-
-  useEffect(() => {
-    return window.electronAPI.onMessage((message) => {
-      if (message.type !== "tts:audio") {
-        return;
-      }
-
-      void playAudio(message.audioBase64, message.mimeType).catch((error) => {
-        console.error("[Spira:tts:renderer] Failed to initialize audio playback", error);
-        stopPlayback();
-      });
-    });
-  }, [playAudio, stopPlayback]);
-
-  useEffect(() => {
-    if (
-      !voiceEnabled ||
-      !lastMessage ||
-      lastMessage.role !== "assistant" ||
-      lastMessage.isStreaming ||
-      !lastMessage.content.trim() ||
-      lastSpokenMessageIdRef.current === lastMessage.id
-    ) {
-      return;
-    }
-
-    lastSpokenMessageIdRef.current = lastMessage.id;
-    window.electronAPI.send({ type: "tts:speak", text: lastMessage.content });
-  }, [lastMessage, voiceEnabled]);
-
   return (
     <div className={styles.panel}>
+      <div className={styles.toolbar}>
+        <div>
+          <div className={styles.toolbarEyebrow}>Conversation archive</div>
+          <div className={styles.toolbarTitle}>
+            {activeConversationTitle?.trim() || (activeConversationId ? "Untitled conversation" : "New conversation")}
+          </div>
+        </div>
+        <button type="button" className={styles.archiveToggle} onClick={() => setArchiveOpen((open) => !open)}>
+          {archiveOpen ? "Hide archive" : "Open archive"}
+        </button>
+      </div>
+      {sessionNotice ? (
+        <div className={`${styles.notice} ${styles[sessionNotice.kind]}`} role="alert" aria-live="polite">
+          <span>{sessionNotice.message}</span>
+          <button type="button" className={styles.noticeDismiss} onClick={() => setSessionNotice(null)}>
+            Dismiss
+          </button>
+        </div>
+      ) : null}
       <div ref={scrollRef} className={styles.messages}>
+        {messages.length === 0 ? (
+          <section className={styles.emptyState}>
+            <div className={styles.emptyEyebrow}>Bridge / Conversation</div>
+            <h3 className={styles.emptyTitle}>Shinra is standing by.</h3>
+            <p className={styles.emptyCopy}>
+              Ask for a code change, a system investigation, or a quick read of the repo and I will get to work.
+            </p>
+            <div className={styles.examples}>
+              {EXAMPLE_PROMPTS.map((prompt) => (
+                <button
+                  key={prompt}
+                  type="button"
+                  className={styles.exampleChip}
+                  onClick={() => {
+                    setDraft(prompt);
+                    requestComposerFocus();
+                  }}
+                >
+                  {prompt}
+                </button>
+              ))}
+            </div>
+          </section>
+        ) : null}
         <AnimatePresence initial={false}>
-          {messages.map((message) => (
-            <motion.div
-              key={message.id}
-              layout
-              initial={{ opacity: 0, y: 16 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -12 }}
-              transition={{ duration: 0.2 }}
-            >
-              <MessageBubble message={message} />
-            </motion.div>
-          ))}
+          {messages.map((message) => {
+            return (
+              <motion.div
+                key={message.id}
+                initial={{ opacity: 0, y: 16 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -12 }}
+                transition={{ duration: 0.2 }}
+              >
+                <MessageBubble
+                  message={message}
+                  isAwaitingReply={awaitingQuestion?.id === message.id}
+                  onRetry={
+                    message.id === latestAssistantMessage?.id && retryPrompt && !isStreaming && !isResetting
+                      ? () => {
+                          setDraft(retryPrompt);
+                          requestComposerFocus();
+                        }
+                      : undefined
+                  }
+                />
+              </motion.div>
+            );
+          })}
         </AnimatePresence>
       </div>
       <InputBar />
+      <ConversationArchivePanel
+        open={archiveOpen}
+        disabled={isStreaming || isResetting}
+        onClose={() => setArchiveOpen(false)}
+      />
     </div>
   );
 }

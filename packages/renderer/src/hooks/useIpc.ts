@@ -1,8 +1,7 @@
-import { PROTOCOL_VERSION } from "@spira/shared";
 import { useEffect } from "react";
 import { useAssistantStore } from "../stores/assistant-store.js";
 import { useAudioStore } from "../stores/audio-store.js";
-import { PENDING_ASSISTANT_ID, useChatStore } from "../stores/chat-store.js";
+import { useChatStore } from "../stores/chat-store.js";
 import { useConnectionStore } from "../stores/connection-store.js";
 import { useMcpStore } from "../stores/mcp-store.js";
 import { usePermissionStore } from "../stores/permission-store.js";
@@ -10,18 +9,26 @@ import { useRoomStore } from "../stores/room-store.js";
 import { useSettingsStore } from "../stores/settings-store.js";
 import { useUpgradeStore } from "../stores/upgrade-store.js";
 import { useVisionStore } from "../stores/vision-store.js";
-import { shouldDisplayToolName } from "../tool-display.js";
+import { registerChatHandlers } from "./ipc/register-chat-handlers.js";
+import { activateSpiraUiRuntime, registerUiHandlers } from "./ipc/register-ui-handlers.js";
+import { createIpcSessionTracker } from "./ipc/session-tracker.js";
 
 export function useIpc(): void {
   const setAssistantState = useAssistantStore((store) => store.setState);
   const addUserMessage = useChatStore((store) => store.addUserMessage);
+  const hydrateConversation = useChatStore((store) => store.hydrateConversation);
   const startAssistantMessage = useChatStore((store) => store.startAssistantMessage);
   const appendDelta = useChatStore((store) => store.appendDelta);
   const finaliseMessage = useChatStore((store) => store.finaliseMessage);
   const completeMessage = useChatStore((store) => store.completeMessage);
+  const abortStreamingMessage = useChatStore((store) => store.abortStreamingMessage);
   const clearStreamingState = useChatStore((store) => store.clearStreamingState);
   const addToolCall = useChatStore((store) => store.addToolCall);
   const updateToolResult = useChatStore((store) => store.updateToolResult);
+  const setAborting = useChatStore((store) => store.setAborting);
+  const setResetConfirming = useChatStore((store) => store.setResetConfirming);
+  const setResetting = useChatStore((store) => store.setResetting);
+  const setSessionNotice = useChatStore((store) => store.setSessionNotice);
   const setServers = useMcpStore((store) => store.setServers);
   const clearRoomState = useRoomStore((store) => store.clearAll);
   const syncRoomsFromServers = useRoomStore((store) => store.syncServers);
@@ -44,220 +51,109 @@ export function useIpc(): void {
   const showUpgradeStatus = useUpgradeStore((store) => store.showStatus);
 
   useEffect(() => {
-    let activeAssistantMessageId: string | null = null;
-    let lastAutoSpokenMessageId: string | null = null;
-    const toolCallMessageIds = new Map<string, string>();
+    const tracker = createIpcSessionTracker();
+
+    void window.electronAPI.getRecentConversation().then((conversation) => {
+      if (useChatStore.getState().messages.length > 0) {
+        return;
+      }
+
+      hydrateConversation(conversation);
+    });
 
     void window.electronAPI.getConnectionStatus().then((status) => {
       setConnectionStatus(status);
     });
 
     const unsubscribers = [
-      window.electronAPI.onMessage((message) => {
-        if (message.type === "backend:hello") {
-          clearStreamingState();
-          clearPermissionRequests();
-          clearAllActiveCaptures();
-          clearRoomState();
-          if (useUpgradeStore.getState().banner?.proposalId) {
-            clearBanner();
-          }
-          lastAutoSpokenMessageId = null;
-          if (message.protocolVersion === PROTOCOL_VERSION) {
-            clearProtocolMismatch();
-          } else {
-            setProtocolMismatch(message.protocolVersion, message.backendBuildId);
-          }
-          activeAssistantMessageId = null;
-          return;
-        }
-
-        if (message.type === "pong") {
-          if (message.protocolVersion === PROTOCOL_VERSION) {
-            clearProtocolMismatch();
-          } else {
-            setProtocolMismatch(message.protocolVersion, message.backendBuildId);
-          }
-          return;
-        }
+      ...registerChatHandlers(tracker, {
+        hydrateConversation,
+        setAssistantState,
+        addUserMessage,
+        startAssistantMessage,
+        appendDelta,
+        finaliseMessage,
+        completeMessage,
+        abortStreamingMessage,
+        clearStreamingState,
+        addToolCall,
+        updateToolResult,
+        setAborting,
+        setResetConfirming,
+        setResetting,
+        setSessionNotice,
+        clearRoomState,
+        handleRoomToolCall,
+        clearPermissionRequests,
+        clearAllActiveCaptures,
+        setActiveCapture,
+        clearActiveCapture,
+        clearBanner,
+        setConnectionStatus,
+        setProtocolMismatch,
+        clearProtocolMismatch,
       }),
-      window.electronAPI.onUpgradeProposal(({ proposal, message }) => {
-        showUpgradeProposal(proposal, message);
-      }),
-      window.electronAPI.onUpgradeStatus((message) => {
-        if (message.scope === "backend-reload") {
-          const currentConnectionStatus = useConnectionStore.getState().status;
-          if (message.status === "applying") {
-            setConnectionStatus("upgrading");
-          } else if (message.status === "completed" && currentConnectionStatus === "upgrading") {
-            setConnectionStatus("connecting");
-          } else if (message.status === "failed") {
-            setConnectionStatus("disconnected");
-          }
-        }
-        showUpgradeStatus(message);
-      }),
-      window.electronAPI.onStateChange((state) => {
-        setAssistantState(state);
-      }),
-      window.electronAPI.onChatDelta(({ conversationId, token }) => {
-        if (conversationId !== activeAssistantMessageId) {
-          activeAssistantMessageId = conversationId;
-          if (toolCallMessageIds.size > 0) {
-            for (const [callId, mappedMessageId] of toolCallMessageIds.entries()) {
-              if (mappedMessageId === PENDING_ASSISTANT_ID) {
-                toolCallMessageIds.set(callId, conversationId);
-              }
-            }
-          }
-          startAssistantMessage(conversationId);
-        }
-
-        appendDelta(conversationId, token);
-      }),
-      window.electronAPI.onChatMessage((message) => {
-        if (message.role === "assistant") {
-          finaliseMessage(message.id, message.content, message.autoSpeak);
-          if (
-            useSettingsStore.getState().voiceEnabled &&
-            message.autoSpeak !== false &&
-            message.content.trim() &&
-            lastAutoSpokenMessageId !== message.id
-          ) {
-            lastAutoSpokenMessageId = message.id;
-            window.electronAPI.send({ type: "tts:speak", text: message.content });
-          }
-          activeAssistantMessageId = null;
-          return;
-        }
-
-        if (message.role === "user") {
-          addUserMessage(message.content);
-        }
-      }),
-      window.electronAPI.onChatComplete(({ messageId }) => {
-        completeMessage(messageId);
-        if (activeAssistantMessageId === messageId) {
-          activeAssistantMessageId = null;
-        }
-      }),
-      window.electronAPI.onToolCall((payload) => {
-        const messageId = activeAssistantMessageId ?? PENDING_ASSISTANT_ID;
-        if (payload.name.startsWith("vision_")) {
-          if (payload.status === "running" || payload.status === "pending") {
-            setActiveCapture(payload.callId, payload.name, payload.args);
-          } else {
-            clearActiveCapture(payload.callId);
-          }
-        }
-
-        if (!shouldDisplayToolName(payload.name)) {
-          return;
-        }
-
-        if (payload.status === "running" || payload.status === "pending") {
-          toolCallMessageIds.set(payload.callId, messageId);
-          startAssistantMessage(messageId);
-          addToolCall(messageId, {
-            callId: payload.callId,
-            name: payload.name,
-            args: payload.args ?? {},
-            details: payload.details,
-            status: payload.status,
-          });
-          handleRoomToolCall(payload, useMcpStore.getState().servers);
-          return;
-        }
-
-        const mappedMessageId = toolCallMessageIds.get(payload.callId) ?? messageId;
-        updateToolResult(mappedMessageId, payload.name, {
-          callId: payload.callId,
-          status: payload.status,
-          value: payload.details,
-        });
-        handleRoomToolCall(payload, useMcpStore.getState().servers);
-        toolCallMessageIds.delete(payload.callId);
-      }),
-      window.electronAPI.onPermissionRequest((payload) => {
-        addPermissionRequest(payload);
-      }),
-      window.electronAPI.onPermissionComplete(({ requestId }) => {
-        removePermissionRequest(requestId);
-      }),
-      window.electronAPI.onMcpStatus((servers) => {
-        setServers(servers);
-        syncRoomsFromServers(servers);
-      }),
-      window.electronAPI.onAudioLevel((level) => {
-        setAudioLevel(level);
-      }),
-      window.electronAPI.onTtsAmplitude((amplitude) => {
-        setTtsAmplitude(amplitude);
-      }),
-      window.electronAPI.onVoiceTranscript((text) => {
-        addUserMessage(text);
-      }),
-      window.electronAPI.onSettingsCurrent((settings) => {
-        applySettings(settings);
-      }),
-      window.electronAPI.onConnectionStatus((status) => {
-        setConnectionStatus(status);
-        if (status !== "connected") {
-          clearStreamingState();
-          clearPermissionRequests();
-          clearAllActiveCaptures();
-          clearRoomState();
-        }
-      }),
-      window.electronAPI.onError((payload) => {
-        console.error(`[Spira:${payload.source ?? "unknown"}:${payload.code}] ${payload.message}`, payload);
-        if (payload.details) {
-          console.error(payload.details);
-        }
-        if (payload.source !== "tts") {
-          setAssistantState("error");
-        }
-        if (payload.code === "BACKEND_SOCKET_ERROR" || payload.code === "BACKEND_CRASHED") {
-          setConnectionStatus("disconnected");
-          clearPermissionRequests();
-          clearAllActiveCaptures();
-          clearRoomState();
-        }
+      ...registerUiHandlers({
+        setServers,
+        syncRoomsFromServers,
+        addPermissionRequest,
+        removePermissionRequest,
+        showUpgradeProposal,
+        showUpgradeStatus,
+        setAudioLevel,
+        setTtsAmplitude,
+        applySettings,
+        setConnectionStatus,
+        clearStreamingState,
+        setAborting,
+        setResetConfirming,
+        setResetting,
+        clearPermissionRequests,
+        clearAllActiveCaptures,
+        clearRoomState,
       }),
     ];
 
     window.electronAPI.send({ type: "ping" });
+    const deactivateSpiraUiRuntime = activateSpiraUiRuntime();
 
     const pruneInterval = window.setInterval(() => {
       pruneRoomFlights();
     }, 1000);
 
     return () => {
+      deactivateSpiraUiRuntime();
       window.clearInterval(pruneInterval);
       for (const unsubscribe of unsubscribers) {
         unsubscribe();
       }
     };
   }, [
+    addPermissionRequest,
     addToolCall,
     addUserMessage,
-    addPermissionRequest,
-    appendDelta,
+    abortStreamingMessage,
     applySettings,
-    clearActiveCapture,
+    appendDelta,
     clearAllActiveCaptures,
+    clearActiveCapture,
     clearBanner,
     clearStreamingState,
     clearProtocolMismatch,
     clearPermissionRequests,
     clearRoomState,
+    hydrateConversation,
     completeMessage,
     finaliseMessage,
     removePermissionRequest,
     setAssistantState,
     setActiveCapture,
+    setAborting,
     setAudioLevel,
     setConnectionStatus,
+    setResetConfirming,
+    setResetting,
+    setSessionNotice,
     syncRoomsFromServers,
     setProtocolMismatch,
     setServers,
@@ -265,8 +161,8 @@ export function useIpc(): void {
     showUpgradeProposal,
     showUpgradeStatus,
     startAssistantMessage,
+    updateToolResult,
     handleRoomToolCall,
     pruneRoomFlights,
-    updateToolResult,
   ]);
 }

@@ -1,0 +1,26 @@
+export const RUNTIME_CONFIG_KEYS = [
+  "githubToken",
+  "elevenLabsApiKey",
+  "picovoiceAccessKey",
+  "nexusModsApiKey",
+] as const;
+
+export type RuntimeConfigKey = (typeof RUNTIME_CONFIG_KEYS)[number];
+export type RuntimeConfigSource = "stored" | "environment" | "cleared" | "unset";
+export type RuntimeConfigUpdate = Partial<Record<RuntimeConfigKey, string | null>>;
+
+export interface RuntimeConfigEntrySummary {
+  key: RuntimeConfigKey;
+  label: string;
+  description: string;
+  configured: boolean;
+  source: RuntimeConfigSource;
+  secret: true;
+}
+
+export type RuntimeConfigSummary = Record<RuntimeConfigKey, RuntimeConfigEntrySummary>;
+
+export interface RuntimeConfigApplyResult {
+  summary: RuntimeConfigSummary;
+  appliedToBackend: boolean;
+}

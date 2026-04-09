@@ -7,15 +7,26 @@ const CONNECTION_STATUS_CHANNEL = "spira:connection-status";
 const CONNECTION_STATUS_GET_CHANNEL = "connection-status:get";
 const SETTINGS_GET_CHANNEL = "settings:get";
 const SETTINGS_SET_CHANNEL = "settings:set";
+const RECENT_CONVERSATION_GET_CHANNEL = "conversation:recent:get";
+const CONVERSATIONS_LIST_CHANNEL = "conversation:list";
+const CONVERSATION_GET_CHANNEL = "conversation:get";
+const CONVERSATION_SEARCH_CHANNEL = "conversation:search";
+const CONVERSATION_MARK_VIEWED_CHANNEL = "conversation:mark-viewed";
+const CONVERSATION_ARCHIVE_CHANNEL = "conversation:archive";
+const RUNTIME_CONFIG_GET_CHANNEL = "runtime-config:get";
+const RUNTIME_CONFIG_SET_CHANNEL = "runtime-config:set";
 const UPGRADE_RESPONSE_CHANNEL = "upgrade:respond";
 
 type WindowControlAction = "minimize" | "maximize" | "close";
 
 const serverMessageListeners = new Set<(message: ServerMessage) => void>();
 const latestServerMessages = new Map<ServerMessage["type"], ServerMessage>();
+const NON_REPLAYABLE_SERVER_MESSAGES = new Set<ServerMessage["type"]>(["chat:abort-complete", "chat:reset-complete"]);
 
 ipcRenderer.on("spira:from-backend", (_event: IpcRendererEvent, message: ServerMessage) => {
-  latestServerMessages.set(message.type, message);
+  if (!NON_REPLAYABLE_SERVER_MESSAGES.has(message.type)) {
+    latestServerMessages.set(message.type, message);
+  }
   for (const listener of serverMessageListeners) {
     listener(message);
   }
@@ -58,11 +69,14 @@ const electronAPI: ElectronApi = {
   send(message) {
     ipcRenderer.send("spira:to-backend", message);
   },
-  sendMessage(text) {
-    electronAPI.send({ type: "chat:send", text });
+  sendMessage(text, conversationId) {
+    electronAPI.send({ type: "chat:send", text, conversationId });
   },
-  clearChat() {
-    electronAPI.send({ type: "chat:clear" });
+  abortChat() {
+    electronAPI.send({ type: "chat:abort" });
+  },
+  resetChat() {
+    electronAPI.send({ type: "chat:reset" });
   },
   toggleVoice() {
     electronAPI.send({ type: "voice:toggle" });
@@ -70,11 +84,38 @@ const electronAPI: ElectronApi = {
   updateSettings(settings) {
     electronAPI.send({ type: "settings:update", settings });
   },
+  setMcpServerEnabled(serverId, enabled) {
+    electronAPI.send({ type: "mcp:set-enabled", serverId, enabled });
+  },
   getSettings() {
     return ipcRenderer.invoke(SETTINGS_GET_CHANNEL);
   },
   getConnectionStatus() {
     return ipcRenderer.invoke(CONNECTION_STATUS_GET_CHANNEL);
+  },
+  getRecentConversation() {
+    return ipcRenderer.invoke(RECENT_CONVERSATION_GET_CHANNEL);
+  },
+  listConversations(limit, offset) {
+    return ipcRenderer.invoke(CONVERSATIONS_LIST_CHANNEL, { limit, offset });
+  },
+  getConversation(conversationId) {
+    return ipcRenderer.invoke(CONVERSATION_GET_CHANNEL, { conversationId });
+  },
+  searchConversations(query, limit) {
+    return ipcRenderer.invoke(CONVERSATION_SEARCH_CHANNEL, { query, limit });
+  },
+  markConversationViewed(conversationId) {
+    return ipcRenderer.invoke(CONVERSATION_MARK_VIEWED_CHANNEL, { conversationId });
+  },
+  archiveConversation(conversationId) {
+    return ipcRenderer.invoke(CONVERSATION_ARCHIVE_CHANNEL, { conversationId });
+  },
+  getRuntimeConfig() {
+    return ipcRenderer.invoke(RUNTIME_CONFIG_GET_CHANNEL);
+  },
+  setRuntimeConfig(update) {
+    return ipcRenderer.invoke(RUNTIME_CONFIG_SET_CHANNEL, update);
   },
   setSettings(data) {
     return ipcRenderer.invoke(SETTINGS_SET_CHANNEL, data);
@@ -115,6 +156,16 @@ const electronAPI: ElectronApi = {
   onChatComplete(handler) {
     return onServerMessage("chat:complete", (message) => {
       handler({ conversationId: message.conversationId, messageId: message.messageId });
+    });
+  },
+  onChatAbortComplete(handler) {
+    return onServerMessage("chat:abort-complete", () => {
+      handler();
+    });
+  },
+  onChatResetComplete(handler) {
+    return onServerMessage("chat:reset-complete", () => {
+      handler();
     });
   },
   onToolCall(handler) {
@@ -171,6 +222,17 @@ const electronAPI: ElectronApi = {
   onSettingsCurrent(handler) {
     return onServerMessage("settings:current", (message) => {
       handler(message.settings);
+    });
+  },
+  onUpgradeProposal(handler) {
+    return onServerMessage("upgrade:proposal", (message) => {
+      handler({ proposal: message.proposal, message: message.message });
+    });
+  },
+  onUpgradeStatus(handler) {
+    return onServerMessage("upgrade:status", (message) => {
+      const { type: _type, ...status } = message;
+      handler(status);
     });
   },
   onConnectionStatus,

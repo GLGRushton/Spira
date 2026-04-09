@@ -25,6 +25,47 @@ interface ServiceCountResult extends Record<string, unknown> {
 
 export const registerSystemInfoTools = (server: McpServer): void => {
   server.registerTool(
+    "system_get_upgrade_probe",
+    {
+      description: "Return a simple read-only probe payload for upgrade checks.",
+      inputSchema: EmptySchema,
+      annotations: {
+        readOnlyHint: true,
+        idempotentHint: true,
+      },
+    },
+    async () =>
+      successResult(
+        {
+          probe: "upgrade-ok",
+          source: "system_get_upgrade_probe",
+        },
+        "Upgrade probe succeeded.",
+      ),
+  );
+
+  server.registerTool(
+    "system_get_upgrade_probe_details",
+    {
+      description: "Return a detailed read-only probe payload for upgrade checks.",
+      inputSchema: EmptySchema,
+      annotations: {
+        readOnlyHint: true,
+        idempotentHint: true,
+      },
+    },
+    async () =>
+      successResult(
+        {
+          probe: "upgrade-ok-2",
+          source: "system_get_upgrade_probe_details",
+          summary: "Detailed upgrade probe succeeded.",
+        },
+        "Detailed upgrade probe succeeded.",
+      ),
+  );
+
+  server.registerTool(
     "system_get_system_info",
     {
       description: "Get basic Windows host, OS, and uptime details.",
@@ -36,7 +77,11 @@ export const registerSystemInfoTools = (server: McpServer): void => {
           `
 $os = Get-CimInstance Win32_OperatingSystem
 $computer = Get-CimInstance Win32_ComputerSystem
-$bootTime = [Management.ManagementDateTimeConverter]::ToDateTime($os.LastBootUpTime)
+$bootTime = if ($os.LastBootUpTime -is [datetime]) {
+  [datetime]$os.LastBootUpTime
+} else {
+  [System.Management.ManagementDateTimeConverter]::ToDateTime([string]$os.LastBootUpTime)
+}
 $result = @{
   computerName = $env:COMPUTERNAME
   userName = $env:USERNAME

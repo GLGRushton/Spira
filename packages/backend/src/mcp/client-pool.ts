@@ -86,9 +86,14 @@ export class McpClientPool {
     const stderrStream = transport.stderr as Readable | null;
     stderrStream?.setEncoding("utf8");
     const stderrHandler = (chunk: Buffer | string): void => {
-      const stderr = chunk.toString().trim();
-      if (stderr !== "") {
+      const lines = chunk
+        .toString()
+        .split(/\r?\n/u)
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0);
+      for (const stderr of lines) {
         this.logger.warn({ serverId: config.id, stderr }, "MCP server stderr");
+        this.bus.emit("mcp:server-stderr", config.id, stderr);
       }
     };
     stderrStream?.on("data", stderrHandler);

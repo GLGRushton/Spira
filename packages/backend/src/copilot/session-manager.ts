@@ -6,6 +6,7 @@ import {
   type CopilotSession,
   type PermissionRequest,
   type PermissionRequestResult,
+  type SessionConfig,
   type SessionEvent,
 } from "@github/copilot-sdk";
 import type { AssistantState, Env, PermissionRequestPayload, UpgradeProposal } from "@spira/shared";
@@ -41,6 +42,10 @@ const SHINRA_LAST_INSTRUCTIONS = [
   "Do not introduce yourself as GitHub Copilot CLI, GPT-5.4, or a terminal assistant unless the user explicitly asks about the underlying model or platform.",
   "When discussing the product, treat Spira as the application and Shinra as the assistant persona inside it.",
 ].join("\n");
+const VOICE_RESPONSE_INSTRUCTIONS = [
+  "The current user request arrived through voice.",
+  "Optimize for spoken clarity: lead with the answer, avoid unnecessary markdown structure, and keep the pacing natural for read-aloud delivery.",
+].join("\n");
 
 type ReportedCopilotError = CopilotError & { reportedToClient?: boolean };
 type CopilotAuthStrategy = "logged-in-user" | "github-token";
@@ -64,6 +69,7 @@ export class CopilotSessionManager {
   private client: CopilotClient | null = null;
   private session: CopilotSession | null = null;
   private initializingSession: Promise<CopilotSession> | null = null;
+  private activeSessionId: string | null = null;
   private readonly streamAssembler = new StreamAssembler();
   private readonly pendingPermissionRequests = new Map<string, PendingPermissionRequest>();
   private currentState: AssistantState = "idle";
@@ -71,6 +77,9 @@ export class CopilotSessionManager {
   private registeredToolSignature: string | null = null;
   private pendingToolRefreshSignature: string | null = null;
   private refreshingSessionForToolChanges: Promise<void> | null = null;
+  private nextResponseAutoSpeak = true;
+  private responseAbortEpoch = 0;
+  private promptInFlight = false;
 
   constructor(
     private readonly bus: SpiraEventBus,
@@ -85,31 +94,96 @@ export class CopilotSessionManager {
   }
 
   async sendMessage(text: string): Promise<void> {
+    return this.sendPrompt(text, true);
+  }
+
+  async sendVoiceMessage(text: string): Promise<void> {
+    return this.sendPrompt(`${VOICE_RESPONSE_INSTRUCTIONS}\n\n${text}`, true);
+  }
+
+  private async sendPrompt(text: string, autoSpeak: boolean): Promise<void> {
+    const abortEpoch = this.responseAbortEpoch;
     try {
       if (this.currentState === "error") {
         this.transitionTo("idle");
       }
+      if (this.currentState === "thinking" || this.promptInFlight) {
+        throw new CopilotError("A response is already in progress.");
+      }
+      this.promptInFlight = true;
       this.transitionTo("thinking");
+      this.nextResponseAutoSpeak = autoSpeak;
 
-      const session = await this.getOrCreateSession();
+      await this.sendPromptWithRecovery(text, abortEpoch);
+    } catch (error) {
+      this.nextResponseAutoSpeak = true;
+      if (this.responseAbortEpoch !== abortEpoch) {
+        logger.info("Suppressed send failure caused by an intentional response abort");
+        return;
+      }
+      throw this.reportAndWrapError(error, "Failed to send message to GitHub Copilot");
+    } finally {
+      this.promptInFlight = false;
+    }
+  }
+
+  private async sendPromptWithRecovery(text: string, abortEpoch: number): Promise<void> {
+    const session = await this.getOrCreateSession();
+
+    try {
       await this.withTimeout(
         session.send({ prompt: text }),
         SEND_TIMEOUT_MS,
         "Timed out while sending a message to GitHub Copilot",
       );
     } catch (error) {
-      throw this.reportAndWrapError(error, "Failed to send message to GitHub Copilot");
+      if (!this.isMissingSessionError(error)) {
+        throw error;
+      }
+
+      logger.warn(
+        { error, sessionId: session.sessionId },
+        "GitHub Copilot session was not found during send; re-establishing session and retrying once",
+      );
+      await this.invalidateExpiredSession(session);
+
+      const refreshedSession = await this.getOrCreateSession();
+      if (this.responseAbortEpoch !== abortEpoch) {
+        logger.info("Skipped retry send because the response was aborted during recovery");
+        return;
+      }
+      await this.withTimeout(
+        refreshedSession.send({ prompt: text }),
+        SEND_TIMEOUT_MS,
+        "Timed out while sending a message to GitHub Copilot",
+      );
     }
   }
 
   async clearSession(): Promise<void> {
     try {
+      const sessionId = this.activeSessionId;
       await this.disconnectSession();
+      if (sessionId) {
+        await this.deletePersistedSession(sessionId);
+      }
+      this.activeSessionId = null;
       this.streamAssembler.clear();
       this.transitionTo("idle");
     } catch (error) {
       throw this.reportAndWrapError(error, "Failed to clear the GitHub Copilot session");
     }
+  }
+
+  async abortResponse(): Promise<void> {
+    if (this.currentState !== "thinking" && !this.promptInFlight) {
+      return;
+    }
+
+    this.responseAbortEpoch += 1;
+    this.nextResponseAutoSpeak = true;
+    await this.disconnectSession();
+    this.transitionTo("idle");
   }
 
   async shutdown(): Promise<void> {
@@ -166,6 +240,58 @@ export class CopilotSessionManager {
 
   private async createSession(): Promise<CopilotSession> {
     const client = await this.getOrCreateClient();
+    const sessionPromise = this.openSession(client);
+
+    let session: CopilotSession;
+    try {
+      session = await this.withTimeout(
+        sessionPromise,
+        SESSION_INIT_TIMEOUT_MS,
+        "Timed out while connecting to GitHub Copilot",
+      );
+    } catch (error) {
+      this.session = null;
+      sessionPromise.then((resolvedSession) => void resolvedSession.disconnect().catch(() => {})).catch(() => {});
+      throw error;
+    }
+
+    this.activeSessionId = session.sessionId;
+    this.registeredToolSignature = this.getCurrentToolSignature();
+    logger.info({ sessionId: session.sessionId }, "GitHub Copilot session ready");
+
+    return session;
+  }
+
+  private async openSession(client: CopilotClient): Promise<CopilotSession> {
+    const sessionConfig = this.getSessionConfig();
+    const persistedSessionId = this.activeSessionId;
+    if (persistedSessionId) {
+      try {
+        const session = await client.resumeSession(persistedSessionId, sessionConfig);
+        logger.info({ sessionId: persistedSessionId }, "GitHub Copilot session resumed");
+        return session;
+      } catch (error) {
+        if (!this.isMissingSessionError(error)) {
+          throw error;
+        }
+
+        logger.warn(
+          { error, sessionId: persistedSessionId },
+          "Persisted GitHub Copilot session was not found; creating a fresh session",
+        );
+        this.activeSessionId = null;
+      }
+    }
+
+    const sessionId = randomUUID();
+    this.activeSessionId = sessionId;
+    return client.createSession({
+      ...sessionConfig,
+      sessionId,
+    });
+  }
+
+  private getSessionConfig(): Omit<SessionConfig, "sessionId"> {
     const toolAwarenessInstructions = this.getToolAwarenessInstructions();
     const upgradeToolInstructions = this.getUpgradeToolInstructions();
     const copilotTools = getCopilotTools(this.toolAggregator, {
@@ -173,8 +299,11 @@ export class CopilotSessionManager {
       applyHotCapabilityUpgrade: this.applyHotCapabilityUpgrade,
     });
 
-    const sessionPromise = client.createSession({
+    return {
       clientName: "Spira",
+      infiniteSessions: {
+        enabled: true,
+      },
       onEvent: (event) => {
         this.handleSessionEvent(event);
       },
@@ -211,25 +340,7 @@ export class CopilotSessionManager {
       },
       workingDirectory: appRootDir,
       tools: copilotTools,
-    });
-
-    let session: CopilotSession;
-    try {
-      session = await this.withTimeout(
-        sessionPromise,
-        SESSION_INIT_TIMEOUT_MS,
-        "Timed out while connecting to GitHub Copilot",
-      );
-    } catch (error) {
-      this.session = null;
-      sessionPromise.then((resolvedSession) => void resolvedSession.disconnect().catch(() => {})).catch(() => {});
-      throw error;
-    }
-
-    this.registeredToolSignature = this.getCurrentToolSignature();
-    logger.info({ sessionId: session.sessionId }, "GitHub Copilot session created");
-
-    return session;
+    };
   }
 
   private handleSessionEvent(event: SessionEvent): void {
@@ -246,7 +357,13 @@ export class CopilotSessionManager {
       case "assistant.message": {
         const assembledText = this.streamAssembler.finalize(event.data.messageId);
         const fullText = event.data.content || assembledText;
-        this.bus.emit("copilot:response-end", { messageId: event.data.messageId, text: fullText });
+        this.bus.emit("copilot:response-end", {
+          messageId: event.data.messageId,
+          text: fullText,
+          timestamp: Date.now(),
+          autoSpeak: this.nextResponseAutoSpeak,
+        });
+        this.nextResponseAutoSpeak = true;
         return;
       }
 
@@ -260,7 +377,7 @@ export class CopilotSessionManager {
 
       case "session.error":
         logger.error({ errorType: event.data.errorType, sessionError: event.data }, "GitHub Copilot session error");
-        // Invalidate the session so the next sendMessage creates a fresh one
+        // Invalidate the live handle so the next sendMessage can resume or recreate the session.
         this.clearPendingPermissionRequests("expired");
         this.session = null;
         this.streamAssembler.clear();
@@ -271,6 +388,7 @@ export class CopilotSessionManager {
           formatErrorDetails(event.data),
           "copilot",
         );
+        this.nextResponseAutoSpeak = true;
         this.transitionTo("error");
         return;
 
@@ -313,6 +431,15 @@ export class CopilotSessionManager {
     } catch (error) {
       logger.warn({ error, sessionId: session.sessionId }, "Failed to disconnect GitHub Copilot session cleanly");
     }
+  }
+
+  private async invalidateExpiredSession(session: CopilotSession): Promise<void> {
+    if (this.session !== session) {
+      return;
+    }
+
+    await this.disconnectSession();
+    this.transitionTo("idle");
   }
 
   private async getOrCreateClient(): Promise<CopilotClient> {
@@ -410,6 +537,7 @@ export class CopilotSessionManager {
 
     const previousState = this.currentState;
     this.currentState = nextState;
+    this.bus.emit("copilot:state", nextState);
     this.bus.emit("state:change", previousState, nextState);
 
     if (nextState === "idle") {
@@ -437,6 +565,22 @@ export class CopilotSessionManager {
       }
     } catch (error) {
       logger.warn({ error }, "Failed to stop GitHub Copilot client cleanly");
+    }
+  }
+
+  private async deletePersistedSession(sessionId: string): Promise<void> {
+    const client = await this.getOrCreateClient();
+
+    try {
+      await client.deleteSession(sessionId);
+      logger.info({ sessionId }, "GitHub Copilot session deleted");
+    } catch (error) {
+      if (this.isMissingSessionError(error)) {
+        logger.info({ sessionId }, "GitHub Copilot session was already deleted");
+        return;
+      }
+
+      throw error;
     }
   }
 
@@ -482,6 +626,36 @@ export class CopilotSessionManager {
         clearTimeout(timeoutId);
       }
     }
+  }
+
+  private isMissingSessionError(error: unknown): boolean {
+    for (const message of this.collectErrorMessages(error)) {
+      if (message.includes("Session not found:")) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  private collectErrorMessages(error: unknown, depth = 0): string[] {
+    if (depth > 5 || error === null || error === undefined) {
+      return [];
+    }
+
+    if (typeof error === "string") {
+      return [error];
+    }
+
+    if (error instanceof Error) {
+      const messages = [error.message];
+      if ("cause" in error && error.cause !== undefined) {
+        messages.push(...this.collectErrorMessages(error.cause, depth + 1));
+      }
+      return messages;
+    }
+
+    return [];
   }
 
   private async handlePermissionRequest(request: PermissionRequest): Promise<PermissionRequestResult> {

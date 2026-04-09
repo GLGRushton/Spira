@@ -33,12 +33,23 @@ export interface McpTool {
   execution?: McpToolExecution;
 }
 
+export interface McpServerDiagnostics {
+  failureCount: number;
+  lastFailureAt?: number;
+  lastError?: string;
+  remediationHint?: string;
+  recentStderr: string[];
+}
+
 export interface McpServerStatus {
   id: string;
   name: string;
+  enabled: boolean;
   state: "starting" | "connected" | "disconnected" | "error";
   toolCount: number;
   tools: string[];
   error?: string;
+  diagnostics: McpServerDiagnostics;
+  lastConnectedAt?: number;
   uptimeMs?: number;
 }

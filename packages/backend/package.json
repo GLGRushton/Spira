@@ -10,9 +10,11 @@
   "dependencies": {
     "@github/copilot-sdk": "^0.2.1",
     "@modelcontextprotocol/sdk": "^1.0.0",
+    "@spira/memory-db": "workspace:*",
     "@picovoice/porcupine-node": "^3.0.5",
     "@picovoice/pvrecorder-node": "^1.2.7",
     "@spira/shared": "workspace:*",
+    "kokoro-js": "^1.2.1",
     "node-fetch": "^3.3.2",
     "nodejs-whisper": "^0.2.9",
     "pino": "^9.0.0",

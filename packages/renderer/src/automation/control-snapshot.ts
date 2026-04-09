@@ -1,0 +1,104 @@
+import {
+  PROTOCOL_VERSION,
+  SPIRA_UI_CONTROL_BRIDGE_VERSION,
+  SPIRA_UI_ROOT_VIEWS,
+  type SpiraUiChatTranscript,
+  type SpiraUiMessageSummary,
+  type SpiraUiSnapshot,
+} from "@spira/shared";
+import { buildAssistantDockSummary } from "../shinra-status.js";
+import { useAssistantStore } from "../stores/assistant-store.js";
+import { getAwaitingAssistantQuestion, useChatStore } from "../stores/chat-store.js";
+import { useConnectionStore } from "../stores/connection-store.js";
+import { useMcpStore } from "../stores/mcp-store.js";
+import { useNavigationStore } from "../stores/navigation-store.js";
+import { usePermissionStore } from "../stores/permission-store.js";
+import { useRoomStore } from "../stores/room-store.js";
+import { useSettingsStore } from "../stores/settings-store.js";
+import { useUpgradeStore } from "../stores/upgrade-store.js";
+
+const toMessageSummary = (message: {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  timestamp: number;
+  autoSpeak?: boolean;
+  isStreaming?: boolean;
+  wasAborted?: boolean;
+}): SpiraUiMessageSummary => ({
+  id: message.id,
+  role: message.role,
+  content: message.content,
+  timestamp: message.timestamp,
+  autoSpeak: message.autoSpeak,
+  isStreaming: message.isStreaming,
+  wasAborted: message.wasAborted,
+});
+
+export const buildSpiraUiChatTranscript = (limit = 100): SpiraUiChatTranscript => {
+  const chat = useChatStore.getState();
+  return {
+    messages: chat.messages
+      .filter((message) => message.role === "user" || message.role === "assistant")
+      .slice(-Math.max(1, limit))
+      .map((message) => toMessageSummary(message)),
+  };
+};
+
+export const buildSpiraUiSnapshot = (): SpiraUiSnapshot => {
+  const chat = useChatStore.getState();
+  const awaitingQuestion = getAwaitingAssistantQuestion(chat.messages);
+  const lastUserMessage = [...chat.messages].reverse().find((message) => message.role === "user");
+  const lastAssistantMessage = [...chat.messages].reverse().find((message) => message.role === "assistant");
+  const upgrade = useUpgradeStore.getState();
+  const room = useRoomStore.getState();
+  const settings = useSettingsStore.getState();
+  const activeView = useNavigationStore.getState().activeView;
+  const assistantState = useAssistantStore.getState().state;
+
+  return {
+    bridgeVersion: SPIRA_UI_CONTROL_BRIDGE_VERSION,
+    protocolVersion: PROTOCOL_VERSION,
+    activeView,
+    rootViews: [...SPIRA_UI_ROOT_VIEWS],
+    window: {
+      title: document.title || "Spira",
+      focused: document.hasFocus(),
+      visible: document.visibilityState === "visible",
+    },
+    assistantState,
+    connectionStatus: useConnectionStore.getState().status,
+    settings: {
+      voiceEnabled: settings.voiceEnabled,
+      wakeWordEnabled: settings.wakeWordEnabled,
+      ttsProvider: settings.ttsProvider,
+      whisperModel: settings.whisperModel,
+      wakeWordProvider: settings.wakeWordProvider,
+      openWakeWordThreshold: settings.openWakeWordThreshold,
+      elevenLabsVoiceId: settings.elevenLabsVoiceId,
+      theme: settings.theme,
+    },
+    permissions: [...usePermissionStore.getState().requests],
+    upgradeBanner: upgrade.banner ? { ...upgrade.banner } : null,
+    protocolBanner: upgrade.protocolBanner ? { ...upgrade.protocolBanner } : null,
+    mcpServers: [...useMcpStore.getState().servers],
+    agentRooms: room.agentRooms.map((agentRoom) => ({ ...agentRoom })),
+    chat: {
+      draft: chat.draft,
+      isStreaming: chat.isStreaming,
+      isAborting: chat.isAborting,
+      isResetConfirming: chat.isResetConfirming,
+      isResetting: chat.isResetting,
+      messageCount: chat.messages.length,
+      lastUserMessage: lastUserMessage ? toMessageSummary(lastUserMessage) : undefined,
+      lastAssistantMessage: lastAssistantMessage ? toMessageSummary(lastAssistantMessage) : undefined,
+      awaitingQuestion: awaitingQuestion ? toMessageSummary(awaitingQuestion) : undefined,
+    },
+    assistantDock: buildAssistantDockSummary({
+      activeView,
+      assistantState,
+      isStreaming: chat.isStreaming,
+      messages: chat.messages,
+    }),
+  };
+};

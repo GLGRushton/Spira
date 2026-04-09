@@ -1,11 +1,9 @@
-import type { VoicePipelineState } from "@spira/shared";
+import type { AssistantState, VoicePipelineState } from "@spira/shared";
 import type { Logger } from "pino";
 import { SpiraError } from "../util/errors.js";
 import type { SpiraEventBus } from "../util/event-bus.js";
 import type { AudioCapture } from "./audio-capture.js";
-import type { AudioPlayback } from "./audio-playback.js";
 import type { ISttProvider } from "./stt-provider.js";
-import type { ITtsProvider } from "./tts-provider.js";
 import type { WakeWordProvider } from "./wake-word.js";
 
 const LISTEN_TIMEOUT_MS = 10_000;
@@ -14,7 +12,6 @@ const MIN_SPEECH_DURATION_MS = 300;
 const MAX_SPEECH_CAPTURE_MS = 8_000;
 const STT_TIMEOUT_MS = 30_000;
 const THINKING_TIMEOUT_MS = 30_000;
-const SPEAKING_TIMEOUT_MS = 120_000;
 const ERROR_RECOVERY_MS = 2_000;
 const DEFAULT_SAMPLE_RATE = 16_000;
 
@@ -22,6 +19,7 @@ export class VoicePipeline {
   private state: VoicePipelineState = "idle";
   private started = false;
   private muted = false;
+  private wakeWordSuspended = false;
   private pushToTalkActive = false;
   private wakeWordReady = false;
   private audioFrames: Int16Array[] = [];
@@ -31,15 +29,16 @@ export class VoicePipeline {
   private lastLevelAt = 0;
   private responseTimer: NodeJS.Timeout | null = null;
   private recoveryTimer: NodeJS.Timeout | null = null;
+  private copilotState: AssistantState = "idle";
+  private waitingForCopilotIdle = false;
   private unsubscribeFrame: (() => void) | null = null;
   private unsubscribeResponseEnd: (() => void) | null = null;
+  private unsubscribeCopilotState: (() => void) | null = null;
 
   constructor(
     private readonly capture: AudioCapture,
     private readonly wakeWord: WakeWordProvider,
     private readonly stt: ISttProvider,
-    private readonly tts: ITtsProvider,
-    private readonly playback: AudioPlayback,
     private readonly bus: SpiraEventBus,
     private readonly logger: Logger,
   ) {}
@@ -85,8 +84,8 @@ export class VoicePipeline {
         this.handleFrame(frame);
       });
 
-      const responseEndHandler = ({ text }: { text: string; messageId: string }) => {
-        void this.handleCopilotResponse(text).catch((error) => {
+      const responseEndHandler = (_event: { text: string; messageId: string }) => {
+        void this.handleCopilotResponse().catch((error) => {
           this.logger.error({ error }, "Voice pipeline failed while handling Copilot response");
           this.handleError(error);
         });
@@ -94,6 +93,18 @@ export class VoicePipeline {
       this.bus.on("copilot:response-end", responseEndHandler);
       this.unsubscribeResponseEnd = () => {
         this.bus.off("copilot:response-end", responseEndHandler);
+      };
+
+      const copilotStateHandler = (state: AssistantState) => {
+        this.copilotState = state;
+        if (state === "idle" && this.waitingForCopilotIdle) {
+          this.waitingForCopilotIdle = false;
+          this.scheduleIdleRecovery();
+        }
+      };
+      this.bus.on("copilot:state", copilotStateHandler);
+      this.unsubscribeCopilotState = () => {
+        this.bus.off("copilot:state", copilotStateHandler);
       };
 
       this.capture.start();
@@ -110,8 +121,10 @@ export class VoicePipeline {
       this.started = false;
       this.unsubscribeFrame?.();
       this.unsubscribeResponseEnd?.();
+      this.unsubscribeCopilotState?.();
       this.unsubscribeFrame = null;
       this.unsubscribeResponseEnd = null;
+      this.unsubscribeCopilotState = null;
       this.capture.stop();
       this.wakeWord.dispose();
       throw error;
@@ -124,23 +137,19 @@ export class VoicePipeline {
     this.clearTimers();
     this.unsubscribeFrame?.();
     this.unsubscribeResponseEnd?.();
+    this.unsubscribeCopilotState?.();
     this.unsubscribeFrame = null;
     this.unsubscribeResponseEnd = null;
-    this.playback.stop();
+    this.unsubscribeCopilotState = null;
     this.capture.stop();
     this.wakeWord.dispose();
     this.stt.dispose();
-    this.tts.dispose();
     this.resetListeningState();
     this.transitionTo("idle");
     this.logger.info("Voice pipeline stopped");
   }
 
   activatePushToTalk(): void {
-    if (this.muted) {
-      return;
-    }
-
     this.pushToTalkActive = true;
     if (!this.started) {
       return;
@@ -165,6 +174,7 @@ export class VoicePipeline {
 
     this.muted = muted;
     this.pushToTalkActive = false;
+    this.wakeWordSuspended = false;
     if (muted && this.state === "listening") {
       this.resetToIdle();
     }
@@ -177,7 +187,7 @@ export class VoicePipeline {
   }
 
   private handleFrame(frame: Int16Array): void {
-    if (!this.started || this.muted) {
+    if (!this.started || (this.muted && !this.pushToTalkActive)) {
       return;
     }
 
@@ -187,7 +197,7 @@ export class VoicePipeline {
         return;
       }
 
-      if (this.wakeWordReady && this.wakeWord.processFrame(frame)) {
+      if (!this.wakeWordSuspended && this.wakeWordReady && this.wakeWord.processFrame(frame)) {
         this.logger.info("Wake word detected");
         this.beginListening("wake-word");
       }
@@ -287,6 +297,7 @@ export class VoicePipeline {
         return;
       }
 
+      this.waitingForCopilotIdle = false;
       this.transitionTo("thinking");
       this.bus.emit("voice:transcript", { text: transcript });
       this.responseTimer = setTimeout(() => {
@@ -301,51 +312,18 @@ export class VoicePipeline {
     }
   }
 
-  private async handleCopilotResponse(text: string): Promise<void> {
+  private async handleCopilotResponse(): Promise<void> {
     if (this.state !== "thinking") {
       return;
     }
 
     this.clearResponseTimer();
 
-    if (!text.trim()) {
-      this.transitionTo("idle");
-      return;
-    }
-
-    this.transitionTo("speaking");
-
-    try {
-      const sampleRate = VoicePipeline.resolveTtsSampleRate(this.tts);
-      await VoicePipeline.withTimeout(
-        this.playback.playStream(
-          this.tts.synthesize(text),
-          "pcm",
-          { sampleRate, channels: 1, bitDepth: 16 },
-          (amplitude) => {
-            this.bus.emit("tts:amplitude", { amplitude });
-          },
-        ),
-        SPEAKING_TIMEOUT_MS,
-        "TTS playback timed out",
-      );
-
-      if (!this.isActiveState("speaking")) {
-        return;
-      }
-
-      this.transitionTo("idle");
-    } catch (error) {
-      if (!this.isActiveState("speaking")) {
-        return;
-      }
-      this.handleError(error);
-    }
+    this.finishResponseCycle();
   }
 
   private handleError(error: unknown): void {
     this.logger.error({ error }, "Voice pipeline error");
-    this.playback.stop();
     this.resetListeningState();
     this.transitionTo("error");
     this.recoveryTimer = setTimeout(() => {
@@ -355,7 +333,27 @@ export class VoicePipeline {
 
   private resetToIdle(): void {
     this.resetListeningState();
+    this.waitingForCopilotIdle = false;
     this.transitionTo("idle");
+  }
+
+  private scheduleIdleRecovery(): void {
+    this.resetListeningState();
+    this.clearTimers();
+    this.transitionTo("idle");
+  }
+
+  private finishResponseCycle(): void {
+    this.wakeWordSuspended = true;
+    if (this.copilotState === "idle") {
+      this.waitingForCopilotIdle = false;
+      this.scheduleIdleRecovery();
+      return;
+    }
+
+    this.waitingForCopilotIdle = true;
+    this.resetListeningState();
+    this.transitionTo("thinking");
   }
 
   private resetListeningState(): void {
@@ -418,11 +416,6 @@ export class VoicePipeline {
       sumSquares += normalized * normalized;
     }
     return Math.min(1, Math.sqrt(sumSquares / Math.max(frame.length, 1)));
-  }
-
-  private static resolveTtsSampleRate(tts: ITtsProvider): number {
-    const sampleRate = (tts as ITtsProvider & { sampleRate?: number }).sampleRate;
-    return typeof sampleRate === "number" ? sampleRate : DEFAULT_SAMPLE_RATE;
   }
 
   private static async withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {

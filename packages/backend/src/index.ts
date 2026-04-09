@@ -1,5 +1,14 @@
+import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { type ClientMessage, type Env, PROTOCOL_VERSION, type UpgradeProposal, parseEnv } from "@spira/shared";
+import { SPIRA_MEMORY_DB_PATH_ENV, SpiraMemoryDatabase, type UpsertToolCallInput } from "@spira/memory-db";
+import {
+  type ClientMessage,
+  type Env,
+  PROTOCOL_VERSION,
+  type UpgradeProposal,
+  type UserSettings,
+  parseEnv,
+} from "@spira/shared";
 import { ZodError } from "zod";
 import { CopilotSessionManager } from "./copilot/session-manager.js";
 import { McpClientPool } from "./mcp/client-pool.js";
@@ -11,12 +20,9 @@ import { ConfigError, SpiraError, toErrorPayload } from "./util/errors.js";
 import { SpiraEventBus } from "./util/event-bus.js";
 import { createLogger } from "./util/logger.js";
 import { AudioCapture } from "./voice/audio-capture.js";
-import { AudioPlayback } from "./voice/audio-playback.js";
 import { VoicePipeline } from "./voice/pipeline.js";
 import { WhisperSttProvider } from "./voice/stt.js";
-import { PiperTtsProvider } from "./voice/tts-piper.js";
 import { TtsPlaybackService } from "./voice/tts-playback-service.js";
-import { ElevenLabsTtsProvider } from "./voice/tts.js";
 import { NullWakeWordProvider } from "./voice/wake-word-null.js";
 import { OpenWakeWordProvider } from "./voice/wake-word-openwakeword.js";
 import { PorcupineWakeWordProvider, type WakeWordProvider } from "./voice/wake-word.js";
@@ -32,7 +38,13 @@ let transport: WsTransport | null = null;
 let unsubscribeTransport: (() => void) | null = null;
 let voicePipeline: VoicePipeline | null = null;
 let ttsPlayback: TtsPlaybackService | null = null;
-let voiceEnabled = false;
+let backendEnv: Env | null = null;
+let voiceConfiguration: VoiceConfiguration | null = null;
+let wakeWordEnabled = true;
+let speechEnabled = true;
+let memoryDb: SpiraMemoryDatabase | null = null;
+let activeConversationId: string | null = null;
+const pendingToolCalls = new Map<string, Omit<UpsertToolCallInput, "messageId">>();
 
 const BACKEND_BUILD_ID = process.env.SPIRA_BUILD_ID?.trim() || "dev";
 const BACKEND_GENERATION = Number(process.env.SPIRA_GENERATION ?? "0");
@@ -45,6 +57,12 @@ const pendingUpgradeProposalResponses = new Map<
     timeout: NodeJS.Timeout;
   }
 >();
+const VOICE_ACKNOWLEDGEMENTS = ["On it.", "Understood.", "Right away.", "Heard you."] as const;
+
+const pickVoiceAcknowledgement = (text: string): string => {
+  const normalizedLength = text.trim().length;
+  return VOICE_ACKNOWLEDGEMENTS[normalizedLength % VOICE_ACKNOWLEDGEMENTS.length] ?? VOICE_ACKNOWLEDGEMENTS[0];
+};
 
 const loadEnvFromFile = () => {
   try {
@@ -69,14 +87,100 @@ const createEnv = (): Env => {
   }
 };
 
-const createWakeWordProvider = (env: Env): WakeWordProvider => {
-  if (env.WAKE_WORD_PROVIDER === "none") {
+type VoiceConfiguration = Pick<UserSettings, "whisperModel" | "wakeWordProvider" | "openWakeWordThreshold">;
+
+const getVoiceConfiguration = (env: Env, settings: Partial<UserSettings> = {}): VoiceConfiguration => ({
+  whisperModel: settings.whisperModel ?? voiceConfiguration?.whisperModel ?? env.WHISPER_MODEL,
+  wakeWordProvider: settings.wakeWordProvider ?? voiceConfiguration?.wakeWordProvider ?? env.WAKE_WORD_PROVIDER,
+  openWakeWordThreshold:
+    settings.openWakeWordThreshold ?? voiceConfiguration?.openWakeWordThreshold ?? env.OPENWAKEWORD_THRESHOLD,
+});
+
+const ensureActiveConversation = (timestamp: number, preferredTitle?: string, preferredId?: string): string | null => {
+  if (!memoryDb) {
+    return null;
+  }
+
+  if (preferredId) {
+    activeConversationId = preferredId;
+  }
+
+  if (!activeConversationId) {
+    activeConversationId = memoryDb.createConversation({
+      id: preferredId,
+      title: preferredTitle,
+      createdAt: timestamp,
+    });
+  }
+
+  return activeConversationId;
+};
+
+const persistUserMessage = (text: string, timestamp: number, conversationId?: string): void => {
+  const activeId = ensureActiveConversation(timestamp, undefined, conversationId);
+  if (!memoryDb || !activeId) {
+    return;
+  }
+
+  memoryDb.appendMessage({
+    id: `user-${randomUUID()}`,
+    conversationId: activeId,
+    role: "user",
+    content: text,
+    timestamp,
+  });
+};
+
+const persistPendingToolCalls = (messageId: string): void => {
+  if (!memoryDb) {
+    return;
+  }
+
+  for (const toolCall of pendingToolCalls.values()) {
+    memoryDb.upsertToolCall({
+      messageId,
+      ...toolCall,
+    });
+  }
+  pendingToolCalls.clear();
+};
+
+const persistAssistantMessage = (
+  id: string,
+  text: string,
+  timestamp: number,
+  options: { autoSpeak?: boolean; wasAborted?: boolean } = {},
+): void => {
+  const conversationId = ensureActiveConversation(timestamp);
+  if (!memoryDb || !conversationId) {
+    return;
+  }
+
+  memoryDb.appendMessage({
+    id,
+    conversationId,
+    role: "assistant",
+    content: text,
+    timestamp,
+    autoSpeak: options.autoSpeak,
+    wasAborted: options.wasAborted,
+  });
+  persistPendingToolCalls(id);
+};
+
+const sameVoiceConfiguration = (left: VoiceConfiguration, right: VoiceConfiguration): boolean =>
+  left.whisperModel === right.whisperModel &&
+  left.wakeWordProvider === right.wakeWordProvider &&
+  left.openWakeWordThreshold === right.openWakeWordThreshold;
+
+const createWakeWordProvider = (env: Env, config: VoiceConfiguration): WakeWordProvider => {
+  if (config.wakeWordProvider === "none") {
     return new NullWakeWordProvider();
   }
 
-  if (env.WAKE_WORD_PROVIDER === "porcupine") {
+  if (config.wakeWordProvider === "porcupine") {
     if (!env.PICOVOICE_ACCESS_KEY?.trim()) {
-      logger.warn("WAKE_WORD_PROVIDER=porcupine but PICOVOICE_ACCESS_KEY is missing; wake word disabled");
+      logger.warn("Wake-word provider is set to porcupine but PICOVOICE_ACCESS_KEY is missing; wake word disabled");
       return new NullWakeWordProvider();
     }
 
@@ -101,10 +205,57 @@ const createWakeWordProvider = (env: Env): WakeWordProvider => {
       workerPath: env.OPENWAKEWORD_WORKER_PATH,
       modelPath: env.OPENWAKEWORD_MODEL_PATH,
       modelName: env.OPENWAKEWORD_MODEL_NAME,
-      threshold: env.OPENWAKEWORD_THRESHOLD,
+      threshold: config.openWakeWordThreshold,
     },
     logger,
   );
+};
+
+const createConfiguredVoicePipeline = async (env: Env, config: VoiceConfiguration): Promise<VoicePipeline> => {
+  if (!bus) {
+    throw new Error("Voice pipeline requires an initialized event bus");
+  }
+
+  const capture = new AudioCapture({}, logger);
+  const wakeWord = createWakeWordProvider(env, config);
+  const stt = new WhisperSttProvider(config.whisperModel, logger);
+  const pipeline = new VoicePipeline(capture, wakeWord, stt, bus, logger);
+  await pipeline.start();
+  pipeline.setMuted(!wakeWordEnabled);
+  return pipeline;
+};
+
+const applyVoiceConfiguration = async (settings: Partial<UserSettings>): Promise<void> => {
+  if (!backendEnv) {
+    return;
+  }
+
+  const nextConfiguration = getVoiceConfiguration(backendEnv, settings);
+  const previousConfiguration = voiceConfiguration ?? getVoiceConfiguration(backendEnv);
+  if (sameVoiceConfiguration(previousConfiguration, nextConfiguration)) {
+    voiceConfiguration = nextConfiguration;
+    return;
+  }
+
+  const previousPipeline = voicePipeline;
+  if (previousPipeline) {
+    await previousPipeline.stop();
+    voicePipeline = null;
+  }
+
+  try {
+    voicePipeline = await createConfiguredVoicePipeline(backendEnv, nextConfiguration);
+    voiceConfiguration = nextConfiguration;
+  } catch (error) {
+    try {
+      voicePipeline = await createConfiguredVoicePipeline(backendEnv, previousConfiguration);
+      voiceConfiguration = previousConfiguration;
+    } catch (restoreError) {
+      voicePipeline = null;
+      logger.error({ error: restoreError }, "Failed to restore the previous voice configuration");
+    }
+    throw error;
+  }
 };
 
 const requestUpgradeProposal = async (proposal: UpgradeProposal): Promise<void> => {
@@ -116,7 +267,7 @@ const requestUpgradeProposal = async (proposal: UpgradeProposal): Promise<void> 
     const timeout = setTimeout(() => {
       pendingUpgradeProposalResponses.delete(proposal.proposalId);
       reject(new Error("Timed out waiting for upgrade proposal acknowledgement"));
-    }, 5_000);
+    }, 10_000);
 
     pendingUpgradeProposalResponses.set(proposal.proposalId, {
       resolve: () => {
@@ -150,6 +301,7 @@ const shutdown = async (signal: NodeJS.Signals | "manual") => {
   ttsPlayback?.dispose();
   await copilotManager?.shutdown();
   await mcpRegistry?.shutdown();
+  memoryDb?.close();
   transport?.close();
   bus?.removeAllListeners();
 
@@ -159,7 +311,12 @@ const shutdown = async (signal: NodeJS.Signals | "manual") => {
   transport = null;
   voicePipeline = null;
   ttsPlayback = null;
-  voiceEnabled = false;
+  backendEnv = null;
+  voiceConfiguration = null;
+  wakeWordEnabled = true;
+  speechEnabled = true;
+  memoryDb = null;
+  activeConversationId = null;
   server = null;
   bus = null;
 };
@@ -187,6 +344,12 @@ const handleClientMessage = async (message: ClientMessage): Promise<void> => {
 
   if (message.type === "chat:send") {
     try {
+      if (message.conversationId && message.conversationId !== activeConversationId) {
+        await copilotManager?.clearSession();
+        pendingToolCalls.clear();
+        activeConversationId = message.conversationId;
+      }
+      persistUserMessage(message.text, Date.now(), message.conversationId);
       await copilotManager?.sendMessage(message.text);
     } catch (error) {
       logger.error(
@@ -206,10 +369,31 @@ const handleClientMessage = async (message: ClientMessage): Promise<void> => {
     return;
   }
 
-  if (message.type === "chat:clear") {
+  if (message.type === "chat:abort") {
+    ttsPlayback?.stop();
+    try {
+      await copilotManager?.abortResponse();
+      // Keep the archive clean: partial aborted assistant turns remain a transient UI artifact
+      // unless Copilot emitted a finalized assistant message before the abort landed.
+      pendingToolCalls.clear();
+      transport?.send({ type: "chat:abort-complete" });
+    } catch (error) {
+      logger.error({ err: error, messageType: message.type }, "Failed to abort chat response");
+      transport?.send({
+        type: "error",
+        ...toErrorPayload(error, "UNKNOWN_ERROR", "Failed to stop the current response", "copilot"),
+      });
+    }
+    return;
+  }
+
+  if (message.type === "chat:reset") {
     ttsPlayback?.stop();
     try {
       await copilotManager?.clearSession();
+      pendingToolCalls.clear();
+      activeConversationId = null;
+      transport?.send({ type: "chat:reset-complete" });
     } catch (error) {
       logger.error({ err: error, messageType: message.type }, "Failed to clear chat session");
       transport?.send({
@@ -246,6 +430,27 @@ const handleClientMessage = async (message: ClientMessage): Promise<void> => {
     return;
   }
 
+  if (message.type === "mcp:set-enabled") {
+    try {
+      await mcpRegistry?.setServerEnabled(message.serverId, message.enabled);
+    } catch (error) {
+      logger.error(
+        { err: error, serverId: message.serverId, enabled: message.enabled },
+        "Failed to update MCP server state",
+      );
+      transport?.send({
+        type: "error",
+        ...toErrorPayload(
+          error,
+          "MCP_UPDATE_FAILED",
+          `Failed to ${message.enabled ? "enable" : "disable"} MCP server ${message.serverId}`,
+          "mcp",
+        ),
+      });
+    }
+    return;
+  }
+
   if (message.type === "tts:speak") {
     try {
       await ttsPlayback?.speak(message.text);
@@ -273,22 +478,38 @@ const handleClientMessage = async (message: ClientMessage): Promise<void> => {
       return;
     }
 
-    try {
-      if (voiceEnabled) {
-        await voicePipeline.stop();
-        voiceEnabled = false;
-      } else {
-        await voicePipeline.start();
-        voiceEnabled = true;
-      }
-    } catch (error) {
-      logger.warn({ error }, "Failed to toggle voice pipeline");
-    }
+    wakeWordEnabled = !wakeWordEnabled;
+    voicePipeline.setMuted(!wakeWordEnabled);
     return;
   }
 
   if (message.type === "settings:update") {
-    ttsPlayback?.updateSettings(message.settings);
+    try {
+      ttsPlayback?.updateSettings(message.settings);
+      if (typeof message.settings.voiceEnabled === "boolean") {
+        speechEnabled = message.settings.voiceEnabled;
+        if (!speechEnabled) {
+          ttsPlayback?.stop();
+        }
+      }
+      if (typeof message.settings.wakeWordEnabled === "boolean") {
+        wakeWordEnabled = message.settings.wakeWordEnabled;
+        voicePipeline?.setMuted(!wakeWordEnabled);
+      }
+      if (
+        typeof message.settings.whisperModel === "string" ||
+        typeof message.settings.wakeWordProvider === "string" ||
+        typeof message.settings.openWakeWordThreshold === "number"
+      ) {
+        await applyVoiceConfiguration(message.settings);
+      }
+    } catch (error) {
+      logger.error({ err: error, messageType: message.type }, "Failed to apply updated voice settings");
+      transport?.send({
+        type: "error",
+        ...toErrorPayload(error, "VOICE_SETTINGS_UPDATE_FAILED", "Failed to apply updated voice settings", "voice"),
+      });
+    }
     return;
   }
 
@@ -305,16 +526,6 @@ const handleClientMessage = async (message: ClientMessage): Promise<void> => {
       return;
     }
 
-    if (!voiceEnabled) {
-      try {
-        await voicePipeline.start();
-        voiceEnabled = true;
-      } catch (error) {
-        logger.warn({ error }, "Unable to start voice pipeline for push-to-talk");
-        return;
-      }
-    }
-
     if (message.active) {
       voicePipeline.activatePushToTalk();
     } else {
@@ -324,11 +535,13 @@ const handleClientMessage = async (message: ClientMessage): Promise<void> => {
   }
 
   if (message.type === "voice:mute") {
+    wakeWordEnabled = false;
     voicePipeline?.setMuted(true);
     return;
   }
 
   if (message.type === "voice:unmute") {
+    wakeWordEnabled = true;
     voicePipeline?.setMuted(false);
     return;
   }
@@ -338,6 +551,8 @@ const handleClientMessage = async (message: ClientMessage): Promise<void> => {
 
 const bootstrap = async () => {
   const env = createEnv();
+  backendEnv = env;
+  voiceConfiguration = getVoiceConfiguration(env);
 
   logger.info({ nodeEnv: process.env.NODE_ENV ?? "development", port: env.SPIRA_PORT }, "Starting Spira backend");
 
@@ -345,6 +560,15 @@ const bootstrap = async () => {
   const pool = new McpClientPool(bus, logger);
   const aggregator = new McpToolAggregator(pool);
   mcpRegistry = new McpRegistry(bus, logger, pool);
+  const memoryDbPath = process.env[SPIRA_MEMORY_DB_PATH_ENV];
+  if (typeof memoryDbPath === "string" && memoryDbPath.trim()) {
+    memoryDb = SpiraMemoryDatabase.open(memoryDbPath.trim());
+  } else {
+    logger.warn(
+      { envKey: SPIRA_MEMORY_DB_PATH_ENV },
+      "Memory database path is unset; conversation persistence disabled",
+    );
+  }
   server = new WsServer(
     bus,
     env.SPIRA_PORT,
@@ -363,7 +587,17 @@ const bootstrap = async () => {
   ttsPlayback = new TtsPlaybackService(env, bus, logger);
 
   bus.on("voice:transcript", ({ text }) => {
-    void copilotManager?.sendMessage(text).catch((error) => {
+    persistUserMessage(text, Date.now());
+    const acknowledgement = pickVoiceAcknowledgement(text);
+    bus?.emit("chat:assistant-message", {
+      id: `voice-ack-${randomUUID()}`,
+      text: acknowledgement,
+      timestamp: Date.now(),
+      autoSpeak: true,
+      persist: false,
+    });
+
+    void copilotManager?.sendVoiceMessage(text).catch((error) => {
       logger.error({ err: error, transcriptLength: text.length }, "Failed to forward voice transcript to Copilot");
       transport?.send({
         type: "error",
@@ -372,8 +606,45 @@ const bootstrap = async () => {
     });
   });
 
+  bus.on("chat:assistant-message", ({ id, text, timestamp, autoSpeak, persist }) => {
+    if (persist === false) {
+      return;
+    }
+    persistAssistantMessage(id, text, timestamp, { autoSpeak });
+  });
+
+  bus.on("copilot:response-end", ({ messageId, text, timestamp, autoSpeak }) => {
+    persistAssistantMessage(messageId, text, timestamp, { autoSpeak });
+  });
+
+  bus.on("copilot:tool-call", (callId, toolName, args) => {
+    pendingToolCalls.set(callId, {
+      callId,
+      name: toolName,
+      args,
+      status: "running",
+    });
+  });
+
+  bus.on("copilot:tool-result", (callId, result) => {
+    const existing = pendingToolCalls.get(callId);
+    pendingToolCalls.set(callId, {
+      callId,
+      name: existing?.name ?? "unknown",
+      args: existing?.args ?? {},
+      result,
+      status: "success",
+      details: typeof result === "string" ? result : undefined,
+    });
+  });
+
+  bus.on("copilot:error", () => {
+    pendingToolCalls.clear();
+  });
+
   bus.on("transport:client-disconnected", () => {
     copilotManager?.cancelPendingPermissionRequests();
+    pendingToolCalls.clear();
   });
 
   unsubscribeTransport = transport.onMessage((message) => {
@@ -389,27 +660,10 @@ const bootstrap = async () => {
   await mcpRegistry.initialize();
 
   try {
-    const capture = new AudioCapture({}, logger);
-    const wakeWord = createWakeWordProvider(env);
-    const piperModelPath = env.PIPER_MODEL ? resolveAppPath(env.PIPER_MODEL) : "";
-    const stt = new WhisperSttProvider(env.WHISPER_MODEL, logger);
-    const tts = env.ELEVENLABS_API_KEY
-      ? new ElevenLabsTtsProvider(
-          {
-            apiKey: env.ELEVENLABS_API_KEY,
-            voiceId: env.ELEVENLABS_VOICE_ID ?? "21m00Tcm4TlvDq8ikWAM",
-          },
-          logger,
-        )
-      : new PiperTtsProvider(env.PIPER_EXECUTABLE ?? "piper", piperModelPath, logger);
-    const playback = new AudioPlayback(logger);
-
-    voicePipeline = new VoicePipeline(capture, wakeWord, stt, tts, playback, bus, logger);
-    await voicePipeline.start();
-    voiceEnabled = true;
+    voicePipeline = await createConfiguredVoicePipeline(env, voiceConfiguration);
   } catch (error) {
     voicePipeline = null;
-    voiceEnabled = false;
+    wakeWordEnabled = false;
     logger.warn({ error }, "Voice pipeline initialization failed; continuing without voice");
   }
 

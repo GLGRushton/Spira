@@ -7,36 +7,37 @@ import styles from "./VoiceIndicator.module.css";
 export function VoiceIndicator() {
   const assistantState = useAssistantStore((store) => store.state);
   const audioLevel = useAudioStore((store) => store.audioLevel);
-  const voiceEnabled = useSettingsStore((store) => store.voiceEnabled);
-  const toggleVoice = useSettingsStore((store) => store.toggleVoice);
+  const wakeWordEnabled = useSettingsStore((store) => store.wakeWordEnabled);
+  const setWakeWordEnabled = useSettingsStore((store) => store.setWakeWordEnabled);
   const isListening = assistantState === "listening" || assistantState === "transcribing";
 
   const handleToggle = () => {
-    toggleVoice();
-    window.electronAPI.toggleVoice();
+    const nextEnabled = !wakeWordEnabled;
+    setWakeWordEnabled(nextEnabled);
+    window.electronAPI.updateSettings({ wakeWordEnabled: nextEnabled });
   };
 
   return (
     <section className={styles.panel}>
       <div className={styles.header}>
         <div>
-          <div className={styles.label}>Voice Link</div>
-          <div className={styles.state}>{voiceEnabled ? (isListening ? "Listening" : "Standby") : "Muted"}</div>
+          <div className={styles.label}>Wake Link</div>
+          <div className={styles.state}>{wakeWordEnabled ? (isListening ? "Listening" : "Standby") : "Offline"}</div>
         </div>
         <button
           type="button"
           aria-label="Toggle voice input"
-          aria-pressed={voiceEnabled}
-          className={`${styles.toggle} ${voiceEnabled ? styles.active : ""}`}
+          aria-pressed={wakeWordEnabled}
+          className={`${styles.toggle} ${wakeWordEnabled ? styles.active : ""}`}
           onClick={handleToggle}
         >
-          {voiceEnabled ? "On" : "Off"}
+          {wakeWordEnabled ? "On" : "Off"}
         </button>
       </div>
       <div className={styles.meter}>
         <motion.div
           className={`${styles.fill} ${isListening ? styles.pulse : ""}`}
-          animate={{ width: `${Math.max(8, audioLevel * 100)}%`, opacity: voiceEnabled ? 1 : 0.3 }}
+          animate={{ width: `${Math.max(8, audioLevel * 100)}%`, opacity: wakeWordEnabled ? 1 : 0.3 }}
           transition={{ type: "spring", damping: 18, stiffness: 160 }}
         />
       </div>

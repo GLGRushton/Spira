@@ -34,17 +34,31 @@ export class WsServer {
       this.registerBusHandler("copilot:delta", (messageId, delta) => {
         this.send({ type: "chat:token", token: delta, conversationId: messageId });
       }),
-      this.registerBusHandler("copilot:response-end", ({ messageId, text }) => {
+      this.registerBusHandler("copilot:response-end", ({ messageId, text, timestamp, autoSpeak }) => {
         this.send({
           type: "chat:message",
           message: {
             id: messageId,
             role: "assistant",
             content: text,
-            timestamp: Date.now(),
+            timestamp,
+            autoSpeak,
           },
         });
         this.send({ type: "chat:complete", conversationId: messageId, messageId });
+      }),
+      this.registerBusHandler("chat:assistant-message", ({ id, text, timestamp, autoSpeak }) => {
+        this.send({
+          type: "chat:message",
+          message: {
+            id,
+            role: "assistant",
+            content: text,
+            timestamp,
+            autoSpeak,
+          },
+        });
+        this.send({ type: "chat:complete", conversationId: id, messageId: id });
       }),
       this.registerBusHandler("copilot:error", (code, message, details, source) => {
         this.toolCalls.clear();

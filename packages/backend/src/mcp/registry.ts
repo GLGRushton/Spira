@@ -3,6 +3,7 @@ import path from "node:path";
 import {
   type McpServerConfig,
   McpServerConfigSchema,
+  type McpServerDiagnostics,
   type McpServerStatus,
   type McpServersFile,
   McpServersFileSchema,
@@ -15,31 +16,80 @@ import type { SpiraEventBus } from "../util/event-bus.js";
 import type { McpClientPool } from "./client-pool.js";
 
 interface McpServerEntry {
-  readonly fileConfig: McpServerConfig;
-  readonly runtimeConfig: McpServerConfig;
+  fileConfig: McpServerConfig;
+  runtimeConfig: McpServerConfig;
   status: McpServerStatus;
   connectedAt?: number;
 }
 
-const toDevelopmentConfig = (config: McpServerConfig): McpServerConfig => {
+export const toRuntimeConfig = (config: McpServerConfig): McpServerConfig => {
   if (process.env.NODE_ENV !== "development" || config.transport !== "stdio" || config.command !== "node") {
     return config;
   }
 
   return {
     ...config,
-    command: "tsx",
-    args: config.args.map((arg) => arg.replace(/([\\/])dist([\\/])/g, "$1src$2").replace(/\.js$/u, ".ts")),
+    command: process.execPath,
+    args: [
+      "--import",
+      "tsx",
+      ...config.args.map((arg) => arg.replace(/([\\/])dist([\\/])/g, "$1src$2").replace(/\.js$/u, ".ts")),
+    ],
   };
 };
 
-const createDisconnectedStatus = (config: McpServerConfig): McpServerStatus => ({
+const createDiagnostics = (): McpServerDiagnostics => ({
+  failureCount: 0,
+  recentStderr: [],
+});
+
+export const createDisconnectedStatus = (
+  config: McpServerConfig,
+  previous?: Pick<McpServerStatus, "diagnostics" | "lastConnectedAt">,
+): McpServerStatus => ({
   id: config.id,
   name: config.name,
+  enabled: config.enabled,
   state: config.enabled ? "starting" : "disconnected",
   toolCount: 0,
   tools: [],
+  diagnostics: previous?.diagnostics ?? createDiagnostics(),
+  lastConnectedAt: previous?.lastConnectedAt,
 });
+
+const MAX_RECENT_STDERR_LINES = 8;
+
+const pushRecentStderr = (diagnostics: McpServerDiagnostics, line: string): McpServerDiagnostics => ({
+  ...diagnostics,
+  recentStderr: [...diagnostics.recentStderr, line].slice(-MAX_RECENT_STDERR_LINES),
+});
+
+export const deriveRemediationHint = (message: string, recentStderr: string[]): string => {
+  const haystack = `${message}\n${recentStderr.join("\n")}`.toLowerCase();
+  if (haystack.includes("enoent") || haystack.includes("spawn")) {
+    return "Check the server command, arguments, and required runtime on this machine.";
+  }
+
+  if (haystack.includes("eacces") || haystack.includes("permission denied")) {
+    return "Check execution permissions for the MCP command and any referenced files.";
+  }
+
+  if (
+    haystack.includes("401") ||
+    haystack.includes("403") ||
+    haystack.includes("unauthorized") ||
+    haystack.includes("api key") ||
+    haystack.includes("token")
+  ) {
+    return "Check this server's API key or other authentication environment variables.";
+  }
+
+  if (haystack.includes("schema") || haystack.includes("invalid") || haystack.includes("config")) {
+    return "Review the MCP server configuration and environment values for invalid settings.";
+  }
+
+  return "Inspect the recent stderr lines below, then review the server command and environment.";
+};
 
 export class McpRegistry {
   private readonly servers = new Map<string, McpServerEntry>();
@@ -47,6 +97,7 @@ export class McpRegistry {
   private configMutation = Promise.resolve();
   private suppressStatusPublishes = false;
   private publishPending = false;
+  private stderrPublishTimer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(
     private readonly bus: SpiraEventBus,
@@ -55,6 +106,9 @@ export class McpRegistry {
   ) {
     this.bus.on("mcp:server-crashed", (serverId) => {
       this.handleServerCrash(serverId);
+    });
+    this.bus.on("mcp:server-stderr", (serverId, line) => {
+      this.handleServerStderr(serverId, line);
     });
   }
 
@@ -112,7 +166,7 @@ export class McpRegistry {
 
       const entry: McpServerEntry = {
         fileConfig,
-        runtimeConfig: toDevelopmentConfig(fileConfig),
+        runtimeConfig: toRuntimeConfig(fileConfig),
         status: createDisconnectedStatus(fileConfig),
       };
 
@@ -147,7 +201,7 @@ export class McpRegistry {
         await this.writeConfig(this.serializeConfig());
       } catch (error) {
         entry.connectedAt = undefined;
-        entry.status = createDisconnectedStatus(entry.fileConfig);
+        entry.status = createDisconnectedStatus(entry.fileConfig, entry.status);
         this.servers.set(serverId, entry);
         this.publishStatuses();
         if (entry.fileConfig.enabled) {
@@ -163,10 +217,78 @@ export class McpRegistry {
     });
   }
 
+  async setServerEnabled(serverId: string, enabled: boolean): Promise<void> {
+    await this.runConfigMutation(async () => {
+      const entry = this.requireEntry(serverId);
+      const previousEnabled = entry.fileConfig.enabled;
+      if (previousEnabled === enabled) {
+        return;
+      }
+
+      entry.fileConfig.enabled = enabled;
+      entry.runtimeConfig = toRuntimeConfig(entry.fileConfig);
+
+      if (!enabled) {
+        await this.pool.disconnect(serverId);
+        entry.connectedAt = undefined;
+        entry.status = createDisconnectedStatus(entry.fileConfig, entry.status);
+        this.publishStatuses();
+
+        try {
+          await this.writeConfig(this.serializeConfig());
+        } catch (error) {
+          entry.fileConfig.enabled = previousEnabled;
+          entry.runtimeConfig = toRuntimeConfig(entry.fileConfig);
+          if (previousEnabled) {
+            await this.connectEntry(entry).catch((reconnectError) => {
+              this.logger.error(
+                { error: reconnectError, serverId },
+                "Failed to reconnect MCP server while rolling back disable",
+              );
+            });
+          } else {
+            entry.status = createDisconnectedStatus(entry.fileConfig, entry.status);
+            this.publishStatuses();
+          }
+          throw error;
+        }
+        return;
+      }
+
+      entry.status = createDisconnectedStatus(entry.fileConfig, entry.status);
+      this.publishStatuses();
+
+      try {
+        await this.connectEntry(entry, { throwOnFailure: true, publishFailureStatus: false });
+        await this.writeConfig(this.serializeConfig());
+      } catch (error) {
+        await this.pool.disconnect(serverId).catch((disconnectError) => {
+          this.logger.warn({ error: disconnectError, serverId }, "Failed to rollback enabled MCP server");
+        });
+        entry.connectedAt = undefined;
+        entry.fileConfig.enabled = previousEnabled;
+        entry.runtimeConfig = toRuntimeConfig(entry.fileConfig);
+        entry.status = createDisconnectedStatus(entry.fileConfig, entry.status);
+        if (previousEnabled) {
+          await this.connectEntry(entry).catch((reconnectError) => {
+            this.logger.error(
+              { error: reconnectError, serverId },
+              "Failed to reconnect MCP server while rolling back enable",
+            );
+          });
+        } else {
+          this.publishStatuses();
+        }
+        throw error;
+      }
+    });
+  }
+
   getStatus(): McpServerStatus[] {
     return [...this.servers.values()].map((entry) => ({
       ...entry.status,
       state: this.pool.isCrashed(entry.fileConfig.id) ? "error" : entry.status.state,
+      lastConnectedAt: entry.connectedAt ?? entry.status.lastConnectedAt,
       uptimeMs:
         entry.status.state === "connected" && entry.connectedAt !== undefined
           ? Date.now() - entry.connectedAt
@@ -194,13 +316,15 @@ export class McpRegistry {
     options: { throwOnEnabledServerFailure?: boolean } = {},
   ): Promise<void> {
     this.configSchema = configFile.$schema;
+    const previousServers = new Map(this.servers);
     this.servers.clear();
 
     for (const config of configFile.servers) {
+      const previousStatus = previousServers.get(config.id)?.status;
       this.servers.set(config.id, {
         fileConfig: config,
-        runtimeConfig: toDevelopmentConfig(config),
-        status: createDisconnectedStatus(config),
+        runtimeConfig: toRuntimeConfig(config),
+        status: createDisconnectedStatus(config, previousStatus),
       });
     }
 
@@ -237,6 +361,7 @@ export class McpRegistry {
     options: { throwOnFailure?: boolean; publishFailureStatus?: boolean } = {},
   ): Promise<void> {
     this.updateStatus(entry.fileConfig.id, {
+      enabled: entry.fileConfig.enabled,
       state: "starting",
       toolCount: 0,
       tools: [],
@@ -251,9 +376,12 @@ export class McpRegistry {
       entry.status = {
         id: entry.fileConfig.id,
         name: entry.fileConfig.name,
+        enabled: entry.fileConfig.enabled,
         state: "connected",
         toolCount: tools.length,
         tools: tools.map((tool) => tool.name),
+        diagnostics: entry.status.diagnostics,
+        lastConnectedAt: connectedAt,
         uptimeMs: 0,
       };
       this.publishStatuses();
@@ -261,13 +389,23 @@ export class McpRegistry {
       this.logger.error({ error, serverId: entry.fileConfig.id }, "Failed to connect MCP server");
       if (options.publishFailureStatus !== false) {
         entry.connectedAt = undefined;
+        const message = error instanceof Error ? error.message : String(error);
         entry.status = {
           id: entry.fileConfig.id,
           name: entry.fileConfig.name,
+          enabled: entry.fileConfig.enabled,
           state: "error",
           toolCount: 0,
           tools: [],
-          error: error instanceof Error ? error.message : String(error),
+          error: message,
+          diagnostics: {
+            ...entry.status.diagnostics,
+            failureCount: entry.status.diagnostics.failureCount + 1,
+            lastFailureAt: Date.now(),
+            lastError: message,
+            remediationHint: deriveRemediationHint(message, entry.status.diagnostics.recentStderr),
+          },
+          lastConnectedAt: entry.status.lastConnectedAt,
         };
         this.publishStatuses();
       }
@@ -302,16 +440,46 @@ export class McpRegistry {
     }
 
     entry.connectedAt = undefined;
+    const error = "MCP server process exited unexpectedly";
     entry.status = {
       id: entry.fileConfig.id,
       name: entry.fileConfig.name,
+      enabled: entry.fileConfig.enabled,
       state: "error",
       toolCount: 0,
       tools: [],
-      error: "MCP server process exited unexpectedly",
+      error,
+      diagnostics: {
+        ...entry.status.diagnostics,
+        failureCount: entry.status.diagnostics.failureCount + 1,
+        lastFailureAt: Date.now(),
+        lastError: error,
+        remediationHint: deriveRemediationHint(error, entry.status.diagnostics.recentStderr),
+      },
+      lastConnectedAt: entry.status.lastConnectedAt,
       uptimeMs: undefined,
     };
     this.publishStatuses();
+  }
+
+  private handleServerStderr(serverId: string, line: string): void {
+    const entry = this.servers.get(serverId);
+    if (!entry) {
+      return;
+    }
+
+    entry.status = {
+      ...entry.status,
+      diagnostics: pushRecentStderr(entry.status.diagnostics, line),
+    };
+    if (this.stderrPublishTimer) {
+      return;
+    }
+
+    this.stderrPublishTimer = setTimeout(() => {
+      this.stderrPublishTimer = undefined;
+      this.publishStatuses();
+    }, 75);
   }
 
   private serializeConfig(): McpServersFile {
@@ -344,6 +512,10 @@ export class McpRegistry {
   }
 
   private publishStatuses(): void {
+    if (this.stderrPublishTimer) {
+      clearTimeout(this.stderrPublishTimer);
+      this.stderrPublishTimer = undefined;
+    }
     if (this.suppressStatusPublishes) {
       this.publishPending = true;
       return;

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { type Tool, type ToolResultObject, defineTool } from "@github/copilot-sdk";
-import { type McpTool, type UpgradeProposal, classifyUpgradeScope } from "@spira/shared";
+import { type McpTool, type UpgradeProposal, classifyUpgradeScope, getRelevantUpgradeFiles } from "@spira/shared";
 import type { McpToolAggregator } from "../mcp/tool-aggregator.js";
 import { createLogger } from "../util/logger.js";
 
@@ -77,7 +77,12 @@ const buildUpgradeProposalTool = (
         const changedFiles = Array.isArray(payload.changedFiles)
           ? payload.changedFiles.filter((value: unknown): value is string => typeof value === "string")
           : [];
-        const scope = classifyUpgradeScope(changedFiles);
+        const relevantChangedFiles = getRelevantUpgradeFiles(changedFiles);
+        if (relevantChangedFiles.length === 0) {
+          return toSuccessResult("No live Spira upgrade is needed for the changed files.");
+        }
+
+        const scope = classifyUpgradeScope(relevantChangedFiles);
 
         if (scope === "hot-capability") {
           if (!applyHotCapabilityUpgrade) {
@@ -94,7 +99,7 @@ const buildUpgradeProposalTool = (
           proposalId: randomUUID(),
           scope,
           summary,
-          changedFiles,
+          changedFiles: relevantChangedFiles,
           requestedAt: Date.now(),
         });
         return toSuccessResult("Upgrade proposal sent to the user for approval.");

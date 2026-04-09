@@ -9,7 +9,7 @@ export function McpStatus() {
       <div className={styles.title}>MCP Servers</div>
       <div className={styles.list}>
         {servers.length === 0 ? (
-          <div className={styles.empty}>Awaiting registry sync</div>
+          <div className={styles.empty}>No MCP servers reported</div>
         ) : (
           servers.map((server) => (
             <article key={server.id} className={styles.item}>

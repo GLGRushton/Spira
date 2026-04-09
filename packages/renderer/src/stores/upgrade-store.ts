@@ -1,4 +1,4 @@
-import type { UpgradeProposal, UpgradeScope, UpgradeStatus } from "@spira/shared";
+import { type UpgradeProposal, type UpgradeScope, type UpgradeStatus, upgradeCanAutoRelaunch } from "@spira/shared";
 import { create } from "zustand";
 
 export interface UpgradeBannerState {
@@ -23,14 +23,14 @@ interface UpgradeStore {
   showStatus: (status: UpgradeStatus) => void;
 }
 
-const getPrimaryActionLabel = (scope: UpgradeScope): string | undefined => {
-  switch (scope) {
+const getPrimaryActionLabel = (proposal: UpgradeProposal): string | undefined => {
+  switch (proposal.scope) {
     case "backend-reload":
       return "Apply now";
     case "ui-refresh":
       return "Refresh now";
     case "full-restart":
-      return "I'll restart manually";
+      return upgradeCanAutoRelaunch(proposal.changedFiles) ? "Restart Spira" : "I'll restart manually";
     case "hot-capability":
       return undefined;
     default:
@@ -61,7 +61,7 @@ export const useUpgradeStore = create<UpgradeStore>((set) => ({
     set({ protocolBanner: null });
   },
   showProposal: (proposal, message) => {
-    const primaryActionLabel = getPrimaryActionLabel(proposal.scope);
+    const primaryActionLabel = getPrimaryActionLabel(proposal);
     set({
       banner: {
         kind: proposal.scope === "backend-reload" ? "warning" : "info",

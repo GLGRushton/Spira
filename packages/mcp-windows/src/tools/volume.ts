@@ -3,17 +3,22 @@ import { runPs } from "../util/powershell.js";
 import { errorResult, successResult } from "../util/results.js";
 import { EmptySchema, SetVolumeSchema } from "../util/validation.js";
 
+// TODO: Cache AudioEndpoint in a compiled DLL and switch to Add-Type -Path.
+// runPs() starts a new PowerShell process per call, so the inline C# is recompiled every time.
 const AUDIO_ENDPOINT_SCRIPT = String.raw`
-// TODO: Cache AudioEndpoint in a compiled DLL and switch to Add-Type -Path. runPs() starts a new PowerShell process per call, so the inline C# is recompiled every time.
 Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
 
-[ComImport, Guid("BCDE0395-E52F-467C-8E3D-C4579291692E")]
+[ComImport, Guid("A95664D2-9614-4F35-A746-DE8DB63617E6")]
 [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
 interface IMMDeviceEnumerator {
     int NotImpl1();
     [PreserveSig] int GetDefaultAudioEndpoint(int dataFlow, int role, out IMMDevice ppDevice);
+}
+
+[ComImport, Guid("BCDE0395-E52F-467C-8E3D-C4579291692E")]
+class MMDeviceEnumeratorComObject {
 }
 
 [ComImport, Guid("D666063F-1587-4E43-81F1-B948E807363F")]
@@ -34,6 +39,10 @@ interface IAudioEndpointVolume {
     [PreserveSig] int SetMasterVolumeLevelScalar(float fLevel, Guid pguidEventContext);
     int NotImpl5();
     [PreserveSig] int GetMasterVolumeLevelScalar(out float pfLevel);
+    int NotImpl6();
+    int NotImpl7();
+    int NotImpl8();
+    int NotImpl9();
     [PreserveSig] int SetMute([MarshalAs(UnmanagedType.Bool)] bool bMute, Guid pguidEventContext);
     [PreserveSig] int GetMute([MarshalAs(UnmanagedType.Bool)] out bool pbMute);
 }
@@ -42,7 +51,7 @@ public class AudioEndpoint {
     static readonly Guid IID_IAudioEndpointVolume = typeof(IAudioEndpointVolume).GUID;
 
     static IAudioEndpointVolume GetEndpoint() {
-        var enumerator = (IMMDeviceEnumerator)Activator.CreateInstance(Type.GetTypeFromCLSID(new Guid("BCDE0395-E52F-467C-8E3D-C4579291692E")));
+        var enumerator = (IMMDeviceEnumerator)new MMDeviceEnumeratorComObject();
         IMMDevice device;
         enumerator.GetDefaultAudioEndpoint(0, 1, out device);
         IAudioEndpointVolume endpoint;

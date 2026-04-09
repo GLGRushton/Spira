@@ -37,6 +37,7 @@ export class BackendLifecycle {
   private stopPromise: Promise<void> | null = null;
   private readonly onFatal?: Callback;
   private readonly onMessage?: (message: BackendLifecycleMessage) => void;
+  private envOverrides: Record<string, string> = {};
 
   constructor(backendPort = 9720, options: BackendLifecycleOptions = {}) {
     this.backendPort = backendPort;
@@ -141,6 +142,10 @@ export class BackendLifecycle {
     await this.waitUntilReady();
   }
 
+  setEnvOverrides(overrides: Record<string, string>): void {
+    this.envOverrides = { ...overrides };
+  }
+
   send(message: BackendLifecycleResponse): void {
     this.child?.send(message);
   }
@@ -161,6 +166,7 @@ export class BackendLifecycle {
       execPath,
       env: {
         ...process.env,
+        ...this.envOverrides,
         SPIRA_PORT: String(this.backendPort),
         SPIRA_GENERATION: String(myGeneration),
         SPIRA_BUILD_ID: this.getBuildId(),

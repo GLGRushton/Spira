@@ -8,6 +8,10 @@ import type {
 } from "@spira/shared";
 
 export interface EventMap {
+  "chat:assistant-message": [
+    message: { id: string; text: string; timestamp: number; autoSpeak?: boolean; persist?: boolean },
+  ];
+  "copilot:state": [state: AssistantState];
   "voice:pipeline": [{ state: VoicePipelineState }];
   "voice:muted": [{ muted: boolean }];
   "state:change": [previous: AssistantState, current: AssistantState];
@@ -17,13 +21,14 @@ export interface EventMap {
   "voice:transcript": [{ text: string }];
   "copilot:response-start": [messageId: string];
   "copilot:delta": [messageId: string, delta: string];
-  "copilot:response-end": [{ text: string; messageId: string }];
+  "copilot:response-end": [{ text: string; messageId: string; timestamp: number; autoSpeak?: boolean }];
   "copilot:error": [code: string, message: string, details?: string, source?: string];
   "copilot:tool-call": [callId: string, toolName: string, args: Record<string, unknown>];
   "copilot:tool-result": [callId: string, result: unknown];
   "copilot:permission-request": [request: PermissionRequestPayload];
   "copilot:permission-complete": [requestId: string, result: "approved" | "denied" | "expired"];
   "mcp:server-crashed": [serverId: string];
+  "mcp:server-stderr": [serverId: string, line: string];
   "mcp:servers-changed": [statuses: McpServerStatus[]];
   "transport:client-message": [message: ClientMessage];
   "transport:client-connected": [];

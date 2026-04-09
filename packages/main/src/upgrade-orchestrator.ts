@@ -1,11 +1,18 @@
-import type { ConnectionStatus, ServerMessage, UpgradeProposal } from "@spira/shared";
-import type { BrowserWindow } from "electron";
+import {
+  type ConnectionStatus,
+  type ServerMessage,
+  type UpgradeProposal,
+  upgradeCanAutoRelaunch,
+  upgradeNeedsUiRefresh,
+} from "@spira/shared";
+import type { BrowserWindow, Event as ElectronEvent } from "electron";
 import type { BackendLifecycle } from "./backend-lifecycle.js";
 
 interface UpgradeOrchestratorOptions {
   lifecycle: BackendLifecycle;
   getWindow: () => BrowserWindow | null;
   emitConnectionStatus: (status: ConnectionStatus) => void;
+  relaunchApp: () => Promise<void>;
 }
 
 interface ProposalDecision {
@@ -13,14 +20,24 @@ interface ProposalDecision {
   reason?: string;
 }
 
+class ReportedUpgradeError extends Error {}
+
 export class UpgradeOrchestrator {
   private pendingProposal: UpgradeProposal | null = null;
   private backendReloadInProgress = false;
+  private appRelaunchInProgress = false;
   private uiRefreshInProgress = false;
 
   constructor(private readonly options: UpgradeOrchestratorOptions) {}
 
   handleProposal(proposal: UpgradeProposal): ProposalDecision {
+    if (this.appRelaunchInProgress) {
+      return {
+        accepted: false,
+        reason: "An app relaunch is already in progress.",
+      };
+    }
+
     if (this.backendReloadInProgress) {
       return {
         accepted: false,
@@ -53,7 +70,7 @@ export class UpgradeOrchestrator {
 
   async respondToProposal(proposalId: string, approved: boolean): Promise<void> {
     if (!this.pendingProposal || this.pendingProposal.proposalId !== proposalId) {
-      return;
+      throw new Error("This upgrade prompt is no longer active.");
     }
 
     const proposal = this.pendingProposal;
@@ -75,9 +92,17 @@ export class UpgradeOrchestrator {
         await this.applyBackendReload(proposal);
         return;
       case "ui-refresh":
-        this.applyUiRefresh(proposal);
+        await this.applyUiRefresh(proposal, {
+          applyingMessage: "Refreshing the UI to apply the update...",
+          completedMessage: "Upgrade applied.",
+        });
         return;
       case "full-restart":
+        if (upgradeCanAutoRelaunch(proposal.changedFiles)) {
+          await this.applyAppRelaunch(proposal);
+          return;
+        }
+
         this.send({
           type: "upgrade:status",
           proposalId: proposal.proposalId,
@@ -100,64 +125,90 @@ export class UpgradeOrchestrator {
     }
   }
 
-  private applyUiRefresh(proposal: UpgradeProposal): void {
+  private async applyUiRefresh(
+    proposal: UpgradeProposal,
+    options: { applyingMessage: string; completedMessage: string },
+  ): Promise<void> {
     this.send({
       type: "upgrade:status",
       proposalId: proposal.proposalId,
       scope: proposal.scope,
       status: "applying",
-      message: "Refreshing the UI to apply the update...",
+      message: options.applyingMessage,
     });
 
     const window = this.options.getWindow();
     if (!window || window.isDestroyed()) {
-      this.send({
-        type: "upgrade:status",
-        proposalId: proposal.proposalId,
-        scope: proposal.scope,
-        status: "failed",
-        message: "Unable to refresh the UI because the main window is unavailable.",
-      });
-      return;
+      throw this.failUpgrade(proposal, "Unable to refresh the UI because the main window is unavailable.");
     }
 
     this.uiRefreshInProgress = true;
-    const clearRefreshState = () => {
-      this.uiRefreshInProgress = false;
-      window.webContents.removeListener("did-finish-load", handleRefreshSuccess);
-      window.webContents.removeListener("did-fail-load", handleRefreshFailure);
-      window.webContents.removeListener("destroyed", handleRefreshDestroyed);
-    };
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const clearRefreshState = () => {
+          window.webContents.removeListener("did-finish-load", handleRefreshSuccess);
+          window.webContents.removeListener("did-fail-load", handleRefreshFailure);
+          window.webContents.removeListener("destroyed", handleRefreshDestroyed);
+        };
 
-    const handleRefreshSuccess = () => {
-      clearRefreshState();
-    };
-    const handleRefreshFailure = () => {
-      clearRefreshState();
-      this.send({
-        type: "upgrade:status",
-        proposalId: proposal.proposalId,
-        scope: proposal.scope,
-        status: "failed",
-        message: "UI refresh failed. Please try again.",
+        const handleRefreshSuccess = () => {
+          clearRefreshState();
+          this.send({
+            type: "upgrade:status",
+            proposalId: proposal.proposalId,
+            scope: proposal.scope,
+            status: "completed",
+            message: options.completedMessage,
+          });
+          resolve();
+        };
+        const handleRefreshFailure = (
+          _event: ElectronEvent,
+          _errorCode: number,
+          _errorDescription: string,
+          _validatedUrl: string,
+          isMainFrame: boolean,
+        ) => {
+          if (!isMainFrame) {
+            return;
+          }
+
+          clearRefreshState();
+          reject(this.failUpgrade(proposal, "UI refresh failed. Please try again."));
+        };
+        const handleRefreshDestroyed = () => {
+          clearRefreshState();
+          reject(this.failUpgrade(proposal, "The main window closed before the UI refresh completed."));
+        };
+
+        window.webContents.once("did-finish-load", handleRefreshSuccess);
+        window.webContents.on("did-fail-load", handleRefreshFailure);
+        window.webContents.once("destroyed", handleRefreshDestroyed);
+        window.webContents.reload();
       });
-    };
-    const handleRefreshDestroyed = () => {
-      clearRefreshState();
-    };
-
-    window.webContents.once("did-finish-load", handleRefreshSuccess);
-    window.webContents.once("did-fail-load", handleRefreshFailure);
-    window.webContents.once("destroyed", handleRefreshDestroyed);
-    window.webContents.reload();
+    } finally {
+      this.uiRefreshInProgress = false;
+    }
   }
 
   isRestartInProgress(): boolean {
-    return this.backendReloadInProgress;
+    return this.backendReloadInProgress || this.appRelaunchInProgress;
   }
 
   clearPendingProposal(): void {
     this.pendingProposal = null;
+  }
+
+  reemitPendingProposal(): void {
+    if (!this.pendingProposal) {
+      return;
+    }
+
+    this.send({
+      type: "upgrade:proposal",
+      proposal: this.pendingProposal,
+      message: this.describeProposal(this.pendingProposal),
+    });
   }
 
   private async applyBackendReload(proposal: UpgradeProposal): Promise<void> {
@@ -173,24 +224,57 @@ export class UpgradeOrchestrator {
 
     try {
       await this.options.lifecycle.restart();
-      this.send({
-        type: "upgrade:status",
-        proposalId: proposal.proposalId,
-        scope: proposal.scope,
-        status: "completed",
-        message: "Backend upgrade applied.",
-      });
+      if (upgradeNeedsUiRefresh(proposal.changedFiles)) {
+        await this.applyUiRefresh(proposal, {
+          applyingMessage: "Backend restarted. Refreshing the UI to finish the upgrade...",
+          completedMessage: "Upgrade applied.",
+        });
+      } else {
+        this.send({
+          type: "upgrade:status",
+          proposalId: proposal.proposalId,
+          scope: proposal.scope,
+          status: "completed",
+          message: "Backend upgrade applied.",
+        });
+      }
     } catch (error) {
-      this.send({
-        type: "upgrade:status",
-        proposalId: proposal.proposalId,
-        scope: proposal.scope,
-        status: "failed",
-        message: error instanceof Error ? error.message : "Backend restart failed.",
-      });
+      if (!(error instanceof ReportedUpgradeError)) {
+        this.failUpgrade(proposal, error instanceof Error ? error.message : "Backend restart failed.");
+      }
     } finally {
       this.backendReloadInProgress = false;
     }
+  }
+
+  private async applyAppRelaunch(proposal: UpgradeProposal): Promise<void> {
+    this.send({
+      type: "upgrade:status",
+      proposalId: proposal.proposalId,
+      scope: proposal.scope,
+      status: "applying",
+      message: "Restarting Spira to apply the upgrade...",
+    });
+    this.appRelaunchInProgress = true;
+    this.options.emitConnectionStatus("upgrading");
+
+    try {
+      await this.options.relaunchApp();
+    } catch (error) {
+      this.failUpgrade(proposal, error instanceof Error ? error.message : "Failed to relaunch Spira.");
+      this.appRelaunchInProgress = false;
+    }
+  }
+
+  private failUpgrade(proposal: UpgradeProposal, message: string): Error {
+    this.send({
+      type: "upgrade:status",
+      proposalId: proposal.proposalId,
+      scope: proposal.scope,
+      status: "failed",
+      message,
+    });
+    return new ReportedUpgradeError(message);
   }
 
   private send(message: ServerMessage): void {
@@ -205,11 +289,15 @@ export class UpgradeOrchestrator {
   private describeProposal(proposal: UpgradeProposal): string {
     switch (proposal.scope) {
       case "backend-reload":
-        return "This change needs a brief backend restart to take effect. Approve when you're ready.";
+        return upgradeNeedsUiRefresh(proposal.changedFiles)
+          ? "This change needs a brief backend restart and UI refresh. Approve when you're ready."
+          : "This change needs a brief backend restart to take effect. Approve when you're ready.";
       case "ui-refresh":
         return "This change needs a UI refresh to take effect. Refresh when you're ready; the chat history will be restored.";
       case "full-restart":
-        return "This change needs a full app restart to take effect.";
+        return upgradeCanAutoRelaunch(proposal.changedFiles)
+          ? "This change needs Spira to relaunch to take effect. Approve when you're ready."
+          : "This change still needs a manual restart of Spira to take effect.";
       case "hot-capability":
         return "This change should be applied immediately without a restart proposal.";
       default:

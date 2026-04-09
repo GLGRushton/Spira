@@ -1,20 +1,34 @@
-import type { UserSettings } from "@spira/shared";
+import {
+  type TtsProvider,
+  type UserSettings,
+  type WakeWordProviderSetting,
+  normalizeTtsProvider,
+  normalizeWakeWordProvider,
+} from "@spira/shared";
 import { create } from "zustand";
 
 export interface SettingsState extends UserSettings {}
 
 interface SettingsStore extends SettingsState {
-  toggleVoice: () => void;
+  toggleSpeech: () => void;
   setVoiceEnabled: (enabled: boolean) => void;
-  setTtsProvider: (provider: "elevenlabs" | "piper") => void;
+  toggleWakeWord: () => void;
+  setWakeWordEnabled: (enabled: boolean) => void;
+  setTtsProvider: (provider: TtsProvider) => void;
+  setWhisperModel: (model: SettingsState["whisperModel"]) => void;
+  setWakeWordProvider: (provider: WakeWordProviderSetting) => void;
+  setOpenWakeWordThreshold: (threshold: number) => void;
+  setElevenLabsVoiceId: (voiceId: string) => void;
   applySettings: (settings: Partial<SettingsState>) => void;
 }
 
 const DEFAULT_SETTINGS: SettingsState = {
   voiceEnabled: true,
   wakeWordEnabled: true,
-  ttsProvider: "piper",
+  ttsProvider: "kokoro",
   whisperModel: "base.en",
+  wakeWordProvider: "openwakeword",
+  openWakeWordThreshold: 0.5,
   elevenLabsVoiceId: "",
   theme: "ffx",
 };
@@ -24,6 +38,8 @@ const toPersistedSettings = (state: SettingsState): SettingsState => ({
   wakeWordEnabled: state.wakeWordEnabled,
   ttsProvider: state.ttsProvider,
   whisperModel: state.whisperModel,
+  wakeWordProvider: state.wakeWordProvider,
+  openWakeWordThreshold: state.openWakeWordThreshold,
   elevenLabsVoiceId: state.elevenLabsVoiceId,
   theme: state.theme,
 });
@@ -40,7 +56,7 @@ const persistSettings = (settings: Partial<SettingsState>): void => {
 
 export const useSettingsStore = create<SettingsStore>((set, get) => ({
   ...DEFAULT_SETTINGS,
-  toggleVoice: () => {
+  toggleSpeech: () => {
     const nextSettings = {
       ...toPersistedSettings(get()),
       voiceEnabled: !get().voiceEnabled,
@@ -56,6 +72,22 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
     set({ voiceEnabled: enabled });
     persistSettings(nextSettings);
   },
+  toggleWakeWord: () => {
+    const nextSettings = {
+      ...toPersistedSettings(get()),
+      wakeWordEnabled: !get().wakeWordEnabled,
+    };
+    set({ wakeWordEnabled: nextSettings.wakeWordEnabled });
+    persistSettings(nextSettings);
+  },
+  setWakeWordEnabled: (enabled) => {
+    const nextSettings = {
+      ...toPersistedSettings(get()),
+      wakeWordEnabled: enabled,
+    };
+    set({ wakeWordEnabled: enabled });
+    persistSettings(nextSettings);
+  },
   setTtsProvider: (provider) => {
     const nextSettings = {
       ...toPersistedSettings(get()),
@@ -64,10 +96,49 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
     set({ ttsProvider: provider });
     persistSettings(nextSettings);
   },
-  applySettings: (settings) => {
+  setWhisperModel: (whisperModel) => {
     const nextSettings = {
       ...toPersistedSettings(get()),
+      whisperModel,
+    };
+    set({ whisperModel });
+    persistSettings(nextSettings);
+  },
+  setWakeWordProvider: (wakeWordProvider) => {
+    const nextSettings = {
+      ...toPersistedSettings(get()),
+      wakeWordProvider,
+    };
+    set({ wakeWordProvider });
+    persistSettings(nextSettings);
+  },
+  setOpenWakeWordThreshold: (openWakeWordThreshold) => {
+    const nextSettings = {
+      ...toPersistedSettings(get()),
+      openWakeWordThreshold,
+    };
+    set({ openWakeWordThreshold });
+    persistSettings(nextSettings);
+  },
+  setElevenLabsVoiceId: (elevenLabsVoiceId) => {
+    const nextSettings = {
+      ...toPersistedSettings(get()),
+      elevenLabsVoiceId,
+    };
+    set({ elevenLabsVoiceId });
+    persistSettings(nextSettings);
+  },
+  applySettings: (settings) => {
+    const normalizedSettings = {
       ...settings,
+      ...(typeof settings.ttsProvider === "string" ? { ttsProvider: normalizeTtsProvider(settings.ttsProvider) } : {}),
+      ...(typeof settings.wakeWordProvider === "string"
+        ? { wakeWordProvider: normalizeWakeWordProvider(settings.wakeWordProvider) }
+        : {}),
+    };
+    const nextSettings = {
+      ...toPersistedSettings(get()),
+      ...normalizedSettings,
     };
     set(nextSettings);
   },

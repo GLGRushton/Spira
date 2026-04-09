@@ -15,15 +15,13 @@ export type UpgradeStatus =
   | { proposalId: string; scope: UpgradeScope; status: "denied"; message: string }
   | { proposalId: string; scope: UpgradeScope; status: "failed"; message: string };
 
-const FULL_RESTART_FILES = new Set([
-  "biome.json",
-  "package.json",
-  "pnpm-lock.yaml",
-  "pnpm-workspace.yaml",
-  "tsconfig.base.json",
-  "tsconfig.json",
-  "vitest.workspace.ts",
-]);
+const MANUAL_RESTART_FILES = new Set(["package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml"]);
+const IGNORED_UPGRADE_FILES = new Set(["biome.json", "tsconfig.base.json", "tsconfig.json", "vitest.workspace.ts"]);
+const MAIN_PROCESS_PREFIX = "packages/main/";
+const RENDERER_PREFIXES = ["packages/renderer/", "assets/"] as const;
+const BACKEND_PREFIXES = ["packages/backend/", "packages/shared/"] as const;
+const HOT_CAPABILITY_PREFIXES = ["packages/mcp-"] as const;
+const IGNORED_UPGRADE_FILE_PATTERNS = [/\.md$/u, /(^|\/)scripts\//u, /\.(test|spec)\.[cm]?[jt]sx?$/u];
 
 export const normalizeChangedFilePath = (file: string): string =>
   file
@@ -32,8 +30,37 @@ export const normalizeChangedFilePath = (file: string): string =>
     .replace(/^\.\/+/u, "")
     .replace(/^\/+/u, "");
 
+const matchesAnyPrefix = (file: string, prefixes: readonly string[]): boolean =>
+  prefixes.some((prefix) => file.startsWith(prefix));
+const isEnvFile = (file: string): boolean => file === ".env" || file.startsWith(".env.");
+const isRendererFile = (file: string): boolean => matchesAnyPrefix(file, RENDERER_PREFIXES);
+const isBackendFile = (file: string): boolean => isEnvFile(file) || matchesAnyPrefix(file, BACKEND_PREFIXES);
+const isHotCapabilityFile = (file: string): boolean =>
+  file === "mcp-servers.json" || matchesAnyPrefix(file, HOT_CAPABILITY_PREFIXES);
+const isIgnoredUpgradeFile = (file: string): boolean =>
+  IGNORED_UPGRADE_FILES.has(file) || IGNORED_UPGRADE_FILE_PATTERNS.some((pattern) => pattern.test(file));
+const isKnownRuntimeFile = (file: string): boolean =>
+  MANUAL_RESTART_FILES.has(file) ||
+  file.startsWith(MAIN_PROCESS_PREFIX) ||
+  isRendererFile(file) ||
+  isBackendFile(file) ||
+  isHotCapabilityFile(file);
+
+export const getRelevantUpgradeFiles = (changedFiles: string[]): string[] =>
+  [...new Set(changedFiles.map(normalizeChangedFilePath).filter((file) => file.length > 0))].filter(
+    (file) => !isIgnoredUpgradeFile(file),
+  );
+
+export const upgradeNeedsUiRefresh = (changedFiles: string[]): boolean =>
+  getRelevantUpgradeFiles(changedFiles).some((file) => isRendererFile(file));
+
+export const upgradeCanAutoRelaunch = (changedFiles: string[]): boolean => {
+  const files = getRelevantUpgradeFiles(changedFiles);
+  return files.length > 0 && files.every((file) => !MANUAL_RESTART_FILES.has(file) && isKnownRuntimeFile(file));
+};
+
 export const classifyUpgradeScope = (changedFiles: string[]): UpgradeScope => {
-  const files = [...new Set(changedFiles.map(normalizeChangedFilePath).filter((file) => file.length > 0))];
+  const files = getRelevantUpgradeFiles(changedFiles);
   if (files.length === 0) {
     throw new Error("Upgrade classification requires at least one changed file.");
   }
@@ -43,52 +70,31 @@ export const classifyUpgradeScope = (changedFiles: string[]): UpgradeScope => {
   let hasHotCapabilityChange = false;
 
   for (const file of files) {
-    if (file === "mcp-servers.json") {
-      hasHotCapabilityChange = true;
-      continue;
-    }
-
-    if (file === ".env" || file.startsWith(".env.")) {
-      hasBackendChange = true;
-      continue;
-    }
-
-    if (file.startsWith("packages/main/") || FULL_RESTART_FILES.has(file)) {
+    if (MANUAL_RESTART_FILES.has(file) || file.startsWith(MAIN_PROCESS_PREFIX) || !isKnownRuntimeFile(file)) {
       return "full-restart";
     }
 
-    if (file.startsWith("packages/renderer/") || file.startsWith("assets/")) {
+    if (isRendererFile(file)) {
       hasRendererChange = true;
       continue;
     }
 
-    if (file.startsWith("packages/backend/") || file.startsWith("packages/shared/")) {
+    if (isBackendFile(file)) {
       hasBackendChange = true;
       continue;
     }
 
-    if (file.startsWith("packages/mcp-")) {
+    if (isHotCapabilityFile(file)) {
       hasHotCapabilityChange = true;
-      continue;
     }
-
-    return "full-restart";
   }
 
   if (hasHotCapabilityChange && !hasBackendChange && !hasRendererChange) {
     return "hot-capability";
   }
 
-  if (hasBackendChange && hasRendererChange) {
-    return "full-restart";
-  }
-
-  if (hasBackendChange) {
+  if (hasBackendChange || hasHotCapabilityChange) {
     return "backend-reload";
-  }
-
-  if (hasRendererChange && hasHotCapabilityChange) {
-    return "full-restart";
   }
 
   return "ui-refresh";

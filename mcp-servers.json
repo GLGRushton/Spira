@@ -21,6 +21,50 @@
       "enabled": true,
       "autoRestart": true,
       "maxRestarts": 3
+    },
+    {
+      "id": "memories",
+      "name": "Spira Memories",
+      "transport": "stdio",
+      "command": "node",
+      "args": ["packages/mcp-memories/dist/index.js"],
+      "env": {},
+      "enabled": true,
+      "autoRestart": true,
+      "maxRestarts": 3
+    },
+    {
+      "id": "spira-ui",
+      "name": "Spira UI",
+      "transport": "stdio",
+      "command": "node",
+      "args": ["packages/mcp-spira-ui/dist/index.js"],
+      "env": {},
+      "enabled": true,
+      "autoRestart": true,
+      "maxRestarts": 3
+    },
+    {
+      "id": "nexus-mods",
+      "name": "Nexus Mods",
+      "transport": "stdio",
+      "command": "node",
+      "args": ["packages/mcp-nexus-mods/dist/index.js"],
+      "env": {},
+      "enabled": true,
+      "autoRestart": true,
+      "maxRestarts": 3
+    },
+    {
+      "id": "windows-ui",
+      "name": "Windows UI",
+      "transport": "stdio",
+      "command": "node",
+      "args": ["packages/mcp-windows-ui/dist/index.js"],
+      "env": {},
+      "enabled": true,
+      "autoRestart": true,
+      "maxRestarts": 3
     }
   ]
 }

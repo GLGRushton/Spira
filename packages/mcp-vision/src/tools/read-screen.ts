@@ -36,6 +36,7 @@ export const registerReadScreenTool = (server: McpServer): void => {
             text: ocr.text,
             lineCount: ocr.lineCount,
             wordCount: ocr.wordCount,
+            lines: ocr.lines,
             ...(target === "screen"
               ? {
                   monitorIndex: "monitorIndex" in capture ? capture.monitorIndex : monitorIndex,

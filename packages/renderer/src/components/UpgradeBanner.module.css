@@ -72,6 +72,13 @@
   background: color-mix(in srgb, var(--accent) 14%, rgba(255, 255, 255, 0.06));
 }
 
+.buttonBusy,
+.button:disabled,
+.dismiss:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
 .dismiss {
   border: 0;
   background: transparent;

@@ -2,9 +2,14 @@
   "files": [],
   "references": [
     { "path": "packages/shared" },
+    { "path": "packages/memory-db" },
     { "path": "packages/backend" },
     { "path": "packages/main" },
+    { "path": "packages/mcp-memories" },
+    { "path": "packages/mcp-spira-ui" },
+    { "path": "packages/mcp-nexus-mods" },
     { "path": "packages/mcp-vision" },
-    { "path": "packages/mcp-windows" }
+    { "path": "packages/mcp-windows" },
+    { "path": "packages/mcp-windows-ui" }
   ]
 }

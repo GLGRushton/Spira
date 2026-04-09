@@ -6,6 +6,11 @@
   box-shadow: 0 12px 36px rgba(5, 10, 30, 0.25);
 }
 
+.question {
+  border-color: rgba(0, 229, 255, 0.36);
+  box-shadow: 0 0 0 1px rgba(0, 229, 255, 0.12), 0 12px 36px rgba(5, 10, 30, 0.25);
+}
+
 .user {
   margin-left: auto;
   background: linear-gradient(180deg, rgba(0, 212, 170, 0.18), rgba(0, 140, 112, 0.24));
@@ -17,12 +22,77 @@
   background: rgba(17, 22, 56, 0.82);
 }
 
-.meta {
+.headerRow {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
   margin-bottom: 8px;
+}
+
+.metaGroup {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.meta {
   color: var(--text-secondary);
   font-size: 10px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
+}
+
+.questionPill {
+  padding: 3px 8px;
+  border: 1px solid rgba(0, 229, 255, 0.22);
+  border-radius: 999px;
+  color: var(--accent-cyan);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.messageActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  opacity: 0;
+  transition: opacity 0.16s ease;
+}
+
+.bubble:hover .messageActions,
+.bubble:focus-within .messageActions {
+  opacity: 1;
+}
+
+.actionButton {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.actionButton:hover,
+.actionButton:focus-visible {
+  color: var(--accent-cyan);
+}
+
+.actionButton:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+@media (hover: none) {
+  .messageActions {
+    opacity: 1;
+  }
 }
 
 .content {
@@ -63,4 +133,12 @@
   color: var(--accent-cyan);
   font-weight: 600;
   background: rgba(38, 50, 92, 0.45);
+}
+
+.stopped {
+  margin-top: 0.85rem;
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
