@@ -1,7 +1,9 @@
 import type { AssistantState } from "@spira/shared";
 import { ChatPanel } from "../chat/ChatPanel.js";
 import { ShinraOrb } from "../orb/ShinraOrb.js";
+import { AuxDeck } from "./AuxDeck.js";
 import styles from "./BridgeRoomDetail.module.css";
+import { ToolSummaryChips } from "./ToolSummaryChips.js";
 
 interface BridgeRoomDetailProps {
   assistantState: AssistantState;
@@ -32,16 +34,13 @@ export function BridgeRoomDetail({ assistantState }: BridgeRoomDetailProps) {
             <div className={styles.orbWrap}>
               <ShinraOrb />
             </div>
-            <div className={`${styles.statePill} ${styles[assistantState]}`}>{assistantState}</div>
+            <div className={styles.statusCluster}>
+              <div className={`${styles.statePill} ${styles[assistantState]}`}>{assistantState}</div>
+              <ToolSummaryChips assistantState={assistantState} />
+            </div>
           </section>
 
-          <section className={styles.placeholderStage}>
-            <div className={styles.sectionEyebrow}>Aux deck</div>
-            <h3 className={styles.placeholderTitle}>Systems expansion slot</h3>
-            <p className={styles.placeholderCopy}>
-              Reserved for future tactical overlays, room-wide diagnostics, or bridge automation controls.
-            </p>
-          </section>
+          <AuxDeck assistantState={assistantState} />
         </aside>
       </div>
     </div>

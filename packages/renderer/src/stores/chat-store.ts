@@ -14,9 +14,21 @@ export interface ChatMessage {
   role: "user" | "assistant";
   content: string;
   isStreaming?: boolean;
+  autoSpeak?: boolean;
   toolCalls?: ToolCallEntry[];
   timestamp: number;
 }
+
+export const getLatestCompletedAssistantMessage = (messages: ChatMessage[]): ChatMessage | undefined => {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message.role === "assistant" && !message.isStreaming) {
+      return message;
+    }
+  }
+
+  return undefined;
+};
 
 interface ChatStore {
   messages: ChatMessage[];
@@ -24,7 +36,7 @@ interface ChatStore {
   addUserMessage: (text: string) => void;
   startAssistantMessage: (id: string) => void;
   appendDelta: (id: string, delta: string) => void;
-  finaliseMessage: (id: string, content: string) => void;
+  finaliseMessage: (id: string, content: string, autoSpeak?: boolean) => void;
   completeMessage: (id: string) => void;
   clearStreamingState: () => void;
   addToolCall: (messageId: string, entry: ToolCallEntry) => void;
@@ -186,13 +198,14 @@ export const useChatStore = create<ChatStore>((set) => ({
       };
     });
   },
-  finaliseMessage: (id, content) => {
+  finaliseMessage: (id, content, autoSpeak) => {
     set((state) => {
       const ensuredMessages = ensureAssistantMessage(state.messages, id);
       const messages = updateMessage(ensuredMessages, id, (message) => ({
         ...message,
         content,
         isStreaming: false,
+        autoSpeak,
       }));
       persistMessages(messages);
       return {

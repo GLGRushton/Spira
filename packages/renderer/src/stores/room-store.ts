@@ -1,5 +1,6 @@
 import type { McpServerStatus, ToolCallStatus } from "@spira/shared";
 import { create } from "zustand";
+import { RECENT_COMPLETION_MS } from "../tool-display.js";
 
 export interface ToolFlight {
   callId: string;
@@ -303,7 +304,9 @@ export const useRoomStore = create<RoomStore>((set) => ({
   pruneFlights: () => {
     const now = Date.now();
     set((state) => {
-      const flights = state.flights.filter((flight) => !flight.completedAt || now - flight.completedAt < 1800);
+      const flights = state.flights.filter(
+        (flight) => !flight.completedAt || now - flight.completedAt < RECENT_COMPLETION_MS,
+      );
       const agentRooms = state.agentRooms.filter(
         (room) => room.activeToolCount > 0 || now - room.updatedAt < 5 * 60_000,
       );

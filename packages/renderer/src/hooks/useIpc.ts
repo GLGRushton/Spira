@@ -10,6 +10,7 @@ import { useRoomStore } from "../stores/room-store.js";
 import { useSettingsStore } from "../stores/settings-store.js";
 import { useUpgradeStore } from "../stores/upgrade-store.js";
 import { useVisionStore } from "../stores/vision-store.js";
+import { shouldDisplayToolName } from "../tool-display.js";
 
 export function useIpc(): void {
   const setAssistantState = useAssistantStore((store) => store.setState);
@@ -36,6 +37,7 @@ export function useIpc(): void {
   const setActiveCapture = useVisionStore((store) => store.setActiveCapture);
   const clearActiveCapture = useVisionStore((store) => store.clearActiveCapture);
   const clearAllActiveCaptures = useVisionStore((store) => store.clearAllActiveCaptures);
+  const clearBanner = useUpgradeStore((store) => store.clearBanner);
   const setProtocolMismatch = useUpgradeStore((store) => store.setProtocolMismatch);
   const clearProtocolMismatch = useUpgradeStore((store) => store.clearProtocolMismatch);
   const showUpgradeProposal = useUpgradeStore((store) => store.showProposal);
@@ -43,6 +45,7 @@ export function useIpc(): void {
 
   useEffect(() => {
     let activeAssistantMessageId: string | null = null;
+    let lastAutoSpokenMessageId: string | null = null;
     const toolCallMessageIds = new Map<string, string>();
 
     void window.electronAPI.getConnectionStatus().then((status) => {
@@ -56,6 +59,10 @@ export function useIpc(): void {
           clearPermissionRequests();
           clearAllActiveCaptures();
           clearRoomState();
+          if (useUpgradeStore.getState().banner?.proposalId) {
+            clearBanner();
+          }
+          lastAutoSpokenMessageId = null;
           if (message.protocolVersion === PROTOCOL_VERSION) {
             clearProtocolMismatch();
           } else {
@@ -73,25 +80,22 @@ export function useIpc(): void {
           }
           return;
         }
-
-        if (message.type === "upgrade:proposal") {
-          showUpgradeProposal(message.proposal, message.message);
-          return;
-        }
-
-        if (message.type === "upgrade:status") {
-          if (message.scope === "backend-reload") {
-            const currentConnectionStatus = useConnectionStore.getState().status;
-            if (message.status === "applying") {
-              setConnectionStatus("upgrading");
-            } else if (message.status === "completed" && currentConnectionStatus === "upgrading") {
-              setConnectionStatus("connecting");
-            } else if (message.status === "failed") {
-              setConnectionStatus("disconnected");
-            }
+      }),
+      window.electronAPI.onUpgradeProposal(({ proposal, message }) => {
+        showUpgradeProposal(proposal, message);
+      }),
+      window.electronAPI.onUpgradeStatus((message) => {
+        if (message.scope === "backend-reload") {
+          const currentConnectionStatus = useConnectionStore.getState().status;
+          if (message.status === "applying") {
+            setConnectionStatus("upgrading");
+          } else if (message.status === "completed" && currentConnectionStatus === "upgrading") {
+            setConnectionStatus("connecting");
+          } else if (message.status === "failed") {
+            setConnectionStatus("disconnected");
           }
-          showUpgradeStatus(message);
         }
+        showUpgradeStatus(message);
       }),
       window.electronAPI.onStateChange((state) => {
         setAssistantState(state);
@@ -113,7 +117,16 @@ export function useIpc(): void {
       }),
       window.electronAPI.onChatMessage((message) => {
         if (message.role === "assistant") {
-          finaliseMessage(message.id, message.content);
+          finaliseMessage(message.id, message.content, message.autoSpeak);
+          if (
+            useSettingsStore.getState().voiceEnabled &&
+            message.autoSpeak !== false &&
+            message.content.trim() &&
+            lastAutoSpokenMessageId !== message.id
+          ) {
+            lastAutoSpokenMessageId = message.id;
+            window.electronAPI.send({ type: "tts:speak", text: message.content });
+          }
           activeAssistantMessageId = null;
           return;
         }
@@ -136,6 +149,10 @@ export function useIpc(): void {
           } else {
             clearActiveCapture(payload.callId);
           }
+        }
+
+        if (!shouldDisplayToolName(payload.name)) {
+          return;
         }
 
         if (payload.status === "running" || payload.status === "pending") {
@@ -229,6 +246,7 @@ export function useIpc(): void {
     applySettings,
     clearActiveCapture,
     clearAllActiveCaptures,
+    clearBanner,
     clearStreamingState,
     clearProtocolMismatch,
     clearPermissionRequests,

@@ -3,6 +3,7 @@ import { motion } from "framer-motion";
 import { useEffect, useMemo, useState } from "react";
 import type { MutableRefObject } from "react";
 import type { ToolFlight } from "../../stores/room-store.js";
+import { RECENT_COMPLETION_MS } from "../../tool-display.js";
 import styles from "./FlightLayer.module.css";
 
 interface FlightLayerProps {
@@ -42,7 +43,7 @@ export function FlightLayer({ flights, trackRef, roomNodesRef }: FlightLayerProp
           return true;
         }
 
-        return Date.now() - flight.completedAt < 1800;
+        return Date.now() - flight.completedAt < RECENT_COMPLETION_MS;
       }),
     [flights],
   );

@@ -1,0 +1,36 @@
+.panel {
+  display: grid;
+  gap: 8px;
+}
+
+.title {
+  color: var(--text-secondary);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.chip,
+.overflow {
+  padding: 6px 10px;
+  border: 1px solid rgba(0, 229, 255, 0.12);
+  border-radius: 999px;
+  background: rgba(8, 12, 30, 0.42);
+  font-size: 11px;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.chip {
+  color: var(--text-primary);
+}
+
+.overflow {
+  color: var(--text-secondary);
+}

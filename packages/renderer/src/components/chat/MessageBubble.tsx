@@ -3,7 +3,7 @@ import remarkGfm from "remark-gfm";
 import type { ChatMessage } from "../../stores/chat-store.js";
 import styles from "./MessageBubble.module.css";
 import { StreamingText } from "./StreamingText.js";
-import { ToolCallCard } from "./ToolCallCard.js";
+import { ToolActivityLine } from "./ToolActivityLine.js";
 
 interface MessageBubbleProps {
   message: ChatMessage;
@@ -22,9 +22,7 @@ export function MessageBubble({ message }: MessageBubbleProps) {
           <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
         )}
       </div>
-      {message.toolCalls?.map((entry) => (
-        <ToolCallCard key={entry.callId ?? entry.name} entry={entry} />
-      ))}
+      {!isUser ? <ToolActivityLine toolCalls={message.toolCalls} /> : null}
     </article>
   );
 }
