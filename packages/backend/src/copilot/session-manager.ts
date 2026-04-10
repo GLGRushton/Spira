@@ -1,30 +1,46 @@
 import { randomUUID } from "node:crypto";
-import { createRequire } from "node:module";
-import path from "node:path";
-import {
+import type {
   CopilotClient,
-  type CopilotSession,
-  type PermissionRequest,
-  type PermissionRequestResult,
-  type SessionConfig,
-  type SessionEvent,
+  CopilotSession,
+  PermissionRequest,
+  PermissionRequestResult,
+  SessionConfig,
+  SessionEvent,
 } from "@github/copilot-sdk";
-import type { AssistantState, Env, PermissionRequestPayload, UpgradeProposal } from "@spira/shared";
+import type {
+  AssistantState,
+  Env,
+  PermissionRequestPayload,
+  SubagentDelegationArgs,
+  SubagentDomainId,
+  SubagentEnvelope,
+  SubagentRunHandle,
+  UpgradeProposal,
+} from "@spira/shared";
 import type { McpToolAggregator } from "../mcp/tool-aggregator.js";
+import { SUBAGENT_DOMAINS, getDelegatedServerIds, getSubagentDomain } from "../subagent/domain-registry.js";
+import { SubagentLockManager } from "../subagent/lock-manager.js";
+import { SubagentRunRegistry } from "../subagent/run-registry.js";
+import { SubagentRunner } from "../subagent/subagent-runner.js";
 import { appRootDir } from "../util/app-paths.js";
 import { CopilotError, formatErrorDetails } from "../util/errors.js";
 import type { SpiraEventBus } from "../util/event-bus.js";
 import { createLogger } from "../util/logger.js";
+import {
+  type CopilotAuthStrategy,
+  createCopilotClient,
+  createFreshCopilotSession,
+  stopCopilotClient,
+  withTimeout,
+} from "./session-factory.js";
 import { StreamAssembler } from "./stream-handler.js";
-import { getCopilotTools } from "./tool-bridge.js";
+import { type ToolBridgeOptions, getCopilotTools } from "./tool-bridge.js";
 
 const logger = createLogger("copilot-session");
-const require = createRequire(import.meta.url);
 
 const SESSION_INIT_TIMEOUT_MS = 20_000;
 const SEND_TIMEOUT_MS = 20_000;
 const PERMISSION_REQUEST_TIMEOUT_MS = 60_000;
-const COPILOT_AUTH_ENV_KEYS = ["COPILOT_SDK_AUTH_TOKEN", "GITHUB_ACCESS_TOKEN", "GITHUB_TOKEN", "GH_TOKEN"] as const;
 const SHINRA_PERSONA_INSTRUCTIONS = [
   "You are Shinra, the resident operations intelligence of Spira.",
   "When asked who you are, identify yourself as Shinra. Refer to the application you run inside as Spira.",
@@ -47,8 +63,20 @@ const VOICE_RESPONSE_INSTRUCTIONS = [
   "Optimize for spoken clarity: lead with the answer, avoid unnecessary markdown structure, and keep the pacing natural for read-aloud delivery.",
 ].join("\n");
 
+export interface SessionPersistence {
+  load(): string | null;
+  save(sessionId: string | null): void;
+}
+
+interface SendPromptOptions {
+  continuityPreamble?: string | null;
+}
+
+interface SessionManagerOptions {
+  sessionPersistence?: SessionPersistence | null;
+}
+
 type ReportedCopilotError = CopilotError & { reportedToClient?: boolean };
-type CopilotAuthStrategy = "logged-in-user" | "github-token";
 type PendingPermissionRequest = {
   resolve: (result: PermissionRequestResult) => void;
   timeout: NodeJS.Timeout;
@@ -80,6 +108,11 @@ export class CopilotSessionManager {
   private nextResponseAutoSpeak = true;
   private responseAbortEpoch = 0;
   private promptInFlight = false;
+  private sessionOrigin: "created" | "resumed" | null = null;
+  private readonly sessionPersistence: SessionPersistence | null;
+  private readonly subagentLockManager = new SubagentLockManager();
+  private readonly subagentRunRegistry: SubagentRunRegistry;
+  private readonly subagentRunners = new Map<SubagentDomainId, SubagentRunner>();
 
   constructor(
     private readonly bus: SpiraEventBus,
@@ -87,21 +120,25 @@ export class CopilotSessionManager {
     private readonly toolAggregator: McpToolAggregator,
     private readonly requestUpgradeProposal?: (proposal: UpgradeProposal) => Promise<void> | void,
     private readonly applyHotCapabilityUpgrade?: () => Promise<void> | void,
+    options: SessionManagerOptions = {},
   ) {
+    this.sessionPersistence = options.sessionPersistence ?? null;
+    this.subagentRunRegistry = new SubagentRunRegistry({ bus: this.bus });
+    this.activeSessionId = this.sessionPersistence?.load() ?? null;
     this.bus.on("mcp:servers-changed", () => {
       void this.refreshSessionForToolChanges();
     });
   }
 
-  async sendMessage(text: string): Promise<void> {
-    return this.sendPrompt(text, true);
+  async sendMessage(text: string, options: SendPromptOptions = {}): Promise<void> {
+    return this.sendPrompt(text, true, options);
   }
 
-  async sendVoiceMessage(text: string): Promise<void> {
-    return this.sendPrompt(`${VOICE_RESPONSE_INSTRUCTIONS}\n\n${text}`, true);
+  async sendVoiceMessage(text: string, options: SendPromptOptions = {}): Promise<void> {
+    return this.sendPrompt(`${VOICE_RESPONSE_INSTRUCTIONS}\n\n${text}`, true, options);
   }
 
-  private async sendPrompt(text: string, autoSpeak: boolean): Promise<void> {
+  private async sendPrompt(text: string, autoSpeak: boolean, options: SendPromptOptions): Promise<void> {
     const abortEpoch = this.responseAbortEpoch;
     try {
       if (this.currentState === "error") {
@@ -114,7 +151,7 @@ export class CopilotSessionManager {
       this.transitionTo("thinking");
       this.nextResponseAutoSpeak = autoSpeak;
 
-      await this.sendPromptWithRecovery(text, abortEpoch);
+      await this.sendPromptWithRecovery(text, abortEpoch, options);
     } catch (error) {
       this.nextResponseAutoSpeak = true;
       if (this.responseAbortEpoch !== abortEpoch) {
@@ -127,12 +164,13 @@ export class CopilotSessionManager {
     }
   }
 
-  private async sendPromptWithRecovery(text: string, abortEpoch: number): Promise<void> {
+  private async sendPromptWithRecovery(text: string, abortEpoch: number, options: SendPromptOptions): Promise<void> {
+    const hadLiveSession = this.session !== null;
     const session = await this.getOrCreateSession();
 
     try {
-      await this.withTimeout(
-        session.send({ prompt: text }),
+      await withTimeout(
+        session.send({ prompt: this.buildOutgoingPrompt(text, options.continuityPreamble ?? null, hadLiveSession) }),
         SEND_TIMEOUT_MS,
         "Timed out while sending a message to GitHub Copilot",
       );
@@ -152,8 +190,8 @@ export class CopilotSessionManager {
         logger.info("Skipped retry send because the response was aborted during recovery");
         return;
       }
-      await this.withTimeout(
-        refreshedSession.send({ prompt: text }),
+      await withTimeout(
+        refreshedSession.send({ prompt: this.buildOutgoingPrompt(text, options.continuityPreamble ?? null, false) }),
         SEND_TIMEOUT_MS,
         "Timed out while sending a message to GitHub Copilot",
       );
@@ -168,6 +206,7 @@ export class CopilotSessionManager {
         await this.deletePersistedSession(sessionId);
       }
       this.activeSessionId = null;
+      this.persistSessionId(null);
       this.streamAssembler.clear();
       this.transitionTo("idle");
     } catch (error) {
@@ -244,7 +283,7 @@ export class CopilotSessionManager {
 
     let session: CopilotSession;
     try {
-      session = await this.withTimeout(
+      session = await withTimeout(
         sessionPromise,
         SESSION_INIT_TIMEOUT_MS,
         "Timed out while connecting to GitHub Copilot",
@@ -256,6 +295,7 @@ export class CopilotSessionManager {
     }
 
     this.activeSessionId = session.sessionId;
+    this.persistSessionId(session.sessionId);
     this.registeredToolSignature = this.getCurrentToolSignature();
     logger.info({ sessionId: session.sessionId }, "GitHub Copilot session ready");
 
@@ -264,10 +304,12 @@ export class CopilotSessionManager {
 
   private async openSession(client: CopilotClient): Promise<CopilotSession> {
     const sessionConfig = this.getSessionConfig();
-    const persistedSessionId = this.activeSessionId;
+    const persistedSessionId = this.activeSessionId ?? this.sessionPersistence?.load() ?? null;
     if (persistedSessionId) {
       try {
         const session = await client.resumeSession(persistedSessionId, sessionConfig);
+        this.activeSessionId = persistedSessionId;
+        this.sessionOrigin = "resumed";
         logger.info({ sessionId: persistedSessionId }, "GitHub Copilot session resumed");
         return session;
       } catch (error) {
@@ -280,24 +322,28 @@ export class CopilotSessionManager {
           "Persisted GitHub Copilot session was not found; creating a fresh session",
         );
         this.activeSessionId = null;
+        this.persistSessionId(null);
       }
     }
 
     const sessionId = randomUUID();
     this.activeSessionId = sessionId;
-    return client.createSession({
-      ...sessionConfig,
-      sessionId,
-    });
+    this.sessionOrigin = "created";
+    return createFreshCopilotSession(client, sessionConfig, sessionId);
+  }
+
+  private buildOutgoingPrompt(text: string, continuityPreamble: string | null, hadLiveSession: boolean): string {
+    if (hadLiveSession || this.sessionOrigin !== "created" || !continuityPreamble?.trim()) {
+      return text;
+    }
+
+    return `${continuityPreamble}\n\nCurrent user request:\n${text}`;
   }
 
   private getSessionConfig(): Omit<SessionConfig, "sessionId"> {
     const toolAwarenessInstructions = this.getToolAwarenessInstructions();
     const upgradeToolInstructions = this.getUpgradeToolInstructions();
-    const copilotTools = getCopilotTools(this.toolAggregator, {
-      requestUpgradeProposal: this.requestUpgradeProposal,
-      applyHotCapabilityUpgrade: this.applyHotCapabilityUpgrade,
-    });
+    const copilotTools = getCopilotTools(this.toolAggregator, this.getToolBridgeOptions());
 
     return {
       clientName: "Spira",
@@ -409,6 +455,7 @@ export class CopilotSessionManager {
     const initializingSession = this.initializingSession;
     this.session = null;
     this.initializingSession = null;
+    this.sessionOrigin = null;
     this.registeredToolSignature = null;
     this.streamAssembler.clear();
 
@@ -433,12 +480,18 @@ export class CopilotSessionManager {
     }
   }
 
+  private persistSessionId(sessionId: string | null): void {
+    this.sessionPersistence?.save(sessionId);
+  }
+
   private async invalidateExpiredSession(session: CopilotSession): Promise<void> {
     if (this.session !== session) {
       return;
     }
 
     await this.disconnectSession();
+    this.activeSessionId = null;
+    this.persistSessionId(null);
     this.transitionTo("idle");
   }
 
@@ -454,80 +507,7 @@ export class CopilotSessionManager {
   }
 
   private async createClient(): Promise<{ client: CopilotClient; strategy: CopilotAuthStrategy }> {
-    const cliPath = this.resolveCliPath();
-    const loggedInClient = new CopilotClient({
-      cliPath,
-      env: this.getSanitizedCopilotEnv(),
-      useLoggedInUser: true,
-      useStdio: true,
-    });
-
-    try {
-      await loggedInClient.start();
-      const authStatus = await loggedInClient.getAuthStatus();
-
-      if (authStatus.isAuthenticated) {
-        logger.info(
-          { authType: authStatus.authType ?? "unknown", strategy: "logged-in-user" },
-          "Using logged-in Copilot authentication",
-        );
-        return { client: loggedInClient, strategy: "logged-in-user" };
-      }
-    } catch (error) {
-      logger.warn({ error }, "Logged-in Copilot authentication check failed");
-    }
-
-    await this.stopClient(loggedInClient);
-
-    if (this.env.GITHUB_TOKEN.trim()) {
-      const tokenClient = new CopilotClient({
-        cliPath,
-        env: this.getSanitizedCopilotEnv(),
-        githubToken: this.env.GITHUB_TOKEN,
-        useStdio: true,
-      });
-
-      try {
-        await tokenClient.start();
-        const authStatus = await tokenClient.getAuthStatus();
-        logger.info(
-          { authType: authStatus.authType ?? "unknown", strategy: "github-token" },
-          "Using token-based Copilot authentication",
-        );
-        return { client: tokenClient, strategy: "github-token" };
-      } catch (error) {
-        logger.warn({ error }, "Token-based Copilot authentication check failed");
-        await this.stopClient(tokenClient);
-      }
-    }
-
-    throw new CopilotError("GitHub Copilot is not authenticated. Run /login in the Copilot CLI.");
-  }
-
-  private getSanitizedCopilotEnv(): NodeJS.ProcessEnv {
-    const sanitizedEnv = { ...process.env };
-    for (const key of COPILOT_AUTH_ENV_KEYS) {
-      delete sanitizedEnv[key];
-    }
-    return sanitizedEnv;
-  }
-
-  private resolveCliPath(): string | undefined {
-    try {
-      if (process.platform === "win32") {
-        const packageName = process.arch === "arm64" ? "@github/copilot-win32-arm64" : "@github/copilot-win32-x64";
-        const packageJsonPath = require.resolve(`${packageName}/package.json`);
-        return path.join(path.dirname(packageJsonPath), "copilot.exe");
-      }
-
-      return undefined;
-    } catch (error) {
-      logger.warn(
-        { error, platform: process.platform, arch: process.arch },
-        "Falling back to default Copilot CLI path",
-      );
-      return undefined;
-    }
+    return createCopilotClient(this.env, logger);
   }
 
   private transitionTo(nextState: AssistantState): void {
@@ -558,14 +538,7 @@ export class CopilotSessionManager {
   }
 
   private async stopClient(client: CopilotClient): Promise<void> {
-    try {
-      const stopErrors = await client.stop();
-      if (stopErrors.length > 0) {
-        logger.warn({ stopErrors }, "GitHub Copilot client stopped with cleanup errors");
-      }
-    } catch (error) {
-      logger.warn({ error }, "Failed to stop GitHub Copilot client cleanly");
-    }
+    await stopCopilotClient(client, logger);
   }
 
   private async deletePersistedSession(sessionId: string): Promise<void> {
@@ -607,25 +580,6 @@ export class CopilotSessionManager {
     (wrappedError as ReportedCopilotError).reportedToClient = true;
 
     return wrappedError;
-  }
-
-  private async withTimeout<T>(promise: Promise<T>, timeoutMs: number, timeoutMessage: string): Promise<T> {
-    let timeoutId: NodeJS.Timeout | undefined;
-
-    try {
-      return await Promise.race([
-        promise,
-        new Promise<T>((_resolve, reject) => {
-          timeoutId = setTimeout(() => {
-            reject(new CopilotError(timeoutMessage));
-          }, timeoutMs);
-        }),
-      ]);
-    } finally {
-      if (timeoutId) {
-        clearTimeout(timeoutId);
-      }
-    }
   }
 
   private isMissingSessionError(error: unknown): boolean {
@@ -709,14 +663,28 @@ export class CopilotSessionManager {
 
   private getCurrentToolSignature(): string {
     return JSON.stringify(
-      this.toolAggregator
-        .getTools()
-        .map((tool) => `${tool.serverId}:${tool.name}`)
+      getCopilotTools(this.toolAggregator, this.getToolBridgeOptions())
+        .map((tool) => tool.name)
         .sort(),
     );
   }
 
   private getToolAwarenessInstructions(): string {
+    if (this.env.SPIRA_SUBAGENTS_ENABLED) {
+      return [
+        "Use delegation tools for domain-specific operations.",
+        '- delegate_to_windows handles Windows system actions, screen inspection, and desktop UI automation. Use mode="background" when you want to send it off and keep working.',
+        '- delegate_to_spira handles Spira UI inspection and control. Use mode="background" when you want to send it off and keep working.',
+        '- delegate_to_nexus handles Nexus Mods searches, file discovery, and downloads. Use mode="background" when you want to send it off and keep working.',
+        "- read_subagent checks the status or final result of a delegated run by agent_id. Use wait=true to block for up to 30 seconds when you want to see whether it finishes.",
+        "- list_subagents lists active and recently completed delegated runs.",
+        "- write_subagent sends follow-up input into an idle delegated run so it can continue working.",
+        "- stop_subagent cancels a delegated run and lets it fizzle out cleanly.",
+        "If the user asks whether you can inspect the screen or active window, answer yes and use delegate_to_windows.",
+        "Set allowWrites to true only when the delegated task genuinely needs to change state.",
+      ].join("\n");
+    }
+
     const tools = this.toolAggregator.getTools();
     const visionTools = tools.filter((tool) => tool.name.startsWith("vision_"));
     if (visionTools.length === 0) {
@@ -742,6 +710,64 @@ export class CopilotSessionManager {
     }
 
     return "If you modify local Spira code or configuration and need the app to apply those changes, use the spira_propose_upgrade tool with the changed file paths instead of guessing the restart scope yourself.";
+  }
+
+  private getToolBridgeOptions(): ToolBridgeOptions {
+    const subagentsEnabled = this.env.SPIRA_SUBAGENTS_ENABLED;
+    const connectedDelegationDomains = SUBAGENT_DOMAINS.filter(
+      (domain) => this.toolAggregator.getToolsForServerIds(domain.serverIds).length > 0,
+    );
+    return {
+      requestUpgradeProposal: this.requestUpgradeProposal,
+      applyHotCapabilityUpgrade: this.applyHotCapabilityUpgrade,
+      ...(subagentsEnabled
+        ? {
+            excludeServerIds: getDelegatedServerIds(),
+            delegationDomains: connectedDelegationDomains,
+            delegateToDomain: async (
+              domainId: SubagentDomainId,
+              args: SubagentDelegationArgs,
+            ): Promise<SubagentEnvelope | SubagentRunHandle> => {
+              if (args.mode === "background") {
+                return this.subagentRunRegistry.track(domainId, args, this.getSubagentRunner(domainId).launch(args));
+              }
+
+              return this.getSubagentRunner(domainId).run(args);
+            },
+            readSubagent: async (agentId, options) =>
+              options?.wait
+                ? this.subagentRunRegistry.waitFor(agentId, options.timeoutMs)
+                : this.subagentRunRegistry.get(agentId),
+            listSubagents: (options) => this.subagentRunRegistry.list(options),
+            writeSubagent: (agentId, input) => this.subagentRunRegistry.write(agentId, input),
+            stopSubagent: (agentId) => this.subagentRunRegistry.stop(agentId),
+          }
+        : {}),
+    };
+  }
+
+  private getSubagentRunner(domainId: SubagentDomainId): SubagentRunner {
+    const existingRunner = this.subagentRunners.get(domainId);
+    if (existingRunner) {
+      return existingRunner;
+    }
+
+    const domain = getSubagentDomain(domainId);
+    if (!domain) {
+      throw new CopilotError(`Unknown subagent domain ${domainId}`);
+    }
+
+    const runner = new SubagentRunner({
+      bus: this.bus,
+      env: this.env,
+      toolAggregator: this.toolAggregator,
+      domain,
+      getClient: () => this.getOrCreateClient(),
+      onPermissionRequest: (request) => this.handlePermissionRequest(request),
+      lockManager: this.subagentLockManager,
+    });
+    this.subagentRunners.set(domainId, runner);
+    return runner;
   }
 
   private async refreshSessionForToolChanges(): Promise<void> {

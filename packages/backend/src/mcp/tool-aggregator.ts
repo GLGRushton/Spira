@@ -9,8 +9,18 @@ export class McpToolAggregator {
     return this.pool.allTools();
   }
 
+  getToolsForServerIds(serverIds: readonly string[]): McpTool[] {
+    const serverIdSet = new Set(serverIds);
+    return this.getTools().filter((tool) => serverIdSet.has(tool.serverId));
+  }
+
+  getToolsExcludingServerIds(serverIds: readonly string[]): McpTool[] {
+    const serverIdSet = new Set(serverIds);
+    return this.getTools().filter((tool) => !serverIdSet.has(tool.serverId));
+  }
+
   async executeTool(toolName: string, args: unknown): Promise<unknown> {
-    const matchingTools = this.pool.allTools().filter((tool) => tool.name === toolName);
+    const matchingTools = this.getTools().filter((tool) => tool.name === toolName);
 
     if (matchingTools.length === 0) {
       throw new McpError(`No MCP tool named ${toolName} is registered`);

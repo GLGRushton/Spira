@@ -1,3 +1,4 @@
+import { summarizeConversationTitle } from "@spira/shared";
 import { useEffect, useRef } from "react";
 import {
   PENDING_ASSISTANT_ID,
@@ -5,15 +6,10 @@ import {
   getAwaitingAssistantQuestion,
   useChatStore,
 } from "../../stores/chat-store.js";
-import { useRoomStore } from "../../stores/room-store.js";
-import { useVisionStore } from "../../stores/vision-store.js";
 import styles from "./InputBar.module.css";
+import { clearClientSessionUi } from "./session-ui.js";
 
 const RESET_TIMEOUT_MS = 5_000;
-const inferConversationTitle = (content: string): string => {
-  const singleLine = content.trim().replace(/\s+/gu, " ");
-  return singleLine.length > 80 ? `${singleLine.slice(0, 77)}...` : singleLine;
-};
 
 export function InputBar() {
   const addUserMessage = useChatStore((store) => store.addUserMessage);
@@ -25,7 +21,6 @@ export function InputBar() {
   const setDraft = useChatStore((store) => store.setDraft);
   const setActiveConversation = useChatStore((store) => store.setActiveConversation);
   const startAssistantMessage = useChatStore((store) => store.startAssistantMessage);
-  const clearMessages = useChatStore((store) => store.clearMessages);
   const isAborting = useChatStore((store) => store.isAborting);
   const isResetConfirming = useChatStore((store) => store.isResetConfirming);
   const isResetting = useChatStore((store) => store.isResetting);
@@ -34,8 +29,6 @@ export function InputBar() {
   const setResetConfirming = useChatStore((store) => store.setResetConfirming);
   const setResetting = useChatStore((store) => store.setResetting);
   const setSessionNotice = useChatStore((store) => store.setSessionNotice);
-  const clearRoomState = useRoomStore((store) => store.clearAll);
-  const clearVisionState = useVisionStore((store) => store.clearAllActiveCaptures);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const previousAwaitingQuestionId = useRef<string | null>(null);
 
@@ -74,15 +67,7 @@ export function InputBar() {
   }, [composerFocusToken, isResetting, isStreaming]);
 
   const clearUi = () => {
-    if (useChatStore.getState().isStreaming) {
-      return;
-    }
-
-    window.electronAPI.send({ type: "tts:stop" });
-    clearMessages();
-    clearRoomState();
-    clearVisionState();
-    setDraft("");
+    clearClientSessionUi();
   };
 
   const promptResetSession = () => {
@@ -117,7 +102,7 @@ export function InputBar() {
     startAssistantMessage(PENDING_ASSISTANT_ID);
     const conversationId = activeConversationId ?? createChatEntityId();
     if (!activeConversationId) {
-      setActiveConversation(conversationId, inferConversationTitle(trimmed));
+      setActiveConversation(conversationId, summarizeConversationTitle(trimmed));
     }
     window.electronAPI.sendMessage(trimmed, conversationId);
     setDraft("");

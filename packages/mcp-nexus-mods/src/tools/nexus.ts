@@ -17,6 +17,7 @@ export const registerNexusTools = (server: McpServer): void => {
     {
       description: "Search Nexus Mods games by name so you can identify the game you want to mod.",
       inputSchema: SearchGamesSchema,
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
     },
     async ({ query, limit, offset }) => {
       try {
@@ -33,6 +34,7 @@ export const registerNexusTools = (server: McpServer): void => {
     {
       description: "Get a Nexus Mods game by domain name or numeric ID.",
       inputSchema: GetGameSchema,
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
     },
     async ({ id, domainName }) => {
       try {
@@ -53,6 +55,7 @@ export const registerNexusTools = (server: McpServer): void => {
     {
       description: "Search Nexus Mods within a specific game's domain, optionally narrowing by search text.",
       inputSchema: SearchModsSchema,
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
     },
     async ({ gameDomainName, query, directDownloadOnly, limit, offset }) => {
       try {
@@ -69,6 +72,7 @@ export const registerNexusTools = (server: McpServer): void => {
     {
       description: "List Nexus file entries for a mod using the game ID and mod ID returned by search results.",
       inputSchema: GetModFilesSchema,
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
     },
     async ({ gameId, modId }) => {
       try {

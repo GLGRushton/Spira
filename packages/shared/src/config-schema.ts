@@ -2,6 +2,10 @@ import { z } from "zod";
 
 type EnvInput = Record<string, string | undefined>;
 const defaultEnvInput: EnvInput = (globalThis as { process?: { env?: EnvInput } }).process?.env ?? {};
+const BooleanEnvFlagSchema = z
+  .enum(["true", "false"])
+  .default("false")
+  .transform((value) => value === "true");
 
 export const McpServerConfigSchema = z.object({
   id: z.string().regex(/^[a-z0-9-]+$/, "Lowercase alphanumeric and hyphens only"),
@@ -41,6 +45,7 @@ export const EnvSchema = z.object({
   OPENWAKEWORD_MODEL_PATH: z.string().optional(),
   OPENWAKEWORD_MODEL_NAME: z.string().default("hey_jarvis"),
   OPENWAKEWORD_THRESHOLD: z.coerce.number().min(0).max(1).default(0.5),
+  SPIRA_SUBAGENTS_ENABLED: BooleanEnvFlagSchema,
 });
 
 export type Env = z.infer<typeof EnvSchema>;

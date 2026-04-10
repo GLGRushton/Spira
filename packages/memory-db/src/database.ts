@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import path from "node:path";
+import { summarizeConversationTitle } from "@spira/shared";
 import BetterSqlite3 from "better-sqlite3";
-import { DEFAULT_SPIRA_MEMORY_DB_FILENAME, SPIRA_MEMORY_DB_PATH_ENV, getSpiraMemoryDbPath } from "./path.js";
 
 const SQLITE_BUSY_TIMEOUT_MS = 5_000;
 
@@ -165,6 +165,10 @@ interface MemoryEntryRow {
   updatedAt: number;
 }
 
+interface SessionStateRow {
+  value: string | null;
+}
+
 const MIGRATIONS: MigrationDefinition[] = [
   {
     version: 1,
@@ -246,6 +250,17 @@ const MIGRATIONS: MigrationDefinition[] = [
       "CREATE INDEX idx_conversations_last_viewed_at ON conversations(last_viewed_at DESC)",
     ],
   },
+  {
+    version: 4,
+    statements: [
+      `CREATE TABLE session_state (
+        key TEXT PRIMARY KEY,
+        value TEXT,
+        updated_at INTEGER NOT NULL
+      )`,
+      "CREATE INDEX idx_session_state_updated_at ON session_state(updated_at DESC)",
+    ],
+  },
 ];
 
 type SqliteDatabase = InstanceType<typeof BetterSqlite3>;
@@ -279,16 +294,6 @@ const normalizeTitle = (value: string | null | undefined): string | null => {
 
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
-};
-
-const inferConversationTitle = (content: string): string | null => {
-  const trimmed = content.trim();
-  if (!trimmed) {
-    return null;
-  }
-
-  const singleLine = trimmed.replace(/\s+/gu, " ");
-  return singleLine.length > 80 ? `${singleLine.slice(0, 77)}...` : singleLine;
 };
 
 const toFtsQuery = (query: string): string => {
@@ -391,7 +396,7 @@ export class SpiraMemoryDatabase {
 
   appendMessage(input: AppendConversationMessageInput): void {
     this.assertWritable();
-    const title = input.role === "user" ? inferConversationTitle(input.content) : null;
+    const title = input.role === "user" ? summarizeConversationTitle(input.content) : null;
     this.createConversation({
       id: input.conversationId,
       title,
@@ -699,6 +704,56 @@ export class SpiraMemoryDatabase {
       .run({ conversationId, timestamp });
 
     return result.changes > 0;
+  }
+
+  getSessionState(key: string): string | null {
+    const row = this.db
+      .prepare(
+        `SELECT
+           value
+         FROM session_state
+         WHERE key = @key`,
+      )
+      .get({ key }) as SessionStateRow | undefined;
+
+    if (!row) {
+      return null;
+    }
+
+    return row.value === null ? null : String(row.value);
+  }
+
+  setSessionState(key: string, value: string | null): void {
+    this.assertWritable();
+    if (value === null) {
+      this.db
+        .prepare(
+          `DELETE FROM session_state
+           WHERE key = @key`,
+        )
+        .run({ key });
+      return;
+    }
+
+    const normalizedValue = value.trim();
+    if (!normalizedValue) {
+      throw new Error("Session state values cannot be empty.");
+    }
+
+    const updatedAt = Date.now();
+    this.db
+      .prepare(
+        `INSERT INTO session_state (key, value, updated_at)
+         VALUES (@key, @value, @updatedAt)
+         ON CONFLICT(key) DO UPDATE SET
+           value = excluded.value,
+           updated_at = excluded.updated_at`,
+      )
+      .run({
+        key,
+        value: normalizedValue,
+        updatedAt,
+      });
   }
 
   remember(input: RememberMemoryInput): MemoryEntryRecord {

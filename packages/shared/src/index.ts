@@ -8,7 +8,13 @@ export type {
 } from "./conversation-types.js";
 export type { ChatMessage, ToolCallStatus } from "./chat-types.js";
 export type { Env, McpServersFile } from "./config-schema.js";
-export type { ConnectionStatus, ElectronApi, ToolCallPayload } from "./electron-api.js";
+export type {
+  ConnectionStatus,
+  ElectronApi,
+  RendererFatalPayload,
+  RendererFatalPhase,
+  ToolCallPayload,
+} from "./electron-api.js";
 export type {
   McpServerConfig,
   McpServerDiagnostics,
@@ -26,6 +32,35 @@ export type {
   WakeWordProviderSetting,
   UserSettings,
 } from "./protocol.js";
+export type {
+  NormalizedStateChange,
+  SubagentArtifact,
+  SubagentCompletedEvent,
+  SubagentDeltaEvent,
+  SubagentDelegationArgs,
+  SubagentDomain,
+  SubagentDomainId,
+  SubagentEnvelope,
+  SubagentEnvelopeStatus,
+  SubagentErrorEvent,
+  SubagentErrorRecord,
+  SubagentLockAcquiredEvent,
+  SubagentLockDeniedEvent,
+  SubagentLockReleasedEvent,
+  SubagentResultPayload,
+  SubagentRunHandle,
+  SubagentRunSnapshot,
+  SubagentRunStatus,
+  SubagentScopeId,
+  SubagentStatusEvent,
+  SubagentStartedEvent,
+  SubagentToolCallEvent,
+  SubagentToolCallRecord,
+  SubagentToolResultEvent,
+  SubagentWriteIntentDenial,
+  SubagentWriteIntentGrant,
+  SubagentWriteIntentRequest,
+} from "./subagent-types.js";
 export type {
   RuntimeConfigApplyResult,
   RuntimeConfigEntrySummary,
@@ -63,6 +98,7 @@ export type { VoicePipelineEvent, VoicePipelineState, TranscriptionResult, OrbVi
 export type { OcrLine, OcrRectangle, OcrResult, OcrWord } from "./windows-ocr.js";
 export { McpServerConfigSchema, McpServersFileSchema, EnvSchema, parseEnv } from "./config-schema.js";
 export { markdownToSpeechText } from "./markdown-to-speech.js";
+export { summarizeConversationTitle } from "./conversation-title.js";
 export {
   normalizeTtsProvider,
   normalizeWakeWordProvider,
@@ -70,6 +106,7 @@ export {
   TTS_PROVIDERS,
   WAKE_WORD_PROVIDERS,
 } from "./protocol.js";
+export { SUBAGENT_DOMAIN_IDS, SUBAGENT_SCOPE_IDS } from "./subagent-types.js";
 export {
   SPIRA_UI_ACTION_TYPES,
   SPIRA_UI_CONTROL_BRIDGE_VERSION,

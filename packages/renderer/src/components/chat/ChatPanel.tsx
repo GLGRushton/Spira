@@ -5,6 +5,7 @@ import styles from "./ChatPanel.module.css";
 import { ConversationArchivePanel } from "./ConversationArchivePanel.js";
 import { InputBar } from "./InputBar.js";
 import { MessageBubble } from "./MessageBubble.js";
+import { clearClientSessionUi } from "./session-ui.js";
 
 const EXAMPLE_PROMPTS = [
   "Trace how the bridge chat state flows end to end.",
@@ -18,10 +19,12 @@ export function ChatPanel() {
   const activeConversationTitle = useChatStore((store) => store.activeConversationTitle);
   const isStreaming = useChatStore((store) => store.isStreaming);
   const isResetting = useChatStore((store) => store.isResetting);
+  const setActiveConversation = useChatStore((store) => store.setActiveConversation);
   const requestComposerFocus = useChatStore((store) => store.requestComposerFocus);
   const sessionNotice = useChatStore((store) => store.sessionNotice);
   const setSessionNotice = useChatStore((store) => store.setSessionNotice);
   const setDraft = useChatStore((store) => store.setDraft);
+  const setResetting = useChatStore((store) => store.setResetting);
   const scrollRef = useRef<HTMLDivElement>(null);
   const lastMessage = messages.at(-1);
   const awaitingQuestion = getAwaitingAssistantQuestion(messages);
@@ -64,6 +67,19 @@ export function ChatPanel() {
       });
     }
   }, [lastMessage]);
+
+  const startNewChat = () => {
+    if (isStreaming || isResetting) {
+      return;
+    }
+
+    setSessionNotice(null);
+    setResetting(true);
+    clearClientSessionUi();
+    setActiveConversation(null, null);
+    window.electronAPI.startNewChat(activeConversationId ?? undefined);
+    setArchiveOpen(false);
+  };
 
   return (
     <div className={styles.panel}>
@@ -142,7 +158,9 @@ export function ChatPanel() {
       <ConversationArchivePanel
         open={archiveOpen}
         disabled={isStreaming || isResetting}
+        canStartNewChat={messages.length > 0 || activeConversationId !== null}
         onClose={() => setArchiveOpen(false)}
+        onStartNewChat={startNewChat}
       />
     </div>
   );

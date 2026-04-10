@@ -54,7 +54,11 @@ export function AgentClusterDetail({ rooms, onSelectRoom }: AgentClusterDetailPr
                 </span>
               </div>
               <div className={styles.roomName}>{room.label}</div>
-              <div className={styles.roomDetail}>{room.detail ?? room.caption}</div>
+              <div className={styles.roomDetail}>
+                {room.domainId ? `${room.domainId} · ` : ""}
+                {room.attempt ? `attempt ${room.attempt} · ` : ""}
+                {room.detail ?? room.caption}
+              </div>
             </button>
           ))
         )}

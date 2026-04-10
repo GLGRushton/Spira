@@ -81,24 +81,21 @@ describe("SpiraMemoryDatabase", () => {
     expect(recentConversation?.lastViewedAt).toBe(2_000);
   });
 
-  it("infers and truncates the first user-message title when the conversation already exists", () => {
+  it("summarizes the first user-message title when the conversation already exists", () => {
     const database = createTestDatabase();
     const conversationId = database.createConversation({ createdAt: 1_000 });
-    const longMessage =
-      "This first user message is deliberately far too long to fit as a conversation title without being neatly truncated.";
+    const firstMessage = "Can you help me untangle chat retention for Spira?";
 
     database.appendMessage({
       id: "user-1",
       conversationId,
       role: "user",
-      content: longMessage,
+      content: firstMessage,
       timestamp: 1_000,
     });
 
     const conversation = database.getConversation(conversationId);
-    expect(conversation?.title).toBe(
-      "This first user message is deliberately far too long to fit as a conversation...",
-    );
+    expect(conversation?.title).toBe("Help Me Untangle");
   });
 
   it("stores and searches explicit memory entries", () => {
@@ -152,5 +149,20 @@ describe("SpiraMemoryDatabase", () => {
 
     expect(database.listConversations()[0]?.id).toBe(newerMessageConversationId);
     expect(database.getMostRecentConversation()?.id).toBe(newerMessageConversationId);
+  });
+
+  it("persists and clears session state values", () => {
+    const database = createTestDatabase();
+
+    expect(database.getSessionState("copilot-session-id")).toBeNull();
+
+    database.setSessionState("copilot-session-id", "session-123");
+    expect(database.getSessionState("copilot-session-id")).toBe("session-123");
+
+    database.setSessionState("copilot-session-id", "session-456");
+    expect(database.getSessionState("copilot-session-id")).toBe("session-456");
+
+    database.setSessionState("copilot-session-id", null);
+    expect(database.getSessionState("copilot-session-id")).toBeNull();
   });
 });

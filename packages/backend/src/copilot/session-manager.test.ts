@@ -12,6 +12,7 @@ type SessionManagerInternals = {
   } | null;
   activeSessionId: string | null;
   currentState: "idle" | "thinking" | "listening" | "transcribing" | "speaking" | "error";
+  sessionOrigin: "created" | "resumed" | null;
   registeredToolSignature: string | null;
   pendingToolRefreshSignature: string | null;
   refreshingSessionForToolChanges: Promise<void> | null;
@@ -20,15 +21,35 @@ type SessionManagerInternals = {
   refreshSessionForToolChanges(): Promise<void>;
   handleSessionEvent(event: { type: "session.idle"; data: Record<string, never> }): void;
   getUpgradeToolInstructions(): string;
+  getSessionConfig(): { tools: Array<{ name: string }> };
 };
 
-const createManager = (tools: McpTool[]) => {
+const createManager = (
+  tools: McpTool[],
+  options?: {
+    sessionPersistence?: {
+      load(): string | null;
+      save(sessionId: string | null): void;
+    } | null;
+    envInput?: Record<string, string | undefined>;
+  },
+) => {
   const bus = new SpiraEventBus();
   const aggregator = {
     getTools: () => tools,
+    getToolsForServerIds: (serverIds: readonly string[]) => tools.filter((tool) => serverIds.includes(tool.serverId)),
+    getToolsExcludingServerIds: (serverIds: readonly string[]) =>
+      tools.filter((tool) => !serverIds.includes(tool.serverId)),
   };
 
-  return new CopilotSessionManager(bus, parseEnv({}), aggregator as never);
+  return new CopilotSessionManager(
+    bus,
+    parseEnv(options?.envInput ?? {}),
+    aggregator as never,
+    undefined,
+    undefined,
+    options,
+  );
 };
 
 describe("CopilotSessionManager", () => {
@@ -60,7 +81,7 @@ describe("CopilotSessionManager", () => {
     await internals.refreshSessionForToolChanges();
 
     expect(session.disconnect).not.toHaveBeenCalled();
-    expect(internals.pendingToolRefreshSignature).toBe(JSON.stringify(["windows-system:system_get_memory_info"]));
+    expect(internals.pendingToolRefreshSignature).toBe(JSON.stringify(["system_get_memory_info"]));
 
     internals.handleSessionEvent({ type: "session.idle", data: {} });
     await Promise.resolve();
@@ -151,6 +172,65 @@ describe("CopilotSessionManager", () => {
     expect(internals.getUpgradeToolInstructions()).toContain("spira_propose_upgrade");
   });
 
+  it("replaces delegated MCP tools with delegation tools when subagents are enabled", () => {
+    const manager = createManager(
+      [
+        {
+          serverId: "windows-system",
+          serverName: "Windows System",
+          name: "system_get_memory_info",
+          description: "Read memory info.",
+          inputSchema: {
+            type: "object",
+            properties: {},
+            additionalProperties: false,
+          },
+        },
+        {
+          serverId: "memories",
+          serverName: "Spira Memories",
+          name: "spira_memory_list_entries",
+          description: "List stored memories.",
+          inputSchema: {
+            type: "object",
+            properties: {},
+            additionalProperties: false,
+          },
+        },
+        {
+          serverId: "spira-ui",
+          serverName: "Spira UI",
+          name: "spira_ui_get_snapshot",
+          description: "Read the current Spira snapshot.",
+          inputSchema: {
+            type: "object",
+            properties: {},
+            additionalProperties: false,
+          },
+        },
+      ],
+      {
+        envInput: { SPIRA_SUBAGENTS_ENABLED: "true" },
+      },
+    );
+    const internals = manager as unknown as SessionManagerInternals;
+    const toolNames = internals.getSessionConfig().tools.map((tool) => tool.name);
+
+    expect(toolNames).toEqual(
+      expect.arrayContaining([
+        "delegate_to_windows",
+        "delegate_to_spira",
+        "spira_memory_list_entries",
+        "read_subagent",
+        "list_subagents",
+        "write_subagent",
+        "stop_subagent",
+      ]),
+    );
+    expect(toolNames).not.toContain("system_get_memory_info");
+    expect(toolNames).not.toContain("delegate_to_nexus");
+  });
+
   it("recreates the session and retries when the SDK reports Session not found", async () => {
     const manager = createManager([]);
     const internals = manager as unknown as SessionManagerInternals;
@@ -212,8 +292,69 @@ describe("CopilotSessionManager", () => {
     expect(client.createSession).not.toHaveBeenCalled();
   });
 
+  it("loads a persisted session id from session persistence on startup", async () => {
+    const persistence = {
+      load: vi.fn().mockReturnValue("persisted-session"),
+      save: vi.fn(),
+    };
+    const manager = createManager([], { sessionPersistence: persistence });
+    const internals = manager as unknown as SessionManagerInternals;
+    const resumedSession = {
+      sessionId: "persisted-session",
+      disconnect: vi.fn().mockResolvedValue(undefined),
+    };
+    const client = {
+      resumeSession: vi.fn().mockResolvedValue(resumedSession),
+      createSession: vi.fn(),
+    };
+
+    vi.spyOn(
+      manager as unknown as { getOrCreateClient: () => Promise<typeof client> },
+      "getOrCreateClient",
+    ).mockResolvedValue(client);
+
+    await expect(internals.createSession()).resolves.toBe(resumedSession);
+
+    expect(persistence.load).toHaveBeenCalled();
+    expect(client.resumeSession).toHaveBeenCalledWith(
+      "persisted-session",
+      expect.objectContaining({ clientName: "Spira" }),
+    );
+    expect(client.createSession).not.toHaveBeenCalled();
+  });
+
+  it("saves the active session id through session persistence", async () => {
+    const persistence = {
+      load: vi.fn().mockReturnValue(null),
+      save: vi.fn(),
+    };
+    const manager = createManager([], { sessionPersistence: persistence });
+    const internals = manager as unknown as SessionManagerInternals;
+    const createdSession = {
+      sessionId: "fresh-session",
+      disconnect: vi.fn().mockResolvedValue(undefined),
+    };
+    const client = {
+      resumeSession: vi.fn(),
+      createSession: vi.fn().mockResolvedValue(createdSession),
+    };
+
+    vi.spyOn(
+      manager as unknown as { getOrCreateClient: () => Promise<typeof client> },
+      "getOrCreateClient",
+    ).mockResolvedValue(client);
+
+    await expect(internals.createSession()).resolves.toBe(createdSession);
+
+    expect(persistence.save).toHaveBeenCalledWith("fresh-session");
+  });
+
   it("deletes the persisted SDK session when the user clears chat", async () => {
-    const manager = createManager([]);
+    const persistence = {
+      load: vi.fn().mockReturnValue("persisted-session"),
+      save: vi.fn(),
+    };
+    const manager = createManager([], { sessionPersistence: persistence });
     const internals = manager as unknown as SessionManagerInternals;
     const session = {
       sessionId: "persisted-session",
@@ -234,6 +375,55 @@ describe("CopilotSessionManager", () => {
     expect(session.disconnect).toHaveBeenCalledTimes(1);
     expect(internals.activeSessionId).toBeNull();
     expect(deletePersistedSessionSpy).toHaveBeenCalledWith("persisted-session");
+    expect(persistence.save).toHaveBeenCalledWith(null);
+  });
+
+  it("prepends continuity context only for fresh sessions", async () => {
+    const manager = createManager([]);
+    const internals = manager as unknown as SessionManagerInternals;
+    const session = {
+      sessionId: "fresh-session",
+      send: vi.fn().mockResolvedValue(undefined),
+      disconnect: vi.fn().mockResolvedValue(undefined),
+    };
+
+    internals.sessionOrigin = "created";
+    vi.spyOn(
+      manager as unknown as { getOrCreateSession: () => Promise<typeof session> },
+      "getOrCreateSession",
+    ).mockResolvedValue(session);
+
+    await expect(
+      manager.sendMessage("Continue fixing the renderer", { continuityPreamble: "[Recovered context]\nPrior work." }),
+    ).resolves.toBeUndefined();
+
+    expect(session.send).toHaveBeenCalledWith({
+      prompt: "[Recovered context]\nPrior work.\n\nCurrent user request:\nContinue fixing the renderer",
+    });
+  });
+
+  it("does not prepend continuity context for resumed sessions", async () => {
+    const manager = createManager([]);
+    const internals = manager as unknown as SessionManagerInternals;
+    const session = {
+      sessionId: "persisted-session",
+      send: vi.fn().mockResolvedValue(undefined),
+      disconnect: vi.fn().mockResolvedValue(undefined),
+    };
+
+    internals.sessionOrigin = "resumed";
+    vi.spyOn(
+      manager as unknown as { getOrCreateSession: () => Promise<typeof session> },
+      "getOrCreateSession",
+    ).mockResolvedValue(session);
+
+    await expect(
+      manager.sendMessage("Continue fixing the renderer", { continuityPreamble: "[Recovered context]" }),
+    ).resolves.toBeUndefined();
+
+    expect(session.send).toHaveBeenCalledWith({
+      prompt: "Continue fixing the renderer",
+    });
   });
 
   it("does not retry non-session-not-found send failures", async () => {

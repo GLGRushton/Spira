@@ -4,6 +4,16 @@ import type {
   ClientMessage,
   McpServerStatus,
   PermissionRequestPayload,
+  SubagentCompletedEvent,
+  SubagentDeltaEvent,
+  SubagentErrorEvent,
+  SubagentLockAcquiredEvent,
+  SubagentLockDeniedEvent,
+  SubagentLockReleasedEvent,
+  SubagentStartedEvent,
+  SubagentStatusEvent,
+  SubagentToolCallEvent,
+  SubagentToolResultEvent,
   VoicePipelineState,
 } from "@spira/shared";
 
@@ -30,6 +40,16 @@ export interface EventMap {
   "mcp:server-crashed": [serverId: string];
   "mcp:server-stderr": [serverId: string, line: string];
   "mcp:servers-changed": [statuses: McpServerStatus[]];
+  "subagent:started": [event: SubagentStartedEvent];
+  "subagent:tool-call": [event: SubagentToolCallEvent];
+  "subagent:tool-result": [event: SubagentToolResultEvent];
+  "subagent:delta": [event: SubagentDeltaEvent];
+  "subagent:status": [event: SubagentStatusEvent];
+  "subagent:completed": [event: SubagentCompletedEvent];
+  "subagent:error": [event: SubagentErrorEvent];
+  "subagent:lock-acquired": [event: SubagentLockAcquiredEvent];
+  "subagent:lock-denied": [event: SubagentLockDeniedEvent];
+  "subagent:lock-released": [event: SubagentLockReleasedEvent];
   "transport:client-message": [message: ClientMessage];
   "transport:client-connected": [];
   "transport:client-disconnected": [reason: string];

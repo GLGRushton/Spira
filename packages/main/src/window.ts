@@ -54,6 +54,13 @@ export function createWindow(): BrowserWindow {
     window.show();
   });
 
+  window.on("unresponsive", () => {
+    console.error("Spira renderer became unresponsive.");
+  });
+  window.webContents.on("render-process-gone", (_event, details) => {
+    console.error("Spira renderer process exited unexpectedly.", details);
+  });
+
   if (isDevelopment) {
     void loadDevelopmentRenderer(window).catch((error: unknown) => {
       console.error("Failed to load development renderer", error);

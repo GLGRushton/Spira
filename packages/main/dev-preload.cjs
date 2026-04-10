@@ -14,10 +14,15 @@ const CONVERSATION_ARCHIVE_CHANNEL = "conversation:archive";
 const RUNTIME_CONFIG_GET_CHANNEL = "runtime-config:get";
 const RUNTIME_CONFIG_SET_CHANNEL = "runtime-config:set";
 const UPGRADE_RESPONSE_CHANNEL = "upgrade:respond";
+const RENDERER_FATAL_CHANNEL = "renderer:fatal";
 
 const serverMessageListeners = new Set();
 const latestServerMessages = new Map();
-const NON_REPLAYABLE_SERVER_MESSAGES = new Set(["chat:abort-complete", "chat:reset-complete"]);
+const NON_REPLAYABLE_SERVER_MESSAGES = new Set([
+  "chat:abort-complete",
+  "chat:reset-complete",
+  "chat:new-session-complete",
+]);
 
 ipcRenderer.on("spira:from-backend", (_event, message) => {
   if (!NON_REPLAYABLE_SERVER_MESSAGES.has(message.type)) {
@@ -62,14 +67,17 @@ const electronAPI = {
   send(message) {
     ipcRenderer.send("spira:to-backend", message);
   },
-  sendMessage(text) {
-    electronAPI.send({ type: "chat:send", text });
+  sendMessage(text, conversationId) {
+    electronAPI.send({ type: "chat:send", text, conversationId });
   },
   abortChat() {
     electronAPI.send({ type: "chat:abort" });
   },
   resetChat() {
     electronAPI.send({ type: "chat:reset" });
+  },
+  startNewChat(conversationId) {
+    electronAPI.send({ type: "chat:new-session", conversationId });
   },
   toggleVoice() {
     electronAPI.send({ type: "voice:toggle" });
@@ -116,6 +124,9 @@ const electronAPI = {
   respondToUpgradeProposal(proposalId, approved) {
     return ipcRenderer.invoke(UPGRADE_RESPONSE_CHANNEL, { proposalId, approved });
   },
+  reportRendererFatal(payload) {
+    ipcRenderer.send(RENDERER_FATAL_CHANNEL, payload);
+  },
   minimize() {
     sendWindowControl("minimize");
   },
@@ -159,6 +170,11 @@ const electronAPI = {
   onChatResetComplete(handler) {
     return onServerMessage("chat:reset-complete", () => {
       handler();
+    });
+  },
+  onChatNewSessionComplete(handler) {
+    return onServerMessage("chat:new-session-complete", (message) => {
+      handler({ preservedToMemory: message.preservedToMemory });
     });
   },
   onToolCall(handler) {

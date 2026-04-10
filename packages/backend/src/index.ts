@@ -1,15 +1,27 @@
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { SPIRA_MEMORY_DB_PATH_ENV, SpiraMemoryDatabase, type UpsertToolCallInput } from "@spira/memory-db";
+import {
+  type ConversationMessageRecord,
+  type ConversationRecord,
+  type ConversationSummary,
+  SPIRA_MEMORY_DB_PATH_ENV,
+  SpiraMemoryDatabase,
+  type UpsertToolCallInput,
+} from "@spira/memory-db";
 import {
   type ClientMessage,
+  type ConversationMessage,
+  type ConversationSearchMatch,
   type Env,
   PROTOCOL_VERSION,
+  type StoredConversation,
+  type StoredConversationSummary,
   type UpgradeProposal,
   type UserSettings,
   parseEnv,
 } from "@spira/shared";
 import { ZodError } from "zod";
+import { buildContinuityPreamble, buildConversationMemoryContent } from "./copilot/continuity.js";
 import { CopilotSessionManager } from "./copilot/session-manager.js";
 import { McpClientPool } from "./mcp/client-pool.js";
 import { McpRegistry } from "./mcp/registry.js";
@@ -58,6 +70,9 @@ const pendingUpgradeProposalResponses = new Map<
   }
 >();
 const VOICE_ACKNOWLEDGEMENTS = ["On it.", "Understood.", "Right away.", "Heard you."] as const;
+const SESSION_STATE_SESSION_ID_KEY = "copilot-session-id";
+const SESSION_STATE_CONVERSATION_ID_KEY = "active-conversation-id";
+const CONVERSATION_MEMORY_PREFIX = "conversation-summary:";
 
 const pickVoiceAcknowledgement = (text: string): string => {
   const normalizedLength = text.trim().length;
@@ -96,25 +111,64 @@ const getVoiceConfiguration = (env: Env, settings: Partial<UserSettings> = {}): 
     settings.openWakeWordThreshold ?? voiceConfiguration?.openWakeWordThreshold ?? env.OPENWAKEWORD_THRESHOLD,
 });
 
+const setActiveConversation = (conversationId: string | null): void => {
+  activeConversationId = conversationId;
+  memoryDb?.setSessionState(SESSION_STATE_CONVERSATION_ID_KEY, conversationId);
+};
+
 const ensureActiveConversation = (timestamp: number, preferredTitle?: string, preferredId?: string): string | null => {
   if (!memoryDb) {
     return null;
   }
 
   if (preferredId) {
-    activeConversationId = preferredId;
+    setActiveConversation(preferredId);
   }
 
   if (!activeConversationId) {
-    activeConversationId = memoryDb.createConversation({
-      id: preferredId,
-      title: preferredTitle,
-      createdAt: timestamp,
-    });
+    setActiveConversation(
+      memoryDb.createConversation({
+        id: preferredId,
+        title: preferredTitle,
+        createdAt: timestamp,
+      }),
+    );
   }
 
   return activeConversationId;
 };
+
+const rememberConversationContext = (conversationId: string | null): boolean => {
+  if (!memoryDb || !conversationId) {
+    return false;
+  }
+
+  const conversation = memoryDb.getConversation(conversationId);
+  if (!conversation) {
+    return false;
+  }
+
+  const content = buildConversationMemoryContent(conversation);
+  if (!content) {
+    return false;
+  }
+
+  memoryDb.remember({
+    id: `${CONVERSATION_MEMORY_PREFIX}${conversationId}`,
+    category: "task-context",
+    content,
+    sourceConversationId: conversationId,
+    sourceMessageId: conversation.messages.at(-1)?.id ?? null,
+  });
+  return true;
+};
+
+const getContinuityPreamble = (text: string, conversationId?: string): string | null =>
+  buildContinuityPreamble({
+    database: memoryDb,
+    query: text,
+    conversationId: conversationId ?? activeConversationId,
+  });
 
 const persistUserMessage = (text: string, timestamp: number, conversationId?: string): void => {
   const activeId = ensureActiveConversation(timestamp, undefined, conversationId);
@@ -166,6 +220,53 @@ const persistAssistantMessage = (
     wasAborted: options.wasAborted,
   });
   persistPendingToolCalls(id);
+};
+
+const mapStoredConversationMessage = (message: ConversationMessageRecord): ConversationMessage | null => {
+  if (message.role !== "user" && message.role !== "assistant") {
+    return null;
+  }
+
+  return {
+    id: message.id,
+    role: message.role,
+    content: message.content,
+    timestamp: message.timestamp,
+    wasAborted: message.wasAborted,
+    autoSpeak: message.autoSpeak,
+    toolCalls: message.toolCalls.map((toolCall) => ({
+      callId: toolCall.callId ?? undefined,
+      name: toolCall.name,
+      args: toolCall.args,
+      result: toolCall.result,
+      status: toolCall.status ?? undefined,
+      details: toolCall.details ?? undefined,
+    })),
+  };
+};
+
+const mapStoredConversationSummary = (conversation: ConversationSummary): StoredConversationSummary => ({
+  id: conversation.id,
+  title: conversation.title,
+  createdAt: conversation.createdAt,
+  updatedAt: conversation.updatedAt,
+  lastMessageAt: conversation.lastMessageAt,
+  lastViewedAt: conversation.lastViewedAt,
+  messageCount: conversation.messageCount,
+});
+
+const mapStoredConversation = (conversation: ConversationRecord | null): StoredConversation | null => {
+  if (!conversation) {
+    return null;
+  }
+
+  return {
+    ...mapStoredConversationSummary(conversation),
+    messages: conversation.messages.flatMap((message) => {
+      const mapped = mapStoredConversationMessage(message);
+      return mapped ? [mapped] : [];
+    }),
+  };
 };
 
 const sameVoiceConfiguration = (left: VoiceConfiguration, right: VoiceConfiguration): boolean =>
@@ -342,15 +443,74 @@ const handleClientMessage = async (message: ClientMessage): Promise<void> => {
     return;
   }
 
+  if (message.type === "conversation:recent:get") {
+    transport?.send({
+      type: "conversation:recent:result",
+      requestId: message.requestId,
+      conversation: mapStoredConversation(memoryDb?.getMostRecentConversation() ?? null),
+    });
+    return;
+  }
+
+  if (message.type === "conversation:list") {
+    const limit = typeof message.limit === "number" ? message.limit : 30;
+    const offset = typeof message.offset === "number" ? message.offset : 0;
+    transport?.send({
+      type: "conversation:list:result",
+      requestId: message.requestId,
+      conversations: (memoryDb?.listConversations(limit, offset) ?? []).map(mapStoredConversationSummary),
+    });
+    return;
+  }
+
+  if (message.type === "conversation:get") {
+    transport?.send({
+      type: "conversation:get:result",
+      requestId: message.requestId,
+      conversation: mapStoredConversation(memoryDb?.getConversation(message.conversationId) ?? null),
+    });
+    return;
+  }
+
+  if (message.type === "conversation:search") {
+    const limit = typeof message.limit === "number" ? message.limit : 20;
+    const matches: ConversationSearchMatch[] = memoryDb?.searchConversationMessages(message.query, limit) ?? [];
+    transport?.send({
+      type: "conversation:search:result",
+      requestId: message.requestId,
+      matches,
+    });
+    return;
+  }
+
+  if (message.type === "conversation:mark-viewed") {
+    transport?.send({
+      type: "conversation:mark-viewed:result",
+      requestId: message.requestId,
+      success: memoryDb?.markConversationViewed(message.conversationId) ?? false,
+    });
+    return;
+  }
+
+  if (message.type === "conversation:archive") {
+    transport?.send({
+      type: "conversation:archive:result",
+      requestId: message.requestId,
+      success: memoryDb?.archiveConversation(message.conversationId) ?? false,
+    });
+    return;
+  }
+
   if (message.type === "chat:send") {
     try {
       if (message.conversationId && message.conversationId !== activeConversationId) {
         await copilotManager?.clearSession();
         pendingToolCalls.clear();
-        activeConversationId = message.conversationId;
+        setActiveConversation(message.conversationId);
       }
+      const continuityPreamble = getContinuityPreamble(message.text, message.conversationId);
       persistUserMessage(message.text, Date.now(), message.conversationId);
-      await copilotManager?.sendMessage(message.text);
+      await copilotManager?.sendMessage(message.text, { continuityPreamble });
     } catch (error) {
       logger.error(
         { err: error, messageType: message.type, textLength: message.text.length },
@@ -392,13 +552,32 @@ const handleClientMessage = async (message: ClientMessage): Promise<void> => {
     try {
       await copilotManager?.clearSession();
       pendingToolCalls.clear();
-      activeConversationId = null;
+      setActiveConversation(null);
       transport?.send({ type: "chat:reset-complete" });
     } catch (error) {
       logger.error({ err: error, messageType: message.type }, "Failed to clear chat session");
       transport?.send({
         type: "error",
         ...toErrorPayload(error, "UNKNOWN_ERROR", "Failed to clear chat session", "copilot"),
+      });
+    }
+    return;
+  }
+
+  if (message.type === "chat:new-session") {
+    ttsPlayback?.stop();
+    try {
+      const previousConversationId = message.conversationId ?? activeConversationId;
+      const preservedToMemory = rememberConversationContext(previousConversationId);
+      await copilotManager?.clearSession();
+      pendingToolCalls.clear();
+      setActiveConversation(null);
+      transport?.send({ type: "chat:new-session-complete", preservedToMemory });
+    } catch (error) {
+      logger.error({ err: error, messageType: message.type }, "Failed to start a new chat session");
+      transport?.send({
+        type: "error",
+        ...toErrorPayload(error, "UNKNOWN_ERROR", "Failed to start a new chat session", "copilot"),
       });
     }
     return;
@@ -563,6 +742,7 @@ const bootstrap = async () => {
   const memoryDbPath = process.env[SPIRA_MEMORY_DB_PATH_ENV];
   if (typeof memoryDbPath === "string" && memoryDbPath.trim()) {
     memoryDb = SpiraMemoryDatabase.open(memoryDbPath.trim());
+    setActiveConversation(memoryDb.getSessionState(SESSION_STATE_CONVERSATION_ID_KEY));
   } else {
     logger.warn(
       { envKey: SPIRA_MEMORY_DB_PATH_ENV },
@@ -577,16 +757,33 @@ const bootstrap = async () => {
     () => mcpRegistry?.getStatus() ?? [],
   );
   transport = new WsTransport(server);
-  copilotManager = new CopilotSessionManager(bus, env, aggregator, requestUpgradeProposal, async () => {
-    if (!mcpRegistry) {
-      throw new Error("MCP registry is unavailable");
-    }
+  copilotManager = new CopilotSessionManager(
+    bus,
+    env,
+    aggregator,
+    requestUpgradeProposal,
+    async () => {
+      if (!mcpRegistry) {
+        throw new Error("MCP registry is unavailable");
+      }
 
-    await mcpRegistry.reloadFromDisk();
-  });
+      await mcpRegistry.reloadFromDisk();
+    },
+    {
+      sessionPersistence: memoryDb
+        ? {
+            load: () => memoryDb?.getSessionState(SESSION_STATE_SESSION_ID_KEY) ?? null,
+            save: (sessionId) => {
+              memoryDb?.setSessionState(SESSION_STATE_SESSION_ID_KEY, sessionId);
+            },
+          }
+        : null,
+    },
+  );
   ttsPlayback = new TtsPlaybackService(env, bus, logger);
 
   bus.on("voice:transcript", ({ text }) => {
+    const continuityPreamble = getContinuityPreamble(text);
     persistUserMessage(text, Date.now());
     const acknowledgement = pickVoiceAcknowledgement(text);
     bus?.emit("chat:assistant-message", {
@@ -597,7 +794,7 @@ const bootstrap = async () => {
       persist: false,
     });
 
-    void copilotManager?.sendVoiceMessage(text).catch((error) => {
+    void copilotManager?.sendVoiceMessage(text, { continuityPreamble }).catch((error) => {
       logger.error({ err: error, transcriptLength: text.length }, "Failed to forward voice transcript to Copilot");
       transport?.send({
         type: "error",

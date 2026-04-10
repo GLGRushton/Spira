@@ -33,6 +33,16 @@ export function useIpc(): void {
   const clearRoomState = useRoomStore((store) => store.clearAll);
   const syncRoomsFromServers = useRoomStore((store) => store.syncServers);
   const handleRoomToolCall = useRoomStore((store) => store.handleToolCall);
+  const handleSubagentStarted = useRoomStore((store) => store.handleSubagentStarted);
+  const handleSubagentToolCall = useRoomStore((store) => store.handleSubagentToolCall);
+  const handleSubagentToolResult = useRoomStore((store) => store.handleSubagentToolResult);
+  const handleSubagentDelta = useRoomStore((store) => store.handleSubagentDelta);
+  const handleSubagentStatus = useRoomStore((store) => store.handleSubagentStatus);
+  const handleSubagentCompleted = useRoomStore((store) => store.handleSubagentCompleted);
+  const handleSubagentError = useRoomStore((store) => store.handleSubagentError);
+  const handleSubagentLockAcquired = useRoomStore((store) => store.handleSubagentLockAcquired);
+  const handleSubagentLockDenied = useRoomStore((store) => store.handleSubagentLockDenied);
+  const handleSubagentLockReleased = useRoomStore((store) => store.handleSubagentLockReleased);
   const pruneRoomFlights = useRoomStore((store) => store.pruneFlights);
   const setAudioLevel = useAudioStore((store) => store.setAudioLevel);
   const setTtsAmplitude = useAudioStore((store) => store.setTtsAmplitude);
@@ -111,6 +121,16 @@ export function useIpc(): void {
         clearPermissionRequests,
         clearAllActiveCaptures,
         clearRoomState,
+        handleSubagentStarted,
+        handleSubagentToolCall,
+        handleSubagentToolResult,
+        handleSubagentDelta,
+        handleSubagentStatus,
+        handleSubagentCompleted,
+        handleSubagentError,
+        handleSubagentLockAcquired,
+        handleSubagentLockDenied,
+        handleSubagentLockReleased,
       }),
     ];
 
@@ -163,6 +183,16 @@ export function useIpc(): void {
     startAssistantMessage,
     updateToolResult,
     handleRoomToolCall,
+    handleSubagentDelta,
+    handleSubagentStatus,
+    handleSubagentCompleted,
+    handleSubagentError,
+    handleSubagentLockAcquired,
+    handleSubagentLockDenied,
+    handleSubagentLockReleased,
+    handleSubagentStarted,
+    handleSubagentToolCall,
+    handleSubagentToolResult,
     pruneRoomFlights,
   ]);
 }

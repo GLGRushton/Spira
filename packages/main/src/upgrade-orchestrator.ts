@@ -12,6 +12,8 @@ interface UpgradeOrchestratorOptions {
   lifecycle: BackendLifecycle;
   getWindow: () => BrowserWindow | null;
   emitConnectionStatus: (status: ConnectionStatus) => void;
+  getRendererReadySequence: () => number;
+  waitForNextRendererReady: (afterSequence: number, timeoutMs: number) => Promise<void>;
   relaunchApp: () => Promise<void>;
 }
 
@@ -21,6 +23,8 @@ interface ProposalDecision {
 }
 
 class ReportedUpgradeError extends Error {}
+
+const UI_REFRESH_READY_TIMEOUT_MS = 15_000;
 
 export class UpgradeOrchestrator {
   private pendingProposal: UpgradeProposal | null = null;
@@ -144,9 +148,9 @@ export class UpgradeOrchestrator {
 
     this.uiRefreshInProgress = true;
     try {
+      const rendererReadySequence = this.options.getRendererReadySequence();
       await new Promise<void>((resolve, reject) => {
         const clearRefreshState = () => {
-          window.webContents.removeListener("did-finish-load", handleRefreshSuccess);
           window.webContents.removeListener("did-fail-load", handleRefreshFailure);
           window.webContents.removeListener("destroyed", handleRefreshDestroyed);
         };
@@ -181,10 +185,21 @@ export class UpgradeOrchestrator {
           reject(this.failUpgrade(proposal, "The main window closed before the UI refresh completed."));
         };
 
-        window.webContents.once("did-finish-load", handleRefreshSuccess);
         window.webContents.on("did-fail-load", handleRefreshFailure);
         window.webContents.once("destroyed", handleRefreshDestroyed);
-        window.webContents.reload();
+        void this.options
+          .waitForNextRendererReady(rendererReadySequence, UI_REFRESH_READY_TIMEOUT_MS)
+          .then(handleRefreshSuccess)
+          .catch((error: unknown) => {
+            clearRefreshState();
+            reject(
+              this.failUpgrade(
+                proposal,
+                error instanceof Error ? error.message : "Timed out waiting for the UI to finish loading.",
+              ),
+            );
+          });
+        window.webContents.reloadIgnoringCache();
       });
     } finally {
       this.uiRefreshInProgress = false;

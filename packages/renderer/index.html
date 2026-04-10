@@ -4,9 +4,235 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Spira</title>
+    <style>
+      #spira-boot-shell {
+        position: fixed;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        padding: 28px;
+        background: radial-gradient(circle at top, rgba(0, 229, 255, 0.08), transparent 30%), #0a0e27;
+        color: #e8eaf6;
+        font-family: "Segoe UI", system-ui, sans-serif;
+      }
+
+      #spira-boot-shell[hidden] {
+        display: none;
+      }
+
+      .spira-boot-panel {
+        width: min(720px, 100%);
+        border: 1px solid rgba(0, 229, 255, 0.16);
+        border-radius: 18px;
+        background: linear-gradient(180deg, rgba(18, 24, 56, 0.96), rgba(10, 14, 39, 0.98));
+        box-shadow: 0 22px 60px rgba(4, 7, 22, 0.46);
+        padding: 28px;
+      }
+
+      .spira-boot-eyebrow {
+        display: block;
+        margin-bottom: 10px;
+        color: rgba(255, 255, 255, 0.72);
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+      }
+
+      .spira-boot-title {
+        margin: 0 0 12px;
+        font-size: 28px;
+        line-height: 1.15;
+      }
+
+      .spira-boot-message {
+        margin: 0;
+        color: rgba(232, 234, 246, 0.88);
+        font-size: 15px;
+        line-height: 1.6;
+      }
+
+      .spira-boot-actions {
+        display: flex;
+        gap: 12px;
+        margin-top: 20px;
+      }
+
+      .spira-boot-reload {
+        border: 1px solid rgba(0, 229, 255, 0.26);
+        border-radius: 999px;
+        background: rgba(0, 229, 255, 0.12);
+        padding: 11px 16px;
+        color: inherit;
+        cursor: pointer;
+        font-size: 13px;
+        font-weight: 600;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .spira-boot-reload[hidden],
+      .spira-boot-details[hidden] {
+        display: none;
+      }
+
+      .spira-boot-details {
+        margin-top: 22px;
+        overflow: auto;
+        border-radius: 12px;
+        background: rgba(6, 10, 24, 0.78);
+        padding: 14px;
+        color: rgba(232, 234, 246, 0.84);
+        font-family: "Cascadia Code", "Consolas", monospace;
+        font-size: 12px;
+        line-height: 1.55;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+    </style>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="spira-boot-shell" role="status" aria-live="polite">
+      <section class="spira-boot-panel">
+        <span class="spira-boot-eyebrow">Spira renderer</span>
+        <h1 id="spira-boot-title" class="spira-boot-title">Loading Spira...</h1>
+        <p id="spira-boot-message" class="spira-boot-message">Shinra is bringing the interface online.</p>
+        <div class="spira-boot-actions">
+          <button id="spira-boot-reload" class="spira-boot-reload" type="button" hidden>Reload Spira</button>
+        </div>
+        <pre id="spira-boot-details" class="spira-boot-details" hidden></pre>
+      </section>
+    </div>
+    <div id="root" hidden></div>
+    <script>
+      (() => {
+        const shell = document.getElementById("spira-boot-shell");
+        const root = document.getElementById("root");
+        const titleNode = document.getElementById("spira-boot-title");
+        const messageNode = document.getElementById("spira-boot-message");
+        const detailsNode = document.getElementById("spira-boot-details");
+        const reloadButton = document.getElementById("spira-boot-reload");
+        let ready = false;
+
+        const trimDetails = (value) => {
+          if (typeof value !== "string") {
+            return "";
+          }
+
+          const trimmed = value.trim();
+          return trimmed.slice(0, 8000);
+        };
+
+        const describeError = (value) => {
+          if (value && typeof value === "object" && "title" in value && "message" in value) {
+            return {
+              title: typeof value.title === "string" && value.title ? value.title : "Spira couldn't finish loading",
+              message:
+                typeof value.message === "string" && value.message
+                  ? value.message
+                  : "A renderer error stopped the interface before it could recover.",
+              details: trimDetails(typeof value.details === "string" ? value.details : ""),
+              phase: value.phase === "runtime" ? "runtime" : "bootstrap",
+            };
+          }
+
+          if (value instanceof Error) {
+            return {
+              title: "Spira couldn't finish loading",
+              message: value.message
+                ? `A renderer error stopped the interface before it finished loading: ${value.message}`
+                : "A renderer error stopped the interface before it finished loading.",
+              details: trimDetails(value.stack || value.message || ""),
+              phase: "bootstrap",
+            };
+          }
+
+          if (typeof value === "string" && value.trim()) {
+            return {
+              title: "Spira couldn't finish loading",
+              message: `A renderer error stopped the interface before it finished loading: ${value.trim()}`,
+              details: "",
+              phase: "bootstrap",
+            };
+          }
+
+          return {
+            title: "Spira couldn't finish loading",
+            message: "A renderer error stopped the interface before it finished loading.",
+            details: "",
+            phase: "bootstrap",
+          };
+        };
+
+        const reportFatal = (payload) => {
+          if (typeof window.electronAPI?.reportRendererFatal === "function") {
+            window.electronAPI.reportRendererFatal(payload);
+          }
+        };
+
+        const showFailure = (payload) => {
+          const fatal = describeError(payload);
+          ready = false;
+          if (shell) {
+            shell.hidden = false;
+          }
+          if (root) {
+            root.hidden = true;
+          }
+          if (titleNode) {
+            titleNode.textContent = fatal.title;
+          }
+          if (messageNode) {
+            messageNode.textContent = `${fatal.message} Reload Spira to try again.`;
+          }
+          const details = trimDetails(fatal.details);
+          if (detailsNode) {
+            detailsNode.textContent = details;
+            detailsNode.hidden = details.length === 0;
+          }
+          if (reloadButton) {
+            reloadButton.hidden = false;
+          }
+          reportFatal(fatal);
+        };
+
+        if (reloadButton) {
+          reloadButton.addEventListener("click", () => {
+            window.location.reload();
+          });
+        }
+
+        window.__spiraRendererBoot = {
+          markReady() {
+            ready = true;
+            if (shell) {
+              shell.hidden = true;
+            }
+            if (root) {
+              root.hidden = false;
+            }
+          },
+          showFailure,
+          isReady() {
+            return ready;
+          },
+        };
+
+        window.addEventListener("error", (event) => {
+          if (ready) {
+            return;
+          }
+          showFailure(event.error || event.message);
+        });
+
+        window.addEventListener("unhandledrejection", (event) => {
+          if (ready) {
+            return;
+          }
+          showFailure(event.reason);
+        });
+      })();
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

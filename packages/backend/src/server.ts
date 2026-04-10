@@ -108,6 +108,36 @@ export class WsServer {
       this.registerBusHandler("voice:transcript", ({ text }) => {
         this.send({ type: "voice:transcript", text });
       }),
+      this.registerBusHandler("subagent:started", (event) => {
+        this.send({ type: "subagent:started", event });
+      }),
+      this.registerBusHandler("subagent:tool-call", (event) => {
+        this.send({ type: "subagent:tool-call", event });
+      }),
+      this.registerBusHandler("subagent:tool-result", (event) => {
+        this.send({ type: "subagent:tool-result", event });
+      }),
+      this.registerBusHandler("subagent:delta", (event) => {
+        this.send({ type: "subagent:delta", event });
+      }),
+      this.registerBusHandler("subagent:status", (event) => {
+        this.send({ type: "subagent:status", event });
+      }),
+      this.registerBusHandler("subagent:completed", (event) => {
+        this.send({ type: "subagent:completed", event });
+      }),
+      this.registerBusHandler("subagent:error", (event) => {
+        this.send({ type: "subagent:error", event });
+      }),
+      this.registerBusHandler("subagent:lock-acquired", (event) => {
+        this.send({ type: "subagent:lock-acquired", event });
+      }),
+      this.registerBusHandler("subagent:lock-denied", (event) => {
+        this.send({ type: "subagent:lock-denied", event });
+      }),
+      this.registerBusHandler("subagent:lock-released", (event) => {
+        this.send({ type: "subagent:lock-released", event });
+      }),
     ];
   }
 

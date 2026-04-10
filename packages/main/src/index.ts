@@ -1,10 +1,10 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import {
-  type ConversationRecord as ArchivedConversation,
-  type ConversationMessageRecord as ArchivedConversationMessage,
-  type ConversationSummary as ArchivedConversationSummary,
-  type SpiraMemoryDatabase,
+import type {
+  ConversationRecord as ArchivedConversation,
+  ConversationMessageRecord as ArchivedConversationMessage,
+  ConversationSummary as ArchivedConversationSummary,
+  SpiraMemoryDatabase,
 } from "@spira/memory-db";
 import { SPIRA_MEMORY_DB_PATH_ENV, getSpiraMemoryDbPath } from "@spira/memory-db/path";
 import {
@@ -12,6 +12,7 @@ import {
   type ConversationMessage,
   type ConversationSearchMatch,
   RUNTIME_CONFIG_KEYS,
+  type RendererFatalPayload,
   type RuntimeConfigApplyResult,
   type RuntimeConfigKey,
   type RuntimeConfigSummary,
@@ -28,7 +29,7 @@ import { BrowserWindow, app, ipcMain, safeStorage } from "electron";
 import WebSocket from "ws";
 import { setupAutoUpdater } from "./auto-update.js";
 import { BackendLifecycle } from "./backend-lifecycle.js";
-import { setupIpcBridge } from "./ipc-bridge.js";
+import { type IpcBridgeHandle, setupIpcBridge } from "./ipc-bridge.js";
 import { SpiraUiControlBridge } from "./spira-ui-control-bridge.js";
 import { createTray } from "./tray.js";
 import { UpgradeOrchestrator } from "./upgrade-orchestrator.js";
@@ -48,6 +49,7 @@ const CONVERSATION_ARCHIVE_CHANNEL = "conversation:archive";
 const RUNTIME_CONFIG_GET_CHANNEL = "runtime-config:get";
 const RUNTIME_CONFIG_SET_CHANNEL = "runtime-config:set";
 const UPGRADE_RESPONSE_CHANNEL = "upgrade:respond";
+const RENDERER_FATAL_CHANNEL = "renderer:fatal";
 const EXTERNAL_BACKEND_READY_TIMEOUT_MS = 30_000;
 const currentFile = fileURLToPath(import.meta.url);
 const currentDir = path.dirname(currentFile);
@@ -76,7 +78,7 @@ const { default: ElectronStore } = (await import("electron-store")) as {
 
 let lifecycle: BackendLifecycle | null = null;
 let mainWindow: BrowserWindow | null = null;
-let cleanupBridge: (() => void) | null = null;
+let bridge: IpcBridgeHandle | null = null;
 let tray: Tray | null = null;
 let settingsStore: SettingsStoreInstance | null = null;
 let archiveDb: SpiraMemoryDatabase | null = null;
@@ -86,6 +88,59 @@ let uiControlBridge: SpiraUiControlBridge | null = null;
 let isQuitting = false;
 let shutdownPromise: Promise<void> | null = null;
 let currentConnectionStatus: ConnectionStatus = "connecting";
+let rendererReadySequence = 0;
+const rendererReadyWaiters = new Set<{
+  afterSequence: number;
+  timer: NodeJS.Timeout;
+  resolve: () => void;
+  reject: (error: Error) => void;
+}>();
+
+const clearRendererReadyWaiter = (waiter: {
+  afterSequence: number;
+  timer: NodeJS.Timeout;
+  resolve: () => void;
+  reject: (error: Error) => void;
+}) => {
+  clearTimeout(waiter.timer);
+  rendererReadyWaiters.delete(waiter);
+};
+
+const notifyRendererReady = () => {
+  rendererReadySequence += 1;
+  for (const waiter of Array.from(rendererReadyWaiters)) {
+    if (rendererReadySequence > waiter.afterSequence) {
+      clearRendererReadyWaiter(waiter);
+      waiter.resolve();
+    }
+  }
+};
+
+const rejectRendererReadyWaiters = (error: Error) => {
+  for (const waiter of Array.from(rendererReadyWaiters)) {
+    clearRendererReadyWaiter(waiter);
+    waiter.reject(error);
+  }
+};
+
+const waitForNextRendererReady = (afterSequence: number, timeoutMs: number): Promise<void> => {
+  if (rendererReadySequence > afterSequence) {
+    return Promise.resolve();
+  }
+
+  return new Promise<void>((resolve, reject) => {
+    const waiter = {
+      afterSequence,
+      timer: setTimeout(() => {
+        clearRendererReadyWaiter(waiter);
+        reject(new Error("Timed out waiting for Spira to finish loading the refreshed UI."));
+      }, timeoutMs),
+      resolve,
+      reject,
+    };
+    rendererReadyWaiters.add(waiter);
+  });
+};
 
 const isMemoryDbAbiMismatch = (error: unknown): error is Error =>
   error instanceof Error &&
@@ -376,26 +431,40 @@ const ensureWindow = () => {
       }
     });
     mainWindow.on("closed", () => {
-      cleanupBridge?.();
-      cleanupBridge = null;
+      bridge?.dispose();
+      bridge = null;
       mainWindow = null;
     });
     tray = createTray(mainWindow, app);
     setupAutoUpdater(mainWindow);
   }
 
-  if (!cleanupBridge) {
-    cleanupBridge = setupIpcBridge(mainWindow, BACKEND_PORT, {
+  if (!bridge) {
+    bridge = setupIpcBridge(mainWindow, BACKEND_PORT, {
       onBackendHello: () => {
         upgradeOrchestrator?.reemitPendingProposal();
       },
       onConnectionStatusChange: (status) => {
         currentConnectionStatus = status;
       },
+      onRendererReady: () => {
+        notifyRendererReady();
+      },
       rendererBuildId: getRendererBuildId(),
       isUpgrading: () => upgradeOrchestrator?.isRestartInProgress() ?? false,
     });
   }
+};
+
+const handleRendererFatal = (_event: IpcMainEvent, payload: RendererFatalPayload) => {
+  const summary = `[Spira:renderer:${payload.phase}] ${payload.title} - ${payload.message}`;
+  if (payload.details) {
+    console.error(summary, payload.details);
+  } else {
+    console.error(summary);
+  }
+
+  rejectRendererReadyWaiters(new Error(payload.message));
 };
 
 const handleGetSettings = () => ({
@@ -450,50 +519,81 @@ const mapConversationRecord = (conversation: ArchivedConversation | null): Store
     }),
   };
 };
-const handleGetRecentConversation = (_event: IpcMainInvokeEvent): StoredConversation | null =>
-  mapConversationRecord(archiveDb?.getMostRecentConversation() ?? null);
+const handleGetRecentConversation = async (_event: IpcMainInvokeEvent): Promise<StoredConversation | null> => {
+  if (archiveDb) {
+    return mapConversationRecord(archiveDb.getMostRecentConversation() ?? null);
+  }
+
+  return (await bridge?.getRecentConversation()) ?? null;
+};
 const handleListConversations = (
   _event: IpcMainInvokeEvent,
   input?: { limit?: number; offset?: number },
-): StoredConversationSummary[] => {
+): Promise<StoredConversationSummary[]> | StoredConversationSummary[] => {
   const limit = typeof input?.limit === "number" ? input.limit : 30;
   const offset = typeof input?.offset === "number" ? input.offset : 0;
-  return archiveDb?.listConversations(limit, offset).map(mapConversationSummary) ?? [];
+
+  if (archiveDb) {
+    return archiveDb.listConversations(limit, offset).map(mapConversationSummary);
+  }
+
+  return bridge?.listConversations(limit, offset) ?? [];
 };
 const handleGetConversation = (
   _event: IpcMainInvokeEvent,
   input?: { conversationId?: string },
-): StoredConversation | null => {
+): Promise<StoredConversation | null> | StoredConversation | null => {
   if (!input?.conversationId) {
     return null;
   }
 
-  return mapConversationRecord(archiveDb?.getConversation(input.conversationId) ?? null);
+  if (archiveDb) {
+    return mapConversationRecord(archiveDb.getConversation(input.conversationId) ?? null);
+  }
+
+  return bridge?.getConversation(input.conversationId) ?? null;
 };
 const handleSearchConversations = (
   _event: IpcMainInvokeEvent,
   input?: { query?: string; limit?: number },
-): ConversationSearchMatch[] => {
+): Promise<ConversationSearchMatch[]> | ConversationSearchMatch[] => {
   if (!input?.query) {
     return [];
   }
 
   const limit = typeof input.limit === "number" ? input.limit : 20;
-  return archiveDb?.searchConversationMessages(input.query, limit) ?? [];
+
+  if (archiveDb) {
+    return archiveDb.searchConversationMessages(input.query, limit);
+  }
+
+  return bridge?.searchConversations(input.query, limit) ?? [];
 };
-const handleMarkConversationViewed = (_event: IpcMainInvokeEvent, input?: { conversationId?: string }) => {
+const handleMarkConversationViewed = async (_event: IpcMainInvokeEvent, input?: { conversationId?: string }) => {
   if (!input?.conversationId) {
     return;
   }
 
-  archiveDb?.markConversationViewed(input.conversationId);
+  if (archiveDb) {
+    archiveDb.markConversationViewed(input.conversationId);
+    return;
+  }
+
+  await bridge?.markConversationViewed(input.conversationId);
 };
-const handleArchiveConversation = (_event: IpcMainInvokeEvent, input?: { conversationId?: string }): boolean => {
+const handleArchiveConversation = async (
+  _event: IpcMainInvokeEvent,
+  input?: { conversationId?: string },
+): Promise<boolean> => {
   if (!input?.conversationId) {
     return false;
   }
 
-  return archiveDb?.archiveConversation(input.conversationId) ?? false;
+  if (archiveDb) {
+    return archiveDb.archiveConversation(input.conversationId);
+  }
+
+  return (await bridge?.archiveConversation(input.conversationId)) ?? false;
 };
 const handleGetRuntimeConfig = (): RuntimeConfigSummary => getRuntimeConfigSummary();
 const handleSetRuntimeConfig = async (
@@ -690,8 +790,8 @@ const shutdownApp = async (): Promise<void> => {
     await lifecycle?.stop();
     await uiControlBridge?.stop();
     uiControlBridge = null;
-    cleanupBridge?.();
-    cleanupBridge = null;
+    bridge?.dispose();
+    bridge = null;
     tray?.destroy();
     tray = null;
     ipcMain.off(WINDOW_CONTROL_CHANNEL, handleWindowControl);
@@ -707,6 +807,8 @@ const shutdownApp = async (): Promise<void> => {
     ipcMain.removeHandler(RUNTIME_CONFIG_GET_CHANNEL);
     ipcMain.removeHandler(RUNTIME_CONFIG_SET_CHANNEL);
     ipcMain.removeHandler(UPGRADE_RESPONSE_CHANNEL);
+    ipcMain.off(RENDERER_FATAL_CHANNEL, handleRendererFatal);
+    rejectRendererReadyWaiters(new Error("Renderer readiness wait cancelled during shutdown."));
     archiveDb?.close();
     archiveDb = null;
   })().finally(() => {
@@ -739,6 +841,7 @@ void app.whenReady().then(async () => {
   ipcMain.handle(RUNTIME_CONFIG_GET_CHANNEL, handleGetRuntimeConfig);
   ipcMain.handle(RUNTIME_CONFIG_SET_CHANNEL, handleSetRuntimeConfig);
   ipcMain.handle(UPGRADE_RESPONSE_CHANNEL, handleUpgradeResponse);
+  ipcMain.on(RENDERER_FATAL_CHANNEL, handleRendererFatal);
 
   if (useExternalBackend()) {
     void waitForExternalBackend(BACKEND_PORT)
@@ -774,6 +877,8 @@ void app.whenReady().then(async () => {
     lifecycle,
     getWindow: () => mainWindow,
     emitConnectionStatus,
+    getRendererReadySequence: () => rendererReadySequence,
+    waitForNextRendererReady,
     relaunchApp: async () => {
       app.relaunch();
       isQuitting = true;

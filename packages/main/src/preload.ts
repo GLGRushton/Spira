@@ -1,4 +1,4 @@
-import type { ConnectionStatus, ElectronApi, ServerMessage } from "@spira/shared";
+import type { ConnectionStatus, ElectronApi, RendererFatalPayload, ServerMessage } from "@spira/shared";
 import { contextBridge, ipcRenderer } from "electron";
 import type { IpcRendererEvent } from "electron";
 
@@ -16,12 +16,17 @@ const CONVERSATION_ARCHIVE_CHANNEL = "conversation:archive";
 const RUNTIME_CONFIG_GET_CHANNEL = "runtime-config:get";
 const RUNTIME_CONFIG_SET_CHANNEL = "runtime-config:set";
 const UPGRADE_RESPONSE_CHANNEL = "upgrade:respond";
+const RENDERER_FATAL_CHANNEL = "renderer:fatal";
 
 type WindowControlAction = "minimize" | "maximize" | "close";
 
 const serverMessageListeners = new Set<(message: ServerMessage) => void>();
 const latestServerMessages = new Map<ServerMessage["type"], ServerMessage>();
-const NON_REPLAYABLE_SERVER_MESSAGES = new Set<ServerMessage["type"]>(["chat:abort-complete", "chat:reset-complete"]);
+const NON_REPLAYABLE_SERVER_MESSAGES = new Set<ServerMessage["type"]>([
+  "chat:abort-complete",
+  "chat:reset-complete",
+  "chat:new-session-complete",
+]);
 
 ipcRenderer.on("spira:from-backend", (_event: IpcRendererEvent, message: ServerMessage) => {
   if (!NON_REPLAYABLE_SERVER_MESSAGES.has(message.type)) {
@@ -78,6 +83,9 @@ const electronAPI: ElectronApi = {
   resetChat() {
     electronAPI.send({ type: "chat:reset" });
   },
+  startNewChat(conversationId) {
+    electronAPI.send({ type: "chat:new-session", conversationId });
+  },
   toggleVoice() {
     electronAPI.send({ type: "voice:toggle" });
   },
@@ -123,6 +131,9 @@ const electronAPI: ElectronApi = {
   respondToUpgradeProposal(proposalId, approved) {
     return ipcRenderer.invoke(UPGRADE_RESPONSE_CHANNEL, { proposalId, approved });
   },
+  reportRendererFatal(payload: RendererFatalPayload) {
+    ipcRenderer.send(RENDERER_FATAL_CHANNEL, payload);
+  },
   minimize() {
     sendWindowControl("minimize");
   },
@@ -166,6 +177,11 @@ const electronAPI: ElectronApi = {
   onChatResetComplete(handler) {
     return onServerMessage("chat:reset-complete", () => {
       handler();
+    });
+  },
+  onChatNewSessionComplete(handler) {
+    return onServerMessage("chat:new-session-complete", (message) => {
+      handler({ preservedToMemory: message.preservedToMemory });
     });
   },
   onToolCall(handler) {

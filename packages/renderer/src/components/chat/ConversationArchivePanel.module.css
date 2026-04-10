@@ -29,6 +29,12 @@
   gap: 12px;
 }
 
+.headerActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .eyebrow {
   color: var(--text-secondary);
   font-size: 11px;
@@ -42,7 +48,8 @@
 }
 
 .closeButton,
-.archiveButton {
+.archiveButton,
+.startButton {
   padding: 8px 10px;
   border: 1px solid rgba(0, 229, 255, 0.14);
   border-radius: 999px;
@@ -53,6 +60,10 @@
   letter-spacing: 0.08em;
   text-transform: uppercase;
   cursor: pointer;
+}
+
+.startButton {
+  color: var(--text-primary);
 }
 
 .searchLabel {
@@ -148,7 +159,9 @@
   flex: 1;
 }
 
-.archiveButton:disabled {
+.archiveButton:disabled,
+.startButton:disabled,
+.closeButton:disabled {
   opacity: 0.55;
   cursor: not-allowed;
 }

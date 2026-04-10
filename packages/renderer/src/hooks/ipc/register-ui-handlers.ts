@@ -19,6 +19,16 @@ interface UiHandlerActions {
   clearPermissionRequests: () => void;
   clearAllActiveCaptures: () => void;
   clearRoomState: () => void;
+  handleSubagentStarted: (event: import("@spira/shared").SubagentStartedEvent) => void;
+  handleSubagentToolCall: (event: import("@spira/shared").SubagentToolCallEvent) => void;
+  handleSubagentToolResult: (event: import("@spira/shared").SubagentToolResultEvent) => void;
+  handleSubagentDelta: (event: import("@spira/shared").SubagentDeltaEvent) => void;
+  handleSubagentStatus: (event: import("@spira/shared").SubagentStatusEvent) => void;
+  handleSubagentCompleted: (event: import("@spira/shared").SubagentCompletedEvent) => void;
+  handleSubagentError: (event: import("@spira/shared").SubagentErrorEvent) => void;
+  handleSubagentLockAcquired: (event: import("@spira/shared").SubagentLockAcquiredEvent) => void;
+  handleSubagentLockDenied: (event: import("@spira/shared").SubagentLockDeniedEvent) => void;
+  handleSubagentLockReleased: (event: import("@spira/shared").SubagentLockReleasedEvent) => void;
 }
 
 export const registerUiHandlers = (actions: UiHandlerActions): Array<() => void> => [
@@ -67,6 +77,42 @@ export const registerUiHandlers = (actions: UiHandlerActions): Array<() => void>
       actions.clearPermissionRequests();
       actions.clearAllActiveCaptures();
       actions.clearRoomState();
+    }
+  }),
+  window.electronAPI.onMessage((message) => {
+    switch (message.type) {
+      case "subagent:started":
+        actions.handleSubagentStarted(message.event);
+        break;
+      case "subagent:tool-call":
+        actions.handleSubagentToolCall(message.event);
+        break;
+      case "subagent:tool-result":
+        actions.handleSubagentToolResult(message.event);
+        break;
+      case "subagent:delta":
+        actions.handleSubagentDelta(message.event);
+        break;
+      case "subagent:status":
+        actions.handleSubagentStatus(message.event);
+        break;
+      case "subagent:completed":
+        actions.handleSubagentCompleted(message.event);
+        break;
+      case "subagent:error":
+        actions.handleSubagentError(message.event);
+        break;
+      case "subagent:lock-acquired":
+        actions.handleSubagentLockAcquired(message.event);
+        break;
+      case "subagent:lock-denied":
+        actions.handleSubagentLockDenied(message.event);
+        break;
+      case "subagent:lock-released":
+        actions.handleSubagentLockReleased(message.event);
+        break;
+      default:
+        break;
     }
   }),
 ];

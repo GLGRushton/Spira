@@ -2,6 +2,7 @@ import type { AssistantState } from "./assistant-state.js";
 import type { ConnectionStatus } from "./electron-api.js";
 import type { McpServerStatus } from "./mcp-types.js";
 import type { PermissionRequestPayload, TtsProvider, UserSettings } from "./protocol.js";
+import type { SubagentDomainId } from "./subagent-types.js";
 import type { UpgradeScope } from "./upgrade.js";
 
 export const SPIRA_UI_CONTROL_BRIDGE_VERSION = 1;
@@ -78,6 +79,10 @@ export interface SpiraUiAgentRoomSummary {
   label: string;
   caption: string;
   status: "launching" | "active" | "idle" | "error";
+  kind?: "agent" | "subagent";
+  domainId?: SubagentDomainId;
+  runId?: string;
+  attempt?: number;
   createdAt: number;
   updatedAt: number;
   sourceCallId?: string;

@@ -1,14 +1,40 @@
 import { randomUUID } from "node:crypto";
 import { type Tool, type ToolResultObject, defineTool } from "@github/copilot-sdk";
-import { type McpTool, type UpgradeProposal, classifyUpgradeScope, getRelevantUpgradeFiles } from "@spira/shared";
+import {
+  type McpTool,
+  type SubagentDelegationArgs,
+  type SubagentDomain,
+  type SubagentEnvelope,
+  type SubagentRunHandle,
+  type SubagentRunSnapshot,
+  type UpgradeProposal,
+  classifyUpgradeScope,
+  getRelevantUpgradeFiles,
+} from "@spira/shared";
 import type { McpToolAggregator } from "../mcp/tool-aggregator.js";
 import { createLogger } from "../util/logger.js";
 
 const logger = createLogger("tool-bridge");
+const DEFAULT_READ_SUBAGENT_TIMEOUT_MS = 30_000;
 
-interface ToolBridgeOptions {
+export interface ToolBridgeOptions {
   requestUpgradeProposal?: (proposal: UpgradeProposal) => Promise<void> | void;
   applyHotCapabilityUpgrade?: () => Promise<void> | void;
+  includeServerIds?: readonly string[];
+  excludeServerIds?: readonly string[];
+  delegationDomains?: readonly SubagentDomain[];
+  delegateToDomain?: (
+    domainId: SubagentDomain["id"],
+    args: SubagentDelegationArgs,
+  ) => Promise<SubagentEnvelope | SubagentRunHandle>;
+  readSubagent?: (
+    agentId: string,
+    options?: { wait?: boolean; timeoutMs?: number },
+  ) => Promise<SubagentRunSnapshot | null>;
+  listSubagents?: (options?: { includeCompleted?: boolean }) => Promise<SubagentRunSnapshot[]> | SubagentRunSnapshot[];
+  writeSubagent?: (agentId: string, input: string) => Promise<SubagentRunSnapshot | null>;
+  stopSubagent?: (agentId: string) => Promise<SubagentRunSnapshot | null>;
+  wrapToolExecution?: (tool: McpTool, args: unknown, execute: () => Promise<unknown>) => Promise<unknown>;
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null;
@@ -32,14 +58,19 @@ const toFailureResult = (toolName: string, error: unknown): ToolResultObject => 
   };
 };
 
-const buildTool = (tool: McpTool, aggregator: McpToolAggregator) =>
+const buildTool = (
+  tool: McpTool,
+  aggregator: McpToolAggregator,
+  wrapToolExecution?: ToolBridgeOptions["wrapToolExecution"],
+) =>
   defineTool(tool.name, {
     description: tool.description ?? `Execute the ${tool.name} tool from ${tool.serverName}.`,
     parameters: tool.inputSchema,
     skipPermission: isPermissionlessTool(tool),
     handler: async (args) => {
       try {
-        return toSuccessResult(await aggregator.executeTool(tool.name, args));
+        const execute = () => aggregator.executeTool(tool.name, args);
+        return toSuccessResult(await (wrapToolExecution ? wrapToolExecution(tool, args, execute) : execute()));
       } catch (error) {
         logger.error({ error, toolName: tool.name, serverId: tool.serverId }, "MCP tool execution failed");
         return toFailureResult(tool.name, error);
@@ -110,10 +141,249 @@ const buildUpgradeProposalTool = (
     },
   });
 
+const buildDelegationTool = (
+  domain: SubagentDomain,
+  delegateToDomain: NonNullable<ToolBridgeOptions["delegateToDomain"]>,
+) =>
+  defineTool(domain.delegationToolName, {
+    description: `Delegate a task to the ${domain.label}. Use mode="background" to get a handle immediately.`,
+    parameters: {
+      type: "object",
+      properties: {
+        task: {
+          type: "string",
+          description: "The task the subagent should complete.",
+        },
+        context: {
+          type: "string",
+          description: "Optional supporting context for the delegated task.",
+        },
+        allowWrites: {
+          type: "boolean",
+          description: "Whether the subagent may perform state-changing actions.",
+        },
+        mode: {
+          type: "string",
+          enum: ["sync", "background"],
+          description: "Run synchronously for an immediate envelope or in the background to get a handle back.",
+        },
+      },
+      required: ["task"],
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      try {
+        const payload = isRecord(args) ? args : {};
+        const task = typeof payload.task === "string" ? payload.task.trim() : "";
+        if (!task) {
+          throw new Error(`Delegation to ${domain.label} requires a non-empty task`);
+        }
+
+        return toSuccessResult(
+          await delegateToDomain(domain.id, {
+            task,
+            ...(typeof payload.context === "string" && payload.context.trim()
+              ? { context: payload.context.trim() }
+              : {}),
+            ...(typeof payload.allowWrites === "boolean" ? { allowWrites: payload.allowWrites } : {}),
+            ...(payload.mode === "background" || payload.mode === "sync" ? { mode: payload.mode } : {}),
+          }),
+        );
+      } catch (error) {
+        logger.error({ error, domainId: domain.id }, "Subagent delegation failed");
+        return toFailureResult(domain.delegationToolName, error);
+      }
+    },
+  });
+
+const buildReadSubagentTool = (readSubagent: NonNullable<ToolBridgeOptions["readSubagent"]>) =>
+  defineTool("read_subagent", {
+    description: "Read the current status or final result of a delegated subagent run by agent_id.",
+    parameters: {
+      type: "object",
+      properties: {
+        agent_id: {
+          type: "string",
+          description: "The delegated subagent handle returned by delegate_to_* in background mode.",
+        },
+        wait: {
+          type: "boolean",
+          description: "Whether to wait briefly for the run to finish before returning.",
+        },
+        timeout_seconds: {
+          type: "number",
+          description: "Optional wait timeout in seconds when wait is true. Defaults to 30 seconds when omitted.",
+        },
+      },
+      required: ["agent_id"],
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      try {
+        const payload = isRecord(args) ? args : {};
+        const agentId = typeof payload.agent_id === "string" ? payload.agent_id.trim() : "";
+        if (!agentId) {
+          throw new Error("read_subagent requires a non-empty agent_id");
+        }
+
+        const shouldWait = payload.wait === true;
+        const snapshot = await readSubagent(agentId, {
+          ...(shouldWait ? { wait: true } : {}),
+          ...(shouldWait
+            ? {
+                timeoutMs:
+                  typeof payload.timeout_seconds === "number" && Number.isFinite(payload.timeout_seconds)
+                    ? Math.max(0, payload.timeout_seconds) * 1000
+                    : DEFAULT_READ_SUBAGENT_TIMEOUT_MS,
+              }
+            : {}),
+        });
+        if (!snapshot) {
+          throw new Error(`No delegated subagent run found for ${agentId}`);
+        }
+
+        return toSuccessResult(snapshot);
+      } catch (error) {
+        logger.error({ error }, "Failed to read delegated subagent run");
+        return toFailureResult("read_subagent", error);
+      }
+    },
+  });
+
+const buildListSubagentsTool = (listSubagents: NonNullable<ToolBridgeOptions["listSubagents"]>) =>
+  defineTool("list_subagents", {
+    description: "List active and recently completed delegated subagent runs.",
+    parameters: {
+      type: "object",
+      properties: {
+        include_completed: {
+          type: "boolean",
+          description: "Whether to include recently completed runs alongside active ones.",
+        },
+      },
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      try {
+        const payload = isRecord(args) ? args : {};
+        return toSuccessResult(
+          await listSubagents({
+            ...(typeof payload.include_completed === "boolean" ? { includeCompleted: payload.include_completed } : {}),
+          }),
+        );
+      } catch (error) {
+        logger.error({ error }, "Failed to list delegated subagent runs");
+        return toFailureResult("list_subagents", error);
+      }
+    },
+  });
+
+const buildWriteSubagentTool = (writeSubagent: NonNullable<ToolBridgeOptions["writeSubagent"]>) =>
+  defineTool("write_subagent", {
+    description: "Send a follow-up message to an idle delegated subagent run by agent_id.",
+    parameters: {
+      type: "object",
+      properties: {
+        agent_id: {
+          type: "string",
+          description: "The delegated subagent handle returned by delegate_to_* in background mode.",
+        },
+        input: {
+          type: "string",
+          description: "The follow-up instruction or message to send to the delegated subagent.",
+        },
+      },
+      required: ["agent_id", "input"],
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      try {
+        const payload = isRecord(args) ? args : {};
+        const agentId = typeof payload.agent_id === "string" ? payload.agent_id.trim() : "";
+        const input = typeof payload.input === "string" ? payload.input.trim() : "";
+        if (!agentId) {
+          throw new Error("write_subagent requires a non-empty agent_id");
+        }
+        if (!input) {
+          throw new Error("write_subagent requires non-empty input");
+        }
+
+        const snapshot = await writeSubagent(agentId, input);
+        if (!snapshot) {
+          throw new Error(`No delegated subagent run found for ${agentId}`);
+        }
+
+        return toSuccessResult(snapshot);
+      } catch (error) {
+        logger.error({ error }, "Failed to write to delegated subagent run");
+        return toFailureResult("write_subagent", error);
+      }
+    },
+  });
+
+const buildStopSubagentTool = (stopSubagent: NonNullable<ToolBridgeOptions["stopSubagent"]>) =>
+  defineTool("stop_subagent", {
+    description: "Stop a delegated subagent run by agent_id and mark it as cancelled.",
+    parameters: {
+      type: "object",
+      properties: {
+        agent_id: {
+          type: "string",
+          description: "The delegated subagent handle returned by delegate_to_* in background mode.",
+        },
+      },
+      required: ["agent_id"],
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      try {
+        const payload = isRecord(args) ? args : {};
+        const agentId = typeof payload.agent_id === "string" ? payload.agent_id.trim() : "";
+        if (!agentId) {
+          throw new Error("stop_subagent requires a non-empty agent_id");
+        }
+
+        const snapshot = await stopSubagent(agentId);
+        if (!snapshot) {
+          throw new Error(`No delegated subagent run found for ${agentId}`);
+        }
+
+        return toSuccessResult(snapshot);
+      } catch (error) {
+        logger.error({ error }, "Failed to stop delegated subagent run");
+        return toFailureResult("stop_subagent", error);
+      }
+    },
+  });
+
 export function getCopilotTools(aggregator: McpToolAggregator, options: ToolBridgeOptions = {}): Tool[] {
-  const tools = aggregator.getTools().map((tool) => buildTool(tool, aggregator));
+  let mcpTools = options.includeServerIds?.length
+    ? aggregator.getToolsForServerIds(options.includeServerIds)
+    : aggregator.getTools();
+  if (options.excludeServerIds?.length) {
+    const excludedServerIds = new Set(options.excludeServerIds);
+    mcpTools = mcpTools.filter((tool) => !excludedServerIds.has(tool.serverId));
+  }
+
+  const tools = mcpTools.map((tool) => buildTool(tool, aggregator, options.wrapToolExecution));
   if (options.requestUpgradeProposal) {
     tools.push(buildUpgradeProposalTool(options.requestUpgradeProposal, options.applyHotCapabilityUpgrade));
+  }
+  if (options.delegationDomains?.length && options.delegateToDomain) {
+    const delegateToDomain = options.delegateToDomain;
+    tools.push(...options.delegationDomains.map((domain) => buildDelegationTool(domain, delegateToDomain)));
+  }
+  if (options.readSubagent) {
+    tools.push(buildReadSubagentTool(options.readSubagent));
+  }
+  if (options.listSubagents) {
+    tools.push(buildListSubagentsTool(options.listSubagents));
+  }
+  if (options.writeSubagent) {
+    tools.push(buildWriteSubagentTool(options.writeSubagent));
+  }
+  if (options.stopSubagent) {
+    tools.push(buildStopSubagentTool(options.stopSubagent));
   }
   logger.info({ toolCount: tools.length }, "Registered MCP tools with Copilot session");
   return tools;

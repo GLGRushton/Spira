@@ -1,7 +1,20 @@
 import type { AssistantState } from "./assistant-state.js";
 import type { ChatMessage, ToolCallStatus } from "./chat-types.js";
+import type { ConversationSearchMatch, StoredConversation, StoredConversationSummary } from "./conversation-types.js";
 import type { McpServerConfig } from "./mcp-types.js";
 import type { McpServerStatus } from "./mcp-types.js";
+import type {
+  SubagentCompletedEvent,
+  SubagentDeltaEvent,
+  SubagentErrorEvent,
+  SubagentLockAcquiredEvent,
+  SubagentLockDeniedEvent,
+  SubagentLockReleasedEvent,
+  SubagentStartedEvent,
+  SubagentStatusEvent,
+  SubagentToolCallEvent,
+  SubagentToolResultEvent,
+} from "./subagent-types.js";
 import type { UpgradeProposal, UpgradeStatus } from "./upgrade.js";
 
 export interface ErrorPayload {
@@ -22,7 +35,7 @@ export interface PermissionRequestPayload {
   readOnly: boolean;
 }
 
-export const PROTOCOL_VERSION = 2;
+export const PROTOCOL_VERSION = 4;
 
 export const TTS_PROVIDERS = ["elevenlabs", "kokoro"] as const;
 export type TtsProvider = (typeof TTS_PROVIDERS)[number];
@@ -30,15 +43,20 @@ export const normalizeTtsProvider = (provider: string | null | undefined): TtsPr
   provider === "elevenlabs" ? "elevenlabs" : "kokoro";
 export const WAKE_WORD_PROVIDERS = ["openwakeword", "porcupine", "none"] as const;
 export type WakeWordProviderSetting = (typeof WAKE_WORD_PROVIDERS)[number];
-export const normalizeWakeWordProvider = (
-  provider: string | null | undefined,
-): WakeWordProviderSetting =>
+export const normalizeWakeWordProvider = (provider: string | null | undefined): WakeWordProviderSetting =>
   provider === "porcupine" || provider === "none" ? provider : "openwakeword";
 
 export type ClientMessage =
   | { type: "chat:send"; text: string; conversationId?: string }
   | { type: "chat:abort" }
   | { type: "chat:reset" }
+  | { type: "chat:new-session"; conversationId?: string }
+  | { type: "conversation:recent:get"; requestId: string }
+  | { type: "conversation:list"; requestId: string; limit?: number; offset?: number }
+  | { type: "conversation:get"; requestId: string; conversationId: string }
+  | { type: "conversation:search"; requestId: string; query: string; limit?: number }
+  | { type: "conversation:mark-viewed"; requestId: string; conversationId: string }
+  | { type: "conversation:archive"; requestId: string; conversationId: string }
   | { type: "tts:speak"; text: string }
   | { type: "tts:stop" }
   | { type: "voice:toggle" }
@@ -64,11 +82,29 @@ export type ServerMessage =
   | { type: "chat:complete"; conversationId: string; messageId: string }
   | { type: "chat:abort-complete" }
   | { type: "chat:reset-complete" }
+  | { type: "chat:new-session-complete"; preservedToMemory: boolean }
   | { type: "chat:message"; message: ChatMessage }
+  | { type: "conversation:recent:result"; requestId: string; conversation: StoredConversation | null }
+  | { type: "conversation:list:result"; requestId: string; conversations: StoredConversationSummary[] }
+  | { type: "conversation:get:result"; requestId: string; conversation: StoredConversation | null }
+  | { type: "conversation:search:result"; requestId: string; matches: ConversationSearchMatch[] }
+  | { type: "conversation:mark-viewed:result"; requestId: string; success: boolean }
+  | { type: "conversation:archive:result"; requestId: string; success: boolean }
+  | ({ type: "conversation:request-error"; requestId: string } & ErrorPayload)
   | { type: "tool:call"; callId: string; name: string; status: ToolCallStatus; args?: unknown; details?: string }
   | { type: "permission:request"; request: PermissionRequestPayload }
   | { type: "permission:complete"; requestId: string; result: "approved" | "denied" | "expired" }
   | { type: "mcp:status"; servers: McpServerStatus[] }
+  | { type: "subagent:started"; event: SubagentStartedEvent }
+  | { type: "subagent:tool-call"; event: SubagentToolCallEvent }
+  | { type: "subagent:tool-result"; event: SubagentToolResultEvent }
+  | { type: "subagent:delta"; event: SubagentDeltaEvent }
+  | { type: "subagent:status"; event: SubagentStatusEvent }
+  | { type: "subagent:completed"; event: SubagentCompletedEvent }
+  | { type: "subagent:error"; event: SubagentErrorEvent }
+  | { type: "subagent:lock-acquired"; event: SubagentLockAcquiredEvent }
+  | { type: "subagent:lock-denied"; event: SubagentLockDeniedEvent }
+  | { type: "subagent:lock-released"; event: SubagentLockReleasedEvent }
   | { type: "voice:transcript"; text: string }
   | { type: "audio:level"; level: number }
   | { type: "tts:amplitude"; amplitude: number }

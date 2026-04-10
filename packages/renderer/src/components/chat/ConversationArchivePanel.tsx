@@ -6,7 +6,9 @@ import styles from "./ConversationArchivePanel.module.css";
 interface ConversationArchivePanelProps {
   open: boolean;
   disabled?: boolean;
+  canStartNewChat?: boolean;
   onClose: () => void;
+  onStartNewChat: () => void;
 }
 
 const formatTimestamp = (timestamp: number | null): string => {
@@ -22,7 +24,13 @@ const formatTimestamp = (timestamp: number | null): string => {
   }).format(timestamp);
 };
 
-export function ConversationArchivePanel({ open, disabled = false, onClose }: ConversationArchivePanelProps) {
+export function ConversationArchivePanel({
+  open,
+  disabled = false,
+  canStartNewChat = true,
+  onClose,
+  onStartNewChat,
+}: ConversationArchivePanelProps) {
   const activeConversationId = useChatStore((store) => store.activeConversationId);
   const hydrateConversation = useChatStore((store) => store.hydrateConversation);
   const setSessionNotice = useChatStore((store) => store.setSessionNotice);
@@ -165,9 +173,19 @@ export function ConversationArchivePanel({ open, disabled = false, onClose }: Co
           <div className={styles.eyebrow}>Conversation archive</div>
           <h3 className={styles.title}>Stored chats</h3>
         </div>
-        <button type="button" className={styles.closeButton} onClick={onClose}>
-          Close
-        </button>
+        <div className={styles.headerActions}>
+          <button
+            type="button"
+            className={styles.startButton}
+            disabled={disabled || !canStartNewChat}
+            onClick={onStartNewChat}
+          >
+            Start new chat
+          </button>
+          <button type="button" className={styles.closeButton} onClick={onClose}>
+            Close
+          </button>
+        </div>
       </div>
 
       <label className={styles.searchLabel}>

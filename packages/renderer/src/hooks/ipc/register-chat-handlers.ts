@@ -101,6 +101,16 @@ export const registerChatHandlers = (tracker: IpcSessionTracker, actions: ChatHa
     actions.setSessionNotice(null);
     actions.setResetting(false);
   }),
+  window.electronAPI.onChatNewSessionComplete(({ preservedToMemory }) => {
+    actions.hydrateConversation(null);
+    actions.setSessionNotice({
+      kind: preservedToMemory ? "info" : "warning",
+      message: preservedToMemory
+        ? "Started a fresh chat. The previous conversation was preserved in archive memory."
+        : "Started a fresh chat. No prior conversation context was added to memory.",
+    });
+    actions.setResetting(false);
+  }),
   window.electronAPI.onToolCall((payload) => {
     const messageId = tracker.activeAssistantMessageId ?? PENDING_ASSISTANT_ID;
     if (payload.name.startsWith("vision_")) {

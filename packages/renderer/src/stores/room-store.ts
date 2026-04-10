@@ -1,4 +1,22 @@
-import type { McpServerStatus, ToolCallStatus } from "@spira/shared";
+import type {
+  McpServerStatus,
+  SubagentCompletedEvent,
+  SubagentDeltaEvent,
+  SubagentDomainId,
+  SubagentEnvelope,
+  SubagentErrorEvent,
+  SubagentErrorRecord,
+  SubagentLockAcquiredEvent,
+  SubagentLockDeniedEvent,
+  SubagentLockReleasedEvent,
+  SubagentRunStatus,
+  SubagentStartedEvent,
+  SubagentStatusEvent,
+  SubagentToolCallEvent,
+  SubagentToolCallRecord,
+  SubagentToolResultEvent,
+  ToolCallStatus,
+} from "@spira/shared";
 import { create } from "zustand";
 import { RECENT_COMPLETION_MS } from "../tool-display.js";
 
@@ -17,6 +35,10 @@ export interface AgentRoom {
   label: string;
   caption: string;
   status: "launching" | "active" | "idle" | "error";
+  kind?: "agent" | "subagent";
+  domainId?: SubagentDomainId;
+  runId?: string;
+  attempt?: number;
   createdAt: number;
   updatedAt: number;
   sourceCallId?: string;
@@ -24,6 +46,11 @@ export interface AgentRoom {
   lastToolName?: string;
   detail?: string;
   activeToolCount: number;
+  expiresAt?: number;
+  liveText?: string;
+  envelope?: SubagentEnvelope;
+  toolHistory: SubagentToolCallRecord[];
+  errorHistory: SubagentErrorRecord[];
 }
 
 interface ToolCallPayload {
@@ -40,6 +67,16 @@ interface RoomStore {
   clearAll: () => void;
   syncServers: (servers: McpServerStatus[]) => void;
   handleToolCall: (payload: ToolCallPayload, servers: McpServerStatus[]) => void;
+  handleSubagentStarted: (event: SubagentStartedEvent) => void;
+  handleSubagentToolCall: (event: SubagentToolCallEvent) => void;
+  handleSubagentToolResult: (event: SubagentToolResultEvent) => void;
+  handleSubagentDelta: (event: SubagentDeltaEvent) => void;
+  handleSubagentStatus: (event: SubagentStatusEvent) => void;
+  handleSubagentCompleted: (event: SubagentCompletedEvent) => void;
+  handleSubagentError: (event: SubagentErrorEvent) => void;
+  handleSubagentLockAcquired: (event: SubagentLockAcquiredEvent) => void;
+  handleSubagentLockDenied: (event: SubagentLockDeniedEvent) => void;
+  handleSubagentLockReleased: (event: SubagentLockReleasedEvent) => void;
   pruneFlights: () => void;
 }
 
@@ -49,7 +86,15 @@ type ActiveCallTarget = {
   sourceCallId?: string;
 };
 
-const AGENT_TOOL_NAMES = new Set(["task", "read_agent", "write_agent", "stop_agent"]);
+const AGENT_TOOL_NAMES = new Set([
+  "task",
+  "read_agent",
+  "write_agent",
+  "stop_agent",
+  "read_subagent",
+  "write_subagent",
+  "stop_subagent",
+]);
 const OPERATIONS_TOOL_NAMES = new Set([
   "rg",
   "glob",
@@ -68,6 +113,11 @@ const activeCallTargets = new Map<string, ActiveCallTarget>();
 const agentLookup = new Map<string, `agent:${string}`>();
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null;
+const SUBAGENT_LABELS: Record<SubagentDomainId, string> = {
+  windows: "Windows Agent",
+  spira: "Spira Agent",
+  nexus: "Nexus Agent",
+};
 
 const getString = (value: unknown): string | undefined =>
   typeof value === "string" && value.trim() ? value.trim() : undefined;
@@ -112,6 +162,13 @@ const extractAgentLabel = (args: unknown): string => {
 
 const toAgentRoomId = (identifier: string): `agent:${string}` => `agent:${identifier}`;
 
+const getSubagentLabel = (domain: SubagentDomainId): string => SUBAGENT_LABELS[domain];
+const getRoomLabel = (rooms: AgentRoom[], roomId: `agent:${string}`, fallback = "Subagent"): string =>
+  rooms.find((room) => room.roomId === roomId)?.label ?? fallback;
+
+const describeSubagentAttempt = (attempt: number, allowWrites?: boolean): string =>
+  `${allowWrites ? "Write-enabled" : "Read-focused"} ${attempt > 1 ? `retry ${attempt}` : "run"} in progress`;
+
 const resolveTargetRoomId = (toolName: string, args: unknown, servers: McpServerStatus[]): string => {
   const agentId = extractAgentIdFromArgs(args);
   if (agentId) {
@@ -145,16 +202,12 @@ const upsertAgentRoom = (
     return [
       {
         roomId,
-        label: update.label,
-        caption: update.caption,
-        status: update.status,
+        ...update,
         createdAt: now,
         updatedAt: now,
-        sourceCallId: update.sourceCallId,
-        agentId: update.agentId,
-        lastToolName: update.lastToolName,
-        detail: update.detail,
         activeToolCount: update.activeToolCount ?? 0,
+        toolHistory: update.toolHistory ?? [],
+        errorHistory: update.errorHistory ?? [],
       },
       ...rooms,
     ];
@@ -167,6 +220,8 @@ const upsertAgentRoom = (
           ...update,
           updatedAt: now,
           activeToolCount: update.activeToolCount ?? room.activeToolCount,
+          toolHistory: update.toolHistory ?? room.toolHistory,
+          errorHistory: update.errorHistory ?? room.errorHistory,
         }
       : room,
   );
@@ -179,10 +234,69 @@ const updateAgentRoomActivity = (rooms: AgentRoom[], roomId: string, delta: numb
           ...room,
           activeToolCount: Math.max(0, room.activeToolCount + delta),
           updatedAt: Date.now(),
-          status: room.status === "error" ? room.status : room.activeToolCount + delta > 0 ? "active" : "idle",
+          status:
+            room.status === "error" ? room.status : Math.max(0, room.activeToolCount + delta) > 0 ? "active" : "idle",
         }
       : room,
   );
+
+const upsertToolHistory = (
+  toolHistory: SubagentToolCallRecord[],
+  entry: SubagentToolCallRecord,
+): SubagentToolCallRecord[] => {
+  const existingIndex = toolHistory.findIndex((toolCall) => toolCall.callId === entry.callId);
+  if (existingIndex < 0) {
+    return [...toolHistory, entry];
+  }
+
+  return toolHistory.map((toolCall, index) => (index === existingIndex ? { ...toolCall, ...entry } : toolCall));
+};
+
+const mergeToolHistory = (
+  existing: SubagentToolCallRecord[],
+  incoming: readonly SubagentToolCallRecord[],
+): SubagentToolCallRecord[] => incoming.reduce((history, entry) => upsertToolHistory(history, entry), existing);
+
+const isSameError = (left: SubagentErrorRecord, right: SubagentErrorRecord): boolean =>
+  left.code === right.code && left.message === right.message && left.details === right.details;
+
+const mergeErrorHistory = (
+  existing: SubagentErrorRecord[],
+  incoming: readonly SubagentErrorRecord[],
+): SubagentErrorRecord[] => {
+  const history = [...existing];
+  for (const entry of incoming) {
+    if (!history.some((error) => isSameError(error, entry))) {
+      history.push(entry);
+    }
+  }
+
+  return history;
+};
+
+const describeSubagentStatus = (status: SubagentRunStatus): { caption: string; status: AgentRoom["status"] } => {
+  switch (status) {
+    case "running":
+      return { caption: "Delegated run active", status: "active" };
+    case "idle":
+      return { caption: "Delegated run idle", status: "idle" };
+    case "partial":
+      return { caption: "Partial result", status: "error" };
+    case "failed":
+      return { caption: "Run failed", status: "error" };
+    case "cancelled":
+      return { caption: "Run cancelled", status: "idle" };
+    case "expired":
+      return { caption: "Run expired", status: "idle" };
+    case "completed":
+      return { caption: "Completed", status: "idle" };
+    default:
+      return { caption: "Delegated run", status: "idle" };
+  }
+};
+
+const trimLiveText = (value: string, maxLength = 8_000): string =>
+  value.length <= maxLength ? value : value.slice(value.length - maxLength);
 
 export const useRoomStore = create<RoomStore>((set) => ({
   flights: [],
@@ -301,6 +415,185 @@ export const useRoomStore = create<RoomStore>((set) => ({
       };
     });
   },
+  handleSubagentStarted: (event) => {
+    agentLookup.set(event.runId, event.roomId);
+    set((state) => ({
+      agentRooms: upsertAgentRoom(state.agentRooms, event.roomId, {
+        label: getSubagentLabel(event.domain),
+        caption: describeSubagentAttempt(event.attempt, event.allowWrites),
+        status: "active",
+        kind: "subagent",
+        domainId: event.domain,
+        runId: event.runId,
+        attempt: event.attempt,
+        detail: event.task,
+        activeToolCount: 0,
+        liveText: "",
+        envelope: undefined,
+      }),
+    }));
+  },
+  handleSubagentToolCall: (event) => {
+    set((state) => ({
+      agentRooms: updateAgentRoomActivity(
+        upsertAgentRoom(state.agentRooms, event.roomId, {
+          label: getRoomLabel(state.agentRooms, event.roomId),
+          caption: "Executing delegated tools",
+          status: "active",
+          lastToolName: event.toolName,
+          detail: event.serverId ? `${event.toolName} via ${event.serverId}` : event.toolName,
+          toolHistory: upsertToolHistory(
+            state.agentRooms.find((room) => room.roomId === event.roomId)?.toolHistory ?? [],
+            {
+              callId: event.callId,
+              toolName: event.toolName,
+              ...(event.serverId ? { serverId: event.serverId } : {}),
+              ...(event.args ? { args: event.args } : {}),
+              status: "running",
+              startedAt: event.startedAt,
+            },
+          ),
+        }),
+        event.roomId,
+        1,
+      ),
+    }));
+  },
+  handleSubagentToolResult: (event) => {
+    set((state) => ({
+      agentRooms: updateAgentRoomActivity(
+        upsertAgentRoom(state.agentRooms, event.roomId, {
+          label: getRoomLabel(state.agentRooms, event.roomId),
+          caption: "Delegated run",
+          status: event.status === "error" ? "error" : "active",
+          lastToolName: event.toolName,
+          detail: event.details ?? `${event.toolName} ${event.status}`,
+          toolHistory: upsertToolHistory(
+            state.agentRooms.find((room) => room.roomId === event.roomId)?.toolHistory ?? [],
+            {
+              callId: event.callId,
+              toolName: event.toolName,
+              ...(event.serverId ? { serverId: event.serverId } : {}),
+              ...(event.result !== undefined ? { result: event.result } : {}),
+              ...(event.details ? { details: event.details } : {}),
+              status: event.status,
+              startedAt: event.startedAt,
+              completedAt: event.completedAt,
+              durationMs: event.durationMs,
+            },
+          ),
+        }),
+        event.roomId,
+        -1,
+      ),
+    }));
+  },
+  handleSubagentDelta: (event) => {
+    set((state) => {
+      const existingRoom = state.agentRooms.find((room) => room.roomId === event.roomId);
+      return {
+        agentRooms: upsertAgentRoom(state.agentRooms, event.roomId, {
+          label: getRoomLabel(state.agentRooms, event.roomId),
+          caption: "Delegated run",
+          status: existingRoom?.status === "error" ? "error" : "active",
+          liveText: trimLiveText(`${existingRoom?.liveText ?? ""}${event.delta}`),
+        }),
+      };
+    });
+  },
+  handleSubagentStatus: (event) => {
+    set((state) => {
+      const descriptor = describeSubagentStatus(event.status);
+      return {
+        agentRooms: upsertAgentRoom(state.agentRooms, event.roomId, {
+          label: getSubagentLabel(event.domain),
+          caption: descriptor.caption,
+          status: descriptor.status,
+          kind: "subagent",
+          domainId: event.domain,
+          runId: event.runId,
+          detail: event.summary,
+          expiresAt: event.expiresAt,
+        }),
+      };
+    });
+  },
+  handleSubagentCompleted: (event) => {
+    set((state) => ({
+      agentRooms: upsertAgentRoom(state.agentRooms, event.roomId, {
+        label: getSubagentLabel(event.domain),
+        caption: event.envelope.followupNeeded ? "Completed with follow-up" : "Completed",
+        status: event.envelope.status === "failed" ? "error" : "idle",
+        kind: "subagent",
+        domainId: event.domain,
+        runId: event.runId,
+        attempt: event.envelope.retryCount + 1,
+        detail: event.envelope.summary,
+        activeToolCount: 0,
+        liveText: "",
+        envelope: event.envelope,
+        toolHistory: mergeToolHistory(
+          state.agentRooms.find((room) => room.roomId === event.roomId)?.toolHistory ?? [],
+          event.envelope.toolCalls,
+        ),
+        errorHistory: mergeErrorHistory(
+          state.agentRooms.find((room) => room.roomId === event.roomId)?.errorHistory ?? [],
+          event.envelope.errors,
+        ),
+      }),
+    }));
+  },
+  handleSubagentError: (event) => {
+    set((state) => ({
+      agentRooms: upsertAgentRoom(state.agentRooms, event.roomId, {
+        label: getSubagentLabel(event.domain),
+        caption: event.willRetry ? "Retrying subagent run" : "Run failed",
+        status: event.willRetry ? "active" : "error",
+        kind: "subagent",
+        domainId: event.domain,
+        runId: event.runId,
+        attempt: event.attempt,
+        detail: event.error.message,
+        errorHistory: mergeErrorHistory(
+          state.agentRooms.find((room) => room.roomId === event.roomId)?.errorHistory ?? [],
+          [event.error],
+        ),
+      }),
+    }));
+  },
+  handleSubagentLockAcquired: (event) => {
+    set((state) => ({
+      agentRooms: upsertAgentRoom(state.agentRooms, event.roomId, {
+        label: getRoomLabel(state.agentRooms, event.roomId),
+        caption: "Write lock granted",
+        status: "active",
+        runId: event.runId,
+        detail: `${event.request.toolName} locked ${event.request.targetId}`,
+      }),
+    }));
+  },
+  handleSubagentLockDenied: (event) => {
+    set((state) => ({
+      agentRooms: upsertAgentRoom(state.agentRooms, event.roomId, {
+        label: getRoomLabel(state.agentRooms, event.roomId),
+        caption: "Write lock denied",
+        status: "error",
+        runId: event.runId,
+        detail: event.denial.reason,
+      }),
+    }));
+  },
+  handleSubagentLockReleased: (event) => {
+    set((state) => ({
+      agentRooms: upsertAgentRoom(state.agentRooms, event.roomId, {
+        label: getRoomLabel(state.agentRooms, event.roomId),
+        caption: "Write lock released",
+        status: state.agentRooms.find((room) => room.roomId === event.roomId)?.activeToolCount ? "active" : "idle",
+        runId: event.runId,
+        detail: `Lock ${event.intentId} released`,
+      }),
+    }));
+  },
   pruneFlights: () => {
     const now = Date.now();
     set((state) => {
@@ -310,6 +603,12 @@ export const useRoomStore = create<RoomStore>((set) => ({
       const agentRooms = state.agentRooms.filter(
         (room) => room.activeToolCount > 0 || now - room.updatedAt < 5 * 60_000,
       );
+      const remainingRoomIds = new Set(agentRooms.map((room) => room.roomId));
+      for (const [agentId, roomId] of agentLookup.entries()) {
+        if (!remainingRoomIds.has(roomId)) {
+          agentLookup.delete(agentId);
+        }
+      }
 
       if (flights.length === state.flights.length && agentRooms.length === state.agentRooms.length) {
         return state;

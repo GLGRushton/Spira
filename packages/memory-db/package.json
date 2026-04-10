@@ -9,6 +9,7 @@
     "./path": "./src/path.ts"
   },
   "dependencies": {
+    "@spira/shared": "workspace:*",
     "better-sqlite3": "^11.10.0"
   },
   "devDependencies": {

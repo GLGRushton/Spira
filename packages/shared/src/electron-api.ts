@@ -8,6 +8,15 @@ import type { UpgradeProposal, UpgradeStatus } from "./upgrade.js";
 
 export type ConnectionStatus = "connecting" | "connected" | "disconnected" | "upgrading";
 
+export type RendererFatalPhase = "bootstrap" | "runtime";
+
+export interface RendererFatalPayload {
+  phase: RendererFatalPhase;
+  title: string;
+  message: string;
+  details?: string;
+}
+
 export interface ToolCallPayload {
   callId: string;
   name: string;
@@ -21,6 +30,7 @@ export interface ElectronApi {
   sendMessage(text: string, conversationId?: string): void;
   abortChat(): void;
   resetChat(): void;
+  startNewChat(conversationId?: string): void;
   toggleVoice(): void;
   updateSettings(settings: Partial<UserSettings>): void;
   setMcpServerEnabled(serverId: string, enabled: boolean): void;
@@ -36,6 +46,7 @@ export interface ElectronApi {
   setRuntimeConfig(update: RuntimeConfigUpdate): Promise<RuntimeConfigApplyResult>;
   setSettings(data: Partial<UserSettings>): Promise<void>;
   respondToUpgradeProposal(proposalId: string, approved: boolean): Promise<void>;
+  reportRendererFatal(payload: RendererFatalPayload): void;
   minimize(): void;
   maximize(): void;
   close(): void;
@@ -46,6 +57,7 @@ export interface ElectronApi {
   onChatComplete(handler: (payload: { conversationId: string; messageId: string }) => void): () => void;
   onChatAbortComplete(handler: () => void): () => void;
   onChatResetComplete(handler: () => void): () => void;
+  onChatNewSessionComplete(handler: (payload: { preservedToMemory: boolean }) => void): () => void;
   onToolCall(handler: (payload: ToolCallPayload) => void): () => void;
   onPermissionRequest(handler: (payload: PermissionRequestPayload) => void): () => void;
   onPermissionComplete(
