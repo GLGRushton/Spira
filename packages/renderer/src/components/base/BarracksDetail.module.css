@@ -1,0 +1,213 @@
+.panel {
+  height: 100%;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  gap: 16px;
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.eyebrow,
+.metricLabel,
+.domainEyebrow,
+.sectionLabel,
+.serverMeta {
+  color: var(--text-secondary);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.title {
+  font-size: clamp(22px, 3vw, 32px);
+}
+
+.caption {
+  max-width: 460px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.6;
+  text-align: right;
+}
+
+.metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.metricCard,
+.domainCard {
+  padding: 14px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  background: rgba(8, 12, 30, 0.52);
+}
+
+.metricValue {
+  display: block;
+  margin-top: 8px;
+  font-size: 18px;
+}
+
+.roster {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 12px;
+  overflow-y: auto;
+}
+
+.domainCard {
+  display: grid;
+  align-content: start;
+  gap: 14px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.03), transparent 40%), rgba(8, 12, 30, 0.58);
+}
+
+.windows {
+  border-color: rgba(0, 229, 255, 0.18);
+}
+
+.spira {
+  border-color: rgba(0, 212, 170, 0.18);
+}
+
+.nexus {
+  border-color: rgba(139, 92, 246, 0.18);
+}
+
+.cardHeader {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.domainTitle {
+  margin-top: 4px;
+  font-size: 20px;
+  text-transform: uppercase;
+}
+
+.domainDescription {
+  margin-top: 8px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.cardBadge {
+  align-self: start;
+  padding: 6px 10px;
+  border: 1px solid rgba(0, 229, 255, 0.14);
+  border-radius: 999px;
+  color: var(--text-primary);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.cardMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.serverGrid {
+  display: grid;
+  gap: 8px;
+}
+
+.serverCard {
+  padding: 10px 12px;
+  border: 1px solid rgba(0, 229, 255, 0.12);
+  border-radius: var(--radius-sm);
+  background: rgba(8, 12, 30, 0.44);
+}
+
+.serverHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.stateDot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  box-shadow: 0 0 12px currentColor;
+}
+
+.connected {
+  color: var(--accent-teal);
+  background: var(--accent-teal);
+}
+
+.starting {
+  color: var(--accent-cyan);
+  background: var(--accent-cyan);
+}
+
+.error,
+.disconnected {
+  color: #ef4444;
+  background: #ef4444;
+}
+
+.serverName {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.toolCloud {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.toolPill {
+  padding: 6px 10px;
+  border: 1px solid rgba(0, 229, 255, 0.14);
+  border-radius: 999px;
+  background: rgba(0, 229, 255, 0.06);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.toolOverflow {
+  border-style: dashed;
+  color: var(--text-secondary);
+}
+
+.emptyState {
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+@media (max-width: 960px) {
+  .header {
+    flex-direction: column;
+  }
+
+  .caption {
+    max-width: none;
+    text-align: left;
+  }
+
+  .metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 720px) {
+  .metrics {
+    grid-template-columns: 1fr;
+  }
+}

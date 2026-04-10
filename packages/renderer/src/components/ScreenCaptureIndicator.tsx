@@ -1,6 +1,7 @@
 import { AnimatePresence, motion } from "framer-motion";
 import { useMemo } from "react";
 import { useVisionStore } from "../stores/vision-store.js";
+import { useStationStore } from "../stores/station-store.js";
 import styles from "./ScreenCaptureIndicator.module.css";
 
 const getLabel = (toolName: string | null, args: unknown): string => {
@@ -30,7 +31,10 @@ const getLabel = (toolName: string | null, args: unknown): string => {
 };
 
 export function ScreenCaptureIndicator() {
-  const activeCapture = useVisionStore((store) => store.activeCaptures.at(-1) ?? null);
+  const activeStationId = useStationStore((store) => store.activeStationId);
+  const activeCapture = useVisionStore(
+    (store) => store.activeCaptures.filter((capture) => capture.stationId === activeStationId).at(-1) ?? null,
+  );
   const activeToolName = activeCapture?.toolName ?? null;
   const activeToolArgs = activeCapture?.args;
   const label = useMemo(() => getLabel(activeToolName, activeToolArgs), [activeToolArgs, activeToolName]);

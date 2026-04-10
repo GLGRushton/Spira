@@ -1,18 +1,12 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { useChatStore } from "./chat-store.js";
+import { createEmptyChatSessionState, getChatSession, useChatStore } from "./chat-store.js";
+import { PRIMARY_STATION_ID } from "./station-store.js";
 
 const resetChatStore = (): void => {
   useChatStore.setState({
-    messages: [],
-    activeConversationId: null,
-    activeConversationTitle: null,
-    draft: "",
-    composerFocusToken: 0,
-    sessionNotice: null,
-    isStreaming: false,
-    isAborting: false,
-    isResetConfirming: false,
-    isResetting: false,
+    sessions: {
+      [PRIMARY_STATION_ID]: createEmptyChatSessionState(),
+    },
   });
 };
 
@@ -27,7 +21,7 @@ describe("chat-store", () => {
     chat.startAssistantMessage("assistant-1");
     chat.completeMessage("assistant-1");
 
-    expect(useChatStore.getState().messages).toEqual([]);
+    expect(getChatSession(useChatStore.getState(), PRIMARY_STATION_ID).messages).toEqual([]);
   });
 
   it("keeps tool-only placeholders visible only while work is still running", () => {
@@ -39,7 +33,7 @@ describe("chat-store", () => {
       args: {},
       status: "running",
     });
-    expect(useChatStore.getState().messages).toHaveLength(1);
+    expect(getChatSession(useChatStore.getState(), PRIMARY_STATION_ID).messages).toHaveLength(1);
 
     chat.updateToolResult("assistant-1", "view", {
       callId: "call-1",
@@ -47,7 +41,7 @@ describe("chat-store", () => {
       value: "done",
     });
 
-    expect(useChatStore.getState().messages).toEqual([]);
+    expect(getChatSession(useChatStore.getState(), PRIMARY_STATION_ID).messages).toEqual([]);
   });
 
   it("keeps assistant replies that contain content", () => {
@@ -56,7 +50,7 @@ describe("chat-store", () => {
     chat.startAssistantMessage("assistant-1");
     chat.finaliseMessage("assistant-1", "Operational.", true);
 
-    expect(useChatStore.getState().messages).toMatchObject([
+    expect(getChatSession(useChatStore.getState(), PRIMARY_STATION_ID).messages).toMatchObject([
       {
         id: "assistant-1",
         role: "assistant",
@@ -77,7 +71,7 @@ describe("chat-store", () => {
       },
     ]);
 
-    expect(useChatStore.getState().messages).toMatchObject([
+    expect(getChatSession(useChatStore.getState(), PRIMARY_STATION_ID).messages).toMatchObject([
       {
         id: "assistant-1",
         role: "assistant",
@@ -99,7 +93,7 @@ describe("chat-store", () => {
       },
     ]);
 
-    expect(useChatStore.getState().messages).toEqual([]);
+    expect(getChatSession(useChatStore.getState(), PRIMARY_STATION_ID).messages).toEqual([]);
   });
 
   it("keeps aborted assistant placeholders visible", () => {
@@ -108,7 +102,7 @@ describe("chat-store", () => {
     chat.startAssistantMessage("assistant-1");
     chat.abortStreamingMessage();
 
-    expect(useChatStore.getState().messages).toMatchObject([
+    expect(getChatSession(useChatStore.getState(), PRIMARY_STATION_ID).messages).toMatchObject([
       {
         id: "assistant-1",
         role: "assistant",
@@ -129,7 +123,7 @@ describe("chat-store", () => {
       },
     ]);
 
-    expect(useChatStore.getState().messages).toEqual([
+    expect(getChatSession(useChatStore.getState(), PRIMARY_STATION_ID).messages).toEqual([
       {
         id: "user-1",
         role: "user",
@@ -159,7 +153,7 @@ describe("chat-store", () => {
       ],
     });
 
-    expect(useChatStore.getState()).toMatchObject({
+    expect(getChatSession(useChatStore.getState(), PRIMARY_STATION_ID)).toMatchObject({
       activeConversationId: "conversation-1",
       activeConversationTitle: "Recovered thread",
       messages: [
@@ -168,6 +162,24 @@ describe("chat-store", () => {
           content: "Recovered from the archive.",
         },
       ],
+    });
+  });
+
+  it("keeps station transcripts isolated", () => {
+    const chat = useChatStore.getState();
+
+    chat.addUserMessage("Primary thread", PRIMARY_STATION_ID);
+    chat.addUserMessage("Bravo thread", "bravo");
+    chat.setDraft("Primary draft", PRIMARY_STATION_ID);
+    chat.setDraft("Bravo draft", "bravo");
+
+    expect(getChatSession(useChatStore.getState(), PRIMARY_STATION_ID)).toMatchObject({
+      draft: "Primary draft",
+      messages: [{ content: "Primary thread" }],
+    });
+    expect(getChatSession(useChatStore.getState(), "bravo")).toMatchObject({
+      draft: "Bravo draft",
+      messages: [{ content: "Bravo thread" }],
     });
   });
 });

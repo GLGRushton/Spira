@@ -1,23 +1,35 @@
-import type { AssistantState, McpServerStatus } from "@spira/shared";
+import { type AssistantState, type McpServerStatus, SUBAGENT_DOMAINS, type SpiraUiView } from "@spira/shared";
 import { useCallback, useEffect, useRef } from "react";
 import type { AgentRoom } from "../../stores/room-store.js";
+import type { StationViewState } from "../../stores/station-store.js";
 import type { ToolFlight } from "../../stores/room-store.js";
 import styles from "./BaseDeck.module.css";
 import { FlightLayer } from "./FlightLayer.js";
 import { RoomCard } from "./RoomCard.js";
 
 interface BaseDeckProps {
-  activeView: "ship" | "bridge" | "mcp" | "agents" | "settings" | `mcp:${string}` | `agent:${string}`;
+  activeView: SpiraUiView;
+  activeStationId: string;
   assistantState: AssistantState;
+  stations: StationViewState[];
   servers: McpServerStatus[];
   agentRooms: AgentRoom[];
   flights: ToolFlight[];
-  onViewChange: (view: "ship" | "bridge" | "mcp" | "agents" | "settings" | `mcp:${string}` | `agent:${string}`) => void;
+  onViewChange: (view: SpiraUiView) => void;
 }
 
 const stateLabel = (state: AssistantState): string => state.charAt(0).toUpperCase() + state.slice(1);
 
-export function BaseDeck({ activeView, assistantState, servers, agentRooms, flights, onViewChange }: BaseDeckProps) {
+export function BaseDeck({
+  activeView,
+  activeStationId,
+  assistantState,
+  stations,
+  servers,
+  agentRooms,
+  flights,
+  onViewChange,
+}: BaseDeckProps) {
   const trackRef = useRef<HTMLDivElement | null>(null);
   const roomNodesRef = useRef(new Map<string, HTMLButtonElement | null>());
   const mcpHubNodeRef = useRef<HTMLButtonElement | null>(null);
@@ -32,13 +44,25 @@ export function BaseDeck({ activeView, assistantState, servers, agentRooms, flig
     (flight) => (flight.status === "running" || flight.status === "pending") && flight.toRoomId.startsWith("agent:"),
   ).length;
   const activeOperationsFlights = flights.filter(
+    (flight) => (flight.status === "running" || flight.status === "pending") && flight.toRoomId === "operations",
+  ).length;
+  const activeSettingsFlights = flights.filter(
     (flight) => (flight.status === "running" || flight.status === "pending") && flight.toRoomId === "settings",
+  ).length;
+  const activeBarracksFlights = flights.filter(
+    (flight) => (flight.status === "running" || flight.status === "pending") && flight.toRoomId === "barracks",
   ).length;
   const connectedServers = servers.filter((server) => server.state === "connected").length;
   const totalTools = servers.reduce((sum, server) => sum + server.toolCount, 0);
+  const delegatedServerIds = new Set(SUBAGENT_DOMAINS.flatMap((domain) => domain.serverIds));
+  const delegatedServers = servers.filter((server) => delegatedServerIds.has(server.id));
+  const delegatedSurfaceCount = delegatedServers.filter((server) => server.state === "connected").length;
+  const delegatedToolCount = delegatedServers.reduce((sum, server) => sum + server.toolCount, 0);
   const activeAgents = agentRooms.filter((room) => room.activeToolCount > 0).length;
   const activeAgentTools = agentRooms.reduce((sum, room) => sum + room.activeToolCount, 0);
   const latestAgents = agentRooms.slice(0, 3);
+  const activeStations = stations.filter((station) => station.state !== "idle" || station.isStreaming).length;
+  const focusedStation = stations.find((station) => station.stationId === activeStationId) ?? stations[0];
 
   const bindRoomNode = useCallback(
     (roomId: string) => (node: HTMLButtonElement | null) => {
@@ -103,7 +127,7 @@ export function BaseDeck({ activeView, assistantState, servers, agentRooms, flig
         </div>
         <p className={styles.caption}>
           A grouped cross-section of the ship. Click a room to zoom into its operations while live tool traffic flows
-          across the deck toward MCP, subagent, and operations hubs.
+          across the deck toward the Armoury, Barracks, Field Office, and operations hubs.
         </p>
       </div>
 
@@ -139,8 +163,8 @@ export function BaseDeck({ activeView, assistantState, servers, agentRooms, flig
                 <strong className={styles.previewValue}>{stateLabel(assistantState)}</strong>
               </div>
               <div className={styles.miniPanel}>
-                <span className={styles.previewLabel}>Lower bay</span>
-                <strong className={styles.previewValue}>Reserved</strong>
+                <span className={styles.previewLabel}>Focused station</span>
+                <strong className={styles.previewValue}>{focusedStation?.label ?? "Primary"}</strong>
               </div>
             </div>
           </div>
@@ -151,7 +175,7 @@ export function BaseDeck({ activeView, assistantState, servers, agentRooms, flig
           roomRef={bindMcpHubNode}
           active={activeView === "mcp" || activeView.startsWith("mcp:")}
           className={styles.mcpRoom}
-          title="MCP Servers"
+          title="Armoury"
           caption="Grouped tools"
           status={connectedServers === servers.length && servers.length > 0 ? "connected" : "starting"}
           metric={`${connectedServers}/${servers.length} links • ${totalTools} tools`}
@@ -169,19 +193,42 @@ export function BaseDeck({ activeView, assistantState, servers, agentRooms, flig
           </div>
         </RoomCard>
 
-        <div className={`${styles.voidCell} ${styles.voidUpper}`}>
-          <span className={styles.voidLabel}>Transit shaft</span>
-          <strong className={styles.voidTitle}>Structural corridor</strong>
-          <span className={styles.voidCopy}>Power routing and crew access spine.</span>
-        </div>
+        <RoomCard
+          roomId="barracks"
+          roomRef={bindRoomNode("barracks")}
+          active={activeView === "barracks"}
+          className={styles.barracksRoom}
+          title="Barracks"
+          caption="Delegation roster"
+          status={delegatedSurfaceCount > 0 ? "connected" : "starting"}
+          metric={`${delegatedSurfaceCount} linked surfaces • ${delegatedToolCount} delegated tools`}
+          tone="command"
+          badge={activeBarracksFlights ? `${activeBarracksFlights} live` : "Roster"}
+          onClick={() => onViewChange("barracks")}
+        >
+          <div className={styles.listPreview}>
+            <div className={styles.listRow}>
+              <span>Windows Agent</span>
+              <span>system + ui + vision</span>
+            </div>
+            <div className={styles.listRow}>
+              <span>Spira Agent</span>
+              <span>ui control bridge</span>
+            </div>
+            <div className={styles.listRow}>
+              <span>Nexus Agent</span>
+              <span>mods + files</span>
+            </div>
+          </div>
+        </RoomCard>
 
         <RoomCard
           roomId="agents"
           roomRef={bindAgentHubNode}
           active={activeView === "agents" || activeView.startsWith("agent:")}
           className={styles.agentRoom}
-          title="Sub Agents"
-          caption="Grouped teams"
+          title="Field Office"
+          caption="Live rooms"
           status={activeAgents > 0 ? "connected" : "idle"}
           metric={
             agentRooms.length > 0 ? `${agentRooms.length} teams • ${activeAgentTools} live ops` : "No deployed teams"
@@ -199,8 +246,31 @@ export function BaseDeck({ activeView, assistantState, servers, agentRooms, flig
                 </div>
               ))
             ) : (
-              <div className={styles.emptyPreview}>No field teams deployed.</div>
+              <div className={styles.emptyPreview}>No field office rooms deployed.</div>
             )}
+          </div>
+        </RoomCard>
+
+        <RoomCard
+          roomId="operations"
+          roomRef={bindRoomNode("operations")}
+          active={activeView === "operations"}
+          className={styles.opsRoom}
+          title="Operations"
+          caption="Command roster"
+          status="connected"
+          metric={`${stations.length} stations • ${activeStations} active`}
+          tone="command"
+          badge={activeOperationsFlights ? `${activeOperationsFlights} live` : "Roster"}
+          onClick={() => onViewChange("operations")}
+        >
+          <div className={styles.listPreview}>
+            {stations.slice(0, 3).map((station) => (
+              <div key={station.stationId} className={styles.listRow}>
+                <span>{station.label}</span>
+                <span>{station.state}</span>
+              </div>
+            ))}
           </div>
         </RoomCard>
 
@@ -208,13 +278,13 @@ export function BaseDeck({ activeView, assistantState, servers, agentRooms, flig
           roomId="settings"
           roomRef={bindRoomNode("settings")}
           active={activeView === "settings"}
-          className={styles.opsRoom}
-          title="Operations"
+          className={styles.settingsRoom}
+          title="Settings"
           caption="Systems control"
           status="connected"
-          metric="Voice link, settings, and utility tooling"
+          metric="Voice link, runtime tuning, and utility tooling"
           tone="ops"
-          badge={activeOperationsFlights ? `${activeOperationsFlights} live` : "Stable"}
+          badge={activeSettingsFlights ? `${activeSettingsFlights} live` : "Stable"}
           onClick={() => onViewChange("settings")}
         >
           <div className={styles.listPreview}>
@@ -228,12 +298,6 @@ export function BaseDeck({ activeView, assistantState, servers, agentRooms, flig
             </div>
           </div>
         </RoomCard>
-
-        <div className={`${styles.voidCell} ${styles.voidLowerMiddle}`}>
-          <span className={styles.voidLabel}>Expansion bay</span>
-          <strong className={styles.voidTitle}>Reserved slot</strong>
-          <span className={styles.voidCopy}>Available for future rooms.</span>
-        </div>
 
         <div className={`${styles.voidCell} ${styles.voidLowerRight}`}>
           <span className={styles.voidLabel}>Expansion bay</span>

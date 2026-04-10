@@ -1,21 +1,31 @@
 import { useEffect } from "react";
-import { useAssistantStore } from "../stores/assistant-store.js";
 import { useAudioStore } from "../stores/audio-store.js";
-import { useChatStore } from "../stores/chat-store.js";
+import { createChatEntityId, getChatSession, useChatStore } from "../stores/chat-store.js";
 import { useConnectionStore } from "../stores/connection-store.js";
 import { useMcpStore } from "../stores/mcp-store.js";
 import { usePermissionStore } from "../stores/permission-store.js";
 import { useRoomStore } from "../stores/room-store.js";
 import { useSettingsStore } from "../stores/settings-store.js";
+import { PRIMARY_STATION_ID, getStation, useStationStore } from "../stores/station-store.js";
 import { useUpgradeStore } from "../stores/upgrade-store.js";
 import { useVisionStore } from "../stores/vision-store.js";
 import { registerChatHandlers } from "./ipc/register-chat-handlers.js";
 import { activateSpiraUiRuntime, registerUiHandlers } from "./ipc/register-ui-handlers.js";
-import { createIpcSessionTracker } from "./ipc/session-tracker.js";
+import type { IpcStationTrackerMap } from "./ipc/session-tracker.js";
 
 export function useIpc(): void {
-  const setAssistantState = useAssistantStore((store) => store.setState);
+  const hydrateStations = useStationStore((store) => store.hydrateStations);
+  const upsertStation = useStationStore((store) => store.upsertStation);
+  const ensureStation = useStationStore((store) => store.ensureStation);
+  const removeStation = useStationStore((store) => store.removeStation);
+  const setActiveStation = useStationStore((store) => store.setActiveStation);
+  const setStationConversation = useStationStore((store) => store.setStationConversation);
+  const setStationState = useStationStore((store) => store.setStationState);
+  const markStationActivity = useStationStore((store) => store.markActivity);
+  const activeStationId = useStationStore((store) => store.activeStationId);
   const addUserMessage = useChatStore((store) => store.addUserMessage);
+  const ensureStationSession = useChatStore((store) => store.ensureStationSession);
+  const removeStationSession = useChatStore((store) => store.removeStationSession);
   const hydrateConversation = useChatStore((store) => store.hydrateConversation);
   const startAssistantMessage = useChatStore((store) => store.startAssistantMessage);
   const appendDelta = useChatStore((store) => store.appendDelta);
@@ -25,6 +35,7 @@ export function useIpc(): void {
   const clearStreamingState = useChatStore((store) => store.clearStreamingState);
   const addToolCall = useChatStore((store) => store.addToolCall);
   const updateToolResult = useChatStore((store) => store.updateToolResult);
+  const setActiveConversation = useChatStore((store) => store.setActiveConversation);
   const setAborting = useChatStore((store) => store.setAborting);
   const setResetConfirming = useChatStore((store) => store.setResetConfirming);
   const setResetting = useChatStore((store) => store.setResetting);
@@ -61,24 +72,27 @@ export function useIpc(): void {
   const showUpgradeStatus = useUpgradeStore((store) => store.showStatus);
 
   useEffect(() => {
-    const tracker = createIpcSessionTracker();
+    const trackers: IpcStationTrackerMap = new Map();
+    const runtimeState = { backendGeneration: null as number | null };
+    const requestStationList = () => {
+      window.electronAPI.send({ type: "station:list", requestId: `station-list-${createChatEntityId()}` });
+    };
 
-    void window.electronAPI.getRecentConversation().then((conversation) => {
-      if (useChatStore.getState().messages.length > 0) {
-        return;
-      }
-
-      hydrateConversation(conversation);
-    });
+    ensureStation(PRIMARY_STATION_ID);
+    ensureStationSession(PRIMARY_STATION_ID);
 
     void window.electronAPI.getConnectionStatus().then((status) => {
       setConnectionStatus(status);
     });
 
     const unsubscribers = [
-      ...registerChatHandlers(tracker, {
+      ...registerChatHandlers(trackers, runtimeState, {
         hydrateConversation,
-        setAssistantState,
+        ensureStationSession,
+        removeStationSession,
+        setAssistantState: (state, stationId) => {
+          setStationState(stationId ?? PRIMARY_STATION_ID, state);
+        },
         addUserMessage,
         startAssistantMessage,
         appendDelta,
@@ -88,10 +102,17 @@ export function useIpc(): void {
         clearStreamingState,
         addToolCall,
         updateToolResult,
+        setActiveConversation,
         setAborting,
         setResetConfirming,
         setResetting,
         setSessionNotice,
+        hydrateStations,
+        upsertStation,
+        setStationConversation,
+        setActiveStation,
+        removeStation,
+        markStationActivity,
         clearRoomState,
         handleRoomToolCall,
         clearPermissionRequests,
@@ -102,6 +123,7 @@ export function useIpc(): void {
         setConnectionStatus,
         setProtocolMismatch,
         clearProtocolMismatch,
+        requestStationList,
       }),
       ...registerUiHandlers({
         setServers,
@@ -134,6 +156,7 @@ export function useIpc(): void {
       }),
     ];
 
+    requestStationList();
     window.electronAPI.send({ type: "ping" });
     const deactivateSpiraUiRuntime = activateSpiraUiRuntime();
 
@@ -162,15 +185,24 @@ export function useIpc(): void {
     clearProtocolMismatch,
     clearPermissionRequests,
     clearRoomState,
-    hydrateConversation,
     completeMessage,
+    ensureStation,
+    ensureStationSession,
+    hydrateConversation,
     finaliseMessage,
+    hydrateStations,
+    markStationActivity,
+    removeStation,
+    removeStationSession,
     removePermissionRequest,
-    setAssistantState,
+    setActiveStation,
+    setStationConversation,
+    setActiveConversation,
     setActiveCapture,
     setAborting,
     setAudioLevel,
     setConnectionStatus,
+    setStationState,
     setResetConfirming,
     setResetting,
     setSessionNotice,
@@ -182,6 +214,7 @@ export function useIpc(): void {
     showUpgradeStatus,
     startAssistantMessage,
     updateToolResult,
+    upsertStation,
     handleRoomToolCall,
     handleSubagentDelta,
     handleSubagentStatus,
@@ -194,5 +227,43 @@ export function useIpc(): void {
     handleSubagentToolCall,
     handleSubagentToolResult,
     pruneRoomFlights,
+  ]);
+
+  const activeSession = useChatStore((store) => getChatSession(store, activeStationId));
+  const activeStation = useStationStore((store) => getStation(store, activeStationId));
+
+  useEffect(() => {
+    ensureStation(activeStationId, {
+      conversationId: activeStation.conversationId,
+      title: activeStation.title,
+    });
+    ensureStationSession(activeStationId);
+
+    if (activeSession.messages.length > 0 || !activeStation.conversationId) {
+      return;
+    }
+
+    let cancelled = false;
+    void window.electronAPI.getConversation(activeStation.conversationId).then((conversation) => {
+      if (cancelled || !conversation || conversation.id !== activeStation.conversationId) {
+        return;
+      }
+
+      hydrateConversation(conversation, activeStationId);
+      setActiveConversation(conversation.id, conversation.title, activeStationId);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    activeSession.messages.length,
+    activeStation.conversationId,
+    activeStation.title,
+    activeStationId,
+    ensureStation,
+    ensureStationSession,
+    hydrateConversation,
+    setActiveConversation,
   ]);
 }

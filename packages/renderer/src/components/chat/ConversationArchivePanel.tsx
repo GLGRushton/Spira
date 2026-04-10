@@ -1,6 +1,7 @@
 import type { ConversationSearchMatch, StoredConversationSummary } from "@spira/shared";
 import { useEffect, useMemo, useState } from "react";
-import { useChatStore } from "../../stores/chat-store.js";
+import { getChatSession, useChatStore } from "../../stores/chat-store.js";
+import { useStationStore } from "../../stores/station-store.js";
 import styles from "./ConversationArchivePanel.module.css";
 
 interface ConversationArchivePanelProps {
@@ -31,7 +32,9 @@ export function ConversationArchivePanel({
   onClose,
   onStartNewChat,
 }: ConversationArchivePanelProps) {
-  const activeConversationId = useChatStore((store) => store.activeConversationId);
+  const activeStationId = useStationStore((store) => store.activeStationId);
+  const setStationConversation = useStationStore((store) => store.setStationConversation);
+  const activeConversationId = useChatStore((store) => getChatSession(store, activeStationId).activeConversationId);
   const hydrateConversation = useChatStore((store) => store.hydrateConversation);
   const setSessionNotice = useChatStore((store) => store.setSessionNotice);
   const [query, setQuery] = useState("");
@@ -129,14 +132,15 @@ export function ConversationArchivePanel({
         return;
       }
 
-      hydrateConversation(conversation);
+      hydrateConversation(conversation, activeStationId);
+      setStationConversation(activeStationId, conversation.id, conversation.title);
       await window.electronAPI.markConversationViewed(conversationId);
       if (conversationId !== activeConversationId) {
         setSessionNotice({
           kind: "warning",
           message:
             "Loaded an archived conversation. The visible transcript is restored from the database; Shinra may need a fresh live turn to regain backend context.",
-        });
+        }, activeStationId);
       }
       onClose();
     } catch (loadError) {

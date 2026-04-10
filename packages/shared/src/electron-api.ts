@@ -2,7 +2,14 @@ import type { AssistantState } from "./assistant-state.js";
 import type { ChatMessage, ToolCallStatus } from "./chat-types.js";
 import type { ConversationSearchMatch, StoredConversation, StoredConversationSummary } from "./conversation-types.js";
 import type { McpServerStatus } from "./mcp-types.js";
-import type { ClientMessage, ErrorPayload, PermissionRequestPayload, ServerMessage, UserSettings } from "./protocol.js";
+import type {
+  ClientMessage,
+  ErrorPayload,
+  PermissionRequestPayload,
+  ServerMessage,
+  StationId,
+  UserSettings,
+} from "./protocol.js";
 import type { RuntimeConfigApplyResult, RuntimeConfigSummary, RuntimeConfigUpdate } from "./runtime-config.js";
 import type { UpgradeProposal, UpgradeStatus } from "./upgrade.js";
 
@@ -23,14 +30,15 @@ export interface ToolCallPayload {
   status: ToolCallStatus;
   args?: unknown;
   details?: string;
+  stationId?: StationId;
 }
 
 export interface ElectronApi {
   send(message: ClientMessage): void;
-  sendMessage(text: string, conversationId?: string): void;
-  abortChat(): void;
-  resetChat(): void;
-  startNewChat(conversationId?: string): void;
+  sendMessage(text: string, conversationId?: string, stationId?: StationId): void;
+  abortChat(stationId?: StationId): void;
+  resetChat(stationId?: StationId): void;
+  startNewChat(conversationId?: string, stationId?: StationId): void;
   toggleVoice(): void;
   updateSettings(settings: Partial<UserSettings>): void;
   setMcpServerEnabled(serverId: string, enabled: boolean): void;
@@ -51,17 +59,17 @@ export interface ElectronApi {
   maximize(): void;
   close(): void;
   onMessage(handler: (message: ServerMessage) => void): () => void;
-  onStateChange(handler: (state: AssistantState) => void): () => void;
-  onChatDelta(handler: (payload: { conversationId: string; token: string }) => void): () => void;
-  onChatMessage(handler: (message: ChatMessage) => void): () => void;
-  onChatComplete(handler: (payload: { conversationId: string; messageId: string }) => void): () => void;
-  onChatAbortComplete(handler: () => void): () => void;
-  onChatResetComplete(handler: () => void): () => void;
-  onChatNewSessionComplete(handler: (payload: { preservedToMemory: boolean }) => void): () => void;
+  onStateChange(handler: (payload: { state: AssistantState; stationId?: StationId }) => void): () => void;
+  onChatDelta(handler: (payload: { conversationId: string; token: string; stationId?: StationId }) => void): () => void;
+  onChatMessage(handler: (payload: { message: ChatMessage; stationId?: StationId }) => void): () => void;
+  onChatComplete(handler: (payload: { conversationId: string; messageId: string; stationId?: StationId }) => void): () => void;
+  onChatAbortComplete(handler: (payload: { stationId?: StationId }) => void): () => void;
+  onChatResetComplete(handler: (payload: { stationId?: StationId }) => void): () => void;
+  onChatNewSessionComplete(handler: (payload: { preservedToMemory: boolean; stationId?: StationId }) => void): () => void;
   onToolCall(handler: (payload: ToolCallPayload) => void): () => void;
   onPermissionRequest(handler: (payload: PermissionRequestPayload) => void): () => void;
   onPermissionComplete(
-    handler: (payload: { requestId: string; result: "approved" | "denied" | "expired" }) => void,
+    handler: (payload: { requestId: string; result: "approved" | "denied" | "expired"; stationId?: StationId }) => void,
   ): () => void;
   onMcpStatus(handler: (servers: McpServerStatus[]) => void): () => void;
   onAudioLevel(handler: (level: number) => void): () => void;

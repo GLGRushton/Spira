@@ -6,7 +6,7 @@ import type { SubagentDomainId } from "./subagent-types.js";
 import type { UpgradeScope } from "./upgrade.js";
 
 export const SPIRA_UI_CONTROL_BRIDGE_VERSION = 1;
-export const SPIRA_UI_ROOT_VIEWS = ["ship", "bridge", "mcp", "agents", "settings"] as const;
+export const SPIRA_UI_ROOT_VIEWS = ["ship", "operations", "bridge", "barracks", "mcp", "agents", "settings"] as const;
 export type SpiraUiRootView = (typeof SPIRA_UI_ROOT_VIEWS)[number];
 export type SpiraUiView = SpiraUiRootView | `mcp:${string}` | `agent:${string}`;
 

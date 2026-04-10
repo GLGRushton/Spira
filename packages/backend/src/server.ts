@@ -17,7 +17,6 @@ export class WsServer {
   private server: WebSocketServer | null = null;
   private client: WebSocket | null = null;
   private readonly busListeners: Array<() => void>;
-  private readonly toolCalls = new Map<string, { name: string; args: Record<string, unknown> }>();
   private voiceMuted = false;
 
   constructor(
@@ -28,64 +27,6 @@ export class WsServer {
     private readonly getMcpStatuses: () => McpServerStatus[] = () => [],
   ) {
     this.busListeners = [
-      this.registerBusHandler("state:change", (_previous, current) => {
-        this.send({ type: "state:change", state: current });
-      }),
-      this.registerBusHandler("copilot:delta", (messageId, delta) => {
-        this.send({ type: "chat:token", token: delta, conversationId: messageId });
-      }),
-      this.registerBusHandler("copilot:response-end", ({ messageId, text, timestamp, autoSpeak }) => {
-        this.send({
-          type: "chat:message",
-          message: {
-            id: messageId,
-            role: "assistant",
-            content: text,
-            timestamp,
-            autoSpeak,
-          },
-        });
-        this.send({ type: "chat:complete", conversationId: messageId, messageId });
-      }),
-      this.registerBusHandler("chat:assistant-message", ({ id, text, timestamp, autoSpeak }) => {
-        this.send({
-          type: "chat:message",
-          message: {
-            id,
-            role: "assistant",
-            content: text,
-            timestamp,
-            autoSpeak,
-          },
-        });
-        this.send({ type: "chat:complete", conversationId: id, messageId: id });
-      }),
-      this.registerBusHandler("copilot:error", (code, message, details, source) => {
-        this.toolCalls.clear();
-        this.send({ type: "error", code, message, details, source });
-      }),
-      this.registerBusHandler("copilot:tool-call", (callId, toolName, args) => {
-        this.toolCalls.set(callId, { name: toolName, args });
-        this.send({ type: "tool:call", callId, name: toolName, status: "running", args });
-      }),
-      this.registerBusHandler("copilot:tool-result", (callId, result) => {
-        const toolCall = this.toolCalls.get(callId) ?? { name: "unknown", args: {} };
-        this.toolCalls.delete(callId);
-        this.send({
-          type: "tool:call",
-          callId,
-          name: toolCall.name,
-          status: "success",
-          args: toolCall.args,
-          details: typeof result === "string" ? result : JSON.stringify(result),
-        });
-      }),
-      this.registerBusHandler("copilot:permission-request", (request) => {
-        this.send({ type: "permission:request", request });
-      }),
-      this.registerBusHandler("copilot:permission-complete", (requestId, result) => {
-        this.send({ type: "permission:complete", requestId, result });
-      }),
       this.registerBusHandler("mcp:servers-changed", (servers) => {
         this.send({ type: "mcp:status", servers });
       }),
@@ -107,36 +48,6 @@ export class WsServer {
       }),
       this.registerBusHandler("voice:transcript", ({ text }) => {
         this.send({ type: "voice:transcript", text });
-      }),
-      this.registerBusHandler("subagent:started", (event) => {
-        this.send({ type: "subagent:started", event });
-      }),
-      this.registerBusHandler("subagent:tool-call", (event) => {
-        this.send({ type: "subagent:tool-call", event });
-      }),
-      this.registerBusHandler("subagent:tool-result", (event) => {
-        this.send({ type: "subagent:tool-result", event });
-      }),
-      this.registerBusHandler("subagent:delta", (event) => {
-        this.send({ type: "subagent:delta", event });
-      }),
-      this.registerBusHandler("subagent:status", (event) => {
-        this.send({ type: "subagent:status", event });
-      }),
-      this.registerBusHandler("subagent:completed", (event) => {
-        this.send({ type: "subagent:completed", event });
-      }),
-      this.registerBusHandler("subagent:error", (event) => {
-        this.send({ type: "subagent:error", event });
-      }),
-      this.registerBusHandler("subagent:lock-acquired", (event) => {
-        this.send({ type: "subagent:lock-acquired", event });
-      }),
-      this.registerBusHandler("subagent:lock-denied", (event) => {
-        this.send({ type: "subagent:lock-denied", event });
-      }),
-      this.registerBusHandler("subagent:lock-released", (event) => {
-        this.send({ type: "subagent:lock-released", event });
       }),
     ];
   }

@@ -44,6 +44,129 @@
   gap: 10px;
 }
 
+.stationPanel {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid rgba(0, 229, 255, 0.14);
+  border-radius: 18px;
+  background: linear-gradient(180deg, rgba(15, 20, 48, 0.92), rgba(8, 12, 30, 0.9));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.stationHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.stationEyebrow {
+  color: var(--text-secondary);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.stationTitle {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.stationCreate {
+  padding: 8px 10px;
+  border: 1px solid rgba(0, 212, 170, 0.26);
+  border-radius: 999px;
+  background: rgba(0, 212, 170, 0.1);
+  color: var(--text-primary);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.stationList {
+  display: grid;
+  gap: 8px;
+}
+
+.stationItem {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid rgba(0, 229, 255, 0.1);
+  border-radius: 14px;
+  background: rgba(20, 26, 60, 0.72);
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.2s ease, transform 0.2s ease, background 0.2s ease;
+}
+
+.stationItem:hover {
+  transform: translateY(-1px);
+  border-color: rgba(0, 229, 255, 0.24);
+}
+
+.stationActive {
+  border-color: rgba(0, 212, 170, 0.32);
+  background: linear-gradient(180deg, rgba(0, 212, 170, 0.16), rgba(20, 26, 60, 0.9));
+}
+
+.stationPulse {
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.24);
+  box-shadow: 0 0 12px rgba(255, 255, 255, 0.12);
+}
+
+.idle {
+  background: rgba(148, 163, 184, 0.82);
+}
+
+.thinking,
+.speaking {
+  background: rgba(0, 229, 255, 0.92);
+  box-shadow: 0 0 14px rgba(0, 229, 255, 0.4);
+}
+
+.listening,
+.transcribing {
+  background: rgba(0, 212, 170, 0.92);
+  box-shadow: 0 0 14px rgba(0, 212, 170, 0.34);
+}
+
+.error {
+  background: rgba(248, 113, 113, 0.92);
+  box-shadow: 0 0 14px rgba(248, 113, 113, 0.3);
+}
+
+.stationCopy {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.stationLabel {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.stationCaption {
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stationUnread {
+  color: var(--accent-teal);
+  font-size: 18px;
+  line-height: 1;
+}
+
 .navItem {
   display: grid;
   gap: 4px;

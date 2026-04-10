@@ -1,9 +1,11 @@
 import type {
   ConversationMessage as SharedChatMessage,
-  ToolCallEntry as SharedToolCallEntry,
+  StationId,
   StoredConversation,
+  ToolCallEntry as SharedToolCallEntry,
 } from "@spira/shared";
 import { create } from "zustand";
+import { PRIMARY_STATION_ID, useStationStore } from "./station-store.js";
 
 export type ChatMessage = SharedChatMessage;
 export type ToolCallEntry = SharedToolCallEntry;
@@ -12,6 +14,47 @@ export interface ChatSessionNotice {
   kind: "info" | "warning";
   message: string;
 }
+
+export interface ChatSessionState {
+  messages: ChatMessage[];
+  activeConversationId: string | null;
+  activeConversationTitle: string | null;
+  draft: string;
+  composerFocusToken: number;
+  sessionNotice: ChatSessionNotice | null;
+  isStreaming: boolean;
+  isAborting: boolean;
+  isResetConfirming: boolean;
+  isResetting: boolean;
+}
+
+interface ChatStore {
+  sessions: Record<StationId, ChatSessionState>;
+  ensureStationSession: (stationId?: StationId) => void;
+  removeStationSession: (stationId: StationId) => void;
+  hydrateMessages: (messages: ChatMessage[], stationId?: StationId) => void;
+  hydrateConversation: (conversation: StoredConversation | null, stationId?: StationId) => void;
+  setActiveConversation: (conversationId: string | null, title?: string | null, stationId?: StationId) => void;
+  addUserMessage: (text: string, stationId?: StationId) => void;
+  startAssistantMessage: (id: string, stationId?: StationId) => void;
+  appendDelta: (id: string, delta: string, stationId?: StationId) => void;
+  finaliseMessage: (id: string, content: string, autoSpeak?: boolean, stationId?: StationId) => void;
+  completeMessage: (id: string, stationId?: StationId) => void;
+  abortStreamingMessage: (stationId?: StationId) => void;
+  clearStreamingState: (stationId?: StationId) => void;
+  addToolCall: (messageId: string, entry: ToolCallEntry, stationId?: StationId) => void;
+  updateToolResult: (messageId: string, toolName: string, result: unknown, stationId?: StationId) => void;
+  setDraft: (draft: string, stationId?: StationId) => void;
+  requestComposerFocus: (stationId?: StationId) => void;
+  setSessionNotice: (notice: ChatSessionNotice | null, stationId?: StationId) => void;
+  setResetConfirming: (isResetConfirming: boolean, stationId?: StationId) => void;
+  setAborting: (isAborting: boolean, stationId?: StationId) => void;
+  setResetting: (isResetting: boolean, stationId?: StationId) => void;
+  clearMessages: (stationId?: StationId) => void;
+}
+
+const MAX_MESSAGES = 500;
+export const PENDING_ASSISTANT_ID = "pending-assistant";
 
 const hasVisibleToolActivity = (message: ChatMessage): boolean =>
   (message.toolCalls ?? []).some((toolCall) => toolCall.status === "pending" || toolCall.status === "running");
@@ -62,40 +105,18 @@ export const getAwaitingAssistantQuestion = (messages: ChatMessage[]): ChatMessa
   return foundUserMessage && assistantMessage.content.trim().endsWith("?") ? assistantMessage : undefined;
 };
 
-interface ChatStore {
-  messages: ChatMessage[];
-  activeConversationId: string | null;
-  activeConversationTitle: string | null;
-  draft: string;
-  composerFocusToken: number;
-  sessionNotice: ChatSessionNotice | null;
-  isStreaming: boolean;
-  isAborting: boolean;
-  isResetConfirming: boolean;
-  isResetting: boolean;
-  hydrateMessages: (messages: ChatMessage[]) => void;
-  hydrateConversation: (conversation: StoredConversation | null) => void;
-  setActiveConversation: (conversationId: string | null, title?: string | null) => void;
-  addUserMessage: (text: string) => void;
-  startAssistantMessage: (id: string) => void;
-  appendDelta: (id: string, delta: string) => void;
-  finaliseMessage: (id: string, content: string, autoSpeak?: boolean) => void;
-  completeMessage: (id: string) => void;
-  abortStreamingMessage: () => void;
-  clearStreamingState: () => void;
-  addToolCall: (messageId: string, entry: ToolCallEntry) => void;
-  updateToolResult: (messageId: string, toolName: string, result: unknown) => void;
-  setDraft: (draft: string) => void;
-  requestComposerFocus: () => void;
-  setSessionNotice: (notice: ChatSessionNotice | null) => void;
-  setResetConfirming: (isResetConfirming: boolean) => void;
-  setAborting: (isAborting: boolean) => void;
-  setResetting: (isResetting: boolean) => void;
-  clearMessages: () => void;
-}
-
-export const PENDING_ASSISTANT_ID = "pending-assistant";
-const MAX_MESSAGES = 500;
+export const createEmptyChatSessionState = (): ChatSessionState => ({
+  messages: [],
+  activeConversationId: null,
+  activeConversationTitle: null,
+  draft: "",
+  composerFocusToken: 0,
+  sessionNotice: null,
+  isStreaming: false,
+  isAborting: false,
+  isResetConfirming: false,
+  isResetting: false,
+});
 
 export const createChatEntityId = (): string => {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
@@ -146,239 +167,353 @@ const updateMessage = (
   messages: ChatMessage[],
   messageId: string,
   update: (message: ChatMessage) => ChatMessage,
-): ChatMessage[] => {
-  return messages.map((message) => {
+): ChatMessage[] =>
+  messages.map((message) => {
     if (message.id !== messageId) {
       return message;
     }
 
     return update(message);
   });
-};
+
+const resolveStationId = (stationId?: StationId): StationId => stationId ?? useStationStore.getState().activeStationId;
+
+export const getChatSession = (store: Pick<ChatStore, "sessions">, stationId?: StationId): ChatSessionState =>
+  store.sessions[resolveStationId(stationId)] ?? createEmptyChatSessionState();
+
+const updateSessionState = (
+  state: ChatStore,
+  stationId: StationId,
+  updater: (session: ChatSessionState) => ChatSessionState,
+): Pick<ChatStore, "sessions"> => ({
+  sessions: {
+    ...state.sessions,
+    [stationId]: updater(getChatSession(state, stationId)),
+  },
+});
 
 export const useChatStore = create<ChatStore>((set) => ({
-  messages: [],
-  activeConversationId: null,
-  activeConversationTitle: null,
-  draft: "",
-  composerFocusToken: 0,
-  sessionNotice: null,
-  isStreaming: false,
-  isAborting: false,
-  isResetConfirming: false,
-  isResetting: false,
-  hydrateMessages: (messages) => {
-    set({ messages: normalizeMessages(messages) });
+  sessions: {
+    [PRIMARY_STATION_ID]: createEmptyChatSessionState(),
   },
-  hydrateConversation: (conversation) => {
-    set({
-      activeConversationId: conversation?.id ?? null,
-      activeConversationTitle: conversation?.title ?? null,
-      messages: normalizeMessages(conversation?.messages ?? []),
-      isStreaming: false,
-      isAborting: false,
-      isResetConfirming: false,
-      isResetting: false,
+  ensureStationSession: (stationId) => {
+    const resolvedStationId = resolveStationId(stationId);
+    set((state) => {
+      if (state.sessions[resolvedStationId]) {
+        return state;
+      }
+
+      return updateSessionState(state, resolvedStationId, () => createEmptyChatSessionState());
     });
   },
-  setActiveConversation: (activeConversationId, activeConversationTitle = null) => {
-    set({ activeConversationId, activeConversationTitle });
+  removeStationSession: (stationId) => {
+    if (stationId === PRIMARY_STATION_ID) {
+      return;
+    }
+
+    set((state) => {
+      const sessions = { ...state.sessions };
+      delete sessions[stationId];
+      return { sessions };
+    });
   },
-  addUserMessage: (text) => {
+  hydrateMessages: (messages, stationId) => {
+    const resolvedStationId = resolveStationId(stationId);
+    set((state) =>
+      updateSessionState(state, resolvedStationId, (session) => ({
+        ...session,
+        messages: normalizeMessages(messages),
+      })),
+    );
+  },
+  hydrateConversation: (conversation, stationId) => {
+    const resolvedStationId = resolveStationId(stationId);
+    set((state) =>
+      updateSessionState(state, resolvedStationId, (session) => ({
+        ...session,
+        activeConversationId: conversation?.id ?? null,
+        activeConversationTitle: conversation?.title ?? null,
+        messages: normalizeMessages(conversation?.messages ?? []),
+        isStreaming: false,
+        isAborting: false,
+        isResetConfirming: false,
+        isResetting: false,
+      })),
+    );
+  },
+  setActiveConversation: (activeConversationId, activeConversationTitle = null, stationId) => {
+    const resolvedStationId = resolveStationId(stationId);
+    set((state) =>
+      updateSessionState(state, resolvedStationId, (session) => ({
+        ...session,
+        activeConversationId,
+        activeConversationTitle,
+      })),
+    );
+  },
+  addUserMessage: (text, stationId) => {
     const trimmed = text.trim();
     if (!trimmed) {
       return;
     }
 
-    set((state) => {
-      const next = [
-        ...state.messages,
-        {
-          id: createChatEntityId(),
-          role: "user" as const,
-          content: trimmed,
-          timestamp: Date.now(),
-        },
-      ];
-      return { messages: trimMessages(next) };
-    });
+    const resolvedStationId = resolveStationId(stationId);
+    set((state) =>
+      updateSessionState(state, resolvedStationId, (session) => {
+        const next = [
+          ...session.messages,
+          {
+            id: createChatEntityId(),
+            role: "user" as const,
+            content: trimmed,
+            timestamp: Date.now(),
+          },
+        ];
+        return {
+          ...session,
+          messages: trimMessages(next),
+        };
+      }),
+    );
   },
-  startAssistantMessage: (id) => {
-    set((state) => ({
-      messages: ensureAssistantMessage(state.messages, id),
-      isStreaming: true,
-    }));
-  },
-  appendDelta: (id, delta) => {
-    set((state) => {
-      const ensuredMessages = ensureAssistantMessage(state.messages, id);
-      return {
-        messages: updateMessage(ensuredMessages, id, (message) => ({
-          ...message,
-          content: `${message.content}${delta}`,
-          isStreaming: true,
-        })),
+  startAssistantMessage: (id, stationId) => {
+    const resolvedStationId = resolveStationId(stationId);
+    set((state) =>
+      updateSessionState(state, resolvedStationId, (session) => ({
+        ...session,
+        messages: ensureAssistantMessage(session.messages, id),
         isStreaming: true,
-      };
-    });
+      })),
+    );
   },
-  finaliseMessage: (id, content, autoSpeak) => {
-    set((state) => {
-      const ensuredMessages = ensureAssistantMessage(state.messages, id);
-      const messages = trimMessages(
-        updateMessage(ensuredMessages, id, (message) => ({
-          ...message,
-          content,
+  appendDelta: (id, delta, stationId) => {
+    const resolvedStationId = resolveStationId(stationId);
+    set((state) =>
+      updateSessionState(state, resolvedStationId, (session) => {
+        const ensuredMessages = ensureAssistantMessage(session.messages, id);
+        return {
+          ...session,
+          messages: updateMessage(ensuredMessages, id, (message) => ({
+            ...message,
+            content: `${message.content}${delta}`,
+            isStreaming: true,
+          })),
+          isStreaming: true,
+        };
+      }),
+    );
+  },
+  finaliseMessage: (id, content, autoSpeak, stationId) => {
+    const resolvedStationId = resolveStationId(stationId);
+    set((state) =>
+      updateSessionState(state, resolvedStationId, (session) => {
+        const ensuredMessages = ensureAssistantMessage(session.messages, id);
+        return {
+          ...session,
+          messages: trimMessages(
+            updateMessage(ensuredMessages, id, (message) => ({
+              ...message,
+              content,
+              isStreaming: false,
+              wasAborted: false,
+              autoSpeak,
+            })),
+          ),
           isStreaming: false,
-          wasAborted: false,
-          autoSpeak,
-        })),
-      );
-      return {
-        messages,
-        isStreaming: false,
-      };
-    });
+        };
+      }),
+    );
   },
-  completeMessage: (id) => {
-    set((state) => {
-      const messages = trimMessages(
-        updateMessage(state.messages, id, (message) => ({
-          ...message,
-          isStreaming: false,
-          wasAborted: false,
-        })),
-      );
-      return {
-        messages,
-        isStreaming: false,
-      };
-    });
-  },
-  abortStreamingMessage: () => {
-    set((state) => {
-      const messages = trimMessages(
-        state.messages.map((message) => {
-          if (message.role !== "assistant" || !message.isStreaming) {
-            return message;
-          }
-
-          return {
+  completeMessage: (id, stationId) => {
+    const resolvedStationId = resolveStationId(stationId);
+    set((state) =>
+      updateSessionState(state, resolvedStationId, (session) => ({
+        ...session,
+        messages: trimMessages(
+          updateMessage(session.messages, id, (message) => ({
             ...message,
             isStreaming: false,
-            wasAborted: true,
-          };
-        }),
-      );
-      return {
-        messages,
+            wasAborted: false,
+          })),
+        ),
         isStreaming: false,
-      };
-    });
+      })),
+    );
   },
-  clearStreamingState: () => {
-    set((state) => ({
-      messages: normalizeMessages(state.messages),
-      isStreaming: false,
-    }));
-  },
-  addToolCall: (messageId, entry) => {
-    set((state) => {
-      const ensuredMessages = ensureAssistantMessage(state.messages, messageId);
-      const messages = updateMessage(ensuredMessages, messageId, (message) => {
-        const toolCalls = message.toolCalls ?? [];
-        const existingIndex = entry.callId ? toolCalls.findIndex((toolCall) => toolCall.callId === entry.callId) : -1;
-        if (existingIndex >= 0) {
-          return {
-            ...message,
-            toolCalls: toolCalls.map((toolCall, index) => {
-              if (index !== existingIndex) {
-                return toolCall;
-              }
+  abortStreamingMessage: (stationId) => {
+    const resolvedStationId = resolveStationId(stationId);
+    set((state) =>
+      updateSessionState(state, resolvedStationId, (session) => ({
+        ...session,
+        messages: trimMessages(
+          session.messages.map((message) => {
+            if (message.role !== "assistant" || !message.isStreaming) {
+              return message;
+            }
 
-              return {
-                ...toolCall,
-                ...entry,
-              };
-            }),
-          };
-        }
-
-        return {
-          ...message,
-          toolCalls: [...toolCalls, entry],
-        };
-      });
-      return {
-        messages,
-      };
-    });
+            return {
+              ...message,
+              isStreaming: false,
+              wasAborted: true,
+            };
+          }),
+        ),
+        isStreaming: false,
+      })),
+    );
   },
-  updateToolResult: (messageId, toolName, result) => {
-    set((state) => {
-      const messages = trimMessages(
-        updateMessage(state.messages, messageId, (message) => {
+  clearStreamingState: (stationId) => {
+    const resolvedStationId = resolveStationId(stationId);
+    set((state) =>
+      updateSessionState(state, resolvedStationId, (session) => ({
+        ...session,
+        messages: normalizeMessages(session.messages),
+        isStreaming: false,
+      })),
+    );
+  },
+  addToolCall: (messageId, entry, stationId) => {
+    const resolvedStationId = resolveStationId(stationId);
+    set((state) =>
+      updateSessionState(state, resolvedStationId, (session) => {
+        const ensuredMessages = ensureAssistantMessage(session.messages, messageId);
+        const messages = updateMessage(ensuredMessages, messageId, (message) => {
           const toolCalls = message.toolCalls ?? [];
-          const resultPayload =
-            result && typeof result === "object"
-              ? (result as { callId?: string; status?: ToolCallEntry["status"] })
-              : undefined;
-          const resultCallId = typeof resultPayload?.callId === "string" ? resultPayload.callId : undefined;
-          const targetIndex = [...toolCalls]
-            .reverse()
-            .findIndex((toolCall) => (resultCallId ? toolCall.callId === resultCallId : toolCall.name === toolName));
+          const existingIndex = entry.callId ? toolCalls.findIndex((toolCall) => toolCall.callId === entry.callId) : -1;
+          if (existingIndex >= 0) {
+            return {
+              ...message,
+              toolCalls: toolCalls.map((toolCall, index) => {
+                if (index !== existingIndex) {
+                  return toolCall;
+                }
 
-          if (targetIndex < 0) {
-            return message;
+                return {
+                  ...toolCall,
+                  ...entry,
+                };
+              }),
+            };
           }
 
-          const index = toolCalls.length - 1 - targetIndex;
           return {
             ...message,
-            toolCalls: toolCalls.map((toolCall, toolIndex) => {
-              if (toolIndex !== index) {
-                return toolCall;
-              }
-
-              return {
-                ...toolCall,
-                result,
-                status: resultPayload?.status ?? "success",
-              };
-            }),
+            toolCalls: [...toolCalls, entry],
           };
-        }),
-      );
-      return {
-        messages,
-      };
-    });
+        });
+        return {
+          ...session,
+          messages,
+        };
+      }),
+    );
   },
-  setDraft: (draft) => {
-    set({ draft });
+  updateToolResult: (messageId, toolName, result, stationId) => {
+    const resolvedStationId = resolveStationId(stationId);
+    set((state) =>
+      updateSessionState(state, resolvedStationId, (session) => ({
+        ...session,
+        messages: trimMessages(
+          updateMessage(session.messages, messageId, (message) => {
+            const toolCalls = message.toolCalls ?? [];
+            const resultPayload =
+              result && typeof result === "object"
+                ? (result as { callId?: string; status?: ToolCallEntry["status"] })
+                : undefined;
+            const resultCallId = typeof resultPayload?.callId === "string" ? resultPayload.callId : undefined;
+            const targetIndex = [...toolCalls]
+              .reverse()
+              .findIndex((toolCall) => (resultCallId ? toolCall.callId === resultCallId : toolCall.name === toolName));
+
+            if (targetIndex < 0) {
+              return message;
+            }
+
+            const index = toolCalls.length - 1 - targetIndex;
+            return {
+              ...message,
+              toolCalls: toolCalls.map((toolCall, toolIndex) => {
+                if (toolIndex !== index) {
+                  return toolCall;
+                }
+
+                return {
+                  ...toolCall,
+                  result,
+                  status: resultPayload?.status ?? "success",
+                };
+              }),
+            };
+          }),
+        ),
+      })),
+    );
   },
-  requestComposerFocus: () => {
-    set((state) => ({ composerFocusToken: state.composerFocusToken + 1 }));
+  setDraft: (draft, stationId) => {
+    const resolvedStationId = resolveStationId(stationId);
+    set((state) =>
+      updateSessionState(state, resolvedStationId, (session) => ({
+        ...session,
+        draft,
+      })),
+    );
   },
-  setSessionNotice: (sessionNotice) => {
-    set({ sessionNotice });
+  requestComposerFocus: (stationId) => {
+    const resolvedStationId = resolveStationId(stationId);
+    set((state) =>
+      updateSessionState(state, resolvedStationId, (session) => ({
+        ...session,
+        composerFocusToken: session.composerFocusToken + 1,
+      })),
+    );
   },
-  setResetConfirming: (isResetConfirming) => {
-    set({ isResetConfirming });
+  setSessionNotice: (sessionNotice, stationId) => {
+    const resolvedStationId = resolveStationId(stationId);
+    set((state) =>
+      updateSessionState(state, resolvedStationId, (session) => ({
+        ...session,
+        sessionNotice,
+      })),
+    );
   },
-  setAborting: (isAborting) => {
-    set({ isAborting });
+  setResetConfirming: (isResetConfirming, stationId) => {
+    const resolvedStationId = resolveStationId(stationId);
+    set((state) =>
+      updateSessionState(state, resolvedStationId, (session) => ({
+        ...session,
+        isResetConfirming,
+      })),
+    );
   },
-  setResetting: (isResetting) => {
-    set({ isResetting });
+  setAborting: (isAborting, stationId) => {
+    const resolvedStationId = resolveStationId(stationId);
+    set((state) =>
+      updateSessionState(state, resolvedStationId, (session) => ({
+        ...session,
+        isAborting,
+      })),
+    );
   },
-  clearMessages: () => {
-    set({
-      messages: [],
-      draft: "",
-      isStreaming: false,
-      isAborting: false,
-      isResetConfirming: false,
-    });
+  setResetting: (isResetting, stationId) => {
+    const resolvedStationId = resolveStationId(stationId);
+    set((state) =>
+      updateSessionState(state, resolvedStationId, (session) => ({
+        ...session,
+        isResetting,
+      })),
+    );
+  },
+  clearMessages: (stationId) => {
+    const resolvedStationId = resolveStationId(stationId);
+    set((state) =>
+      updateSessionState(state, resolvedStationId, (session) => ({
+        ...session,
+        messages: [],
+        draft: "",
+        isStreaming: false,
+        isAborting: false,
+        isResetConfirming: false,
+      })),
+    );
   },
 }));

@@ -6,7 +6,6 @@ import {
   type ConversationSummary,
   SPIRA_MEMORY_DB_PATH_ENV,
   SpiraMemoryDatabase,
-  type UpsertToolCallInput,
 } from "@spira/memory-db";
 import {
   type ClientMessage,
@@ -21,8 +20,7 @@ import {
   parseEnv,
 } from "@spira/shared";
 import { ZodError } from "zod";
-import { buildContinuityPreamble, buildConversationMemoryContent } from "./copilot/continuity.js";
-import { CopilotSessionManager } from "./copilot/session-manager.js";
+import { DEFAULT_STATION_ID, StationRegistry } from "./copilot/station-registry.js";
 import { McpClientPool } from "./mcp/client-pool.js";
 import { McpRegistry } from "./mcp/registry.js";
 import { McpToolAggregator } from "./mcp/tool-aggregator.js";
@@ -44,7 +42,7 @@ const logger = createLogger("backend");
 
 let server: WsServer | null = null;
 let bus: SpiraEventBus | null = null;
-let copilotManager: CopilotSessionManager | null = null;
+let stationRegistry: StationRegistry | null = null;
 let mcpRegistry: McpRegistry | null = null;
 let transport: WsTransport | null = null;
 let unsubscribeTransport: (() => void) | null = null;
@@ -55,8 +53,6 @@ let voiceConfiguration: VoiceConfiguration | null = null;
 let wakeWordEnabled = true;
 let speechEnabled = true;
 let memoryDb: SpiraMemoryDatabase | null = null;
-let activeConversationId: string | null = null;
-const pendingToolCalls = new Map<string, Omit<UpsertToolCallInput, "messageId">>();
 
 const BACKEND_BUILD_ID = process.env.SPIRA_BUILD_ID?.trim() || "dev";
 const BACKEND_GENERATION = Number(process.env.SPIRA_GENERATION ?? "0");
@@ -70,9 +66,6 @@ const pendingUpgradeProposalResponses = new Map<
   }
 >();
 const VOICE_ACKNOWLEDGEMENTS = ["On it.", "Understood.", "Right away.", "Heard you."] as const;
-const SESSION_STATE_SESSION_ID_KEY = "copilot-session-id";
-const SESSION_STATE_CONVERSATION_ID_KEY = "active-conversation-id";
-const CONVERSATION_MEMORY_PREFIX = "conversation-summary:";
 
 const pickVoiceAcknowledgement = (text: string): string => {
   const normalizedLength = text.trim().length;
@@ -110,117 +103,6 @@ const getVoiceConfiguration = (env: Env, settings: Partial<UserSettings> = {}): 
   openWakeWordThreshold:
     settings.openWakeWordThreshold ?? voiceConfiguration?.openWakeWordThreshold ?? env.OPENWAKEWORD_THRESHOLD,
 });
-
-const setActiveConversation = (conversationId: string | null): void => {
-  activeConversationId = conversationId;
-  memoryDb?.setSessionState(SESSION_STATE_CONVERSATION_ID_KEY, conversationId);
-};
-
-const ensureActiveConversation = (timestamp: number, preferredTitle?: string, preferredId?: string): string | null => {
-  if (!memoryDb) {
-    return null;
-  }
-
-  if (preferredId) {
-    setActiveConversation(preferredId);
-  }
-
-  if (!activeConversationId) {
-    setActiveConversation(
-      memoryDb.createConversation({
-        id: preferredId,
-        title: preferredTitle,
-        createdAt: timestamp,
-      }),
-    );
-  }
-
-  return activeConversationId;
-};
-
-const rememberConversationContext = (conversationId: string | null): boolean => {
-  if (!memoryDb || !conversationId) {
-    return false;
-  }
-
-  const conversation = memoryDb.getConversation(conversationId);
-  if (!conversation) {
-    return false;
-  }
-
-  const content = buildConversationMemoryContent(conversation);
-  if (!content) {
-    return false;
-  }
-
-  memoryDb.remember({
-    id: `${CONVERSATION_MEMORY_PREFIX}${conversationId}`,
-    category: "task-context",
-    content,
-    sourceConversationId: conversationId,
-    sourceMessageId: conversation.messages.at(-1)?.id ?? null,
-  });
-  return true;
-};
-
-const getContinuityPreamble = (text: string, conversationId?: string): string | null =>
-  buildContinuityPreamble({
-    database: memoryDb,
-    query: text,
-    conversationId: conversationId ?? activeConversationId,
-  });
-
-const persistUserMessage = (text: string, timestamp: number, conversationId?: string): void => {
-  const activeId = ensureActiveConversation(timestamp, undefined, conversationId);
-  if (!memoryDb || !activeId) {
-    return;
-  }
-
-  memoryDb.appendMessage({
-    id: `user-${randomUUID()}`,
-    conversationId: activeId,
-    role: "user",
-    content: text,
-    timestamp,
-  });
-};
-
-const persistPendingToolCalls = (messageId: string): void => {
-  if (!memoryDb) {
-    return;
-  }
-
-  for (const toolCall of pendingToolCalls.values()) {
-    memoryDb.upsertToolCall({
-      messageId,
-      ...toolCall,
-    });
-  }
-  pendingToolCalls.clear();
-};
-
-const persistAssistantMessage = (
-  id: string,
-  text: string,
-  timestamp: number,
-  options: { autoSpeak?: boolean; wasAborted?: boolean } = {},
-): void => {
-  const conversationId = ensureActiveConversation(timestamp);
-  if (!memoryDb || !conversationId) {
-    return;
-  }
-
-  memoryDb.appendMessage({
-    id,
-    conversationId,
-    role: "assistant",
-    content: text,
-    timestamp,
-    autoSpeak: options.autoSpeak,
-    wasAborted: options.wasAborted,
-  });
-  persistPendingToolCalls(id);
-};
 
 const mapStoredConversationMessage = (message: ConversationMessageRecord): ConversationMessage | null => {
   if (message.role !== "user" && message.role !== "assistant") {
@@ -400,14 +282,14 @@ const shutdown = async (signal: NodeJS.Signals | "manual") => {
   unsubscribeTransport?.();
   await voicePipeline?.stop();
   ttsPlayback?.dispose();
-  await copilotManager?.shutdown();
+  await stationRegistry?.shutdown();
   await mcpRegistry?.shutdown();
   memoryDb?.close();
   transport?.close();
   bus?.removeAllListeners();
 
   unsubscribeTransport = null;
-  copilotManager = null;
+  stationRegistry = null;
   mcpRegistry = null;
   transport = null;
   voicePipeline = null;
@@ -417,7 +299,6 @@ const shutdown = async (signal: NodeJS.Signals | "manual") => {
   wakeWordEnabled = true;
   speechEnabled = true;
   memoryDb = null;
-  activeConversationId = null;
   server = null;
   bus = null;
 };
@@ -440,6 +321,43 @@ const handleClientMessage = async (message: ClientMessage): Promise<void> => {
         "Renderer protocol version mismatch",
       );
     }
+    return;
+  }
+
+  if (message.type === "station:create") {
+    const station = stationRegistry?.createStation({ label: message.label });
+    if (station) {
+      transport?.send({ type: "station:created", station });
+    }
+    return;
+  }
+
+  if (message.type === "station:close") {
+    const closed = await stationRegistry?.closeStation(message.stationId);
+    if (closed) {
+      transport?.send({ type: "station:closed", stationId: message.stationId });
+      return;
+    }
+
+    transport?.send({
+      type: "error",
+      stationId: message.stationId,
+      ...toErrorPayload(
+        new Error(`Unable to close station ${message.stationId}.`),
+        "STATION_CLOSE_FAILED",
+        `Failed to close station ${message.stationId}`,
+        "backend",
+      ),
+    });
+    return;
+  }
+
+  if (message.type === "station:list") {
+    transport?.send({
+      type: "station:list:result",
+      requestId: message.requestId,
+      stations: stationRegistry?.listStations() ?? [],
+    });
     return;
   }
 
@@ -503,14 +421,10 @@ const handleClientMessage = async (message: ClientMessage): Promise<void> => {
 
   if (message.type === "chat:send") {
     try {
-      if (message.conversationId && message.conversationId !== activeConversationId) {
-        await copilotManager?.clearSession();
-        pendingToolCalls.clear();
-        setActiveConversation(message.conversationId);
-      }
-      const continuityPreamble = getContinuityPreamble(message.text, message.conversationId);
-      persistUserMessage(message.text, Date.now(), message.conversationId);
-      await copilotManager?.sendMessage(message.text, { continuityPreamble });
+      await stationRegistry?.sendMessage(message.text, {
+        stationId: message.stationId,
+        conversationId: message.conversationId,
+      });
     } catch (error) {
       logger.error(
         { err: error, messageType: message.type, textLength: message.text.length },
@@ -522,6 +436,7 @@ const handleClientMessage = async (message: ClientMessage): Promise<void> => {
       if (!alreadyReported) {
         transport?.send({
           type: "error",
+          stationId: message.stationId,
           ...toErrorPayload(error, "UNKNOWN_ERROR", "Failed to send message to GitHub Copilot", "copilot"),
         });
       }
@@ -532,15 +447,13 @@ const handleClientMessage = async (message: ClientMessage): Promise<void> => {
   if (message.type === "chat:abort") {
     ttsPlayback?.stop();
     try {
-      await copilotManager?.abortResponse();
-      // Keep the archive clean: partial aborted assistant turns remain a transient UI artifact
-      // unless Copilot emitted a finalized assistant message before the abort landed.
-      pendingToolCalls.clear();
-      transport?.send({ type: "chat:abort-complete" });
+      await stationRegistry?.abortStation(message.stationId);
+      transport?.send({ type: "chat:abort-complete", stationId: message.stationId ?? DEFAULT_STATION_ID });
     } catch (error) {
       logger.error({ err: error, messageType: message.type }, "Failed to abort chat response");
       transport?.send({
         type: "error",
+        stationId: message.stationId,
         ...toErrorPayload(error, "UNKNOWN_ERROR", "Failed to stop the current response", "copilot"),
       });
     }
@@ -550,14 +463,13 @@ const handleClientMessage = async (message: ClientMessage): Promise<void> => {
   if (message.type === "chat:reset") {
     ttsPlayback?.stop();
     try {
-      await copilotManager?.clearSession();
-      pendingToolCalls.clear();
-      setActiveConversation(null);
-      transport?.send({ type: "chat:reset-complete" });
+      await stationRegistry?.resetStation(message.stationId);
+      transport?.send({ type: "chat:reset-complete", stationId: message.stationId ?? DEFAULT_STATION_ID });
     } catch (error) {
       logger.error({ err: error, messageType: message.type }, "Failed to clear chat session");
       transport?.send({
         type: "error",
+        stationId: message.stationId,
         ...toErrorPayload(error, "UNKNOWN_ERROR", "Failed to clear chat session", "copilot"),
       });
     }
@@ -567,16 +479,17 @@ const handleClientMessage = async (message: ClientMessage): Promise<void> => {
   if (message.type === "chat:new-session") {
     ttsPlayback?.stop();
     try {
-      const previousConversationId = message.conversationId ?? activeConversationId;
-      const preservedToMemory = rememberConversationContext(previousConversationId);
-      await copilotManager?.clearSession();
-      pendingToolCalls.clear();
-      setActiveConversation(null);
-      transport?.send({ type: "chat:new-session-complete", preservedToMemory });
+      const preservedToMemory = (await stationRegistry?.startNewSession(message.stationId, message.conversationId)) ?? false;
+      transport?.send({
+        type: "chat:new-session-complete",
+        preservedToMemory,
+        stationId: message.stationId ?? DEFAULT_STATION_ID,
+      });
     } catch (error) {
       logger.error({ err: error, messageType: message.type }, "Failed to start a new chat session");
       transport?.send({
         type: "error",
+        stationId: message.stationId,
         ...toErrorPayload(error, "UNKNOWN_ERROR", "Failed to start a new chat session", "copilot"),
       });
     }
@@ -693,7 +606,7 @@ const handleClientMessage = async (message: ClientMessage): Promise<void> => {
   }
 
   if (message.type === "permission:respond") {
-    const handled = copilotManager?.resolvePermissionRequest(message.requestId, message.approved) ?? false;
+    const handled = stationRegistry?.resolvePermissionRequest(message.requestId, message.approved) ?? false;
     if (!handled) {
       logger.warn({ requestId: message.requestId }, "Received response for unknown permission request");
     }
@@ -742,7 +655,6 @@ const bootstrap = async () => {
   const memoryDbPath = process.env[SPIRA_MEMORY_DB_PATH_ENV];
   if (typeof memoryDbPath === "string" && memoryDbPath.trim()) {
     memoryDb = SpiraMemoryDatabase.open(memoryDbPath.trim());
-    setActiveConversation(memoryDb.getSessionState(SESSION_STATE_CONVERSATION_ID_KEY));
   } else {
     logger.warn(
       { envKey: SPIRA_MEMORY_DB_PATH_ENV },
@@ -757,44 +669,34 @@ const bootstrap = async () => {
     () => mcpRegistry?.getStatus() ?? [],
   );
   transport = new WsTransport(server);
-  copilotManager = new CopilotSessionManager(
-    bus,
+  stationRegistry = new StationRegistry({
+    rootBus: bus,
     env,
-    aggregator,
+    toolAggregator: aggregator,
+    transport,
+    memoryDb,
     requestUpgradeProposal,
-    async () => {
+    applyHotCapabilityUpgrade: async () => {
       if (!mcpRegistry) {
         throw new Error("MCP registry is unavailable");
       }
 
       await mcpRegistry.reloadFromDisk();
     },
-    {
-      sessionPersistence: memoryDb
-        ? {
-            load: () => memoryDb?.getSessionState(SESSION_STATE_SESSION_ID_KEY) ?? null,
-            save: (sessionId) => {
-              memoryDb?.setSessionState(SESSION_STATE_SESSION_ID_KEY, sessionId);
-            },
-          }
-        : null,
-    },
-  );
+  });
+  stationRegistry.createStation({ stationId: DEFAULT_STATION_ID, label: "Primary" });
   ttsPlayback = new TtsPlaybackService(env, bus, logger);
 
   bus.on("voice:transcript", ({ text }) => {
-    const continuityPreamble = getContinuityPreamble(text);
-    persistUserMessage(text, Date.now());
     const acknowledgement = pickVoiceAcknowledgement(text);
-    bus?.emit("chat:assistant-message", {
-      id: `voice-ack-${randomUUID()}`,
-      text: acknowledgement,
+    stationRegistry?.emitAssistantMessage(DEFAULT_STATION_ID, acknowledgement, {
+      messageId: `voice-ack-${randomUUID()}`,
       timestamp: Date.now(),
       autoSpeak: true,
       persist: false,
     });
 
-    void copilotManager?.sendVoiceMessage(text, { continuityPreamble }).catch((error) => {
+    void stationRegistry?.sendVoiceMessage(DEFAULT_STATION_ID, text).catch((error) => {
       logger.error({ err: error, transcriptLength: text.length }, "Failed to forward voice transcript to Copilot");
       transport?.send({
         type: "error",
@@ -803,45 +705,8 @@ const bootstrap = async () => {
     });
   });
 
-  bus.on("chat:assistant-message", ({ id, text, timestamp, autoSpeak, persist }) => {
-    if (persist === false) {
-      return;
-    }
-    persistAssistantMessage(id, text, timestamp, { autoSpeak });
-  });
-
-  bus.on("copilot:response-end", ({ messageId, text, timestamp, autoSpeak }) => {
-    persistAssistantMessage(messageId, text, timestamp, { autoSpeak });
-  });
-
-  bus.on("copilot:tool-call", (callId, toolName, args) => {
-    pendingToolCalls.set(callId, {
-      callId,
-      name: toolName,
-      args,
-      status: "running",
-    });
-  });
-
-  bus.on("copilot:tool-result", (callId, result) => {
-    const existing = pendingToolCalls.get(callId);
-    pendingToolCalls.set(callId, {
-      callId,
-      name: existing?.name ?? "unknown",
-      args: existing?.args ?? {},
-      result,
-      status: "success",
-      details: typeof result === "string" ? result : undefined,
-    });
-  });
-
-  bus.on("copilot:error", () => {
-    pendingToolCalls.clear();
-  });
-
   bus.on("transport:client-disconnected", () => {
-    copilotManager?.cancelPendingPermissionRequests();
-    pendingToolCalls.clear();
+    stationRegistry?.handleClientDisconnected();
   });
 
   unsubscribeTransport = transport.onMessage((message) => {

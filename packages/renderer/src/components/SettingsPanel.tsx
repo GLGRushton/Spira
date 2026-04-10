@@ -266,7 +266,7 @@ export function SettingsPanel() {
       <section className={styles.section}>
         <div className={styles.sectionHeader}>
           <div>
-            <h2>MCP Servers</h2>
+            <h2>Armoury</h2>
             <p>Toggle local MCP servers on or off here. Changes take effect immediately.</p>
           </div>
         </div>

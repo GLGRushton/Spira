@@ -1,11 +1,12 @@
 import { motion } from "framer-motion";
-import { useAssistantStore } from "../stores/assistant-store.js";
 import { useAudioStore } from "../stores/audio-store.js";
 import { useSettingsStore } from "../stores/settings-store.js";
+import { getStation, useStationStore } from "../stores/station-store.js";
 import styles from "./VoiceIndicator.module.css";
 
 export function VoiceIndicator() {
-  const assistantState = useAssistantStore((store) => store.state);
+  const activeStationId = useStationStore((store) => store.activeStationId);
+  const assistantState = useStationStore((store) => getStation(store, activeStationId).state);
   const audioLevel = useAudioStore((store) => store.audioLevel);
   const wakeWordEnabled = useSettingsStore((store) => store.wakeWordEnabled);
   const setWakeWordEnabled = useSettingsStore((store) => store.setWakeWordEnabled);

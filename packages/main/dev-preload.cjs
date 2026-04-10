@@ -17,8 +17,13 @@ const UPGRADE_RESPONSE_CHANNEL = "upgrade:respond";
 const RENDERER_FATAL_CHANNEL = "renderer:fatal";
 
 const serverMessageListeners = new Set();
+// TODO(multi-session): replay cache is currently keyed only by message type.
+// Before enabling concurrent station streaming, make this cache station-aware.
 const latestServerMessages = new Map();
 const NON_REPLAYABLE_SERVER_MESSAGES = new Set([
+  "station:created",
+  "station:closed",
+  "station:list:result",
   "chat:abort-complete",
   "chat:reset-complete",
   "chat:new-session-complete",
@@ -67,17 +72,17 @@ const electronAPI = {
   send(message) {
     ipcRenderer.send("spira:to-backend", message);
   },
-  sendMessage(text, conversationId) {
-    electronAPI.send({ type: "chat:send", text, conversationId });
+  sendMessage(text, conversationId, stationId) {
+    electronAPI.send({ type: "chat:send", text, conversationId, stationId });
   },
-  abortChat() {
-    electronAPI.send({ type: "chat:abort" });
+  abortChat(stationId) {
+    electronAPI.send({ type: "chat:abort", stationId });
   },
-  resetChat() {
-    electronAPI.send({ type: "chat:reset" });
+  resetChat(stationId) {
+    electronAPI.send({ type: "chat:reset", stationId });
   },
-  startNewChat(conversationId) {
-    electronAPI.send({ type: "chat:new-session", conversationId });
+  startNewChat(conversationId, stationId) {
+    electronAPI.send({ type: "chat:new-session", conversationId, stationId });
   },
   toggleVoice() {
     electronAPI.send({ type: "voice:toggle" });
@@ -144,37 +149,37 @@ const electronAPI = {
   },
   onStateChange(handler) {
     return onServerMessage("state:change", (message) => {
-      handler(message.state);
+      handler({ state: message.state, stationId: message.stationId });
     });
   },
   onChatDelta(handler) {
     return onServerMessage("chat:token", (message) => {
-      handler({ conversationId: message.conversationId, token: message.token });
+      handler({ conversationId: message.conversationId, token: message.token, stationId: message.stationId });
     });
   },
   onChatMessage(handler) {
     return onServerMessage("chat:message", (message) => {
-      handler(message.message);
+      handler({ message: message.message, stationId: message.stationId });
     });
   },
   onChatComplete(handler) {
     return onServerMessage("chat:complete", (message) => {
-      handler({ conversationId: message.conversationId, messageId: message.messageId });
+      handler({ conversationId: message.conversationId, messageId: message.messageId, stationId: message.stationId });
     });
   },
   onChatAbortComplete(handler) {
-    return onServerMessage("chat:abort-complete", () => {
-      handler();
+    return onServerMessage("chat:abort-complete", (message) => {
+      handler({ stationId: message.stationId });
     });
   },
   onChatResetComplete(handler) {
-    return onServerMessage("chat:reset-complete", () => {
-      handler();
+    return onServerMessage("chat:reset-complete", (message) => {
+      handler({ stationId: message.stationId });
     });
   },
   onChatNewSessionComplete(handler) {
     return onServerMessage("chat:new-session-complete", (message) => {
-      handler({ preservedToMemory: message.preservedToMemory });
+      handler({ preservedToMemory: message.preservedToMemory, stationId: message.stationId });
     });
   },
   onToolCall(handler) {
@@ -185,6 +190,7 @@ const electronAPI = {
         status: message.status,
         args: message.args,
         details: message.details,
+        stationId: message.stationId,
       });
     });
   },
@@ -195,7 +201,7 @@ const electronAPI = {
   },
   onPermissionComplete(handler) {
     return onServerMessage("permission:complete", (message) => {
-      handler({ requestId: message.requestId, result: message.result });
+      handler({ requestId: message.requestId, result: message.result, stationId: message.stationId });
     });
   },
   onMcpStatus(handler) {
@@ -225,6 +231,7 @@ const electronAPI = {
         message: message.message,
         details: message.details,
         source: message.source,
+        stationId: message.stationId,
       });
     });
   },

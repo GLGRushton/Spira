@@ -1,6 +1,7 @@
 import type { AssistantState } from "@spira/shared";
 import { useMemo } from "react";
-import { getLatestCompletedAssistantMessage, useChatStore } from "../../stores/chat-store.js";
+import { getChatSession, getLatestCompletedAssistantMessage, useChatStore } from "../../stores/chat-store.js";
+import { useStationStore } from "../../stores/station-store.js";
 import { shouldDisplayToolName } from "../../tool-display.js";
 import styles from "./ToolSummaryChips.module.css";
 
@@ -11,7 +12,10 @@ interface ToolSummaryChipsProps {
 const MAX_VISIBLE_CHIPS = 5;
 
 export function ToolSummaryChips({ assistantState }: ToolSummaryChipsProps) {
-  const latestAssistantMessage = useChatStore((store) => getLatestCompletedAssistantMessage(store.messages));
+  const activeStationId = useStationStore((store) => store.activeStationId);
+  const latestAssistantMessage = useChatStore((store) =>
+    getLatestCompletedAssistantMessage(getChatSession(store, activeStationId).messages),
+  );
 
   const summary = useMemo(() => {
     if (assistantState !== "idle") {

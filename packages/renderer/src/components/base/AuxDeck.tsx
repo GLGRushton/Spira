@@ -2,6 +2,7 @@ import type { AssistantState } from "@spira/shared";
 import { AnimatePresence, motion } from "framer-motion";
 import { useEffect, useMemo, useState } from "react";
 import { useRoomStore } from "../../stores/room-store.js";
+import { useStationStore } from "../../stores/station-store.js";
 import {
   RECENT_COMPLETION_MS,
   classifyToolName,
@@ -20,7 +21,12 @@ const formatElapsed = (milliseconds: number): string => {
 };
 
 export function AuxDeck({ assistantState }: AuxDeckProps) {
-  const flights = useRoomStore((store) => store.flights);
+  const activeStationId = useStationStore((store) => store.activeStationId);
+  const allFlights = useRoomStore((store) => store.flights);
+  const flights = useMemo(
+    () => allFlights.filter((flight) => flight.stationId === activeStationId),
+    [activeStationId, allFlights],
+  );
   const [now, setNow] = useState(() => Date.now());
   const hasVisibleFlights = useMemo(
     () =>

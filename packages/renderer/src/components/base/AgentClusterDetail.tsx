@@ -14,12 +14,12 @@ export function AgentClusterDetail({ rooms, onSelectRoom }: AgentClusterDetailPr
     <div className={styles.panel}>
       <div className={styles.header}>
         <div>
-          <div className={styles.eyebrow}>Subagent cluster</div>
-          <h2 className={styles.title}>Field teams</h2>
+          <div className={styles.eyebrow}>Field Office</div>
+          <h2 className={styles.title}>Field Office</h2>
         </div>
         <p className={styles.caption}>
-          Dynamic mission rooms appear here as Shinra spins up subagents. Open a team to inspect its latest activity and
-          current operational load.
+          Dynamic mission rooms appear here as Shinra spins up subagents. Open a room to inspect its latest activity,
+          lifecycle state, and operational load.
         </p>
       </div>
 
@@ -38,7 +38,9 @@ export function AgentClusterDetail({ rooms, onSelectRoom }: AgentClusterDetailPr
 
       <div className={styles.roster}>
         {rooms.length === 0 ? (
-          <div className={styles.emptyState}>No field teams are deployed yet. Start a task tool run to spawn one.</div>
+          <div className={styles.emptyState}>
+            No field office rooms are deployed yet. Start a delegated run to spawn one.
+          </div>
         ) : (
           rooms.map((room) => (
             <button

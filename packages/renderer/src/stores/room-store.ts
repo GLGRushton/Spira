@@ -1,5 +1,6 @@
 import type {
   McpServerStatus,
+  StationId,
   SubagentCompletedEvent,
   SubagentDeltaEvent,
   SubagentDomainId,
@@ -21,6 +22,7 @@ import { create } from "zustand";
 import { RECENT_COMPLETION_MS } from "../tool-display.js";
 
 export interface ToolFlight {
+  stationId: StationId;
   callId: string;
   toolName: string;
   fromRoomId: "bridge";
@@ -31,6 +33,7 @@ export interface ToolFlight {
 }
 
 export interface AgentRoom {
+  stationId: StationId;
   roomId: `agent:${string}`;
   label: string;
   caption: string;
@@ -64,19 +67,19 @@ interface ToolCallPayload {
 interface RoomStore {
   flights: ToolFlight[];
   agentRooms: AgentRoom[];
-  clearAll: () => void;
+  clearAll: (stationId?: StationId) => void;
   syncServers: (servers: McpServerStatus[]) => void;
-  handleToolCall: (payload: ToolCallPayload, servers: McpServerStatus[]) => void;
-  handleSubagentStarted: (event: SubagentStartedEvent) => void;
-  handleSubagentToolCall: (event: SubagentToolCallEvent) => void;
-  handleSubagentToolResult: (event: SubagentToolResultEvent) => void;
-  handleSubagentDelta: (event: SubagentDeltaEvent) => void;
-  handleSubagentStatus: (event: SubagentStatusEvent) => void;
-  handleSubagentCompleted: (event: SubagentCompletedEvent) => void;
-  handleSubagentError: (event: SubagentErrorEvent) => void;
-  handleSubagentLockAcquired: (event: SubagentLockAcquiredEvent) => void;
-  handleSubagentLockDenied: (event: SubagentLockDeniedEvent) => void;
-  handleSubagentLockReleased: (event: SubagentLockReleasedEvent) => void;
+  handleToolCall: (payload: ToolCallPayload, servers: McpServerStatus[], stationId?: StationId) => void;
+  handleSubagentStarted: (event: SubagentStartedEvent, stationId?: StationId) => void;
+  handleSubagentToolCall: (event: SubagentToolCallEvent, stationId?: StationId) => void;
+  handleSubagentToolResult: (event: SubagentToolResultEvent, stationId?: StationId) => void;
+  handleSubagentDelta: (event: SubagentDeltaEvent, stationId?: StationId) => void;
+  handleSubagentStatus: (event: SubagentStatusEvent, stationId?: StationId) => void;
+  handleSubagentCompleted: (event: SubagentCompletedEvent, stationId?: StationId) => void;
+  handleSubagentError: (event: SubagentErrorEvent, stationId?: StationId) => void;
+  handleSubagentLockAcquired: (event: SubagentLockAcquiredEvent, stationId?: StationId) => void;
+  handleSubagentLockDenied: (event: SubagentLockDeniedEvent, stationId?: StationId) => void;
+  handleSubagentLockReleased: (event: SubagentLockReleasedEvent, stationId?: StationId) => void;
   pruneFlights: () => void;
 }
 
@@ -111,6 +114,7 @@ const OPERATIONS_TOOL_NAMES = new Set([
 
 const activeCallTargets = new Map<string, ActiveCallTarget>();
 const agentLookup = new Map<string, `agent:${string}`>();
+const DEFAULT_STATION_ID = "primary";
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null;
 const SUBAGENT_LABELS: Record<SubagentDomainId, string> = {
@@ -161,10 +165,17 @@ const extractAgentLabel = (args: unknown): string => {
 };
 
 const toAgentRoomId = (identifier: string): `agent:${string}` => `agent:${identifier}`;
+const resolveStationId = (stationId?: StationId): StationId => stationId ?? DEFAULT_STATION_ID;
+const toScopedCallKey = (stationId: StationId, callId: string): string => `${stationId}:${callId}`;
+const toScopedAgentKey = (stationId: StationId, agentId: string): string => `${stationId}:${agentId}`;
 
 const getSubagentLabel = (domain: SubagentDomainId): string => SUBAGENT_LABELS[domain];
-const getRoomLabel = (rooms: AgentRoom[], roomId: `agent:${string}`, fallback = "Subagent"): string =>
-  rooms.find((room) => room.roomId === roomId)?.label ?? fallback;
+const getRoomLabel = (
+  rooms: AgentRoom[],
+  roomId: `agent:${string}`,
+  stationId: StationId,
+  fallback = "Subagent",
+): string => rooms.find((room) => room.roomId === roomId && room.stationId === stationId)?.label ?? fallback;
 
 const describeSubagentAttempt = (attempt: number, allowWrites?: boolean): string =>
   `${allowWrites ? "Write-enabled" : "Read-focused"} ${attempt > 1 ? `retry ${attempt}` : "run"} in progress`;
@@ -194,13 +205,15 @@ const resolveTargetRoomId = (toolName: string, args: unknown, servers: McpServer
 const upsertAgentRoom = (
   rooms: AgentRoom[],
   roomId: `agent:${string}`,
+  stationId: StationId,
   update: Partial<AgentRoom> & Pick<AgentRoom, "label" | "caption" | "status">,
 ): AgentRoom[] => {
   const now = Date.now();
-  const existing = rooms.find((room) => room.roomId === roomId);
+  const existing = rooms.find((room) => room.roomId === roomId && room.stationId === stationId);
   if (!existing) {
     return [
       {
+        stationId,
         roomId,
         ...update,
         createdAt: now,
@@ -214,7 +227,7 @@ const upsertAgentRoom = (
   }
 
   return rooms.map((room) =>
-    room.roomId === roomId
+    room.roomId === roomId && room.stationId === stationId
       ? {
           ...room,
           ...update,
@@ -227,9 +240,14 @@ const upsertAgentRoom = (
   );
 };
 
-const updateAgentRoomActivity = (rooms: AgentRoom[], roomId: string, delta: number): AgentRoom[] =>
+const updateAgentRoomActivity = (
+  rooms: AgentRoom[],
+  roomId: string,
+  stationId: StationId,
+  delta: number,
+): AgentRoom[] =>
   rooms.map((room) =>
-    room.roomId === roomId
+    room.roomId === roomId && room.stationId === stationId
       ? {
           ...room,
           activeToolCount: Math.max(0, room.activeToolCount + delta),
@@ -301,13 +319,32 @@ const trimLiveText = (value: string, maxLength = 8_000): string =>
 export const useRoomStore = create<RoomStore>((set) => ({
   flights: [],
   agentRooms: [],
-  clearAll: () => {
-    activeCallTargets.clear();
-    agentLookup.clear();
-    set({
-      flights: [],
-      agentRooms: [],
-    });
+  clearAll: (stationId) => {
+    const resolvedStationId = resolveStationId(stationId);
+    if (!stationId) {
+      activeCallTargets.clear();
+      agentLookup.clear();
+      set({
+        flights: [],
+        agentRooms: [],
+      });
+      return;
+    }
+
+    for (const key of Array.from(activeCallTargets.keys())) {
+      if (key.startsWith(`${resolvedStationId}:`)) {
+        activeCallTargets.delete(key);
+      }
+    }
+    for (const key of Array.from(agentLookup.keys())) {
+      if (key.startsWith(`${resolvedStationId}:`)) {
+        agentLookup.delete(key);
+      }
+    }
+    set((state) => ({
+      flights: state.flights.filter((flight) => flight.stationId !== resolvedStationId),
+      agentRooms: state.agentRooms.filter((room) => room.stationId !== resolvedStationId),
+    }));
   },
   syncServers: (servers) => {
     const activeServerIds = new Set(servers.map((server) => `mcp:${server.id}`));
@@ -317,7 +354,8 @@ export const useRoomStore = create<RoomStore>((set) => ({
       ),
     }));
   },
-  handleToolCall: (payload, servers) => {
+  handleToolCall: (payload, servers, stationId) => {
+    const resolvedStationId = resolveStationId(stationId);
     set((state) => {
       const startedAt = Date.now();
       const nextFlights = [...state.flights];
@@ -325,7 +363,7 @@ export const useRoomStore = create<RoomStore>((set) => ({
 
       if (payload.status === "running" || payload.status === "pending") {
         const targetRoomId = resolveTargetRoomId(payload.name, payload.args, servers);
-        activeCallTargets.set(payload.callId, {
+        activeCallTargets.set(toScopedCallKey(resolvedStationId, payload.callId), {
           roomId: targetRoomId,
           toolName: payload.name,
           sourceCallId: payload.callId,
@@ -334,13 +372,13 @@ export const useRoomStore = create<RoomStore>((set) => ({
         if (payload.name === "task" || AGENT_TOOL_NAMES.has(payload.name)) {
           const explicitAgentId = extractAgentIdFromArgs(payload.args);
           const roomId = explicitAgentId
-            ? (agentLookup.get(explicitAgentId) ?? toAgentRoomId(explicitAgentId))
+            ? (agentLookup.get(toScopedAgentKey(resolvedStationId, explicitAgentId)) ?? toAgentRoomId(explicitAgentId))
             : (targetRoomId as `agent:${string}`);
           if (explicitAgentId) {
-            agentLookup.set(explicitAgentId, roomId);
+            agentLookup.set(toScopedAgentKey(resolvedStationId, explicitAgentId), roomId);
           }
 
-          nextAgentRooms = upsertAgentRoom(nextAgentRooms, roomId, {
+          nextAgentRooms = upsertAgentRoom(nextAgentRooms, roomId, resolvedStationId, {
             label: extractAgentLabel(payload.args),
             caption: explicitAgentId ? "Subagent room" : "Launching field team",
             status: explicitAgentId ? "active" : "launching",
@@ -349,15 +387,20 @@ export const useRoomStore = create<RoomStore>((set) => ({
             lastToolName: payload.name,
             detail: payload.details,
           });
-          nextAgentRooms = updateAgentRoomActivity(nextAgentRooms, roomId, 1);
-          activeCallTargets.set(payload.callId, { roomId, toolName: payload.name, sourceCallId: payload.callId });
+          nextAgentRooms = updateAgentRoomActivity(nextAgentRooms, roomId, resolvedStationId, 1);
+          activeCallTargets.set(toScopedCallKey(resolvedStationId, payload.callId), {
+            roomId,
+            toolName: payload.name,
+            sourceCallId: payload.callId,
+          });
         }
 
         nextFlights.push({
+          stationId: resolvedStationId,
           callId: payload.callId,
           toolName: payload.name,
           fromRoomId: "bridge",
-          toRoomId: activeCallTargets.get(payload.callId)?.roomId ?? targetRoomId,
+          toRoomId: activeCallTargets.get(toScopedCallKey(resolvedStationId, payload.callId))?.roomId ?? targetRoomId,
           status: payload.status,
           startedAt,
         });
@@ -368,10 +411,12 @@ export const useRoomStore = create<RoomStore>((set) => ({
         };
       }
 
-      const target = activeCallTargets.get(payload.callId);
+      const target = activeCallTargets.get(toScopedCallKey(resolvedStationId, payload.callId));
       const targetRoomId = target?.roomId ?? resolveTargetRoomId(payload.name, payload.args, servers);
       const completedAt = Date.now();
-      const flightIndex = nextFlights.findIndex((flight) => flight.callId === payload.callId);
+      const flightIndex = nextFlights.findIndex(
+        (flight) => flight.callId === payload.callId && flight.stationId === resolvedStationId,
+      );
       if (flightIndex >= 0) {
         nextFlights[flightIndex] = {
           ...nextFlights[flightIndex],
@@ -380,6 +425,7 @@ export const useRoomStore = create<RoomStore>((set) => ({
         };
       } else {
         nextFlights.push({
+          stationId: resolvedStationId,
           callId: payload.callId,
           toolName: payload.name,
           fromRoomId: "bridge",
@@ -393,10 +439,10 @@ export const useRoomStore = create<RoomStore>((set) => ({
       if (targetRoomId.startsWith("agent:")) {
         const agentId = extractAgentIdFromDetails(payload.details) ?? extractAgentIdFromArgs(payload.args);
         if (agentId) {
-          agentLookup.set(agentId, targetRoomId as `agent:${string}`);
+          agentLookup.set(toScopedAgentKey(resolvedStationId, agentId), targetRoomId as `agent:${string}`);
         }
 
-        nextAgentRooms = upsertAgentRoom(nextAgentRooms, targetRoomId as `agent:${string}`, {
+        nextAgentRooms = upsertAgentRoom(nextAgentRooms, targetRoomId as `agent:${string}`, resolvedStationId, {
           label: extractAgentLabel(payload.args),
           caption: "Subagent room",
           status: payload.status === "error" ? "error" : "active",
@@ -404,10 +450,10 @@ export const useRoomStore = create<RoomStore>((set) => ({
           lastToolName: payload.name,
           detail: payload.details,
         });
-        nextAgentRooms = updateAgentRoomActivity(nextAgentRooms, targetRoomId, -1);
+        nextAgentRooms = updateAgentRoomActivity(nextAgentRooms, targetRoomId, resolvedStationId, -1);
       }
 
-      activeCallTargets.delete(payload.callId);
+      activeCallTargets.delete(toScopedCallKey(resolvedStationId, payload.callId));
 
       return {
         flights: nextFlights,
@@ -415,10 +461,11 @@ export const useRoomStore = create<RoomStore>((set) => ({
       };
     });
   },
-  handleSubagentStarted: (event) => {
-    agentLookup.set(event.runId, event.roomId);
+  handleSubagentStarted: (event, stationId) => {
+    const resolvedStationId = resolveStationId(stationId);
+    agentLookup.set(toScopedAgentKey(resolvedStationId, event.runId), event.roomId);
     set((state) => ({
-      agentRooms: upsertAgentRoom(state.agentRooms, event.roomId, {
+      agentRooms: upsertAgentRoom(state.agentRooms, event.roomId, resolvedStationId, {
         label: getSubagentLabel(event.domain),
         caption: describeSubagentAttempt(event.attempt, event.allowWrites),
         status: "active",
@@ -433,17 +480,19 @@ export const useRoomStore = create<RoomStore>((set) => ({
       }),
     }));
   },
-  handleSubagentToolCall: (event) => {
+  handleSubagentToolCall: (event, stationId) => {
+    const resolvedStationId = resolveStationId(stationId);
     set((state) => ({
       agentRooms: updateAgentRoomActivity(
-        upsertAgentRoom(state.agentRooms, event.roomId, {
-          label: getRoomLabel(state.agentRooms, event.roomId),
+        upsertAgentRoom(state.agentRooms, event.roomId, resolvedStationId, {
+          label: getRoomLabel(state.agentRooms, event.roomId, resolvedStationId),
           caption: "Executing delegated tools",
           status: "active",
           lastToolName: event.toolName,
           detail: event.serverId ? `${event.toolName} via ${event.serverId}` : event.toolName,
           toolHistory: upsertToolHistory(
-            state.agentRooms.find((room) => room.roomId === event.roomId)?.toolHistory ?? [],
+            state.agentRooms.find((room) => room.roomId === event.roomId && room.stationId === resolvedStationId)?.toolHistory ??
+              [],
             {
               callId: event.callId,
               toolName: event.toolName,
@@ -455,21 +504,24 @@ export const useRoomStore = create<RoomStore>((set) => ({
           ),
         }),
         event.roomId,
+        resolvedStationId,
         1,
       ),
     }));
   },
-  handleSubagentToolResult: (event) => {
+  handleSubagentToolResult: (event, stationId) => {
+    const resolvedStationId = resolveStationId(stationId);
     set((state) => ({
       agentRooms: updateAgentRoomActivity(
-        upsertAgentRoom(state.agentRooms, event.roomId, {
-          label: getRoomLabel(state.agentRooms, event.roomId),
+        upsertAgentRoom(state.agentRooms, event.roomId, resolvedStationId, {
+          label: getRoomLabel(state.agentRooms, event.roomId, resolvedStationId),
           caption: "Delegated run",
           status: event.status === "error" ? "error" : "active",
           lastToolName: event.toolName,
           detail: event.details ?? `${event.toolName} ${event.status}`,
           toolHistory: upsertToolHistory(
-            state.agentRooms.find((room) => room.roomId === event.roomId)?.toolHistory ?? [],
+            state.agentRooms.find((room) => room.roomId === event.roomId && room.stationId === resolvedStationId)?.toolHistory ??
+              [],
             {
               callId: event.callId,
               toolName: event.toolName,
@@ -484,16 +536,18 @@ export const useRoomStore = create<RoomStore>((set) => ({
           ),
         }),
         event.roomId,
+        resolvedStationId,
         -1,
       ),
     }));
   },
-  handleSubagentDelta: (event) => {
+  handleSubagentDelta: (event, stationId) => {
+    const resolvedStationId = resolveStationId(stationId);
     set((state) => {
-      const existingRoom = state.agentRooms.find((room) => room.roomId === event.roomId);
+      const existingRoom = state.agentRooms.find((room) => room.roomId === event.roomId && room.stationId === resolvedStationId);
       return {
-        agentRooms: upsertAgentRoom(state.agentRooms, event.roomId, {
-          label: getRoomLabel(state.agentRooms, event.roomId),
+        agentRooms: upsertAgentRoom(state.agentRooms, event.roomId, resolvedStationId, {
+          label: getRoomLabel(state.agentRooms, event.roomId, resolvedStationId),
           caption: "Delegated run",
           status: existingRoom?.status === "error" ? "error" : "active",
           liveText: trimLiveText(`${existingRoom?.liveText ?? ""}${event.delta}`),
@@ -501,11 +555,12 @@ export const useRoomStore = create<RoomStore>((set) => ({
       };
     });
   },
-  handleSubagentStatus: (event) => {
+  handleSubagentStatus: (event, stationId) => {
+    const resolvedStationId = resolveStationId(stationId);
     set((state) => {
       const descriptor = describeSubagentStatus(event.status);
       return {
-        agentRooms: upsertAgentRoom(state.agentRooms, event.roomId, {
+        agentRooms: upsertAgentRoom(state.agentRooms, event.roomId, resolvedStationId, {
           label: getSubagentLabel(event.domain),
           caption: descriptor.caption,
           status: descriptor.status,
@@ -518,9 +573,10 @@ export const useRoomStore = create<RoomStore>((set) => ({
       };
     });
   },
-  handleSubagentCompleted: (event) => {
+  handleSubagentCompleted: (event, stationId) => {
+    const resolvedStationId = resolveStationId(stationId);
     set((state) => ({
-      agentRooms: upsertAgentRoom(state.agentRooms, event.roomId, {
+      agentRooms: upsertAgentRoom(state.agentRooms, event.roomId, resolvedStationId, {
         label: getSubagentLabel(event.domain),
         caption: event.envelope.followupNeeded ? "Completed with follow-up" : "Completed",
         status: event.envelope.status === "failed" ? "error" : "idle",
@@ -533,19 +589,22 @@ export const useRoomStore = create<RoomStore>((set) => ({
         liveText: "",
         envelope: event.envelope,
         toolHistory: mergeToolHistory(
-          state.agentRooms.find((room) => room.roomId === event.roomId)?.toolHistory ?? [],
+          state.agentRooms.find((room) => room.roomId === event.roomId && room.stationId === resolvedStationId)?.toolHistory ??
+            [],
           event.envelope.toolCalls,
         ),
         errorHistory: mergeErrorHistory(
-          state.agentRooms.find((room) => room.roomId === event.roomId)?.errorHistory ?? [],
+          state.agentRooms.find((room) => room.roomId === event.roomId && room.stationId === resolvedStationId)?.errorHistory ??
+            [],
           event.envelope.errors,
         ),
       }),
     }));
   },
-  handleSubagentError: (event) => {
+  handleSubagentError: (event, stationId) => {
+    const resolvedStationId = resolveStationId(stationId);
     set((state) => ({
-      agentRooms: upsertAgentRoom(state.agentRooms, event.roomId, {
+      agentRooms: upsertAgentRoom(state.agentRooms, event.roomId, resolvedStationId, {
         label: getSubagentLabel(event.domain),
         caption: event.willRetry ? "Retrying subagent run" : "Run failed",
         status: event.willRetry ? "active" : "error",
@@ -555,16 +614,18 @@ export const useRoomStore = create<RoomStore>((set) => ({
         attempt: event.attempt,
         detail: event.error.message,
         errorHistory: mergeErrorHistory(
-          state.agentRooms.find((room) => room.roomId === event.roomId)?.errorHistory ?? [],
+          state.agentRooms.find((room) => room.roomId === event.roomId && room.stationId === resolvedStationId)?.errorHistory ??
+            [],
           [event.error],
         ),
       }),
     }));
   },
-  handleSubagentLockAcquired: (event) => {
+  handleSubagentLockAcquired: (event, stationId) => {
+    const resolvedStationId = resolveStationId(stationId);
     set((state) => ({
-      agentRooms: upsertAgentRoom(state.agentRooms, event.roomId, {
-        label: getRoomLabel(state.agentRooms, event.roomId),
+      agentRooms: upsertAgentRoom(state.agentRooms, event.roomId, resolvedStationId, {
+        label: getRoomLabel(state.agentRooms, event.roomId, resolvedStationId),
         caption: "Write lock granted",
         status: "active",
         runId: event.runId,
@@ -572,10 +633,11 @@ export const useRoomStore = create<RoomStore>((set) => ({
       }),
     }));
   },
-  handleSubagentLockDenied: (event) => {
+  handleSubagentLockDenied: (event, stationId) => {
+    const resolvedStationId = resolveStationId(stationId);
     set((state) => ({
-      agentRooms: upsertAgentRoom(state.agentRooms, event.roomId, {
-        label: getRoomLabel(state.agentRooms, event.roomId),
+      agentRooms: upsertAgentRoom(state.agentRooms, event.roomId, resolvedStationId, {
+        label: getRoomLabel(state.agentRooms, event.roomId, resolvedStationId),
         caption: "Write lock denied",
         status: "error",
         runId: event.runId,
@@ -583,12 +645,17 @@ export const useRoomStore = create<RoomStore>((set) => ({
       }),
     }));
   },
-  handleSubagentLockReleased: (event) => {
+  handleSubagentLockReleased: (event, stationId) => {
+    const resolvedStationId = resolveStationId(stationId);
     set((state) => ({
-      agentRooms: upsertAgentRoom(state.agentRooms, event.roomId, {
-        label: getRoomLabel(state.agentRooms, event.roomId),
+      agentRooms: upsertAgentRoom(state.agentRooms, event.roomId, resolvedStationId, {
+        label: getRoomLabel(state.agentRooms, event.roomId, resolvedStationId),
         caption: "Write lock released",
-        status: state.agentRooms.find((room) => room.roomId === event.roomId)?.activeToolCount ? "active" : "idle",
+        status:
+          state.agentRooms.find((room) => room.roomId === event.roomId && room.stationId === resolvedStationId)
+            ?.activeToolCount
+            ? "active"
+            : "idle",
         runId: event.runId,
         detail: `Lock ${event.intentId} released`,
       }),
@@ -603,9 +670,9 @@ export const useRoomStore = create<RoomStore>((set) => ({
       const agentRooms = state.agentRooms.filter(
         (room) => room.activeToolCount > 0 || now - room.updatedAt < 5 * 60_000,
       );
-      const remainingRoomIds = new Set(agentRooms.map((room) => room.roomId));
+      const remainingRoomIds = new Set(agentRooms.map((room) => `${room.stationId}:${room.roomId}`));
       for (const [agentId, roomId] of agentLookup.entries()) {
-        if (!remainingRoomIds.has(roomId)) {
+        if (!remainingRoomIds.has(`${agentId.split(":")[0]}:${roomId}`)) {
           agentLookup.delete(agentId);
         }
       }

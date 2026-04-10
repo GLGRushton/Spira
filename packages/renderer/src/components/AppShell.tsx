@@ -1,10 +1,10 @@
 import { AnimatePresence, motion } from "framer-motion";
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import { useIpc } from "../hooks/useIpc.js";
-import { useAssistantStore } from "../stores/assistant-store.js";
 import { useMcpStore } from "../stores/mcp-store.js";
 import { useNavigationStore } from "../stores/navigation-store.js";
 import { useRoomStore } from "../stores/room-store.js";
+import { getStation, useStationStore } from "../stores/station-store.js";
 import styles from "./AppShell.module.css";
 import { AssistantStatusStrip } from "./AssistantStatusStrip.js";
 import { GlassPanel } from "./GlassPanel.js";
@@ -18,20 +18,34 @@ import { TitleBar } from "./TitleBar.js";
 import { UpgradeBanner } from "./UpgradeBanner.js";
 import { AgentClusterDetail } from "./base/AgentClusterDetail.js";
 import { AgentRoomDetail } from "./base/AgentRoomDetail.js";
+import { BarracksDetail } from "./base/BarracksDetail.js";
 import { BaseDeck } from "./base/BaseDeck.js";
 import { BridgeRoomDetail } from "./base/BridgeRoomDetail.js";
 import { McpClusterDetail } from "./base/McpClusterDetail.js";
 import { McpRoomDetail } from "./base/McpRoomDetail.js";
+import { OperationsRoster } from "./operations/OperationsRoster.js";
 
 export function AppShell() {
   useIpc();
 
-  const assistantState = useAssistantStore((store) => store.state);
+  const activeStationId = useStationStore((store) => store.activeStationId);
+  const assistantState = useStationStore((store) => getStation(store, activeStationId).state);
+  const stationMap = useStationStore((store) => store.stations);
   const servers = useMcpStore((store) => store.servers);
-  const agentRooms = useRoomStore((store) => store.agentRooms);
-  const flights = useRoomStore((store) => store.flights);
+  const allAgentRooms = useRoomStore((store) => store.agentRooms);
+  const allFlights = useRoomStore((store) => store.flights);
   const view = useNavigationStore((store) => store.activeView);
   const setView = useNavigationStore((store) => store.setView);
+
+  const stations = useMemo(() => Object.values(stationMap), [stationMap]);
+  const agentRooms = useMemo(
+    () => allAgentRooms.filter((room) => room.stationId === activeStationId),
+    [activeStationId, allAgentRooms],
+  );
+  const flights = useMemo(
+    () => allFlights.filter((flight) => flight.stationId === activeStationId),
+    [activeStationId, allFlights],
+  );
 
   const selectedServer = view.startsWith("mcp:") ? servers.find((server) => server.id === view.slice(4)) : null;
   const selectedAgentRoom = view.startsWith("agent:") ? agentRooms.find((room) => room.roomId === view) : null;
@@ -67,12 +81,14 @@ export function AppShell() {
                 exit={{ opacity: 0, scale: 1.015 }}
                 transition={{ duration: 0.26, ease: "easeOut" }}
               >
-                <BaseDeck
-                  activeView={view}
-                  assistantState={assistantState}
-                  servers={servers}
-                  agentRooms={agentRooms}
-                  flights={flights}
+                  <BaseDeck
+                    activeView={view}
+                    activeStationId={activeStationId}
+                    assistantState={assistantState}
+                    stations={stations}
+                    servers={servers}
+                    agentRooms={agentRooms}
+                    flights={flights}
                   onViewChange={setView}
                 />
               </motion.div>
@@ -95,6 +111,10 @@ export function AppShell() {
                   <div className={styles.contentInner}>
                     {view === "bridge" ? (
                       <BridgeRoomDetail assistantState={assistantState} />
+                    ) : view === "operations" ? (
+                      <OperationsRoster onOpenBridge={() => setView("bridge")} />
+                    ) : view === "barracks" ? (
+                      <BarracksDetail servers={servers} agentRooms={agentRooms} />
                     ) : view === "mcp" ? (
                       <McpClusterDetail servers={servers} onSelectServer={(serverId) => setView(`mcp:${serverId}`)} />
                     ) : view === "agents" ? (

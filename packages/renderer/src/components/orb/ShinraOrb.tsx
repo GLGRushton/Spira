@@ -1,12 +1,13 @@
 import { Canvas } from "@react-three/fiber";
 import { Bloom, EffectComposer } from "@react-three/postprocessing";
-import { useAssistantStore } from "../../stores/assistant-store.js";
+import { getStation, useStationStore } from "../../stores/station-store.js";
 import { OrbMesh } from "./OrbMesh.js";
 import { OrbParticles } from "./OrbParticles.js";
 import styles from "./ShinraOrb.module.css";
 
 export function ShinraOrb() {
-  const state = useAssistantStore((store) => store.state);
+  const activeStationId = useStationStore((store) => store.activeStationId);
+  const state = useStationStore((store) => getStation(store, activeStationId).state);
 
   return (
     <div className={styles.wrapper}>

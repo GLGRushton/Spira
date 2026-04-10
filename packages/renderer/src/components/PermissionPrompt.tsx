@@ -1,6 +1,7 @@
 import { AnimatePresence, motion } from "framer-motion";
 import { useMemo } from "react";
 import { usePermissionStore } from "../stores/permission-store.js";
+import { useStationStore } from "../stores/station-store.js";
 import styles from "./PermissionPrompt.module.css";
 
 const formatArgs = (args: Record<string, unknown> | undefined): string => {
@@ -16,9 +17,10 @@ const formatArgs = (args: Record<string, unknown> | undefined): string => {
 };
 
 export function PermissionPrompt() {
+  const activeStationId = useStationStore((store) => store.activeStationId);
   const requests = usePermissionStore((store) => store.requests);
   const removeRequest = usePermissionStore((store) => store.removeRequest);
-  const currentRequest = requests[0];
+  const currentRequest = requests.find((request) => request.stationId === activeStationId) ?? requests[0];
   const args = useMemo(() => formatArgs(currentRequest?.args), [currentRequest?.args]);
 
   const respond = (approved: boolean) => {

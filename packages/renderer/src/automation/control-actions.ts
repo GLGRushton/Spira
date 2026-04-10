@@ -1,24 +1,26 @@
 import type { SpiraUiAction, SpiraUiSnapshot } from "@spira/shared";
-import { PENDING_ASSISTANT_ID, useChatStore } from "../stores/chat-store.js";
+import { PENDING_ASSISTANT_ID, createChatEntityId, getChatSession, useChatStore } from "../stores/chat-store.js";
 import { useMcpStore } from "../stores/mcp-store.js";
 import { useNavigationStore } from "../stores/navigation-store.js";
 import { usePermissionStore } from "../stores/permission-store.js";
 import { useRoomStore } from "../stores/room-store.js";
 import { useSettingsStore } from "../stores/settings-store.js";
+import { useStationStore } from "../stores/station-store.js";
 import { useUpgradeStore } from "../stores/upgrade-store.js";
 import { useVisionStore } from "../stores/vision-store.js";
 import { buildSpiraUiSnapshot } from "./control-snapshot.js";
 
 const clearUi = (): void => {
-  if (useChatStore.getState().isStreaming) {
+  const activeStationId = useStationStore.getState().activeStationId;
+  if (getChatSession(useChatStore.getState(), activeStationId).isStreaming) {
     throw new Error("Cannot clear the UI while the assistant is streaming.");
   }
 
   window.electronAPI.send({ type: "tts:stop" });
-  useChatStore.getState().clearMessages();
-  useRoomStore.getState().clearAll();
-  useVisionStore.getState().clearAllActiveCaptures();
-  useChatStore.getState().setDraft("");
+  useChatStore.getState().clearMessages(activeStationId);
+  useRoomStore.getState().clearAll(activeStationId);
+  useVisionStore.getState().clearAllActiveCaptures(activeStationId);
+  useChatStore.getState().setDraft("", activeStationId);
 };
 
 const updateSettings = async (settings: Parameters<typeof window.electronAPI.setSettings>[0]): Promise<void> => {
@@ -53,48 +55,62 @@ export const performSpiraUiAction = async (action: SpiraUiAction): Promise<Spira
     }
     case "set-draft": {
       const chat = useChatStore.getState();
-      chat.setDraft(action.append ? `${chat.draft}${action.draft}` : action.draft);
+      const activeStationId = useStationStore.getState().activeStationId;
+      const session = getChatSession(chat, activeStationId);
+      chat.setDraft(action.append ? `${session.draft}${action.draft}` : action.draft, activeStationId);
       return buildSpiraUiSnapshot();
     }
     case "focus-composer":
-      useChatStore.getState().requestComposerFocus();
+      useChatStore.getState().requestComposerFocus(useStationStore.getState().activeStationId);
       return buildSpiraUiSnapshot();
     case "send-chat": {
       const chat = useChatStore.getState();
-      const nextText = (action.text ?? chat.draft).trim();
+      const activeStationId = useStationStore.getState().activeStationId;
+      const session = getChatSession(chat, activeStationId);
+      const nextText = (action.text ?? session.draft).trim();
       if (!nextText) {
         throw new Error("Cannot send an empty chat message.");
       }
-      if (chat.isStreaming || chat.isResetting) {
+      if (session.isStreaming || session.isResetting) {
         throw new Error("Chat is busy and cannot accept a new message right now.");
       }
 
-      chat.addUserMessage(nextText);
-      chat.setSessionNotice(null);
-      chat.startAssistantMessage(PENDING_ASSISTANT_ID);
-      window.electronAPI.sendMessage(nextText);
-      chat.setDraft("");
+      chat.addUserMessage(nextText, activeStationId);
+      chat.setSessionNotice(null, activeStationId);
+      chat.startAssistantMessage(PENDING_ASSISTANT_ID, activeStationId);
+      const conversationId = session.activeConversationId ?? createChatEntityId();
+      if (!session.activeConversationId) {
+        chat.setActiveConversation(conversationId, null, activeStationId);
+        useStationStore.getState().setStationConversation(activeStationId, conversationId, null);
+      }
+      window.electronAPI.sendMessage(nextText, conversationId, activeStationId);
+      chat.setDraft("", activeStationId);
       return buildSpiraUiSnapshot();
     }
     case "abort-chat": {
       const chat = useChatStore.getState();
-      if (chat.isStreaming && !chat.isAborting) {
-        chat.setAborting(true);
-        window.electronAPI.abortChat();
+      const activeStationId = useStationStore.getState().activeStationId;
+      const session = getChatSession(chat, activeStationId);
+      if (session.isStreaming && !session.isAborting) {
+        chat.setAborting(true, activeStationId);
+        window.electronAPI.abortChat(activeStationId);
       }
       return buildSpiraUiSnapshot();
     }
     case "reset-chat": {
       const chat = useChatStore.getState();
-      if (chat.isStreaming) {
+      const activeStationId = useStationStore.getState().activeStationId;
+      const session = getChatSession(chat, activeStationId);
+      if (session.isStreaming) {
         throw new Error("Cannot reset chat while the assistant is streaming.");
       }
 
-      chat.setResetConfirming(false);
-      chat.setSessionNotice(null);
-      chat.setResetting(true);
+      chat.setResetConfirming(false, activeStationId);
+      chat.setSessionNotice(null, activeStationId);
+      chat.setResetting(true, activeStationId);
       clearUi();
-      window.electronAPI.resetChat();
+      useStationStore.getState().setStationConversation(activeStationId, null, null);
+      window.electronAPI.resetChat(activeStationId);
       return buildSpiraUiSnapshot();
     }
     case "update-settings":

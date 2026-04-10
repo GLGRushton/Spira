@@ -22,10 +22,12 @@ export interface ErrorPayload {
   message: string;
   source?: string;
   details?: string;
+  stationId?: StationId;
 }
 
 export interface PermissionRequestPayload {
   requestId: string;
+  stationId?: StationId;
   kind: "mcp";
   toolCallId?: string;
   serverName: string;
@@ -35,7 +37,20 @@ export interface PermissionRequestPayload {
   readOnly: boolean;
 }
 
-export const PROTOCOL_VERSION = 4;
+export type StationId = string;
+
+export interface StationSummary {
+  stationId: StationId;
+  conversationId: string | null;
+  label: string;
+  title: string | null;
+  state: AssistantState;
+  createdAt: number;
+  updatedAt: number;
+  isStreaming: boolean;
+}
+
+export const PROTOCOL_VERSION = 5;
 
 export const TTS_PROVIDERS = ["elevenlabs", "kokoro"] as const;
 export type TtsProvider = (typeof TTS_PROVIDERS)[number];
@@ -47,10 +62,13 @@ export const normalizeWakeWordProvider = (provider: string | null | undefined): 
   provider === "porcupine" || provider === "none" ? provider : "openwakeword";
 
 export type ClientMessage =
-  | { type: "chat:send"; text: string; conversationId?: string }
-  | { type: "chat:abort" }
-  | { type: "chat:reset" }
-  | { type: "chat:new-session"; conversationId?: string }
+  | { type: "station:create"; label?: string }
+  | { type: "station:close"; stationId: StationId }
+  | { type: "station:list"; requestId: string }
+  | { type: "chat:send"; text: string; conversationId?: string; stationId?: StationId }
+  | { type: "chat:abort"; stationId?: StationId }
+  | { type: "chat:reset"; stationId?: StationId }
+  | { type: "chat:new-session"; conversationId?: string; stationId?: StationId }
   | { type: "conversation:recent:get"; requestId: string }
   | { type: "conversation:list"; requestId: string; limit?: number; offset?: number }
   | { type: "conversation:get"; requestId: string; conversationId: string }
@@ -74,16 +92,19 @@ export type ClientMessage =
 export type ServerMessage =
   | { type: "pong"; protocolVersion: number; backendBuildId: string }
   | { type: "backend:hello"; generation: number; protocolVersion: number; backendBuildId: string }
+  | { type: "station:created"; station: StationSummary }
+  | { type: "station:closed"; stationId: StationId }
+  | { type: "station:list:result"; requestId: string; stations: StationSummary[] }
   | { type: "upgrade:proposal"; proposal: UpgradeProposal; message: string }
   | ({ type: "upgrade:status" } & UpgradeStatus)
-  | { type: "state:change"; state: AssistantState }
+  | { type: "state:change"; state: AssistantState; stationId?: StationId }
   | { type: "voice:muted"; muted: boolean }
-  | { type: "chat:token"; token: string; conversationId: string }
-  | { type: "chat:complete"; conversationId: string; messageId: string }
-  | { type: "chat:abort-complete" }
-  | { type: "chat:reset-complete" }
-  | { type: "chat:new-session-complete"; preservedToMemory: boolean }
-  | { type: "chat:message"; message: ChatMessage }
+  | { type: "chat:token"; token: string; conversationId: string; stationId?: StationId }
+  | { type: "chat:complete"; conversationId: string; messageId: string; stationId?: StationId }
+  | { type: "chat:abort-complete"; stationId?: StationId }
+  | { type: "chat:reset-complete"; stationId?: StationId }
+  | { type: "chat:new-session-complete"; preservedToMemory: boolean; stationId?: StationId }
+  | { type: "chat:message"; message: ChatMessage; stationId?: StationId }
   | { type: "conversation:recent:result"; requestId: string; conversation: StoredConversation | null }
   | { type: "conversation:list:result"; requestId: string; conversations: StoredConversationSummary[] }
   | { type: "conversation:get:result"; requestId: string; conversation: StoredConversation | null }
@@ -91,20 +112,28 @@ export type ServerMessage =
   | { type: "conversation:mark-viewed:result"; requestId: string; success: boolean }
   | { type: "conversation:archive:result"; requestId: string; success: boolean }
   | ({ type: "conversation:request-error"; requestId: string } & ErrorPayload)
-  | { type: "tool:call"; callId: string; name: string; status: ToolCallStatus; args?: unknown; details?: string }
+  | {
+      type: "tool:call";
+      callId: string;
+      name: string;
+      status: ToolCallStatus;
+      args?: unknown;
+      details?: string;
+      stationId?: StationId;
+    }
   | { type: "permission:request"; request: PermissionRequestPayload }
-  | { type: "permission:complete"; requestId: string; result: "approved" | "denied" | "expired" }
+  | { type: "permission:complete"; requestId: string; result: "approved" | "denied" | "expired"; stationId?: StationId }
   | { type: "mcp:status"; servers: McpServerStatus[] }
-  | { type: "subagent:started"; event: SubagentStartedEvent }
-  | { type: "subagent:tool-call"; event: SubagentToolCallEvent }
-  | { type: "subagent:tool-result"; event: SubagentToolResultEvent }
-  | { type: "subagent:delta"; event: SubagentDeltaEvent }
-  | { type: "subagent:status"; event: SubagentStatusEvent }
-  | { type: "subagent:completed"; event: SubagentCompletedEvent }
-  | { type: "subagent:error"; event: SubagentErrorEvent }
-  | { type: "subagent:lock-acquired"; event: SubagentLockAcquiredEvent }
-  | { type: "subagent:lock-denied"; event: SubagentLockDeniedEvent }
-  | { type: "subagent:lock-released"; event: SubagentLockReleasedEvent }
+  | { type: "subagent:started"; event: SubagentStartedEvent; stationId?: StationId }
+  | { type: "subagent:tool-call"; event: SubagentToolCallEvent; stationId?: StationId }
+  | { type: "subagent:tool-result"; event: SubagentToolResultEvent; stationId?: StationId }
+  | { type: "subagent:delta"; event: SubagentDeltaEvent; stationId?: StationId }
+  | { type: "subagent:status"; event: SubagentStatusEvent; stationId?: StationId }
+  | { type: "subagent:completed"; event: SubagentCompletedEvent; stationId?: StationId }
+  | { type: "subagent:error"; event: SubagentErrorEvent; stationId?: StationId }
+  | { type: "subagent:lock-acquired"; event: SubagentLockAcquiredEvent; stationId?: StationId }
+  | { type: "subagent:lock-denied"; event: SubagentLockDeniedEvent; stationId?: StationId }
+  | { type: "subagent:lock-released"; event: SubagentLockReleasedEvent; stationId?: StationId }
   | { type: "voice:transcript"; text: string }
   | { type: "audio:level"; level: number }
   | { type: "tts:amplitude"; amplitude: number }

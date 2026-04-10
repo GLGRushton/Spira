@@ -6,10 +6,10 @@ export function McpStatus() {
 
   return (
     <section className={styles.panel}>
-      <div className={styles.title}>MCP Servers</div>
+      <div className={styles.title}>Armoury</div>
       <div className={styles.list}>
         {servers.length === 0 ? (
-          <div className={styles.empty}>No MCP servers reported</div>
+          <div className={styles.empty}>No armoury links reported</div>
         ) : (
           servers.map((server) => (
             <article key={server.id} className={styles.item}>

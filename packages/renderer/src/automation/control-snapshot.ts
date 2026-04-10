@@ -7,14 +7,14 @@ import {
   type SpiraUiSnapshot,
 } from "@spira/shared";
 import { buildAssistantDockSummary } from "../shinra-status.js";
-import { useAssistantStore } from "../stores/assistant-store.js";
-import { getAwaitingAssistantQuestion, useChatStore } from "../stores/chat-store.js";
+import { getAwaitingAssistantQuestion, getChatSession, useChatStore } from "../stores/chat-store.js";
 import { useConnectionStore } from "../stores/connection-store.js";
 import { useMcpStore } from "../stores/mcp-store.js";
 import { useNavigationStore } from "../stores/navigation-store.js";
 import { usePermissionStore } from "../stores/permission-store.js";
 import { useRoomStore } from "../stores/room-store.js";
 import { useSettingsStore } from "../stores/settings-store.js";
+import { getStation, useStationStore } from "../stores/station-store.js";
 import { useUpgradeStore } from "../stores/upgrade-store.js";
 
 const toMessageSummary = (message: {
@@ -36,7 +36,8 @@ const toMessageSummary = (message: {
 });
 
 export const buildSpiraUiChatTranscript = (limit = 100): SpiraUiChatTranscript => {
-  const chat = useChatStore.getState();
+  const activeStationId = useStationStore.getState().activeStationId;
+  const chat = getChatSession(useChatStore.getState(), activeStationId);
   return {
     messages: chat.messages
       .filter((message) => message.role === "user" || message.role === "assistant")
@@ -46,7 +47,8 @@ export const buildSpiraUiChatTranscript = (limit = 100): SpiraUiChatTranscript =
 };
 
 export const buildSpiraUiSnapshot = (): SpiraUiSnapshot => {
-  const chat = useChatStore.getState();
+  const activeStationId = useStationStore.getState().activeStationId;
+  const chat = getChatSession(useChatStore.getState(), activeStationId);
   const awaitingQuestion = getAwaitingAssistantQuestion(chat.messages);
   const lastUserMessage = [...chat.messages].reverse().find((message) => message.role === "user");
   const lastAssistantMessage = [...chat.messages].reverse().find((message) => message.role === "assistant");
@@ -54,7 +56,7 @@ export const buildSpiraUiSnapshot = (): SpiraUiSnapshot => {
   const room = useRoomStore.getState();
   const settings = useSettingsStore.getState();
   const activeView = useNavigationStore.getState().activeView;
-  const assistantState = useAssistantStore.getState().state;
+  const assistantState = getStation(useStationStore.getState(), activeStationId).state;
 
   return {
     bridgeVersion: SPIRA_UI_CONTROL_BRIDGE_VERSION,
@@ -78,11 +80,15 @@ export const buildSpiraUiSnapshot = (): SpiraUiSnapshot => {
       elevenLabsVoiceId: settings.elevenLabsVoiceId,
       theme: settings.theme,
     },
-    permissions: [...usePermissionStore.getState().requests],
+    permissions: usePermissionStore
+      .getState()
+      .requests.filter((request) => (request.stationId ?? activeStationId) === activeStationId),
     upgradeBanner: upgrade.banner ? { ...upgrade.banner } : null,
     protocolBanner: upgrade.protocolBanner ? { ...upgrade.protocolBanner } : null,
     mcpServers: [...useMcpStore.getState().servers],
-    agentRooms: room.agentRooms.map((agentRoom) => ({ ...agentRoom })),
+    agentRooms: room.agentRooms
+      .filter((agentRoom) => agentRoom.stationId === activeStationId)
+      .map((agentRoom) => ({ ...agentRoom })),
     chat: {
       draft: chat.draft,
       isStreaming: chat.isStreaming,

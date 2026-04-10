@@ -1,6 +1,7 @@
 import { AnimatePresence, motion } from "framer-motion";
 import { useLayoutEffect, useRef, useState } from "react";
-import { getAwaitingAssistantQuestion, useChatStore } from "../../stores/chat-store.js";
+import { getAwaitingAssistantQuestion, getChatSession, useChatStore } from "../../stores/chat-store.js";
+import { useStationStore } from "../../stores/station-store.js";
 import styles from "./ChatPanel.module.css";
 import { ConversationArchivePanel } from "./ConversationArchivePanel.js";
 import { InputBar } from "./InputBar.js";
@@ -14,14 +15,16 @@ const EXAMPLE_PROMPTS = [
 ];
 
 export function ChatPanel() {
-  const messages = useChatStore((store) => store.messages);
-  const activeConversationId = useChatStore((store) => store.activeConversationId);
-  const activeConversationTitle = useChatStore((store) => store.activeConversationTitle);
-  const isStreaming = useChatStore((store) => store.isStreaming);
-  const isResetting = useChatStore((store) => store.isResetting);
+  const activeStationId = useStationStore((store) => store.activeStationId);
+  const setStationConversation = useStationStore((store) => store.setStationConversation);
+  const messages = useChatStore((store) => getChatSession(store, activeStationId).messages);
+  const activeConversationId = useChatStore((store) => getChatSession(store, activeStationId).activeConversationId);
+  const activeConversationTitle = useChatStore((store) => getChatSession(store, activeStationId).activeConversationTitle);
+  const isStreaming = useChatStore((store) => getChatSession(store, activeStationId).isStreaming);
+  const isResetting = useChatStore((store) => getChatSession(store, activeStationId).isResetting);
   const setActiveConversation = useChatStore((store) => store.setActiveConversation);
   const requestComposerFocus = useChatStore((store) => store.requestComposerFocus);
-  const sessionNotice = useChatStore((store) => store.sessionNotice);
+  const sessionNotice = useChatStore((store) => getChatSession(store, activeStationId).sessionNotice);
   const setSessionNotice = useChatStore((store) => store.setSessionNotice);
   const setDraft = useChatStore((store) => store.setDraft);
   const setResetting = useChatStore((store) => store.setResetting);
@@ -74,10 +77,11 @@ export function ChatPanel() {
     }
 
     setSessionNotice(null);
-    setResetting(true);
-    clearClientSessionUi();
-    setActiveConversation(null, null);
-    window.electronAPI.startNewChat(activeConversationId ?? undefined);
+    setResetting(true, activeStationId);
+    clearClientSessionUi(activeStationId);
+    setActiveConversation(null, null, activeStationId);
+    setStationConversation(activeStationId, null, null);
+    window.electronAPI.startNewChat(activeConversationId ?? undefined, activeStationId);
     setArchiveOpen(false);
   };
 
@@ -97,9 +101,13 @@ export function ChatPanel() {
       {sessionNotice ? (
         <div className={`${styles.notice} ${styles[sessionNotice.kind]}`} role="alert" aria-live="polite">
           <span>{sessionNotice.message}</span>
-          <button type="button" className={styles.noticeDismiss} onClick={() => setSessionNotice(null)}>
-            Dismiss
-          </button>
+            <button
+              type="button"
+              className={styles.noticeDismiss}
+              onClick={() => setSessionNotice(null, activeStationId)}
+            >
+              Dismiss
+            </button>
         </div>
       ) : null}
       <div ref={scrollRef} className={styles.messages}>
@@ -117,8 +125,8 @@ export function ChatPanel() {
                   type="button"
                   className={styles.exampleChip}
                   onClick={() => {
-                    setDraft(prompt);
-                    requestComposerFocus();
+                     setDraft(prompt, activeStationId);
+                     requestComposerFocus(activeStationId);
                   }}
                 >
                   {prompt}
@@ -143,8 +151,8 @@ export function ChatPanel() {
                   onRetry={
                     message.id === latestAssistantMessage?.id && retryPrompt && !isStreaming && !isResetting
                       ? () => {
-                          setDraft(retryPrompt);
-                          requestComposerFocus();
+                           setDraft(retryPrompt, activeStationId);
+                           requestComposerFocus(activeStationId);
                         }
                       : undefined
                   }

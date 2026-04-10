@@ -74,6 +74,7 @@ interface SendPromptOptions {
 
 interface SessionManagerOptions {
   sessionPersistence?: SessionPersistence | null;
+  subagentLockManager?: SubagentLockManager;
 }
 
 type ReportedCopilotError = CopilotError & { reportedToClient?: boolean };
@@ -110,7 +111,7 @@ export class CopilotSessionManager {
   private promptInFlight = false;
   private sessionOrigin: "created" | "resumed" | null = null;
   private readonly sessionPersistence: SessionPersistence | null;
-  private readonly subagentLockManager = new SubagentLockManager();
+  private readonly subagentLockManager: SubagentLockManager;
   private readonly subagentRunRegistry: SubagentRunRegistry;
   private readonly subagentRunners = new Map<SubagentDomainId, SubagentRunner>();
 
@@ -123,6 +124,7 @@ export class CopilotSessionManager {
     options: SessionManagerOptions = {},
   ) {
     this.sessionPersistence = options.sessionPersistence ?? null;
+    this.subagentLockManager = options.subagentLockManager ?? new SubagentLockManager();
     this.subagentRunRegistry = new SubagentRunRegistry({ bus: this.bus });
     this.activeSessionId = this.sessionPersistence?.load() ?? null;
     this.bus.on("mcp:servers-changed", () => {

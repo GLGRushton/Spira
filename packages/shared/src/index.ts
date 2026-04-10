@@ -28,17 +28,19 @@ export type {
   ErrorPayload,
   PermissionRequestPayload,
   ServerMessage,
+  StationId,
+  StationSummary,
   TtsProvider,
   WakeWordProviderSetting,
   UserSettings,
 } from "./protocol.js";
 export type {
   NormalizedStateChange,
+  SubagentDomain,
   SubagentArtifact,
   SubagentCompletedEvent,
   SubagentDeltaEvent,
   SubagentDelegationArgs,
-  SubagentDomain,
   SubagentDomainId,
   SubagentEnvelope,
   SubagentEnvelopeStatus,
@@ -107,6 +109,7 @@ export {
   WAKE_WORD_PROVIDERS,
 } from "./protocol.js";
 export { SUBAGENT_DOMAIN_IDS, SUBAGENT_SCOPE_IDS } from "./subagent-types.js";
+export { SUBAGENT_DOMAINS } from "./subagent-types.js";
 export {
   SPIRA_UI_ACTION_TYPES,
   SPIRA_UI_CONTROL_BRIDGE_VERSION,

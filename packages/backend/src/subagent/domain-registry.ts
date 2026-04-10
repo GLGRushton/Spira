@@ -1,31 +1,6 @@
-import type { McpTool, SubagentDomain, SubagentDomainId } from "@spira/shared";
+import { type McpTool, SUBAGENT_DOMAINS, type SubagentDomain, type SubagentDomainId } from "@spira/shared";
 
-export const SUBAGENT_DOMAINS: readonly SubagentDomain[] = [
-  {
-    id: "windows",
-    label: "Windows Agent",
-    serverIds: ["windows-system", "windows-ui", "vision"],
-    delegationToolName: "delegate_to_windows",
-    allowWrites: true,
-    systemPrompt: "",
-  },
-  {
-    id: "spira",
-    label: "Spira Agent",
-    serverIds: ["spira-ui"],
-    delegationToolName: "delegate_to_spira",
-    allowWrites: true,
-    systemPrompt: "",
-  },
-  {
-    id: "nexus",
-    label: "Nexus Agent",
-    serverIds: ["nexus-mods"],
-    delegationToolName: "delegate_to_nexus",
-    allowWrites: true,
-    systemPrompt: "",
-  },
-];
+export { SUBAGENT_DOMAINS } from "@spira/shared";
 
 const delegatedServerIds = new Set(SUBAGENT_DOMAINS.flatMap((domain) => domain.serverIds));
 

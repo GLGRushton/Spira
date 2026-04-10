@@ -6,6 +6,14 @@ interface McpClusterDetailProps {
   onSelectServer: (serverId: string) => void;
 }
 
+const serverDescriptions: Record<string, string> = {
+  "windows-system": "Host telemetry, process state, and operating system inspection.",
+  "windows-ui": "Desktop interaction, window targeting, and local UI control.",
+  vision: "Visual capture and OCR for screen-aware delegated work.",
+  "spira-ui": "Spira view control, snapshots, and in-app state inspection.",
+  "nexus-mods": "Nexus Mods search, metadata lookup, and mod file discovery.",
+};
+
 export function McpClusterDetail({ servers, onSelectServer }: McpClusterDetailProps) {
   const connected = servers.filter((server) => server.state === "connected").length;
   const totalTools = servers.reduce((sum, server) => sum + server.toolCount, 0);
@@ -14,12 +22,12 @@ export function McpClusterDetail({ servers, onSelectServer }: McpClusterDetailPr
     <div className={styles.panel}>
       <div className={styles.header}>
         <div>
-          <div className={styles.eyebrow}>MCP cluster</div>
-          <h2 className={styles.title}>Local tool network</h2>
+          <div className={styles.eyebrow}>Armoury</div>
+          <h2 className={styles.title}>Armoury</h2>
         </div>
         <p className={styles.caption}>
-          Grouped access to attached MCP servers. Drill into any room to inspect its inventory or troubleshoot a
-          specific link.
+          Grouped access to attached MCP servers. Inspect linked surfaces, review their tool inventory, and open a
+          specific rack when you need to troubleshoot one server.
         </p>
       </div>
 
@@ -44,6 +52,9 @@ export function McpClusterDetail({ servers, onSelectServer }: McpClusterDetailPr
               <span className={styles.serverState}>{server.state}</span>
             </div>
             <div className={styles.serverName}>{server.name}</div>
+            <div className={styles.serverDescription}>
+              {serverDescriptions[server.id] ?? "Attached MCP surface for delegated tools and live operational data."}
+            </div>
             <div className={styles.serverMeta}>
               <span>{server.toolCount} tools</span>
               <span>{server.tools.slice(0, 2).join(" · ") || "No tools"}</span>

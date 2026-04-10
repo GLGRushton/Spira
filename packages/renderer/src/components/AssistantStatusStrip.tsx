@@ -2,9 +2,9 @@ import type { SpiraUiView } from "@spira/shared";
 import { AnimatePresence, motion } from "framer-motion";
 import { useEffect, useMemo, useState } from "react";
 import { getShinraStatusContext } from "../shinra-status.js";
-import { useAssistantStore } from "../stores/assistant-store.js";
 import type { ChatMessage } from "../stores/chat-store.js";
-import { useChatStore } from "../stores/chat-store.js";
+import { getChatSession, useChatStore } from "../stores/chat-store.js";
+import { getStation, useStationStore } from "../stores/station-store.js";
 import styles from "./AssistantStatusStrip.module.css";
 
 interface AssistantStatusStripProps {
@@ -28,9 +28,10 @@ const getResponseBody = (message: ChatMessage | null): string => {
 };
 
 export function AssistantStatusStrip({ activeView, onOpenBridge }: AssistantStatusStripProps) {
-  const assistantState = useAssistantStore((store) => store.state);
-  const isStreaming = useChatStore((store) => store.isStreaming);
-  const messages = useChatStore((store) => store.messages);
+  const activeStationId = useStationStore((store) => store.activeStationId);
+  const assistantState = useStationStore((store) => getStation(store, activeStationId).state);
+  const isStreaming = useChatStore((store) => getChatSession(store, activeStationId).isStreaming);
+  const messages = useChatStore((store) => getChatSession(store, activeStationId).messages);
   const [displayMessage, setDisplayMessage] = useState<ChatMessage | null>(null);
   const [isLingering, setIsLingering] = useState(false);
 
@@ -73,7 +74,7 @@ export function AssistantStatusStrip({ activeView, onOpenBridge }: AssistantStat
 
     setDisplayMessage(null);
     setIsLingering(false);
-  }, [activeView, context.lastAssistantMessage, displayMessage, responseVisible]);
+  }, [activeStationId, activeView, context.lastAssistantMessage, displayMessage, responseVisible]);
 
   if (activeView === "bridge") {
     return null;

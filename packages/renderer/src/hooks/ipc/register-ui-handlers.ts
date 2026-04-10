@@ -1,4 +1,5 @@
 import { setSpiraUiControlReady } from "../../automation/control-runtime.js";
+import { useChatStore } from "../../stores/chat-store.js";
 import { useConnectionStore } from "../../stores/connection-store.js";
 
 interface UiHandlerActions {
@@ -12,23 +13,23 @@ interface UiHandlerActions {
   setTtsAmplitude: (amplitude: number) => void;
   applySettings: (settings: Partial<import("../../stores/settings-store.js").SettingsState>) => void;
   setConnectionStatus: (status: import("@spira/shared").ConnectionStatus) => void;
-  clearStreamingState: () => void;
-  setAborting: (value: boolean) => void;
-  setResetConfirming: (value: boolean) => void;
-  setResetting: (value: boolean) => void;
+  clearStreamingState: (stationId?: string) => void;
+  setAborting: (value: boolean, stationId?: string) => void;
+  setResetConfirming: (value: boolean, stationId?: string) => void;
+  setResetting: (value: boolean, stationId?: string) => void;
   clearPermissionRequests: () => void;
-  clearAllActiveCaptures: () => void;
-  clearRoomState: () => void;
-  handleSubagentStarted: (event: import("@spira/shared").SubagentStartedEvent) => void;
-  handleSubagentToolCall: (event: import("@spira/shared").SubagentToolCallEvent) => void;
-  handleSubagentToolResult: (event: import("@spira/shared").SubagentToolResultEvent) => void;
-  handleSubagentDelta: (event: import("@spira/shared").SubagentDeltaEvent) => void;
-  handleSubagentStatus: (event: import("@spira/shared").SubagentStatusEvent) => void;
-  handleSubagentCompleted: (event: import("@spira/shared").SubagentCompletedEvent) => void;
-  handleSubagentError: (event: import("@spira/shared").SubagentErrorEvent) => void;
-  handleSubagentLockAcquired: (event: import("@spira/shared").SubagentLockAcquiredEvent) => void;
-  handleSubagentLockDenied: (event: import("@spira/shared").SubagentLockDeniedEvent) => void;
-  handleSubagentLockReleased: (event: import("@spira/shared").SubagentLockReleasedEvent) => void;
+  clearAllActiveCaptures: (stationId?: string) => void;
+  clearRoomState: (stationId?: string) => void;
+  handleSubagentStarted: (event: import("@spira/shared").SubagentStartedEvent, stationId?: string) => void;
+  handleSubagentToolCall: (event: import("@spira/shared").SubagentToolCallEvent, stationId?: string) => void;
+  handleSubagentToolResult: (event: import("@spira/shared").SubagentToolResultEvent, stationId?: string) => void;
+  handleSubagentDelta: (event: import("@spira/shared").SubagentDeltaEvent, stationId?: string) => void;
+  handleSubagentStatus: (event: import("@spira/shared").SubagentStatusEvent, stationId?: string) => void;
+  handleSubagentCompleted: (event: import("@spira/shared").SubagentCompletedEvent, stationId?: string) => void;
+  handleSubagentError: (event: import("@spira/shared").SubagentErrorEvent, stationId?: string) => void;
+  handleSubagentLockAcquired: (event: import("@spira/shared").SubagentLockAcquiredEvent, stationId?: string) => void;
+  handleSubagentLockDenied: (event: import("@spira/shared").SubagentLockDeniedEvent, stationId?: string) => void;
+  handleSubagentLockReleased: (event: import("@spira/shared").SubagentLockReleasedEvent, stationId?: string) => void;
 }
 
 export const registerUiHandlers = (actions: UiHandlerActions): Array<() => void> => [
@@ -70,10 +71,12 @@ export const registerUiHandlers = (actions: UiHandlerActions): Array<() => void>
   window.electronAPI.onConnectionStatus((status) => {
     actions.setConnectionStatus(status);
     if (status !== "connected") {
-      actions.clearStreamingState();
-      actions.setAborting(false);
-      actions.setResetConfirming(false);
-      actions.setResetting(false);
+      for (const stationId of Object.keys(useChatStore.getState().sessions)) {
+        actions.clearStreamingState(stationId);
+        actions.setAborting(false, stationId);
+        actions.setResetConfirming(false, stationId);
+        actions.setResetting(false, stationId);
+      }
       actions.clearPermissionRequests();
       actions.clearAllActiveCaptures();
       actions.clearRoomState();
@@ -82,34 +85,34 @@ export const registerUiHandlers = (actions: UiHandlerActions): Array<() => void>
   window.electronAPI.onMessage((message) => {
     switch (message.type) {
       case "subagent:started":
-        actions.handleSubagentStarted(message.event);
+        actions.handleSubagentStarted(message.event, message.stationId);
         break;
       case "subagent:tool-call":
-        actions.handleSubagentToolCall(message.event);
+        actions.handleSubagentToolCall(message.event, message.stationId);
         break;
       case "subagent:tool-result":
-        actions.handleSubagentToolResult(message.event);
+        actions.handleSubagentToolResult(message.event, message.stationId);
         break;
       case "subagent:delta":
-        actions.handleSubagentDelta(message.event);
+        actions.handleSubagentDelta(message.event, message.stationId);
         break;
       case "subagent:status":
-        actions.handleSubagentStatus(message.event);
+        actions.handleSubagentStatus(message.event, message.stationId);
         break;
       case "subagent:completed":
-        actions.handleSubagentCompleted(message.event);
+        actions.handleSubagentCompleted(message.event, message.stationId);
         break;
       case "subagent:error":
-        actions.handleSubagentError(message.event);
+        actions.handleSubagentError(message.event, message.stationId);
         break;
       case "subagent:lock-acquired":
-        actions.handleSubagentLockAcquired(message.event);
+        actions.handleSubagentLockAcquired(message.event, message.stationId);
         break;
       case "subagent:lock-denied":
-        actions.handleSubagentLockDenied(message.event);
+        actions.handleSubagentLockDenied(message.event, message.stationId);
         break;
       case "subagent:lock-released":
-        actions.handleSubagentLockReleased(message.event);
+        actions.handleSubagentLockReleased(message.event, message.stationId);
         break;
       default:
         break;
