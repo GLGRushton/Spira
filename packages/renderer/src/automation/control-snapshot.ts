@@ -16,6 +16,7 @@ import { useRoomStore } from "../stores/room-store.js";
 import { useSettingsStore } from "../stores/settings-store.js";
 import { getStation, useStationStore } from "../stores/station-store.js";
 import { useUpgradeStore } from "../stores/upgrade-store.js";
+import { useVisionStore } from "../stores/vision-store.js";
 
 const toMessageSummary = (message: {
   id: string;
@@ -103,8 +104,19 @@ export const buildSpiraUiSnapshot = (): SpiraUiSnapshot => {
     assistantDock: buildAssistantDockSummary({
       activeView,
       assistantState,
+      connectionStatus: useConnectionStore.getState().status,
       isStreaming: chat.isStreaming,
       messages: chat.messages,
+      permissionRequests: usePermissionStore
+        .getState()
+        .requests.filter((request) => (request.stationId ?? activeStationId) === activeStationId),
+      activeCaptures: useVisionStore
+        .getState()
+        .activeCaptures.filter((capture) => capture.stationId === activeStationId),
+      agentRooms: room.agentRooms.filter((agentRoom) => agentRoom.stationId === activeStationId),
+      upgradeBanner: upgrade.banner ?? upgrade.protocolBanner,
+      isAborting: chat.isAborting,
+      isResetting: chat.isResetting,
     }),
   };
 };

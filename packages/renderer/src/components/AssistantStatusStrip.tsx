@@ -1,11 +1,17 @@
-import type { SpiraUiView } from "@spira/shared";
 import { AnimatePresence, motion } from "framer-motion";
 import { useEffect, useMemo, useState } from "react";
 import { getShinraStatusContext } from "../shinra-status.js";
 import type { ChatMessage } from "../stores/chat-store.js";
 import { getChatSession, useChatStore } from "../stores/chat-store.js";
+import { useConnectionStore } from "../stores/connection-store.js";
+import { usePermissionStore } from "../stores/permission-store.js";
+import { useRoomStore } from "../stores/room-store.js";
 import { getStation, useStationStore } from "../stores/station-store.js";
+import { useUpgradeStore } from "../stores/upgrade-store.js";
+import { useVisionStore } from "../stores/vision-store.js";
 import styles from "./AssistantStatusStrip.module.css";
+
+import type { SpiraUiView } from "@spira/shared";
 
 interface AssistantStatusStripProps {
   activeView: SpiraUiView;
@@ -30,10 +36,29 @@ const getResponseBody = (message: ChatMessage | null): string => {
 export function AssistantStatusStrip({ activeView, onOpenBridge }: AssistantStatusStripProps) {
   const activeStationId = useStationStore((store) => store.activeStationId);
   const assistantState = useStationStore((store) => getStation(store, activeStationId).state);
-  const isStreaming = useChatStore((store) => getChatSession(store, activeStationId).isStreaming);
-  const messages = useChatStore((store) => getChatSession(store, activeStationId).messages);
+  const { isStreaming, messages, isAborting, isResetting } = useChatStore((store) =>
+    getChatSession(store, activeStationId),
+  );
+  const connectionStatus = useConnectionStore((store) => store.status);
+  const allPermissionRequests = usePermissionStore((store) => store.requests);
+  const allActiveCaptures = useVisionStore((store) => store.activeCaptures);
+  const allAgentRooms = useRoomStore((store) => store.agentRooms);
+  const visibleBanner = useUpgradeStore((store) => store.banner ?? store.protocolBanner);
   const [displayMessage, setDisplayMessage] = useState<ChatMessage | null>(null);
   const [isLingering, setIsLingering] = useState(false);
+
+  const permissionRequests = useMemo(
+    () => allPermissionRequests.filter((request) => (request.stationId ?? activeStationId) === activeStationId),
+    [activeStationId, allPermissionRequests],
+  );
+  const activeCaptures = useMemo(
+    () => allActiveCaptures.filter((capture) => capture.stationId === activeStationId),
+    [activeStationId, allActiveCaptures],
+  );
+  const agentRooms = useMemo(
+    () => allAgentRooms.filter((room) => room.stationId === activeStationId),
+    [activeStationId, allAgentRooms],
+  );
 
   const context = useMemo(
     () =>
@@ -41,8 +66,26 @@ export function AssistantStatusStrip({ activeView, onOpenBridge }: AssistantStat
         assistantState,
         isStreaming,
         messages,
+        connectionStatus,
+        permissionRequests,
+        activeCaptures,
+        agentRooms,
+        upgradeBanner: visibleBanner,
+        isAborting,
+        isResetting,
       }),
-    [assistantState, isStreaming, messages],
+    [
+      activeCaptures,
+      agentRooms,
+      assistantState,
+      connectionStatus,
+      isAborting,
+      isResetting,
+      isStreaming,
+      messages,
+      permissionRequests,
+      visibleBanner,
+    ],
   );
 
   const responseVisible = activeView !== "bridge" && context.isResponseState && context.hasCurrentResponse;
@@ -50,19 +93,29 @@ export function AssistantStatusStrip({ activeView, onOpenBridge }: AssistantStat
 
   useEffect(() => {
     if (activeView === "bridge") {
-      setDisplayMessage(null);
-      setIsLingering(false);
+      if (displayMessage !== null) {
+        setDisplayMessage(null);
+      }
+      if (isLingering) {
+        setIsLingering(false);
+      }
       return;
     }
 
     if (responseVisible && context.lastAssistantMessage) {
-      setDisplayMessage(context.lastAssistantMessage);
-      setIsLingering(false);
+      if (displayMessage !== context.lastAssistantMessage) {
+        setDisplayMessage(context.lastAssistantMessage);
+      }
+      if (isLingering) {
+        setIsLingering(false);
+      }
       return;
     }
 
     if (!responseVisible && displayMessage) {
-      setIsLingering(true);
+      if (!isLingering) {
+        setIsLingering(true);
+      }
       const timer = window.setTimeout(() => {
         setDisplayMessage(null);
         setIsLingering(false);
@@ -72,9 +125,13 @@ export function AssistantStatusStrip({ activeView, onOpenBridge }: AssistantStat
       };
     }
 
-    setDisplayMessage(null);
-    setIsLingering(false);
-  }, [activeStationId, activeView, context.lastAssistantMessage, displayMessage, responseVisible]);
+    if (displayMessage !== null) {
+      setDisplayMessage(null);
+    }
+    if (isLingering) {
+      setIsLingering(false);
+    }
+  }, [activeView, context.lastAssistantMessage, displayMessage, isLingering, responseVisible]);
 
   if (activeView === "bridge") {
     return null;
@@ -84,14 +141,31 @@ export function AssistantStatusStrip({ activeView, onOpenBridge }: AssistantStat
     <aside className={styles.strip} aria-label="Shinra status strip">
       <div className={styles.bar}>
         <span
-          className={`${styles.orb} ${styles[assistantState]} ${context.isResponseState ? styles.active : ""}`}
+          className={`${styles.orb} ${styles[context.phase]} ${context.isResponseState ? styles.active : ""}`}
           aria-hidden="true"
         />
         <div className={styles.copy}>
-          <span className={styles.name}>Shinra</span>
+          <div className={styles.headline}>
+            <span className={styles.name}>Shinra</span>
+            <span
+              className={`${styles.phaseBadge} ${styles[context.phase]}`}
+              aria-label={`Shinra phase ${context.phaseLabel}`}
+            >
+              {context.phaseLabel}
+            </span>
+          </div>
           <span className={styles.summary} title={context.statusLine}>
-            {context.statusLine}
+            {context.workSummary ?? "Standing by"}
           </span>
+          {context.indicators.length > 0 ? (
+            <div className={styles.indicators} aria-label="Shinra activity indicators">
+              {context.indicators.map((indicator) => (
+                <span key={indicator} className={styles.indicator}>
+                  {indicator}
+                </span>
+              ))}
+            </div>
+          ) : null}
         </div>
         <button type="button" className={styles.bridgeButton} onClick={onOpenBridge} aria-label="Open bridge">
           ↗

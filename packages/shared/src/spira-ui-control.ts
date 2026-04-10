@@ -72,6 +72,8 @@ export interface SpiraUiAssistantDockSummary {
   expanded: boolean;
   workSummary?: string;
   responsePreview?: string;
+  phaseLabel?: string;
+  indicators?: string[];
 }
 
 export interface SpiraUiAgentRoomSummary {
