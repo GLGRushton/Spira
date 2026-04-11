@@ -20,10 +20,7 @@ interface StationStore {
 
 export const PRIMARY_STATION_ID = "primary";
 
-const createFallbackStation = (
-  stationId: StationId,
-  overrides: Partial<StationSummary> = {},
-): StationViewState => ({
+const createFallbackStation = (stationId: StationId, overrides: Partial<StationSummary> = {}): StationViewState => ({
   stationId,
   conversationId: null,
   label: stationId === PRIMARY_STATION_ID ? "Primary" : "Command Station",
@@ -43,10 +40,8 @@ const sortStations = (stations: Record<StationId, StationViewState>): Record<Sta
       .map((station) => [station.stationId, station]),
   );
 
-export const getStation = (
-  store: Pick<StationStore, "stations">,
-  stationId: StationId | undefined,
-): StationViewState => store.stations[stationId ?? PRIMARY_STATION_ID] ?? createFallbackStation(stationId ?? PRIMARY_STATION_ID);
+export const getStation = (store: Pick<StationStore, "stations">, stationId: StationId | undefined): StationViewState =>
+  store.stations[stationId ?? PRIMARY_STATION_ID] ?? createFallbackStation(stationId ?? PRIMARY_STATION_ID);
 
 export const useStationStore = create<StationStore>((set, get) => ({
   activeStationId: PRIMARY_STATION_ID,
@@ -67,14 +62,15 @@ export const useStationStore = create<StationStore>((set, get) => ({
       }, {});
 
       if (!nextStations[PRIMARY_STATION_ID]) {
-        nextStations[PRIMARY_STATION_ID] = state.stations[PRIMARY_STATION_ID] ?? createFallbackStation(PRIMARY_STATION_ID);
+        nextStations[PRIMARY_STATION_ID] =
+          state.stations[PRIMARY_STATION_ID] ?? createFallbackStation(PRIMARY_STATION_ID);
       }
 
       const activeStationId = nextStations[state.activeStationId]
         ? state.activeStationId
         : nextStations[PRIMARY_STATION_ID]
           ? PRIMARY_STATION_ID
-          : Object.keys(nextStations)[0] ?? PRIMARY_STATION_ID;
+          : (Object.keys(nextStations)[0] ?? PRIMARY_STATION_ID);
 
       nextStations[activeStationId] = {
         ...nextStations[activeStationId],
@@ -154,7 +150,7 @@ export const useStationStore = create<StationStore>((set, get) => ({
           [stationId]: {
             ...station,
             updatedAt,
-            hasUnread: state.activeStationId === stationId ? false : true,
+            hasUnread: state.activeStationId !== stationId,
           },
         },
       };

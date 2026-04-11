@@ -1,5 +1,5 @@
-import { quotePsString, runPs } from "../util/powershell.js";
-import { createCapturePath, pruneStaleCaptureFiles } from "../util/temp-files.js";
+import { quotePsString, runPs } from "@spira/mcp-util/powershell";
+import { createCapturePath, pruneStaleCaptureFiles } from "../util/capture-store.js";
 
 export interface ScreenCaptureResult {
   imagePath: string;

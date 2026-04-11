@@ -51,7 +51,11 @@ export function OperationsRoster({ onOpenBridge }: OperationsRosterProps) {
             <strong>{stationCards.length}</strong>
             <span>stations online</span>
           </div>
-          <button type="button" className={styles.createButton} onClick={() => window.electronAPI.send({ type: "station:create" })}>
+          <button
+            type="button"
+            className={styles.createButton}
+            onClick={() => window.electronAPI.send({ type: "station:create" })}
+          >
             Create station
           </button>
         </div>
@@ -76,7 +80,9 @@ export function OperationsRoster({ onOpenBridge }: OperationsRosterProps) {
               <div className={styles.metrics}>
                 <div className={styles.metric}>
                   <span>Task</span>
-                  <strong>{station.title?.trim() || station.session.activeConversationTitle || "Fresh briefing"}</strong>
+                  <strong>
+                    {station.title?.trim() || station.session.activeConversationTitle || "Fresh briefing"}
+                  </strong>
                 </div>
                 <div className={styles.metric}>
                   <span>Last activity</span>

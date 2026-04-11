@@ -1,0 +1,41 @@
+{
+  "name": "@spira/mcp-util",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./powershell": {
+      "types": "./dist/powershell.d.ts",
+      "import": "./dist/powershell.js"
+    },
+    "./results": {
+      "types": "./dist/results.d.ts",
+      "import": "./dist/results.js"
+    },
+    "./temp-files": {
+      "types": "./dist/temp-files.d.ts",
+      "import": "./dist/temp-files.js"
+    },
+    "./validation": {
+      "types": "./dist/validation.d.ts",
+      "import": "./dist/validation.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.4.0"
+  }
+}

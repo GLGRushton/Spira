@@ -21,7 +21,7 @@ interface IpcBridgeOptions {
   isUpgrading?: () => boolean;
 }
 
-const REPLAYABLE_SERVER_MESSAGES = new Set<ServerMessage["type"]>(["mcp:status"]);
+const REPLAYABLE_SERVER_MESSAGES = new Set<ServerMessage["type"]>(["mcp:status", "subagent:catalog"]);
 const CONVERSATION_REQUEST_TIMEOUT_MS = 10_000;
 
 type ConversationRequestMessage = Extract<ClientMessage, { requestId: string }>;

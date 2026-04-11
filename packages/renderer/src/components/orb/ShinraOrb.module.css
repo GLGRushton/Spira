@@ -1,5 +1,358 @@
 .wrapper {
+  position: relative;
   width: 100%;
-  height: 100%;
-  min-height: 220px;
+  max-width: 290px;
+  min-height: 230px;
+  aspect-ratio: 1;
+  margin: 0 auto;
+  overflow: hidden;
+  border-radius: 999px;
+  isolation: isolate;
+  --pyrefly-primary: #9fe3de;
+  --pyrefly-secondary: #00d4aa;
+  --pyrefly-accent: #d7c38d;
+  --pulse-duration: 4.4s;
+  --drift-duration: 14s;
+  --audio-drive: 0;
+  --mote-opacity: 0.54;
+}
+
+.wrapper::before,
+.wrapper::after {
+  position: absolute;
+  inset: 0;
+  content: "";
+  border-radius: inherit;
+}
+
+.wrapper::before {
+  background: radial-gradient(
+      circle at center,
+      color-mix(in srgb, var(--pyrefly-secondary) 14%, transparent),
+      transparent 36%
+    ), radial-gradient(circle at 50% 32%, color-mix(in srgb, var(--pyrefly-accent) 8%, transparent), transparent 24%),
+    radial-gradient(circle at center, rgba(7, 14, 33, 0.98), rgba(3, 8, 19, 0.94) 54%, rgba(0, 1, 6, 0.2) 78%);
+}
+
+.wrapper::after {
+  inset: 20px;
+  border: 1px solid color-mix(in srgb, var(--pyrefly-accent) 24%, rgba(148, 163, 184, 0.1));
+  box-shadow: inset 0 0 22px color-mix(in srgb, var(--pyrefly-accent) 6%, transparent), 0 0 0 1px
+    rgba(255, 255, 255, 0.02);
+  opacity: 0.72;
+}
+
+.voidGlow,
+.farplaneHalo,
+.congregation,
+.innerField,
+.focusCore,
+.memoryVeil,
+.scanline,
+.voiceWave,
+.pyrefly {
+  position: absolute;
+}
+
+.voidGlow {
+  inset: 16%;
+  border-radius: 999px;
+  background: radial-gradient(
+      circle at center,
+      color-mix(in srgb, var(--pyrefly-secondary) 18%, transparent),
+      transparent 54%
+    ), radial-gradient(circle at center, color-mix(in srgb, var(--pyrefly-primary) 12%, transparent), transparent 68%);
+  filter: blur(22px);
+  opacity: 0.78;
+  animation: fieldPulse var(--pulse-duration) ease-in-out infinite;
+}
+
+.farplaneHalo {
+  inset: 26px;
+  border-radius: 999px;
+  background: radial-gradient(circle at 50% 40%, rgba(255, 255, 255, 0.04), transparent 26%),
+    radial-gradient(circle at center, rgba(16, 27, 52, 0.86), rgba(5, 10, 22, 0.34) 58%, transparent 78%);
+  box-shadow: inset 0 0 28px color-mix(in srgb, var(--pyrefly-primary) 6%, transparent), 0 16px 30px rgba(0, 0, 0, 0.16);
+}
+
+.congregation {
+  inset: 0;
+  display: grid;
+  place-items: center;
+}
+
+.innerField {
+  inset: 32%;
+  border-radius: 999px;
+  background: radial-gradient(
+      circle at center,
+      color-mix(in srgb, var(--pyrefly-primary) 18%, transparent),
+      transparent 42%
+    ), radial-gradient(circle at center, color-mix(in srgb, var(--pyrefly-secondary) 12%, transparent), transparent 70%);
+  filter: blur(18px);
+  opacity: 0.7;
+  animation: fieldPulse calc(var(--pulse-duration) * 0.85) ease-in-out infinite;
+}
+
+.focusCore {
+  top: 50%;
+  left: 50%;
+  width: calc(24px + (var(--audio-drive) * 18px));
+  height: calc(24px + (var(--audio-drive) * 18px));
+  transform: translate(-50%, -50%);
+  border-radius: 999px;
+  background: radial-gradient(
+    circle at center,
+    rgba(255, 255, 255, 0.96),
+    color-mix(in srgb, var(--pyrefly-primary) 88%, white) 30%,
+    transparent 72%
+  );
+  box-shadow: 0 0 22px color-mix(in srgb, var(--pyrefly-primary) 44%, transparent), 0 0 42px
+    color-mix(in srgb, var(--pyrefly-secondary) 24%, transparent);
+  opacity: 0.86;
+  animation: corePulse var(--pulse-duration) ease-in-out infinite;
+}
+
+.memoryVeil {
+  inset: 24%;
+  border-radius: 999px;
+  background: radial-gradient(
+      circle at center,
+      color-mix(in srgb, var(--pyrefly-accent) 8%, transparent),
+      transparent 48%
+    ), radial-gradient(circle at 56% 34%, color-mix(in srgb, var(--pyrefly-primary) 12%, transparent), transparent 24%);
+  filter: blur(16px);
+  opacity: 0.46;
+  animation: veilDrift var(--drift-duration) ease-in-out infinite;
+}
+
+.scanline {
+  inset: 26%;
+  border-radius: 999px;
+  background: linear-gradient(
+    180deg,
+    transparent 0%,
+    transparent 42%,
+    color-mix(in srgb, var(--pyrefly-primary) 58%, transparent) 50%,
+    transparent 58%,
+    transparent 100%
+  );
+  opacity: 0;
+  mix-blend-mode: screen;
+}
+
+.voiceWave {
+  inset: 28%;
+  border: 1px solid color-mix(in srgb, var(--pyrefly-primary) 18%, transparent);
+  border-radius: 999px;
+  opacity: 0;
+  animation-play-state: paused;
+}
+
+.voiceWavePrimary {
+  animation: voiceWave 2s ease-out infinite;
+}
+
+.voiceWaveSecondary {
+  animation: voiceWave 2s ease-out 1s infinite;
+}
+
+.pyrefly {
+  top: 50%;
+  left: 50%;
+  width: var(--mote-size);
+  height: var(--mote-size);
+  margin-left: calc(var(--mote-size) / -2);
+  margin-top: calc(var(--mote-size) / -2);
+  border-radius: 999px;
+  background: radial-gradient(
+    circle at center,
+    rgba(255, 255, 255, 0.98),
+    color-mix(in srgb, var(--pyrefly-primary) 84%, white) 38%,
+    transparent 72%
+  );
+  box-shadow: 0 0 14px color-mix(in srgb, var(--pyrefly-primary) 44%, transparent), 0 0 24px
+    color-mix(in srgb, var(--pyrefly-secondary) 24%, transparent);
+  opacity: var(--mote-opacity);
+  transform: translate(calc(-50% + var(--mote-x)), calc(-50% + var(--mote-y)));
+  animation: pyreflyDrift var(--mote-duration) ease-in-out var(--mote-delay) infinite, pyreflyBlink
+    calc(var(--mote-duration) * 0.74) ease-in-out var(--mote-delay) infinite;
+}
+
+.idle {
+  --pyrefly-primary: #9fe3de;
+  --pyrefly-secondary: #00d4aa;
+  --pyrefly-accent: #cbb58d;
+}
+
+.listening {
+  --pyrefly-primary: #b8f3ff;
+  --pyrefly-secondary: #00e5ff;
+  --pyrefly-accent: #d7cfa1;
+}
+
+.transcribing {
+  --pyrefly-primary: #d5c7ff;
+  --pyrefly-secondary: #72d9ff;
+  --pyrefly-accent: #cdb89b;
+}
+
+.thinking {
+  --pyrefly-primary: #d8c1ff;
+  --pyrefly-secondary: #7c3aed;
+  --pyrefly-accent: #d6c197;
+}
+
+.speaking {
+  --pyrefly-primary: #ffe2a4;
+  --pyrefly-secondary: #cc9900;
+  --pyrefly-accent: #f0d39a;
+}
+
+.error {
+  --pyrefly-primary: #f7c5ab;
+  --pyrefly-secondary: #ef4444;
+  --pyrefly-accent: #c88d7d;
+}
+
+.listening .focusCore,
+.speaking .focusCore {
+  opacity: calc(0.82 + (var(--audio-drive) * 0.18));
+}
+
+.listening .innerField {
+  opacity: 0.82;
+}
+
+.transcribing .scanline {
+  opacity: 0.74;
+  animation: scanSweep 1.06s linear infinite;
+}
+
+.transcribing .pyrefly {
+  animation-duration: calc(var(--mote-duration) * 0.84), calc(var(--mote-duration) * 0.56);
+}
+
+.thinking .pyrefly {
+  animation-duration: calc(var(--mote-duration) * 0.72), calc(var(--mote-duration) * 0.5);
+}
+
+.thinking .memoryVeil {
+  opacity: 0.64;
+  transform: scale(0.92);
+}
+
+.speaking .voiceWave {
+  animation-play-state: running;
+}
+
+.speaking .pyrefly {
+  opacity: calc(var(--mote-opacity) + 0.12);
+}
+
+.error .pyrefly {
+  animation-duration: calc(var(--mote-duration) * 0.48), calc(var(--mote-duration) * 0.34);
+}
+
+.error .farplaneHalo {
+  box-shadow: inset 0 0 30px color-mix(in srgb, var(--pyrefly-secondary) 12%, transparent), 0 16px 30px
+    rgba(0, 0, 0, 0.16);
+}
+
+.error .focusCore,
+.error .voidGlow {
+  animation-duration: 0.58s;
+}
+
+@keyframes fieldPulse {
+  0%,
+  100% {
+    transform: scale(0.94);
+    opacity: 0.56;
+  }
+  50% {
+    transform: scale(1.05);
+    opacity: 0.9;
+  }
+}
+
+@keyframes corePulse {
+  0%,
+  100% {
+    transform: translate(-50%, -50%) scale(0.92);
+  }
+  50% {
+    transform: translate(-50%, -50%) scale(1.12);
+  }
+}
+
+@keyframes veilDrift {
+  0%,
+  100% {
+    transform: translateY(8px) scale(0.98);
+  }
+  50% {
+    transform: translateY(-10px) scale(1.05);
+  }
+}
+
+@keyframes scanSweep {
+  from {
+    transform: translateY(-36%);
+  }
+  to {
+    transform: translateY(36%);
+  }
+}
+
+@keyframes voiceWave {
+  0% {
+    transform: scale(0.72);
+    opacity: 0;
+  }
+  18% {
+    opacity: 0.4;
+  }
+  100% {
+    transform: scale(1.22);
+    opacity: 0;
+  }
+}
+
+@keyframes pyreflyDrift {
+  0%,
+  100% {
+    transform: translate(
+        calc(-50% + var(--mote-x) + (var(--mote-drift-x) * -0.35)),
+        calc(-50% + var(--mote-y) + (var(--mote-drift-y) * 0.45))
+      )
+      scale(0.92);
+  }
+  33% {
+    transform: translate(
+        calc(-50% + var(--mote-x) + var(--mote-drift-x)),
+        calc(-50% + var(--mote-y) + (var(--mote-drift-y) * -0.5))
+      )
+      scale(1.08);
+  }
+  66% {
+    transform: translate(
+        calc(-50% + var(--mote-x) + (var(--mote-drift-x) * -0.12)),
+        calc(-50% + var(--mote-y) + (var(--mote-drift-y) * -1.05))
+      )
+      scale(0.98);
+  }
+}
+
+@keyframes pyreflyBlink {
+  0%,
+  100% {
+    opacity: calc(var(--mote-opacity) * 0.68);
+  }
+  38% {
+    opacity: calc(var(--mote-opacity) + 0.18);
+  }
+  70% {
+    opacity: calc(var(--mote-opacity) * 0.52);
+  }
 }

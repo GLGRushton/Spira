@@ -135,8 +135,18 @@ export class McpClientPool {
       if (transport.onclose === closeHandler) {
         transport.onclose = undefined;
       }
-      await client.close().catch(() => {});
-      await transport.close().catch(() => {});
+      await client.close().catch((closeError) => {
+        this.logger.warn(
+          { error: closeError, serverId: config.id },
+          "Failed to close MCP client after connection failure",
+        );
+      });
+      await transport.close().catch((closeError) => {
+        this.logger.warn(
+          { error: closeError, serverId: config.id },
+          "Failed to close MCP transport after connection failure",
+        );
+      });
       throw new McpError(
         `Failed to connect MCP server ${config.name}: ${error instanceof Error ? error.message : String(error)}`,
         error,

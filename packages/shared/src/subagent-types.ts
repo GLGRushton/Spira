@@ -1,43 +1,62 @@
 import type { ToolCallStatus } from "./chat-types.js";
 
 export const SUBAGENT_DOMAIN_IDS = ["windows", "spira", "nexus"] as const;
-export type SubagentDomainId = (typeof SUBAGENT_DOMAIN_IDS)[number];
+export type BuiltinSubagentDomainId = (typeof SUBAGENT_DOMAIN_IDS)[number];
+export type SubagentDomainId = string;
 export const SUBAGENT_SCOPE_IDS = [...SUBAGENT_DOMAIN_IDS, "shinra"] as const;
-export type SubagentScopeId = (typeof SUBAGENT_SCOPE_IDS)[number];
+export type SubagentScopeId = SubagentDomainId | "shinra";
+
+export type SubagentSource = "builtin" | "user";
 
 export interface SubagentDomain {
   id: SubagentDomainId;
   label: string;
+  description?: string;
   serverIds: string[];
+  allowedToolNames?: string[] | null;
   delegationToolName: string;
   allowWrites: boolean;
   systemPrompt: string;
+  ready?: boolean;
+  source?: SubagentSource;
 }
 
 export const SUBAGENT_DOMAINS: readonly SubagentDomain[] = [
   {
     id: "windows",
     label: "Windows Agent",
+    description: "Handles desktop control, system inspection, and visual reads across the host machine.",
     serverIds: ["windows-system", "windows-ui", "vision"],
+    allowedToolNames: null,
     delegationToolName: "delegate_to_windows",
     allowWrites: true,
     systemPrompt: "",
+    ready: true,
+    source: "builtin",
   },
   {
     id: "spira",
     label: "Spira Agent",
+    description: "Works the live Spira interface and reports what the ship is doing from inside the app.",
     serverIds: ["spira-ui"],
+    allowedToolNames: null,
     delegationToolName: "delegate_to_spira",
     allowWrites: true,
     systemPrompt: "",
+    ready: true,
+    source: "builtin",
   },
   {
     id: "nexus",
     label: "Nexus Agent",
+    description: "Searches Nexus Mods, inspects listings, and gathers mod file details for game research.",
     serverIds: ["nexus-mods"],
+    allowedToolNames: null,
     delegationToolName: "delegate_to_nexus",
     allowWrites: true,
     systemPrompt: "",
+    ready: true,
+    source: "builtin",
   },
 ] as const;
 
@@ -173,6 +192,7 @@ export interface SubagentStartedEvent {
   runId: string;
   roomId: `agent:${string}`;
   domain: SubagentDomainId;
+  label?: string;
   task: string;
   /** One-indexed attempt counter so the first execution is attempt 1. */
   attempt: number;
@@ -215,6 +235,7 @@ export interface SubagentStatusEvent {
   runId: string;
   roomId: `agent:${string}`;
   domain: SubagentDomainId;
+  label?: string;
   status: SubagentRunStatus;
   occurredAt: number;
   summary?: string;
@@ -225,6 +246,7 @@ export interface SubagentCompletedEvent {
   runId: string;
   roomId: `agent:${string}`;
   domain: SubagentDomainId;
+  label?: string;
   completedAt: number;
   envelope: SubagentEnvelope;
 }
@@ -233,6 +255,7 @@ export interface SubagentErrorEvent {
   runId: string;
   roomId: `agent:${string}`;
   domain: SubagentDomainId;
+  label?: string;
   attempt: number;
   error: SubagentErrorRecord;
   willRetry: boolean;

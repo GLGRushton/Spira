@@ -25,7 +25,6 @@ const ensureNewServer = async (): Promise<void> => {
   }
 
   await mkdir(join(packageDir, "src", "tools"), { recursive: true });
-  await mkdir(join(packageDir, "src", "util"), { recursive: true });
 
   const files = new Map<string, string>([
     [
@@ -43,6 +42,7 @@ const ensureNewServer = async (): Promise<void> => {
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
+    "@spira/mcp-util": "workspace:*",
     "zod": "^3.23.0"
   },
   "devDependencies": {
@@ -65,7 +65,8 @@ const ensureNewServer = async (): Promise<void> => {
     "rootDir": "src",
     "types": ["node"]
   },
-  "include": ["src"]
+  "include": ["src"],
+  "references": [{ "path": "../mcp-util" }]
 }
 `,
     ],
@@ -87,123 +88,10 @@ await server.connect(transport);
 `,
     ],
     [
-      join(packageDir, "src", "util", "powershell.ts"),
-      `import { spawn } from "node:child_process";
-
-export interface PsResult {
-  stdout: string;
-  stderr: string;
-  exitCode: number;
-}
-
-export const quotePsString = (value: string): string => value.replaceAll("'", "''");
-
-export async function runPs(command: string, timeoutMs = 10_000): Promise<PsResult> {
-  return await new Promise<PsResult>((resolve, reject) => {
-    const child = spawn("powershell.exe", ["-NonInteractive", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command], {
-      stdio: ["ignore", "pipe", "pipe"],
-      windowsHide: true,
-    });
-
-    let stdout = "";
-    let stderr = "";
-    let settled = false;
-
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-
-    child.stdout.on("data", (chunk: string) => {
-      stdout += chunk;
-    });
-
-    child.stderr.on("data", (chunk: string) => {
-      stderr += chunk;
-    });
-
-    const timeout = setTimeout(() => {
-      if (settled) {
-        return;
-      }
-
-      settled = true;
-      child.kill();
-      reject(new Error(\`PowerShell command timed out after \${timeoutMs}ms\`));
-    }, timeoutMs);
-
-    child.on("error", (error) => {
-      if (settled) {
-        return;
-      }
-
-      settled = true;
-      clearTimeout(timeout);
-      reject(error);
-    });
-
-    child.on("close", (exitCode) => {
-      if (settled) {
-        return;
-      }
-
-      settled = true;
-      clearTimeout(timeout);
-
-      const normalizedExitCode = exitCode ?? -1;
-      const result: PsResult = {
-        stdout: stdout.trim(),
-        stderr: stderr.trim(),
-        exitCode: normalizedExitCode,
-      };
-
-      if (normalizedExitCode !== 0) {
-        reject(new Error(result.stderr || result.stdout || \`PowerShell exited with code \${normalizedExitCode}\`));
-        return;
-      }
-
-      resolve(result);
-    });
-  });
-}
-`,
-    ],
-    [
-      join(packageDir, "src", "util", "results.ts"),
-      `import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-
-const formatText = (value: unknown): string => {
-  if (typeof value === "string") {
-    return value;
-  }
-
-  return JSON.stringify(value, null, 2);
-};
-
-export const successResult = (payload: Record<string, unknown>, text?: string): CallToolResult => ({
-  content: [{ type: "text", text: text ?? formatText(payload) }],
-  structuredContent: payload,
-});
-
-export const errorResult = (message: string): CallToolResult => ({
-  content: [{ type: "text", text: message }],
-  structuredContent: { error: message },
-  isError: true,
-});
-`,
-    ],
-    [
-      join(packageDir, "src", "util", "validation.ts"),
-      `import { z } from "zod";
-
-export const ExampleEchoSchema = z.object({
-  message: z.string().min(1).max(500),
-});
-`,
-    ],
-    [
       join(packageDir, "src", "tools", "example.ts"),
       `import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { errorResult, successResult } from "../util/results.js";
-import { ExampleEchoSchema } from "../util/validation.js";
+import { errorResult, successResult } from "@spira/mcp-util/results";
+import { ExampleEchoSchema } from "@spira/mcp-util/validation";
 
 export const registerExampleTools = (server: McpServer): void => {
   server.registerTool(

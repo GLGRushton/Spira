@@ -6,6 +6,7 @@ import type { McpServerStatus } from "./mcp-types.js";
 import type {
   SubagentCompletedEvent,
   SubagentDeltaEvent,
+  SubagentDomain,
   SubagentErrorEvent,
   SubagentLockAcquiredEvent,
   SubagentLockDeniedEvent,
@@ -86,6 +87,17 @@ export type ClientMessage =
   | { type: "mcp:add-server"; config: McpServerConfig }
   | { type: "mcp:remove-server"; serverId: string }
   | { type: "mcp:set-enabled"; serverId: string; enabled: boolean }
+  | {
+      type: "subagent:create";
+      config: Omit<SubagentDomain, "source" | "delegationToolName"> & { id?: string; delegationToolName?: string };
+    }
+  | {
+      type: "subagent:update";
+      agentId: string;
+      patch: Partial<Omit<SubagentDomain, "id" | "source" | "delegationToolName">>;
+    }
+  | { type: "subagent:remove"; agentId: string }
+  | { type: "subagent:set-ready"; agentId: string; ready: boolean }
   | { type: "handshake"; protocolVersion: number; rendererBuildId: string }
   | { type: "ping" };
 
@@ -124,6 +136,7 @@ export type ServerMessage =
   | { type: "permission:request"; request: PermissionRequestPayload }
   | { type: "permission:complete"; requestId: string; result: "approved" | "denied" | "expired"; stationId?: StationId }
   | { type: "mcp:status"; servers: McpServerStatus[] }
+  | { type: "subagent:catalog"; agents: SubagentDomain[] }
   | { type: "subagent:started"; event: SubagentStartedEvent; stationId?: StationId }
   | { type: "subagent:tool-call"; event: SubagentToolCallEvent; stationId?: StationId }
   | { type: "subagent:tool-result"; event: SubagentToolResultEvent; stationId?: StationId }

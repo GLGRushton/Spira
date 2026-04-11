@@ -90,8 +90,26 @@ const electronAPI = {
   updateSettings(settings) {
     electronAPI.send({ type: "settings:update", settings });
   },
+  addMcpServer(config) {
+    electronAPI.send({ type: "mcp:add-server", config });
+  },
+  removeMcpServer(serverId) {
+    electronAPI.send({ type: "mcp:remove-server", serverId });
+  },
   setMcpServerEnabled(serverId, enabled) {
     electronAPI.send({ type: "mcp:set-enabled", serverId, enabled });
+  },
+  createSubagent(config) {
+    electronAPI.send({ type: "subagent:create", config });
+  },
+  updateSubagent(agentId, patch) {
+    electronAPI.send({ type: "subagent:update", agentId, patch });
+  },
+  removeSubagent(agentId) {
+    electronAPI.send({ type: "subagent:remove", agentId });
+  },
+  setSubagentReady(agentId, ready) {
+    electronAPI.send({ type: "subagent:set-ready", agentId, ready });
   },
   getSettings() {
     return ipcRenderer.invoke(SETTINGS_GET_CHANNEL);
@@ -207,6 +225,11 @@ const electronAPI = {
   onMcpStatus(handler) {
     return onServerMessage("mcp:status", (message) => {
       handler(message.servers);
+    });
+  },
+  onSubagentCatalog(handler) {
+    return onServerMessage("subagent:catalog", (message) => {
+      handler(message.agents);
     });
   },
   onAudioLevel(handler) {

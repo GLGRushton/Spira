@@ -1,7 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { quotePsString, runPs } from "@spira/mcp-util/powershell";
+import { errorResult, successResult } from "@spira/mcp-util/results";
 import { type LaunchCandidate, pickBestLaunchCandidate } from "../util/app-launch.js";
-import { quotePsString, runPs } from "../util/powershell.js";
-import { errorResult, successResult } from "../util/results.js";
 import { CloseAppSchema, EmptySchema, LaunchAppSchema } from "../util/validation.js";
 
 interface DirectLaunchResolution {

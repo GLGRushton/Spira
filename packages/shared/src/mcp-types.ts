@@ -1,6 +1,9 @@
+export type McpServerSource = "builtin" | "user";
+
 export interface McpServerConfig {
   id: string;
   name: string;
+  description?: string;
   transport: "stdio";
   command: string;
   args: string[];
@@ -8,6 +11,7 @@ export interface McpServerConfig {
   enabled: boolean;
   autoRestart: boolean;
   maxRestarts?: number;
+  source?: McpServerSource;
 }
 
 export interface McpToolAnnotations {
@@ -44,6 +48,8 @@ export interface McpServerDiagnostics {
 export interface McpServerStatus {
   id: string;
   name: string;
+  description?: string;
+  source?: McpServerSource;
   enabled: boolean;
   state: "starting" | "connected" | "disconnected" | "error";
   toolCount: number;

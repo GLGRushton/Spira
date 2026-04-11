@@ -34,6 +34,7 @@ import { appRootDir } from "../util/app-paths.js";
 import { CopilotError, formatErrorDetails } from "../util/errors.js";
 import type { SpiraEventBus } from "../util/event-bus.js";
 import { createLogger } from "../util/logger.js";
+import { setUnrefTimeout } from "../util/timers.js";
 import { SubagentLockManager } from "./lock-manager.js";
 
 const logger = createLogger("subagent-runner");
@@ -340,6 +341,7 @@ export class SubagentRunner {
         runId: liveRun.runId,
         roomId: liveRun.roomId,
         domain: this.options.domain.id,
+        label: this.options.domain.label,
         task: args.task,
         attempt: retryCount + 1,
         startedAt: liveRun.startedAt,
@@ -369,6 +371,7 @@ export class SubagentRunner {
           runId: liveRun.runId,
           roomId: liveRun.roomId,
           domain: this.options.domain.id,
+          label: this.options.domain.label,
           completedAt,
           envelope,
         });
@@ -385,6 +388,7 @@ export class SubagentRunner {
           runId: liveRun.runId,
           roomId: liveRun.roomId,
           domain: this.options.domain.id,
+          label: this.options.domain.label,
           attempt: retryCount + 1,
           error: errorRecord,
           willRetry,
@@ -397,7 +401,9 @@ export class SubagentRunner {
 
         if (willRetry) {
           await this.cleanupLiveSession(liveRun);
-          await new Promise((resolve) => setTimeout(resolve, this.retryDelayMs));
+          await new Promise<void>((resolve) => {
+            setUnrefTimeout(resolve, this.retryDelayMs);
+          });
           return this.startTurn(liveRun, args, prompt, retryCount + 1, allowRetry, true);
         }
 
@@ -421,6 +427,7 @@ export class SubagentRunner {
           runId: liveRun.runId,
           roomId: liveRun.roomId,
           domain: this.options.domain.id,
+          label: this.options.domain.label,
           completedAt,
           envelope,
         });

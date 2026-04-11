@@ -1,5 +1,5 @@
 import type { SpiraUiView } from "@spira/shared";
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useStationStore } from "../stores/station-store.js";
 import styles from "./Sidebar.module.css";
 import { VoiceIndicator } from "./VoiceIndicator.js";
@@ -21,15 +21,33 @@ const items: Array<{ id: SidebarView; label: string; caption: string }> = [
   { id: "settings", label: "Settings", caption: "Voice + MCP" },
 ];
 
+const alwaysVisibleItems = items.filter((item) => item.id === "ship" || item.id === "bridge");
+const collapsibleItems = items.filter((item) => item.id !== "ship" && item.id !== "bridge");
+const isCollapsibleView = (view: SidebarView): boolean =>
+  view === "operations" ||
+  view === "barracks" ||
+  view === "settings" ||
+  view === "mcp" ||
+  view === "agents" ||
+  view.startsWith("mcp:") ||
+  view.startsWith("agent:");
+
 export function Sidebar({ activeView, onViewChange }: SidebarProps) {
   const stationMap = useStationStore((store) => store.stations);
   const activeStationId = useStationStore((store) => store.activeStationId);
   const setActiveStation = useStationStore((store) => store.setActiveStation);
+  const [roomsExpanded, setRoomsExpanded] = useState(() => isCollapsibleView(activeView));
   const stations = useMemo(() => Object.values(stationMap), [stationMap]);
   const busyStations = useMemo(
     () => stations.filter((station) => station.state !== "idle" || station.isStreaming),
     [stations],
   );
+
+  useEffect(() => {
+    if (isCollapsibleView(activeView)) {
+      setRoomsExpanded(true);
+    }
+  }, [activeView]);
 
   const isActive = (itemId: SidebarView): boolean => {
     if (itemId === "mcp") {
@@ -58,7 +76,7 @@ export function Sidebar({ activeView, onViewChange }: SidebarProps) {
       </div>
 
       <nav className={styles.nav}>
-        {items.map((item) => (
+        {alwaysVisibleItems.map((item) => (
           <button
             key={item.id}
             type="button"
@@ -69,13 +87,46 @@ export function Sidebar({ activeView, onViewChange }: SidebarProps) {
             <span className={styles.navCaption}>{item.caption}</span>
           </button>
         ))}
+
+        <div className={styles.collapsibleNavSection}>
+          <button
+            type="button"
+            className={`${styles.collapseToggle} ${roomsExpanded ? styles.collapseToggleExpanded : ""}`}
+            onClick={() => setRoomsExpanded((expanded) => !expanded)}
+            aria-expanded={roomsExpanded}
+            aria-controls="sidebar-room-list"
+          >
+            <span className={styles.collapseToggleLabel}>More rooms</span>
+            <span className={styles.collapseToggleIcon} aria-hidden="true">
+              {roomsExpanded ? "-" : "+"}
+            </span>
+          </button>
+
+          {roomsExpanded ? (
+            <div id="sidebar-room-list" className={styles.collapsibleNavItems}>
+              {collapsibleItems.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  className={`${styles.navItem} ${isActive(item.id) ? styles.active : ""}`}
+                  onClick={() => onViewChange(item.id)}
+                >
+                  <span className={styles.navLabel}>{item.label}</span>
+                  <span className={styles.navCaption}>{item.caption}</span>
+                </button>
+              ))}
+            </div>
+          ) : null}
+        </div>
       </nav>
 
       <section className={styles.stationPanel}>
         <div className={styles.stationHeader}>
           <div>
             <div className={styles.stationEyebrow}>Command stations</div>
-            <div className={styles.stationTitle}>{busyStations.length > 0 ? `${busyStations.length} active` : "Standing by"}</div>
+            <div className={styles.stationTitle}>
+              {busyStations.length > 0 ? `${busyStations.length} active` : "Standing by"}
+            </div>
           </div>
           <button
             type="button"

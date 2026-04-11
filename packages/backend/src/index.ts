@@ -25,10 +25,12 @@ import { McpClientPool } from "./mcp/client-pool.js";
 import { McpRegistry } from "./mcp/registry.js";
 import { McpToolAggregator } from "./mcp/tool-aggregator.js";
 import { WsServer } from "./server.js";
+import { SubagentRegistry } from "./subagent/registry.js";
 import { resolveAppPath } from "./util/app-paths.js";
 import { ConfigError, SpiraError, toErrorPayload } from "./util/errors.js";
 import { SpiraEventBus } from "./util/event-bus.js";
 import { createLogger } from "./util/logger.js";
+import { setUnrefTimeout } from "./util/timers.js";
 import { AudioCapture } from "./voice/audio-capture.js";
 import { VoicePipeline } from "./voice/pipeline.js";
 import { WhisperSttProvider } from "./voice/stt.js";
@@ -44,6 +46,7 @@ let server: WsServer | null = null;
 let bus: SpiraEventBus | null = null;
 let stationRegistry: StationRegistry | null = null;
 let mcpRegistry: McpRegistry | null = null;
+let subagentRegistry: SubagentRegistry | null = null;
 let transport: WsTransport | null = null;
 let unsubscribeTransport: (() => void) | null = null;
 let voicePipeline: VoicePipeline | null = null;
@@ -247,7 +250,7 @@ const requestUpgradeProposal = async (proposal: UpgradeProposal): Promise<void> 
   }
 
   await new Promise<void>((resolve, reject) => {
-    const timeout = setTimeout(() => {
+    const timeout = setUnrefTimeout(() => {
       pendingUpgradeProposalResponses.delete(proposal.proposalId);
       reject(new Error("Timed out waiting for upgrade proposal acknowledgement"));
     }, 10_000);
@@ -271,6 +274,14 @@ const requestUpgradeProposal = async (proposal: UpgradeProposal): Promise<void> 
   });
 };
 
+const clearPendingUpgradeProposalResponses = (reason: Error): void => {
+  for (const [proposalId, pending] of pendingUpgradeProposalResponses.entries()) {
+    clearTimeout(pending.timeout);
+    pendingUpgradeProposalResponses.delete(proposalId);
+    pending.reject(reason);
+  }
+};
+
 const shutdown = async (signal: NodeJS.Signals | "manual") => {
   if (shuttingDown) {
     return;
@@ -279,6 +290,7 @@ const shutdown = async (signal: NodeJS.Signals | "manual") => {
   shuttingDown = true;
   logger.info({ signal }, "Shutting down backend");
 
+  clearPendingUpgradeProposalResponses(new Error("Backend is shutting down"));
   unsubscribeTransport?.();
   await voicePipeline?.stop();
   ttsPlayback?.dispose();
@@ -479,7 +491,8 @@ const handleClientMessage = async (message: ClientMessage): Promise<void> => {
   if (message.type === "chat:new-session") {
     ttsPlayback?.stop();
     try {
-      const preservedToMemory = (await stationRegistry?.startNewSession(message.stationId, message.conversationId)) ?? false;
+      const preservedToMemory =
+        (await stationRegistry?.startNewSession(message.stationId, message.conversationId)) ?? false;
       transport?.send({
         type: "chat:new-session-complete",
         preservedToMemory,
@@ -537,6 +550,69 @@ const handleClientMessage = async (message: ClientMessage): Promise<void> => {
           "MCP_UPDATE_FAILED",
           `Failed to ${message.enabled ? "enable" : "disable"} MCP server ${message.serverId}`,
           "mcp",
+        ),
+      });
+    }
+    return;
+  }
+
+  if (message.type === "subagent:create") {
+    try {
+      subagentRegistry?.createCustom(message.config);
+    } catch (error) {
+      logger.error(
+        { err: error, agentId: message.config.id, label: message.config.label },
+        "Failed to create subagent",
+      );
+      transport?.send({
+        type: "error",
+        ...toErrorPayload(error, "SUBAGENT_CREATE_FAILED", "Failed to create subagent", "subagent"),
+      });
+    }
+    return;
+  }
+
+  if (message.type === "subagent:update") {
+    try {
+      subagentRegistry?.updateCustom(message.agentId, message.patch);
+    } catch (error) {
+      logger.error({ err: error, agentId: message.agentId }, "Failed to update subagent");
+      transport?.send({
+        type: "error",
+        ...toErrorPayload(error, "SUBAGENT_UPDATE_FAILED", `Failed to update subagent ${message.agentId}`, "subagent"),
+      });
+    }
+    return;
+  }
+
+  if (message.type === "subagent:remove") {
+    try {
+      subagentRegistry?.removeCustom(message.agentId);
+    } catch (error) {
+      logger.error({ err: error, agentId: message.agentId }, "Failed to remove subagent");
+      transport?.send({
+        type: "error",
+        ...toErrorPayload(error, "SUBAGENT_REMOVE_FAILED", `Failed to remove subagent ${message.agentId}`, "subagent"),
+      });
+    }
+    return;
+  }
+
+  if (message.type === "subagent:set-ready") {
+    try {
+      subagentRegistry?.setReady(message.agentId, message.ready);
+    } catch (error) {
+      logger.error(
+        { err: error, agentId: message.agentId, ready: message.ready },
+        "Failed to update subagent readiness",
+      );
+      transport?.send({
+        type: "error",
+        ...toErrorPayload(
+          error,
+          "SUBAGENT_READY_FAILED",
+          `Failed to update readiness for subagent ${message.agentId}`,
+          "subagent",
         ),
       });
     }
@@ -649,9 +725,6 @@ const bootstrap = async () => {
   logger.info({ nodeEnv: process.env.NODE_ENV ?? "development", port: env.SPIRA_PORT }, "Starting Spira backend");
 
   bus = new SpiraEventBus();
-  const pool = new McpClientPool(bus, logger);
-  const aggregator = new McpToolAggregator(pool);
-  mcpRegistry = new McpRegistry(bus, logger, pool);
   const memoryDbPath = process.env[SPIRA_MEMORY_DB_PATH_ENV];
   if (typeof memoryDbPath === "string" && memoryDbPath.trim()) {
     memoryDb = SpiraMemoryDatabase.open(memoryDbPath.trim());
@@ -661,13 +734,19 @@ const bootstrap = async () => {
       "Memory database path is unset; conversation persistence disabled",
     );
   }
+  const pool = new McpClientPool(bus, logger);
+  const aggregator = new McpToolAggregator(pool);
+  mcpRegistry = new McpRegistry(bus, logger, pool, memoryDb);
+  subagentRegistry = new SubagentRegistry(bus, memoryDb);
   server = new WsServer(
     bus,
     env.SPIRA_PORT,
     BACKEND_GENERATION,
     BACKEND_BUILD_ID,
     () => mcpRegistry?.getStatus() ?? [],
+    () => subagentRegistry?.listAll() ?? [],
   );
+  subagentRegistry.initialize();
   transport = new WsTransport(server);
   stationRegistry = new StationRegistry({
     rootBus: bus,
@@ -675,6 +754,7 @@ const bootstrap = async () => {
     toolAggregator: aggregator,
     transport,
     memoryDb,
+    subagentRegistry,
     requestUpgradeProposal,
     applyHotCapabilityUpgrade: async () => {
       if (!mcpRegistry) {

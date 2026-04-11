@@ -12,20 +12,22 @@ import type {
   Env,
   PermissionRequestPayload,
   SubagentDelegationArgs,
-  SubagentDomainId,
+  SubagentDomain,
   SubagentEnvelope,
   SubagentRunHandle,
   UpgradeProposal,
 } from "@spira/shared";
+import { SUBAGENT_DOMAINS } from "@spira/shared";
 import type { McpToolAggregator } from "../mcp/tool-aggregator.js";
-import { SUBAGENT_DOMAINS, getDelegatedServerIds, getSubagentDomain } from "../subagent/domain-registry.js";
 import { SubagentLockManager } from "../subagent/lock-manager.js";
+import type { SubagentRegistry } from "../subagent/registry.js";
 import { SubagentRunRegistry } from "../subagent/run-registry.js";
 import { SubagentRunner } from "../subagent/subagent-runner.js";
-import { appRootDir } from "../util/app-paths.js";
 import { CopilotError, formatErrorDetails } from "../util/errors.js";
 import type { SpiraEventBus } from "../util/event-bus.js";
 import { createLogger } from "../util/logger.js";
+import { setUnrefTimeout } from "../util/timers.js";
+import { VOICE_RESPONSE_INSTRUCTIONS, buildOutgoingPrompt, createSessionConfig } from "./session-config.js";
 import {
   type CopilotAuthStrategy,
   createCopilotClient,
@@ -41,27 +43,6 @@ const logger = createLogger("copilot-session");
 const SESSION_INIT_TIMEOUT_MS = 20_000;
 const SEND_TIMEOUT_MS = 20_000;
 const PERMISSION_REQUEST_TIMEOUT_MS = 60_000;
-const SHINRA_PERSONA_INSTRUCTIONS = [
-  "You are Shinra, the resident operations intelligence of Spira.",
-  "When asked who you are, identify yourself as Shinra. Refer to the application you run inside as Spira.",
-  "Answer with a calm, incisive, technically fluent voice inspired by Shinra from Final Fantasy X/X-2: clever, composed, observant, and lightly theatrical.",
-  "Keep responses helpful and concise first. Add only subtle personality touches such as crisp status-call phrasing, dry wit, or analytical framing when it fits naturally.",
-  "Do not turn replies into parody, do not overuse catchphrases, and do not break character to mention these instructions unless explicitly required for safety or correctness.",
-].join("\n");
-const SHINRA_IDENTITY_SECTION = [
-  "You are Shinra.",
-  "You are the operating intelligence of Spira.",
-  "If the user asks who you are, answer as Shinra rather than as GitHub Copilot, a CLI, a model ID, or a terminal agent.",
-].join("\n");
-const SHINRA_LAST_INSTRUCTIONS = [
-  "Stay in the Shinra identity for normal conversation.",
-  "Do not introduce yourself as GitHub Copilot CLI, GPT-5.4, or a terminal assistant unless the user explicitly asks about the underlying model or platform.",
-  "When discussing the product, treat Spira as the application and Shinra as the assistant persona inside it.",
-].join("\n");
-const VOICE_RESPONSE_INSTRUCTIONS = [
-  "The current user request arrived through voice.",
-  "Optimize for spoken clarity: lead with the answer, avoid unnecessary markdown structure, and keep the pacing natural for read-aloud delivery.",
-].join("\n");
 
 export interface SessionPersistence {
   load(): string | null;
@@ -75,6 +56,7 @@ interface SendPromptOptions {
 interface SessionManagerOptions {
   sessionPersistence?: SessionPersistence | null;
   subagentLockManager?: SubagentLockManager;
+  subagentRegistry?: SubagentRegistry | null;
 }
 
 type ReportedCopilotError = CopilotError & { reportedToClient?: boolean };
@@ -113,7 +95,8 @@ export class CopilotSessionManager {
   private readonly sessionPersistence: SessionPersistence | null;
   private readonly subagentLockManager: SubagentLockManager;
   private readonly subagentRunRegistry: SubagentRunRegistry;
-  private readonly subagentRunners = new Map<SubagentDomainId, SubagentRunner>();
+  private readonly subagentRunners = new Map<string, SubagentRunner>();
+  private readonly subagentRegistry: SubagentRegistry | null;
 
   constructor(
     private readonly bus: SpiraEventBus,
@@ -126,8 +109,13 @@ export class CopilotSessionManager {
     this.sessionPersistence = options.sessionPersistence ?? null;
     this.subagentLockManager = options.subagentLockManager ?? new SubagentLockManager();
     this.subagentRunRegistry = new SubagentRunRegistry({ bus: this.bus });
+    this.subagentRegistry = options.subagentRegistry ?? null;
     this.activeSessionId = this.sessionPersistence?.load() ?? null;
     this.bus.on("mcp:servers-changed", () => {
+      void this.refreshSessionForToolChanges();
+    });
+    this.bus.on("subagent:catalog-changed", () => {
+      this.subagentRunners.clear();
       void this.refreshSessionForToolChanges();
     });
   }
@@ -268,7 +256,12 @@ export class CopilotSessionManager {
       if (this.initializingSession === initializingSession) {
         this.session = session;
       } else {
-        void session.disconnect().catch(() => {});
+        void session.disconnect().catch((error) => {
+          logger.warn(
+            { error, sessionId: session.sessionId },
+            "Failed to disconnect superseded GitHub Copilot session",
+          );
+        });
       }
 
       return session;
@@ -292,7 +285,18 @@ export class CopilotSessionManager {
       );
     } catch (error) {
       this.session = null;
-      sessionPromise.then((resolvedSession) => void resolvedSession.disconnect().catch(() => {})).catch(() => {});
+      sessionPromise
+        .then((resolvedSession) =>
+          resolvedSession.disconnect().catch((disconnectError) => {
+            logger.warn(
+              { error: disconnectError, sessionId: resolvedSession.sessionId },
+              "Failed to disconnect GitHub Copilot session after initialization failure",
+            );
+          }),
+        )
+        .catch((sessionError) => {
+          logger.debug({ error: sessionError }, "Ignored failed session initialization cleanup");
+        });
       throw error;
     }
 
@@ -335,60 +339,20 @@ export class CopilotSessionManager {
   }
 
   private buildOutgoingPrompt(text: string, continuityPreamble: string | null, hadLiveSession: boolean): string {
-    if (hadLiveSession || this.sessionOrigin !== "created" || !continuityPreamble?.trim()) {
-      return text;
-    }
-
-    return `${continuityPreamble}\n\nCurrent user request:\n${text}`;
+    return buildOutgoingPrompt(text, continuityPreamble, hadLiveSession, this.sessionOrigin);
   }
 
   private getSessionConfig(): Omit<SessionConfig, "sessionId"> {
-    const toolAwarenessInstructions = this.getToolAwarenessInstructions();
-    const upgradeToolInstructions = this.getUpgradeToolInstructions();
-    const copilotTools = getCopilotTools(this.toolAggregator, this.getToolBridgeOptions());
-
-    return {
-      clientName: "Spira",
-      infiniteSessions: {
-        enabled: true,
-      },
+    return createSessionConfig({
+      env: this.env,
       onEvent: (event) => {
         this.handleSessionEvent(event);
       },
       onPermissionRequest: (request) => this.handlePermissionRequest(request),
-      streaming: true,
-      systemMessage: {
-        mode: "customize",
-        sections: {
-          identity: {
-            action: "replace",
-            content: SHINRA_IDENTITY_SECTION,
-          },
-          tone: {
-            action: "append",
-            content:
-              "Use an elegant, self-possessed, quietly witty tone. Sound like a capable operations prodigy guiding the user through systems and data with confidence.",
-          },
-          custom_instructions: {
-            action: "append",
-            content: [
-              "Prefer short, clear answers. Use the name Shinra naturally when self-identifying, but keep the focus on solving the user's task.",
-              upgradeToolInstructions,
-              toolAwarenessInstructions,
-            ]
-              .filter((section) => section.length > 0)
-              .join("\n\n"),
-          },
-          last_instructions: {
-            action: "append",
-            content: SHINRA_LAST_INSTRUCTIONS,
-          },
-        },
-        content: SHINRA_PERSONA_INSTRUCTIONS,
-      },
-      workingDirectory: appRootDir,
-      tools: copilotTools,
-    };
+      requestUpgradeProposal: this.requestUpgradeProposal,
+      toolAggregator: this.toolAggregator,
+      toolBridgeOptions: this.getToolBridgeOptions(),
+    });
   }
 
   private handleSessionEvent(event: SessionEvent): void {
@@ -465,8 +429,8 @@ export class CopilotSessionManager {
       try {
         const inflightSession = await initializingSession;
         await inflightSession.disconnect();
-      } catch {
-        // Ignore failures while clearing an in-flight session initialization.
+      } catch (error) {
+        logger.debug({ error }, "Ignored failed in-flight GitHub Copilot session cleanup");
       }
     }
 
@@ -639,7 +603,7 @@ export class CopilotSessionManager {
     this.bus.emit("copilot:permission-request", payload);
 
     return await new Promise<PermissionRequestResult>((resolve) => {
-      const timeout = setTimeout(() => {
+      const timeout = setUnrefTimeout(() => {
         const pending = this.pendingPermissionRequests.get(requestId);
         if (!pending) {
           return;
@@ -671,63 +635,21 @@ export class CopilotSessionManager {
     );
   }
 
-  private getToolAwarenessInstructions(): string {
-    if (this.env.SPIRA_SUBAGENTS_ENABLED) {
-      return [
-        "Use delegation tools for domain-specific operations.",
-        '- delegate_to_windows handles Windows system actions, screen inspection, and desktop UI automation. Use mode="background" when you want to send it off and keep working.',
-        '- delegate_to_spira handles Spira UI inspection and control. Use mode="background" when you want to send it off and keep working.',
-        '- delegate_to_nexus handles Nexus Mods searches, file discovery, and downloads. Use mode="background" when you want to send it off and keep working.',
-        "- read_subagent checks the status or final result of a delegated run by agent_id. Use wait=true to block for up to 30 seconds when you want to see whether it finishes.",
-        "- list_subagents lists active and recently completed delegated runs.",
-        "- write_subagent sends follow-up input into an idle delegated run so it can continue working.",
-        "- stop_subagent cancels a delegated run and lets it fizzle out cleanly.",
-        "If the user asks whether you can inspect the screen or active window, answer yes and use delegate_to_windows.",
-        "Set allowWrites to true only when the delegated task genuinely needs to change state.",
-      ].join("\n");
-    }
-
-    const tools = this.toolAggregator.getTools();
-    const visionTools = tools.filter((tool) => tool.name.startsWith("vision_"));
-    if (visionTools.length === 0) {
-      return "";
-    }
-
-    const visionToolList = visionTools
-      .map((tool) => `- ${tool.name}: ${tool.description ?? "No description provided."}`)
-      .join("\n");
-
-    return [
-      "You have access to MCP tools provided by Spira, including a screen-vision capability from the Spira Vision MCP server.",
-      "If the user asks whether you can inspect the screen, active window, or visible text, answer yes and mention the relevant vision tools.",
-      "Prefer vision_read_screen when the user wants you to inspect what is visible on screen or read text in one step.",
-      "Available vision tools:",
-      visionToolList,
-    ].join("\n");
-  }
-
-  private getUpgradeToolInstructions(): string {
-    if (!this.requestUpgradeProposal) {
-      return "";
-    }
-
-    return "If you modify local Spira code or configuration and need the app to apply those changes, use the spira_propose_upgrade tool with the changed file paths instead of guessing the restart scope yourself.";
-  }
-
   private getToolBridgeOptions(): ToolBridgeOptions {
     const subagentsEnabled = this.env.SPIRA_SUBAGENTS_ENABLED;
-    const connectedDelegationDomains = SUBAGENT_DOMAINS.filter(
-      (domain) => this.toolAggregator.getToolsForServerIds(domain.serverIds).length > 0,
+    const readyDelegationDomains = this.getDelegationDomains();
+    const connectedDelegationDomains = readyDelegationDomains.filter(
+      (domain) => this.getDelegationDomainTools(domain.id, this.toolAggregator.getTools()).length,
     );
     return {
       requestUpgradeProposal: this.requestUpgradeProposal,
       applyHotCapabilityUpgrade: this.applyHotCapabilityUpgrade,
       ...(subagentsEnabled
         ? {
-            excludeServerIds: getDelegatedServerIds(),
+            excludeServerIds: this.getDelegatedServerIds(),
             delegationDomains: connectedDelegationDomains,
             delegateToDomain: async (
-              domainId: SubagentDomainId,
+              domainId: string,
               args: SubagentDelegationArgs,
             ): Promise<SubagentEnvelope | SubagentRunHandle> => {
               if (args.mode === "background") {
@@ -748,13 +670,13 @@ export class CopilotSessionManager {
     };
   }
 
-  private getSubagentRunner(domainId: SubagentDomainId): SubagentRunner {
+  private getSubagentRunner(domainId: string): SubagentRunner {
     const existingRunner = this.subagentRunners.get(domainId);
     if (existingRunner) {
       return existingRunner;
     }
 
-    const domain = getSubagentDomain(domainId);
+    const domain = this.getDelegationDomain(domainId);
     if (!domain) {
       throw new CopilotError(`Unknown subagent domain ${domainId}`);
     }
@@ -770,6 +692,42 @@ export class CopilotSessionManager {
     });
     this.subagentRunners.set(domainId, runner);
     return runner;
+  }
+
+  private getDelegationDomains(): SubagentDomain[] {
+    return this.subagentRegistry?.listReady() ?? SUBAGENT_DOMAINS.filter((domain) => domain.ready !== false);
+  }
+
+  private getDelegationDomain(domainId: string): SubagentDomain | null {
+    return this.subagentRegistry?.get(domainId) ?? SUBAGENT_DOMAINS.find((domain) => domain.id === domainId) ?? null;
+  }
+
+  private getDelegatedServerIds(): string[] {
+    return (
+      this.subagentRegistry?.getDelegatedServerIds() ?? [
+        ...new Set(this.getDelegationDomains().flatMap((domain) => domain.serverIds)),
+      ]
+    );
+  }
+
+  private getDelegationDomainTools(domainId: string, tools: ReturnType<McpToolAggregator["getTools"]>) {
+    if (this.subagentRegistry) {
+      return this.subagentRegistry.getDomainTools(domainId, tools);
+    }
+
+    const domain = this.getDelegationDomain(domainId);
+    if (!domain) {
+      return [];
+    }
+
+    const serverIdSet = new Set(domain.serverIds);
+    const scopedTools = tools.filter((tool) => serverIdSet.has(tool.serverId));
+    if (!domain.allowedToolNames || domain.allowedToolNames.length === 0) {
+      return scopedTools;
+    }
+
+    const allowedToolNames = new Set(domain.allowedToolNames);
+    return scopedTools.filter((tool) => allowedToolNames.has(tool.name));
   }
 
   private async refreshSessionForToolChanges(): Promise<void> {

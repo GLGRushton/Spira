@@ -44,6 +44,54 @@
   gap: 10px;
 }
 
+.collapsibleNavSection {
+  display: grid;
+  gap: 10px;
+}
+
+.collapseToggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  border: 1px solid rgba(0, 229, 255, 0.14);
+  border-radius: 14px;
+  background: rgba(16, 21, 52, 0.62);
+  color: var(--text-primary);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.2s ease, background 0.2s ease;
+}
+
+.collapseToggle:hover {
+  border-color: rgba(0, 229, 255, 0.24);
+  background: rgba(18, 24, 58, 0.82);
+}
+
+.collapseToggleExpanded {
+  border-color: rgba(0, 212, 170, 0.22);
+  background: rgba(18, 24, 58, 0.9);
+}
+
+.collapseToggleLabel {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.collapseToggleIcon {
+  color: var(--accent-teal);
+  font-size: 18px;
+  line-height: 1;
+}
+
+.collapsibleNavItems {
+  display: grid;
+  gap: 10px;
+}
+
 .stationPanel {
   display: grid;
   gap: 12px;

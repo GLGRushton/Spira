@@ -43,7 +43,10 @@ class FakeMemoryDb {
     wasAborted?: boolean;
   }): void {
     const conversationId = this.createConversation({ id: input.conversationId });
-    const conversation = this.conversations.get(conversationId)!;
+    const conversation = this.conversations.get(conversationId);
+    if (!conversation) {
+      throw new Error(`Conversation ${conversationId} was not created`);
+    }
     if (!conversation.title && input.role === "user") {
       conversation.title = input.content;
     }
@@ -176,9 +179,9 @@ describe("StationRegistry", () => {
     });
 
     expect(memoryDb.getConversation("conv-primary-1")).toMatchObject({
-        id: "conv-primary-1",
-        title: "Primary task",
-      });
+      id: "conv-primary-1",
+      title: "Primary task",
+    });
   });
 
   it("rejects unknown non-primary station ids", async () => {

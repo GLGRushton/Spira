@@ -19,7 +19,9 @@ export function ChatPanel() {
   const setStationConversation = useStationStore((store) => store.setStationConversation);
   const messages = useChatStore((store) => getChatSession(store, activeStationId).messages);
   const activeConversationId = useChatStore((store) => getChatSession(store, activeStationId).activeConversationId);
-  const activeConversationTitle = useChatStore((store) => getChatSession(store, activeStationId).activeConversationTitle);
+  const activeConversationTitle = useChatStore(
+    (store) => getChatSession(store, activeStationId).activeConversationTitle,
+  );
   const isStreaming = useChatStore((store) => getChatSession(store, activeStationId).isStreaming);
   const isResetting = useChatStore((store) => getChatSession(store, activeStationId).isResetting);
   const setActiveConversation = useChatStore((store) => store.setActiveConversation);
@@ -101,13 +103,13 @@ export function ChatPanel() {
       {sessionNotice ? (
         <div className={`${styles.notice} ${styles[sessionNotice.kind]}`} role="alert" aria-live="polite">
           <span>{sessionNotice.message}</span>
-            <button
-              type="button"
-              className={styles.noticeDismiss}
-              onClick={() => setSessionNotice(null, activeStationId)}
-            >
-              Dismiss
-            </button>
+          <button
+            type="button"
+            className={styles.noticeDismiss}
+            onClick={() => setSessionNotice(null, activeStationId)}
+          >
+            Dismiss
+          </button>
         </div>
       ) : null}
       <div ref={scrollRef} className={styles.messages}>
@@ -125,8 +127,8 @@ export function ChatPanel() {
                   type="button"
                   className={styles.exampleChip}
                   onClick={() => {
-                     setDraft(prompt, activeStationId);
-                     requestComposerFocus(activeStationId);
+                    setDraft(prompt, activeStationId);
+                    requestComposerFocus(activeStationId);
                   }}
                 >
                   {prompt}
@@ -151,8 +153,8 @@ export function ChatPanel() {
                   onRetry={
                     message.id === latestAssistantMessage?.id && retryPrompt && !isStreaming && !isResetting
                       ? () => {
-                           setDraft(retryPrompt, activeStationId);
-                           requestComposerFocus(activeStationId);
+                          setDraft(retryPrompt, activeStationId);
+                          requestComposerFocus(activeStationId);
                         }
                       : undefined
                   }

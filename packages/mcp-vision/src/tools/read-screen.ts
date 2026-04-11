@@ -1,8 +1,8 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { errorResult, successResult } from "@spira/mcp-util/results";
 import { captureActiveWindow, captureFullscreen } from "../capture/screen-capture.js";
 import { WindowsOcrProvider } from "../ocr/ocr-provider.js";
-import { errorResult, successResult } from "../util/results.js";
-import { removeCaptureFile } from "../util/temp-files.js";
+import { removeCaptureFile } from "../util/capture-store.js";
 import { ReadScreenSchema } from "../util/validation.js";
 
 const ocrProvider = new WindowsOcrProvider();

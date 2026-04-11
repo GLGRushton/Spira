@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
+    "@spira/mcp-util": "workspace:*",
     "zod": "^3.23.0"
   },
   "devDependencies": {

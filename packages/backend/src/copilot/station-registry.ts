@@ -1,12 +1,22 @@
 import { randomUUID } from "node:crypto";
 import type { SpiraMemoryDatabase, UpsertToolCallInput } from "@spira/memory-db";
-import type { AssistantState, Env, ITransport, McpServerStatus, StationId, StationSummary, UpgradeProposal } from "@spira/shared";
-import { buildContinuityPreamble, buildConversationMemoryContent } from "./continuity.js";
-import { CopilotSessionManager, type SessionPersistence } from "./session-manager.js";
+import type {
+  AssistantState,
+  Env,
+  ITransport,
+  McpServerStatus,
+  StationId,
+  StationSummary,
+  SubagentDomain,
+  UpgradeProposal,
+} from "@spira/shared";
 import type { McpToolAggregator } from "../mcp/tool-aggregator.js";
 import { SubagentLockManager } from "../subagent/lock-manager.js";
+import type { SubagentRegistry } from "../subagent/registry.js";
 import { SpiraError } from "../util/errors.js";
-import { SpiraEventBus, type EventMap } from "../util/event-bus.js";
+import { type EventMap, SpiraEventBus } from "../util/event-bus.js";
+import { buildContinuityPreamble, buildConversationMemoryContent } from "./continuity.js";
+import { CopilotSessionManager, type SessionPersistence } from "./session-manager.js";
 
 export const DEFAULT_STATION_ID = "primary";
 
@@ -45,12 +55,17 @@ interface StationRegistryOptions {
   toolAggregator: McpToolAggregator;
   transport: ITransport;
   memoryDb: SpiraMemoryDatabase | null;
+  subagentRegistry?: SubagentRegistry | null;
   requestUpgradeProposal?: (proposal: UpgradeProposal) => Promise<void> | void;
   applyHotCapabilityUpgrade?: () => Promise<void> | void;
   createSessionManager?: (
     stationId: StationId,
     bus: SpiraEventBus,
-    options: { sessionPersistence: SessionPersistence | null; subagentLockManager: SubagentLockManager },
+    options: {
+      sessionPersistence: SessionPersistence | null;
+      subagentLockManager: SubagentLockManager;
+      subagentRegistry: SubagentRegistry | null;
+    },
   ) => CopilotSessionManager;
 }
 
@@ -68,11 +83,20 @@ export class StationRegistry {
         station.bus.emit("mcp:servers-changed", statuses);
       }
     };
+    const handleSubagentCatalogChanged = (agents: SubagentDomain[]) => {
+      for (const station of this.stations.values()) {
+        station.bus.emit("subagent:catalog-changed", agents);
+      }
+    };
 
     this.options.rootBus.on("mcp:servers-changed", handleMcpServersChanged);
+    this.options.rootBus.on("subagent:catalog-changed", handleSubagentCatalogChanged);
     this.rootBusDisposers = [
       () => {
         this.options.rootBus.off("mcp:servers-changed", handleMcpServersChanged);
+      },
+      () => {
+        this.options.rootBus.off("subagent:catalog-changed", handleSubagentCatalogChanged);
       },
     ];
   }
@@ -86,7 +110,9 @@ export class StationRegistry {
 
     const bus = new SpiraEventBus();
     const createdAt = Date.now();
-    const label = createOptions.label?.trim() || (stationId === DEFAULT_STATION_ID ? "Primary" : `Station ${this.stations.size + 1}`);
+    const label =
+      createOptions.label?.trim() ||
+      (stationId === DEFAULT_STATION_ID ? "Primary" : `Station ${this.stations.size + 1}`);
     const sessionPersistence: SessionPersistence | null = this.options.memoryDb
       ? {
           load: () =>
@@ -105,6 +131,7 @@ export class StationRegistry {
       ? this.options.createSessionManager(stationId, bus, {
           sessionPersistence,
           subagentLockManager: this.subagentLockManager,
+          subagentRegistry: this.options.subagentRegistry ?? null,
         })
       : new CopilotSessionManager(
           bus,
@@ -115,6 +142,7 @@ export class StationRegistry {
           {
             sessionPersistence,
             subagentLockManager: this.subagentLockManager,
+            subagentRegistry: this.options.subagentRegistry ?? null,
           },
         );
     const station: StationContext = {
@@ -273,17 +301,17 @@ export class StationRegistry {
 
     if (resolvedStationId === DEFAULT_STATION_ID) {
       this.createStation({ stationId: resolvedStationId });
-      return this.stations.get(resolvedStationId)!;
+      const created = this.stations.get(resolvedStationId);
+      if (created) {
+        return created;
+      }
     }
 
     throw new SpiraError("STATION_NOT_FOUND", `Unknown station ${resolvedStationId}`);
   }
 
   private attachStationListeners(station: StationContext): Array<() => void> {
-    const register = <T extends keyof EventMap>(
-      event: T,
-      listener: (...args: EventMap[T]) => void,
-    ): (() => void) => {
+    const register = <T extends keyof EventMap>(event: T, listener: (...args: EventMap[T]) => void): (() => void) => {
       station.bus.on(event, listener);
       return () => {
         station.bus.off(event, listener);
@@ -446,7 +474,7 @@ export class StationRegistry {
 
   private toStationSummary(station: StationContext): StationSummary {
     const conversation = station.activeConversationId
-      ? this.options.memoryDb?.getConversation(station.activeConversationId) ?? null
+      ? (this.options.memoryDb?.getConversation(station.activeConversationId) ?? null)
       : null;
     return {
       stationId: station.stationId,

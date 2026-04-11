@@ -1,5 +1,5 @@
-import { quotePsString, runPs } from "./powershell.js";
-import { createCapturePath, pruneStaleCaptureFiles } from "./temp-files.js";
+import { quotePsString, runPs } from "@spira/mcp-util/powershell";
+import { createCapturePath, pruneStaleCaptureFiles } from "./capture-store.js";
 
 export interface WindowTarget {
   handle?: number;

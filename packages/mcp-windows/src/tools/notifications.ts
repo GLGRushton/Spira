@@ -1,6 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { quotePsString, runPs } from "../util/powershell.js";
-import { errorResult, successResult } from "../util/results.js";
+import { quotePsString, runPs } from "@spira/mcp-util/powershell";
+import { errorResult, successResult } from "@spira/mcp-util/results";
 import { SendNotificationSchema } from "../util/validation.js";
 
 export const registerNotificationTools = (server: McpServer): void => {

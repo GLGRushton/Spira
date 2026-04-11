@@ -1,6 +1,7 @@
 import type { AssistantState } from "./assistant-state.js";
 import type { ChatMessage, ToolCallStatus } from "./chat-types.js";
 import type { ConversationSearchMatch, StoredConversation, StoredConversationSummary } from "./conversation-types.js";
+import type { McpServerConfig } from "./mcp-types.js";
 import type { McpServerStatus } from "./mcp-types.js";
 import type {
   ClientMessage,
@@ -11,6 +12,7 @@ import type {
   UserSettings,
 } from "./protocol.js";
 import type { RuntimeConfigApplyResult, RuntimeConfigSummary, RuntimeConfigUpdate } from "./runtime-config.js";
+import type { SubagentDomain } from "./subagent-types.js";
 import type { UpgradeProposal, UpgradeStatus } from "./upgrade.js";
 
 export type ConnectionStatus = "connecting" | "connected" | "disconnected" | "upgrading";
@@ -41,7 +43,15 @@ export interface ElectronApi {
   startNewChat(conversationId?: string, stationId?: StationId): void;
   toggleVoice(): void;
   updateSettings(settings: Partial<UserSettings>): void;
+  addMcpServer(config: McpServerConfig): void;
+  removeMcpServer(serverId: string): void;
   setMcpServerEnabled(serverId: string, enabled: boolean): void;
+  createSubagent(
+    config: Omit<SubagentDomain, "source" | "delegationToolName"> & { id?: string; delegationToolName?: string },
+  ): void;
+  updateSubagent(agentId: string, patch: Partial<Omit<SubagentDomain, "id" | "source" | "delegationToolName">>): void;
+  removeSubagent(agentId: string): void;
+  setSubagentReady(agentId: string, ready: boolean): void;
   getSettings(): Promise<Partial<UserSettings>>;
   getConnectionStatus(): Promise<ConnectionStatus>;
   getRecentConversation(): Promise<StoredConversation | null>;
@@ -62,16 +72,21 @@ export interface ElectronApi {
   onStateChange(handler: (payload: { state: AssistantState; stationId?: StationId }) => void): () => void;
   onChatDelta(handler: (payload: { conversationId: string; token: string; stationId?: StationId }) => void): () => void;
   onChatMessage(handler: (payload: { message: ChatMessage; stationId?: StationId }) => void): () => void;
-  onChatComplete(handler: (payload: { conversationId: string; messageId: string; stationId?: StationId }) => void): () => void;
+  onChatComplete(
+    handler: (payload: { conversationId: string; messageId: string; stationId?: StationId }) => void,
+  ): () => void;
   onChatAbortComplete(handler: (payload: { stationId?: StationId }) => void): () => void;
   onChatResetComplete(handler: (payload: { stationId?: StationId }) => void): () => void;
-  onChatNewSessionComplete(handler: (payload: { preservedToMemory: boolean; stationId?: StationId }) => void): () => void;
+  onChatNewSessionComplete(
+    handler: (payload: { preservedToMemory: boolean; stationId?: StationId }) => void,
+  ): () => void;
   onToolCall(handler: (payload: ToolCallPayload) => void): () => void;
   onPermissionRequest(handler: (payload: PermissionRequestPayload) => void): () => void;
   onPermissionComplete(
     handler: (payload: { requestId: string; result: "approved" | "denied" | "expired"; stationId?: StationId }) => void,
   ): () => void;
   onMcpStatus(handler: (servers: McpServerStatus[]) => void): () => void;
+  onSubagentCatalog(handler: (agents: SubagentDomain[]) => void): () => void;
   onAudioLevel(handler: (level: number) => void): () => void;
   onTtsAmplitude(handler: (amplitude: number) => void): () => void;
   onVoiceTranscript(handler: (text: string) => void): () => void;

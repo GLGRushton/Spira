@@ -1,8 +1,8 @@
-import { type AssistantState, type McpServerStatus, SUBAGENT_DOMAINS, type SpiraUiView } from "@spira/shared";
+import type { AssistantState, McpServerStatus, SpiraUiView, SubagentDomain } from "@spira/shared";
 import { useCallback, useEffect, useRef } from "react";
 import type { AgentRoom } from "../../stores/room-store.js";
-import type { StationViewState } from "../../stores/station-store.js";
 import type { ToolFlight } from "../../stores/room-store.js";
+import type { StationViewState } from "../../stores/station-store.js";
 import styles from "./BaseDeck.module.css";
 import { FlightLayer } from "./FlightLayer.js";
 import { RoomCard } from "./RoomCard.js";
@@ -13,6 +13,7 @@ interface BaseDeckProps {
   assistantState: AssistantState;
   stations: StationViewState[];
   servers: McpServerStatus[];
+  subagents: SubagentDomain[];
   agentRooms: AgentRoom[];
   flights: ToolFlight[];
   onViewChange: (view: SpiraUiView) => void;
@@ -26,6 +27,7 @@ export function BaseDeck({
   assistantState,
   stations,
   servers,
+  subagents,
   agentRooms,
   flights,
   onViewChange,
@@ -54,13 +56,15 @@ export function BaseDeck({
   ).length;
   const connectedServers = servers.filter((server) => server.state === "connected").length;
   const totalTools = servers.reduce((sum, server) => sum + server.toolCount, 0);
-  const delegatedServerIds = new Set(SUBAGENT_DOMAINS.flatMap((domain) => domain.serverIds));
+  const readySubagents = subagents.filter((agent) => agent.ready !== false);
+  const delegatedServerIds = new Set(readySubagents.flatMap((domain) => domain.serverIds));
   const delegatedServers = servers.filter((server) => delegatedServerIds.has(server.id));
   const delegatedSurfaceCount = delegatedServers.filter((server) => server.state === "connected").length;
   const delegatedToolCount = delegatedServers.reduce((sum, server) => sum + server.toolCount, 0);
   const activeAgents = agentRooms.filter((room) => room.activeToolCount > 0).length;
   const activeAgentTools = agentRooms.reduce((sum, room) => sum + room.activeToolCount, 0);
   const latestAgents = agentRooms.slice(0, 3);
+  const previewSubagents = subagents.slice(0, 3);
   const activeStations = stations.filter((station) => station.state !== "idle" || station.isStreaming).length;
   const focusedStation = stations.find((station) => station.stationId === activeStationId) ?? stations[0];
 
@@ -207,18 +211,16 @@ export function BaseDeck({
           onClick={() => onViewChange("barracks")}
         >
           <div className={styles.listPreview}>
-            <div className={styles.listRow}>
-              <span>Windows Agent</span>
-              <span>system + ui + vision</span>
-            </div>
-            <div className={styles.listRow}>
-              <span>Spira Agent</span>
-              <span>ui control bridge</span>
-            </div>
-            <div className={styles.listRow}>
-              <span>Nexus Agent</span>
-              <span>mods + files</span>
-            </div>
+            {previewSubagents.length > 0 ? (
+              previewSubagents.map((agent) => (
+                <div key={agent.id} className={styles.listRow}>
+                  <span>{agent.label}</span>
+                  <span>{agent.ready === false ? "standby" : `${agent.serverIds.length} links`}</span>
+                </div>
+              ))
+            ) : (
+              <div className={styles.emptyPreview}>No barracks roster configured.</div>
+            )}
           </div>
         </RoomCard>
 

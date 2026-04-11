@@ -1,5 +1,5 @@
+import { runPs } from "@spira/mcp-util/powershell";
 import { type OcrResult, buildWindowsOcrScript } from "@spira/shared";
-import { runPs } from "../util/powershell.js";
 
 export interface IOcrProvider {
   recognize(imagePath: string): Promise<OcrResult>;

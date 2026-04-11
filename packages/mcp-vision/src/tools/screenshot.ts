@@ -1,6 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { errorResult, successResult } from "@spira/mcp-util/results";
 import { captureActiveWindow, captureFullscreen } from "../capture/screen-capture.js";
-import { errorResult, successResult } from "../util/results.js";
 import { CaptureScreenSchema, EmptySchema } from "../util/validation.js";
 
 export const registerScreenshotTools = (server: McpServer): void => {

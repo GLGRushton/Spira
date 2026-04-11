@@ -16,10 +16,6 @@ class FakeIpcMain extends EventEmitter {
 
 const ipcMain = new FakeIpcMain();
 
-vi.mock("electron", () => ({
-  ipcMain,
-}));
-
 class FakeWebSocket extends EventEmitter {
   static readonly CONNECTING = 0;
   static readonly OPEN = 1;
@@ -48,17 +44,22 @@ class FakeWebSocket extends EventEmitter {
   }
 }
 
-vi.mock("ws", () => ({
-  default: FakeWebSocket,
-}));
-
 const updateTrayMuteState = vi.fn<(muted: boolean) => void>();
 
-vi.mock("./tray.js", () => ({
-  updateTrayMuteState,
-}));
+const loadBridge = async () => {
+  vi.resetModules();
+  vi.doMock("electron", () => ({
+    ipcMain,
+  }));
+  vi.doMock("ws", () => ({
+    default: FakeWebSocket,
+  }));
+  vi.doMock("./tray.js", () => ({
+    updateTrayMuteState,
+  }));
 
-import { setupIpcBridge } from "./ipc-bridge.js";
+  return await import("./ipc-bridge.js");
+};
 
 class FakeWebContents extends EventEmitter {
   readonly send = vi.fn<(channel: string, payload: unknown) => void>();
@@ -82,6 +83,7 @@ describe("setupIpcBridge", () => {
   });
 
   it("queues conversation archive requests until the backend handshake completes", async () => {
+    const { setupIpcBridge } = await loadBridge();
     const webContents = new FakeWebContents();
     const window = {
       isDestroyed: () => false,

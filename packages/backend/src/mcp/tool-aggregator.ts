@@ -19,6 +19,12 @@ export class McpToolAggregator {
     return this.getTools().filter((tool) => !serverIdSet.has(tool.serverId));
   }
 
+  /**
+   * Executes the uniquely named MCP tool.
+   *
+   * Throws `McpError` when no tool is registered under `toolName` or when
+   * multiple servers expose the same tool name and dispatch would be ambiguous.
+   */
   async executeTool(toolName: string, args: unknown): Promise<unknown> {
     const matchingTools = this.getTools().filter((tool) => tool.name === toolName);
 

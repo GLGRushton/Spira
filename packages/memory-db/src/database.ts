@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import path from "node:path";
+import type { McpServerConfig, McpServerSource, SubagentDomain, SubagentSource } from "@spira/shared";
 import { summarizeConversationTitle } from "@spira/shared";
 import BetterSqlite3 from "better-sqlite3";
 
@@ -110,6 +111,29 @@ export interface OpenSpiraMemoryDatabaseOptions {
   readonly?: boolean;
 }
 
+export interface McpServerConfigRecord extends McpServerConfig {
+  description: string;
+  source: McpServerSource;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface UpsertMcpServerConfigInput extends McpServerConfig {
+  description?: string;
+  source: McpServerSource;
+  createdAt?: number;
+}
+
+export interface SubagentConfigRecord extends SubagentDomain {
+  source: SubagentSource;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface UpsertSubagentConfigInput extends SubagentDomain {
+  createdAt?: number;
+}
+
 interface MigrationDefinition {
   version: number;
   statements: string[];
@@ -167,6 +191,37 @@ interface MemoryEntryRow {
 
 interface SessionStateRow {
   value: string | null;
+}
+
+interface McpServerConfigRow {
+  id: string;
+  name: string;
+  description: string;
+  source: string;
+  transport: "stdio";
+  command: string;
+  argsJson: string;
+  envJson: string | null;
+  enabled: number;
+  autoRestart: number;
+  maxRestarts: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+interface SubagentConfigRow {
+  id: string;
+  label: string;
+  description: string;
+  source: string;
+  systemPrompt: string;
+  delegationToolName: string;
+  serverIdsJson: string;
+  allowedToolNamesJson: string | null;
+  allowWrites: number;
+  ready: number;
+  createdAt: number;
+  updatedAt: number;
 }
 
 const MIGRATIONS: MigrationDefinition[] = [
@@ -261,6 +316,43 @@ const MIGRATIONS: MigrationDefinition[] = [
       "CREATE INDEX idx_session_state_updated_at ON session_state(updated_at DESC)",
     ],
   },
+  {
+    version: 5,
+    statements: [
+      `CREATE TABLE mcp_server_configs (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        description TEXT NOT NULL DEFAULT '',
+        source TEXT NOT NULL CHECK(source IN ('builtin', 'user')),
+        transport TEXT NOT NULL CHECK(transport IN ('stdio')),
+        command TEXT NOT NULL,
+        args_json TEXT NOT NULL,
+        env_json TEXT,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        auto_restart INTEGER NOT NULL DEFAULT 1,
+        max_restarts INTEGER NOT NULL DEFAULT 3,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      )`,
+      "CREATE INDEX idx_mcp_server_configs_source ON mcp_server_configs(source, updated_at DESC)",
+      `CREATE TABLE subagent_configs (
+        id TEXT PRIMARY KEY,
+        label TEXT NOT NULL,
+        description TEXT NOT NULL DEFAULT '',
+        source TEXT NOT NULL CHECK(source IN ('builtin', 'user')),
+        system_prompt TEXT NOT NULL DEFAULT '',
+        delegation_tool_name TEXT NOT NULL UNIQUE,
+        server_ids_json TEXT NOT NULL,
+        allowed_tool_names_json TEXT,
+        allow_writes INTEGER NOT NULL DEFAULT 1,
+        ready INTEGER NOT NULL DEFAULT 1,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      )`,
+      "CREATE INDEX idx_subagent_configs_source ON subagent_configs(source, updated_at DESC)",
+      "CREATE INDEX idx_subagent_configs_ready ON subagent_configs(ready, updated_at DESC)",
+    ],
+  },
 ];
 
 type SqliteDatabase = InstanceType<typeof BetterSqlite3>;
@@ -296,6 +388,16 @@ const normalizeTitle = (value: string | null | undefined): string | null => {
   return trimmed.length > 0 ? trimmed : null;
 };
 
+const normalizeText = (value: string | null | undefined): string => (typeof value === "string" ? value.trim() : "");
+
+const parseStringArray = (value: string | null, fallback: string[] = []): string[] => {
+  const parsed = tryParseJson(value);
+  return Array.isArray(parsed) ? parsed.filter((entry): entry is string => typeof entry === "string") : fallback;
+};
+
+const normalizeStringArray = (value: readonly string[] | null | undefined): string[] =>
+  (value ?? []).map((entry) => entry.trim()).filter((entry) => entry.length > 0);
+
 const toFtsQuery = (query: string): string => {
   const tokens = query
     .trim()
@@ -311,6 +413,63 @@ function assertMemoryEntryCategory(category: string): asserts category is Memory
     throw new Error(`Unsupported memory entry category: ${category}`);
   }
 }
+
+function assertMcpServerSource(source: string): asserts source is McpServerSource {
+  if (source !== "builtin" && source !== "user") {
+    throw new Error(`Unsupported MCP server source: ${source}`);
+  }
+}
+
+function assertSubagentSource(source: string): asserts source is SubagentSource {
+  if (source !== "builtin" && source !== "user") {
+    throw new Error(`Unsupported subagent source: ${source}`);
+  }
+}
+
+const mapMcpServerConfigRow = (row: McpServerConfigRow): McpServerConfigRecord => {
+  assertMcpServerSource(row.source);
+  const envValue = tryParseJson(row.envJson);
+  const env =
+    envValue && typeof envValue === "object" && !Array.isArray(envValue)
+      ? Object.fromEntries(
+          Object.entries(envValue).flatMap(([key, value]) => (typeof value === "string" ? [[key, value]] : [])),
+        )
+      : {};
+
+  return {
+    id: String(row.id),
+    name: String(row.name),
+    description: String(row.description),
+    source: row.source,
+    transport: row.transport,
+    command: String(row.command),
+    args: parseStringArray(row.argsJson),
+    env,
+    enabled: toBoolean(row.enabled),
+    autoRestart: toBoolean(row.autoRestart),
+    maxRestarts: Number(row.maxRestarts),
+    createdAt: Number(row.createdAt),
+    updatedAt: Number(row.updatedAt),
+  };
+};
+
+const mapSubagentConfigRow = (row: SubagentConfigRow): SubagentConfigRecord => {
+  assertSubagentSource(row.source);
+  return {
+    id: String(row.id),
+    label: String(row.label),
+    description: String(row.description),
+    source: row.source,
+    serverIds: parseStringArray(row.serverIdsJson),
+    allowedToolNames: row.allowedToolNamesJson === null ? null : parseStringArray(row.allowedToolNamesJson),
+    delegationToolName: String(row.delegationToolName),
+    allowWrites: toBoolean(row.allowWrites),
+    systemPrompt: String(row.systemPrompt),
+    ready: toBoolean(row.ready),
+    createdAt: Number(row.createdAt),
+    updatedAt: Number(row.updatedAt),
+  };
+};
 
 const configureDatabase = (db: SqliteDatabase, readonly: boolean): void => {
   db.pragma("foreign_keys = ON");
@@ -754,6 +913,357 @@ export class SpiraMemoryDatabase {
         value: normalizedValue,
         updatedAt,
       });
+  }
+
+  listMcpServerConfigs(): McpServerConfigRecord[] {
+    const rows = this.db
+      .prepare(
+        `SELECT
+           id,
+           name,
+           description,
+           source,
+           transport,
+           command,
+           args_json AS argsJson,
+           env_json AS envJson,
+           enabled,
+           auto_restart AS autoRestart,
+           max_restarts AS maxRestarts,
+           created_at AS createdAt,
+           updated_at AS updatedAt
+         FROM mcp_server_configs
+         ORDER BY source ASC, name COLLATE NOCASE ASC`,
+      )
+      .all() as unknown as McpServerConfigRow[];
+
+    return rows.map(mapMcpServerConfigRow);
+  }
+
+  getMcpServerConfig(serverId: string): McpServerConfigRecord | null {
+    const row = this.db
+      .prepare(
+        `SELECT
+           id,
+           name,
+           description,
+           source,
+           transport,
+           command,
+           args_json AS argsJson,
+           env_json AS envJson,
+           enabled,
+           auto_restart AS autoRestart,
+           max_restarts AS maxRestarts,
+           created_at AS createdAt,
+           updated_at AS updatedAt
+         FROM mcp_server_configs
+         WHERE id = @serverId`,
+      )
+      .get({ serverId }) as McpServerConfigRow | undefined;
+
+    return row ? mapMcpServerConfigRow(row) : null;
+  }
+
+  upsertMcpServerConfig(input: UpsertMcpServerConfigInput): McpServerConfigRecord {
+    this.assertWritable();
+    const now = input.createdAt ?? Date.now();
+    const existing = this.getMcpServerConfig(input.id);
+    const description = normalizeText(input.description);
+    const payload = {
+      id: input.id,
+      name: input.name.trim(),
+      description,
+      source: input.source,
+      transport: input.transport,
+      command: input.command.trim(),
+      argsJson: serializeJson(normalizeStringArray(input.args)) ?? "[]",
+      envJson: serializeJson(input.env ?? {}),
+      enabled: input.enabled ? 1 : 0,
+      autoRestart: input.autoRestart ? 1 : 0,
+      maxRestarts: input.maxRestarts ?? 3,
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+    };
+
+    if (!payload.name) {
+      throw new Error("MCP server name cannot be empty.");
+    }
+    if (!payload.command) {
+      throw new Error("MCP server command cannot be empty.");
+    }
+
+    this.db
+      .prepare(
+        `INSERT INTO mcp_server_configs (
+           id,
+           name,
+           description,
+           source,
+           transport,
+           command,
+           args_json,
+           env_json,
+           enabled,
+           auto_restart,
+           max_restarts,
+           created_at,
+           updated_at
+         ) VALUES (
+           @id,
+           @name,
+           @description,
+           @source,
+           @transport,
+           @command,
+           @argsJson,
+           @envJson,
+           @enabled,
+           @autoRestart,
+           @maxRestarts,
+           @createdAt,
+           @updatedAt
+         )
+         ON CONFLICT(id) DO UPDATE SET
+           name = excluded.name,
+           description = excluded.description,
+           source = excluded.source,
+           transport = excluded.transport,
+           command = excluded.command,
+           args_json = excluded.args_json,
+           env_json = excluded.env_json,
+           enabled = excluded.enabled,
+           auto_restart = excluded.auto_restart,
+           max_restarts = excluded.max_restarts,
+           updated_at = excluded.updated_at`,
+      )
+      .run(payload);
+
+    const saved = this.getMcpServerConfig(input.id);
+    if (!saved) {
+      throw new Error(`Failed to load MCP server config ${input.id}.`);
+    }
+
+    return saved;
+  }
+
+  seedBuiltinMcpServerConfigs(configs: readonly McpServerConfig[]): McpServerConfigRecord[] {
+    this.assertWritable();
+    const seed = this.db.transaction((items: readonly McpServerConfig[]) =>
+      items.map((config) =>
+        this.upsertMcpServerConfig({
+          ...config,
+          description: config.description,
+          source: "builtin",
+          enabled: this.getMcpServerConfig(config.id)?.enabled ?? config.enabled,
+        }),
+      ),
+    );
+
+    return seed(configs);
+  }
+
+  removeMcpServerConfig(serverId: string): boolean {
+    this.assertWritable();
+    const result = this.db
+      .prepare(
+        `DELETE FROM mcp_server_configs
+         WHERE id = @serverId`,
+      )
+      .run({ serverId });
+
+    return result.changes > 0;
+  }
+
+  setMcpServerEnabled(serverId: string, enabled: boolean): boolean {
+    this.assertWritable();
+    const result = this.db
+      .prepare(
+        `UPDATE mcp_server_configs
+         SET enabled = @enabled,
+             updated_at = @updatedAt
+         WHERE id = @serverId`,
+      )
+      .run({
+        serverId,
+        enabled: enabled ? 1 : 0,
+        updatedAt: Date.now(),
+      });
+
+    return result.changes > 0;
+  }
+
+  listSubagentConfigs(): SubagentConfigRecord[] {
+    const rows = this.db
+      .prepare(
+        `SELECT
+           id,
+           label,
+           description,
+           source,
+           system_prompt AS systemPrompt,
+           delegation_tool_name AS delegationToolName,
+           server_ids_json AS serverIdsJson,
+           allowed_tool_names_json AS allowedToolNamesJson,
+           allow_writes AS allowWrites,
+           ready,
+           created_at AS createdAt,
+           updated_at AS updatedAt
+         FROM subagent_configs
+         ORDER BY source ASC, label COLLATE NOCASE ASC`,
+      )
+      .all() as unknown as SubagentConfigRow[];
+
+    return rows.map(mapSubagentConfigRow);
+  }
+
+  getSubagentConfig(agentId: string): SubagentConfigRecord | null {
+    const row = this.db
+      .prepare(
+        `SELECT
+           id,
+           label,
+           description,
+           source,
+           system_prompt AS systemPrompt,
+           delegation_tool_name AS delegationToolName,
+           server_ids_json AS serverIdsJson,
+           allowed_tool_names_json AS allowedToolNamesJson,
+           allow_writes AS allowWrites,
+           ready,
+           created_at AS createdAt,
+           updated_at AS updatedAt
+         FROM subagent_configs
+         WHERE id = @agentId`,
+      )
+      .get({ agentId }) as SubagentConfigRow | undefined;
+
+    return row ? mapSubagentConfigRow(row) : null;
+  }
+
+  upsertSubagentConfig(input: UpsertSubagentConfigInput): SubagentConfigRecord {
+    this.assertWritable();
+    const now = input.createdAt ?? Date.now();
+    const existing = this.getSubagentConfig(input.id);
+    const payload = {
+      id: input.id,
+      label: input.label.trim(),
+      description: normalizeText(input.description),
+      source: input.source,
+      systemPrompt: normalizeText(input.systemPrompt),
+      delegationToolName: input.delegationToolName.trim(),
+      serverIdsJson: serializeJson(normalizeStringArray(input.serverIds)) ?? "[]",
+      allowedToolNamesJson:
+        input.allowedToolNames === null || input.allowedToolNames === undefined
+          ? null
+          : serializeJson(normalizeStringArray(input.allowedToolNames)),
+      allowWrites: input.allowWrites ? 1 : 0,
+      ready: input.ready ? 1 : 0,
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+    };
+
+    if (!payload.label) {
+      throw new Error("Subagent label cannot be empty.");
+    }
+    if (!payload.delegationToolName) {
+      throw new Error("Subagent delegation tool name cannot be empty.");
+    }
+
+    this.db
+      .prepare(
+        `INSERT INTO subagent_configs (
+           id,
+           label,
+           description,
+           source,
+           system_prompt,
+           delegation_tool_name,
+           server_ids_json,
+           allowed_tool_names_json,
+           allow_writes,
+           ready,
+           created_at,
+           updated_at
+         ) VALUES (
+           @id,
+           @label,
+           @description,
+           @source,
+           @systemPrompt,
+           @delegationToolName,
+           @serverIdsJson,
+           @allowedToolNamesJson,
+           @allowWrites,
+           @ready,
+           @createdAt,
+           @updatedAt
+         )
+         ON CONFLICT(id) DO UPDATE SET
+           label = excluded.label,
+           description = excluded.description,
+           source = excluded.source,
+           system_prompt = excluded.system_prompt,
+           delegation_tool_name = excluded.delegation_tool_name,
+           server_ids_json = excluded.server_ids_json,
+           allowed_tool_names_json = excluded.allowed_tool_names_json,
+           allow_writes = excluded.allow_writes,
+           ready = excluded.ready,
+           updated_at = excluded.updated_at`,
+      )
+      .run(payload);
+
+    const saved = this.getSubagentConfig(input.id);
+    if (!saved) {
+      throw new Error(`Failed to load subagent config ${input.id}.`);
+    }
+
+    return saved;
+  }
+
+  seedBuiltinSubagentConfigs(configs: readonly SubagentDomain[]): SubagentConfigRecord[] {
+    this.assertWritable();
+    const seed = this.db.transaction((items: readonly SubagentDomain[]) =>
+      items.map((config) =>
+        this.upsertSubagentConfig({
+          ...config,
+          source: "builtin",
+          ready: this.getSubagentConfig(config.id)?.ready ?? config.ready,
+        }),
+      ),
+    );
+
+    return seed(configs);
+  }
+
+  removeSubagentConfig(agentId: string): boolean {
+    this.assertWritable();
+    const result = this.db
+      .prepare(
+        `DELETE FROM subagent_configs
+         WHERE id = @agentId`,
+      )
+      .run({ agentId });
+
+    return result.changes > 0;
+  }
+
+  setSubagentReady(agentId: string, ready: boolean): boolean {
+    this.assertWritable();
+    const result = this.db
+      .prepare(
+        `UPDATE subagent_configs
+         SET ready = @ready,
+             updated_at = @updatedAt
+         WHERE id = @agentId`,
+      )
+      .run({
+        agentId,
+        ready: ready ? 1 : 0,
+        updatedAt: Date.now(),
+      });
+
+    return result.changes > 0;
   }
 
   remember(input: RememberMemoryInput): MemoryEntryRecord {

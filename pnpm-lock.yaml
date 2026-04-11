@@ -112,6 +112,9 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: ^1.0.0
         version: 1.29.0(zod@3.25.76)
+      '@spira/mcp-util':
+        specifier: workspace:*
+        version: link:../mcp-util
       '@spira/memory-db':
         specifier: workspace:*
         version: link:../memory-db
@@ -134,6 +137,9 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: ^1.0.0
         version: 1.29.0(zod@3.25.76)
+      '@spira/mcp-util':
+        specifier: workspace:*
+        version: link:../mcp-util
       zod:
         specifier: ^3.23.0
         version: 3.25.76
@@ -153,6 +159,9 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: ^1.0.0
         version: 1.29.0(zod@3.25.76)
+      '@spira/mcp-util':
+        specifier: workspace:*
+        version: link:../mcp-util
       '@spira/shared':
         specifier: workspace:*
         version: link:../shared
@@ -176,11 +185,30 @@ importers:
         specifier: ^5.4.0
         version: 5.9.3
 
+  packages/mcp-util:
+    dependencies:
+      '@modelcontextprotocol/sdk':
+        specifier: ^1.0.0
+        version: 1.29.0(zod@3.25.76)
+      zod:
+        specifier: ^3.23.0
+        version: 3.25.76
+    devDependencies:
+      '@types/node':
+        specifier: ^24.0.0
+        version: 24.12.2
+      typescript:
+        specifier: ^5.4.0
+        version: 5.9.3
+
   packages/mcp-vision:
     dependencies:
       '@modelcontextprotocol/sdk':
         specifier: ^1.0.0
         version: 1.29.0(zod@3.25.76)
+      '@spira/mcp-util':
+        specifier: workspace:*
+        version: link:../mcp-util
       '@spira/shared':
         specifier: workspace:*
         version: link:../shared
@@ -203,6 +231,9 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: ^1.0.0
         version: 1.29.0(zod@3.25.76)
+      '@spira/mcp-util':
+        specifier: workspace:*
+        version: link:../mcp-util
       zod:
         specifier: ^3.23.0
         version: 3.25.76
@@ -222,6 +253,9 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: ^1.0.0
         version: 1.29.0(zod@3.25.76)
+      '@spira/mcp-util':
+        specifier: workspace:*
+        version: link:../mcp-util
       '@spira/shared':
         specifier: workspace:*
         version: link:../shared

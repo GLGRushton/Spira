@@ -8,13 +8,17 @@ directories:
 
 files:
   - packages/main/dist/**/*
+  - packages/mcp-util/dist/**/*
   - packages/renderer/dist/**/*
   - packages/shared/dist/**/*
   - packages/memory-db/dist/**/*
   - packages/backend/dist/**/*
   - packages/mcp-memories/dist/**/*
+  - packages/mcp-nexus-mods/dist/**/*
+  - packages/mcp-spira-ui/dist/**/*
   - packages/mcp-vision/dist/**/*
   - packages/mcp-windows/dist/**/*
+  - packages/mcp-windows-ui/dist/**/*
   - assets/wake-word/openwakeword/**/*
   - assets/wake-word/openwakeword-runtime/**/*
   - mcp-servers.json
@@ -25,10 +29,14 @@ files:
 
 asarUnpack:
   - packages/backend/dist/**/*
+  - packages/mcp-util/dist/**/*
   - packages/memory-db/dist/**/*
+  - packages/mcp-nexus-mods/dist/**/*
   - packages/mcp-vision/dist/**/*
   - packages/mcp-memories/dist/**/*
+  - packages/mcp-spira-ui/dist/**/*
   - packages/mcp-windows/dist/**/*
+  - packages/mcp-windows-ui/dist/**/*
   - assets/wake-word/openwakeword/**/*
   - assets/wake-word/openwakeword-runtime/**/*
   - node_modules/@picovoice/**/*

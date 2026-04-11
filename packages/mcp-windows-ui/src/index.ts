@@ -3,7 +3,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { registerChromiumTools } from "./tools/chromium.js";
 import { registerUiAutomationTools } from "./tools/uia.js";
 import { registerWindowTools } from "./tools/windows.js";
-import { cleanupCaptureDirectory, pruneStaleCaptureFiles } from "./util/temp-files.js";
+import { cleanupCaptureDirectory, pruneStaleCaptureFiles } from "./util/capture-store.js";
 
 const server = new McpServer({
   name: "spira-windows-ui",

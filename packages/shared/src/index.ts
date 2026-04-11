@@ -17,6 +17,7 @@ export type {
 } from "./electron-api.js";
 export type {
   McpServerConfig,
+  McpServerSource,
   McpServerDiagnostics,
   McpServerStatus,
   McpTool,
@@ -35,6 +36,7 @@ export type {
   UserSettings,
 } from "./protocol.js";
 export type {
+  BuiltinSubagentDomainId,
   NormalizedStateChange,
   SubagentDomain,
   SubagentArtifact,
@@ -53,6 +55,7 @@ export type {
   SubagentRunHandle,
   SubagentRunSnapshot,
   SubagentRunStatus,
+  SubagentSource,
   SubagentScopeId,
   SubagentStatusEvent,
   SubagentStartedEvent,

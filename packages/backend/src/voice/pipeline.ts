@@ -2,6 +2,7 @@ import type { AssistantState, VoicePipelineState } from "@spira/shared";
 import type { Logger } from "pino";
 import { SpiraError } from "../util/errors.js";
 import type { SpiraEventBus } from "../util/event-bus.js";
+import { setUnrefTimeout } from "../util/timers.js";
 import type { AudioCapture } from "./audio-capture.js";
 import type { ISttProvider } from "./stt-provider.js";
 import type { WakeWordProvider } from "./wake-word.js";
@@ -300,7 +301,7 @@ export class VoicePipeline {
       this.waitingForCopilotIdle = false;
       this.transitionTo("thinking");
       this.bus.emit("voice:transcript", { text: transcript });
-      this.responseTimer = setTimeout(() => {
+      this.responseTimer = setUnrefTimeout(() => {
         this.logger.warn("Voice pipeline timed out waiting for Copilot response");
         this.transitionTo("idle");
       }, THINKING_TIMEOUT_MS);
@@ -326,7 +327,7 @@ export class VoicePipeline {
     this.logger.error({ error }, "Voice pipeline error");
     this.resetListeningState();
     this.transitionTo("error");
-    this.recoveryTimer = setTimeout(() => {
+    this.recoveryTimer = setUnrefTimeout(() => {
       this.transitionTo("idle");
     }, ERROR_RECOVERY_MS);
   }
@@ -425,7 +426,7 @@ export class VoicePipeline {
       return await Promise.race([
         promise,
         new Promise<never>((_, reject) => {
-          timeout = setTimeout(() => reject(new Error(message)), timeoutMs);
+          timeout = setUnrefTimeout(() => reject(new Error(message)), timeoutMs);
         }),
       ]);
     } finally {

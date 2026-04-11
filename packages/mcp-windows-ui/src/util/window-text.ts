@@ -8,8 +8,8 @@ import {
   findUiNodes,
   listWindows,
 } from "./automation.js";
+import { removeCaptureFile } from "./capture-store.js";
 import { recognizeWindowImage } from "./ocr.js";
-import { removeCaptureFile } from "./temp-files.js";
 import { type TextMatchMode, findOcrTextMatches } from "./text-match.js";
 
 export interface WindowTextReadResult {

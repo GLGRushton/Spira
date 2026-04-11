@@ -1,9 +1,10 @@
 import { setSpiraUiControlReady } from "../../automation/control-runtime.js";
-import { useChatStore } from "../../stores/chat-store.js";
 import { useConnectionStore } from "../../stores/connection-store.js";
+import { clearRendererTransientState } from "./reset-transient-state.js";
 
-interface UiHandlerActions {
+export interface UiHandlerActions {
   setServers: (servers: import("@spira/shared").McpServerStatus[]) => void;
+  setSubagentCatalog: (agents: import("@spira/shared").SubagentDomain[]) => void;
   syncRoomsFromServers: (servers: import("@spira/shared").McpServerStatus[]) => void;
   addPermissionRequest: (payload: import("@spira/shared").PermissionRequestPayload) => void;
   removePermissionRequest: (requestId: string) => void;
@@ -59,6 +60,9 @@ export const registerUiHandlers = (actions: UiHandlerActions): Array<() => void>
     actions.setServers(servers);
     actions.syncRoomsFromServers(servers);
   }),
+  window.electronAPI.onSubagentCatalog((agents) => {
+    actions.setSubagentCatalog(agents);
+  }),
   window.electronAPI.onAudioLevel((level) => {
     actions.setAudioLevel(level);
   }),
@@ -71,15 +75,7 @@ export const registerUiHandlers = (actions: UiHandlerActions): Array<() => void>
   window.electronAPI.onConnectionStatus((status) => {
     actions.setConnectionStatus(status);
     if (status !== "connected") {
-      for (const stationId of Object.keys(useChatStore.getState().sessions)) {
-        actions.clearStreamingState(stationId);
-        actions.setAborting(false, stationId);
-        actions.setResetConfirming(false, stationId);
-        actions.setResetting(false, stationId);
-      }
-      actions.clearPermissionRequests();
-      actions.clearAllActiveCaptures();
-      actions.clearRoomState();
+      clearRendererTransientState(actions);
     }
   }),
   window.electronAPI.onMessage((message) => {

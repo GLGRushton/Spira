@@ -1,6 +1,5 @@
+export { EmptySchema } from "@spira/mcp-util/validation";
 import { z } from "zod";
-
-export const EmptySchema = z.object({});
 export const RootViewSchema = z.enum(["ship", "bridge", "barracks", "mcp", "agents", "settings"]);
 export const AgentRoomIdSchema = z
   .string()

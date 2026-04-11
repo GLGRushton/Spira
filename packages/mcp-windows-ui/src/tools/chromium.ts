@@ -1,4 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { runPs } from "@spira/mcp-util/powershell";
+import { errorResult, successResult } from "@spira/mcp-util/results";
 import {
   attachChromiumSession,
   detachChromiumSession,
@@ -6,8 +8,6 @@ import {
   listChromiumSessions,
   listChromiumTargets,
 } from "../util/chromium.js";
-import { runPs } from "../util/powershell.js";
-import { errorResult, successResult } from "../util/results.js";
 import {
   ChromiumActionSchema,
   ChromiumAttachSchema,

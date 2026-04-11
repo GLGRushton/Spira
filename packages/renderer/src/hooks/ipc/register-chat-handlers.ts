@@ -4,10 +4,11 @@ import { useMcpStore } from "../../stores/mcp-store.js";
 import { useSettingsStore } from "../../stores/settings-store.js";
 import { PRIMARY_STATION_ID } from "../../stores/station-store.js";
 import { useUpgradeStore } from "../../stores/upgrade-store.js";
+import { clearRendererTransientState, resetStationTransientState } from "./reset-transient-state.js";
 import type { IpcStationTrackerMap } from "./session-tracker.js";
 import { getIpcStationTracker } from "./session-tracker.js";
 
-interface ChatHandlerActions {
+export interface ChatHandlerActions {
   hydrateConversation: (conversation: import("@spira/shared").StoredConversation | null, stationId?: string) => void;
   ensureStationSession: (stationId?: string) => void;
   removeStationSession: (stationId: string) => void;
@@ -139,12 +140,15 @@ export const registerChatHandlers = (
   window.electronAPI.onChatNewSessionComplete(({ preservedToMemory, stationId }) => {
     const resolvedStationId = resolveStationId(stationId);
     actions.hydrateConversation(null, resolvedStationId);
-    actions.setSessionNotice({
-      kind: preservedToMemory ? "info" : "warning",
-      message: preservedToMemory
-        ? "Started a fresh chat. The previous conversation was preserved in archive memory."
-        : "Started a fresh chat. No prior conversation context was added to memory.",
-    }, resolvedStationId);
+    actions.setSessionNotice(
+      {
+        kind: preservedToMemory ? "info" : "warning",
+        message: preservedToMemory
+          ? "Started a fresh chat. The previous conversation was preserved in archive memory."
+          : "Started a fresh chat. No prior conversation context was added to memory.",
+      },
+      resolvedStationId,
+    );
     actions.setResetting(false, resolvedStationId);
   }),
   window.electronAPI.onToolCall((payload) => {
@@ -168,24 +172,33 @@ export const registerChatHandlers = (
       tracker.toolCallMessageIds.set(payload.callId, messageId);
       actions.markStationActivity(resolvedStationId);
       actions.startAssistantMessage(messageId, resolvedStationId);
-      actions.addToolCall(messageId, {
-        callId: payload.callId,
-        name: payload.name,
-        args: payload.args ?? {},
-        details: payload.details,
-        status: payload.status,
-      }, resolvedStationId);
+      actions.addToolCall(
+        messageId,
+        {
+          callId: payload.callId,
+          name: payload.name,
+          args: payload.args ?? {},
+          details: payload.details,
+          status: payload.status,
+        },
+        resolvedStationId,
+      );
       actions.handleRoomToolCall(payload, useMcpStore.getState().servers, resolvedStationId);
       return;
     }
 
     const mappedMessageId = tracker.toolCallMessageIds.get(payload.callId) ?? messageId;
     actions.markStationActivity(resolvedStationId);
-    actions.updateToolResult(mappedMessageId, payload.name, {
-      callId: payload.callId,
-      status: payload.status,
-      value: payload.details,
-    }, resolvedStationId);
+    actions.updateToolResult(
+      mappedMessageId,
+      payload.name,
+      {
+        callId: payload.callId,
+        status: payload.status,
+        value: payload.details,
+      },
+      resolvedStationId,
+    );
     actions.handleRoomToolCall(payload, useMcpStore.getState().servers, resolvedStationId);
     tracker.toolCallMessageIds.delete(payload.callId);
   }),
@@ -194,17 +207,12 @@ export const registerChatHandlers = (
   }),
   window.electronAPI.onMessage((message) => {
     if (message.type === "backend:hello") {
-      const hadVisibleMessages = Object.values(useChatStore.getState().sessions).some((session) => session.messages.length > 0);
-      const generationChanged = runtimeState.backendGeneration !== null && runtimeState.backendGeneration !== message.generation;
-      for (const stationId of Object.keys(useChatStore.getState().sessions)) {
-        actions.clearStreamingState(stationId);
-        actions.setAborting(false, stationId);
-        actions.setResetConfirming(false, stationId);
-        actions.setResetting(false, stationId);
-      }
-      actions.clearPermissionRequests();
-      actions.clearAllActiveCaptures();
-      actions.clearRoomState();
+      const hadVisibleMessages = Object.values(useChatStore.getState().sessions).some(
+        (session) => session.messages.length > 0,
+      );
+      const generationChanged =
+        runtimeState.backendGeneration !== null && runtimeState.backendGeneration !== message.generation;
+      clearRendererTransientState(actions);
       if (useUpgradeStore.getState().banner?.proposalId) {
         actions.clearBanner();
       }
@@ -218,7 +226,8 @@ export const registerChatHandlers = (
           actions.setSessionNotice(
             {
               kind: "warning",
-              message: "The renderer reconnected to Shinra. Backend context may no longer match the visible transcript.",
+              message:
+                "The renderer reconnected to Shinra. Backend context may no longer match the visible transcript.",
             },
             stationId,
           );
@@ -273,12 +282,10 @@ export const registerChatHandlers = (
     if (error.details) {
       console.error(error.details);
     }
-    if (error.source !== "tts") {
+    const affectsAssistantState = error.source !== "tts" && error.source !== "mcp" && error.source !== "subagent";
+    if (affectsAssistantState) {
       actions.setAssistantState("error", resolvedStationId);
-      actions.setAborting(false, resolvedStationId);
-      actions.setResetConfirming(false, resolvedStationId);
-      actions.setResetting(false, resolvedStationId);
-      actions.clearStreamingState(resolvedStationId);
+      resetStationTransientState(actions, resolvedStationId);
       tracker.activeAssistantMessageId = null;
       tracker.toolCallMessageIds.clear();
     }

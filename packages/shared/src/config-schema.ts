@@ -10,6 +10,7 @@ const BooleanEnvFlagSchema = z
 export const McpServerConfigSchema = z.object({
   id: z.string().regex(/^[a-z0-9-]+$/, "Lowercase alphanumeric and hyphens only"),
   name: z.string().min(1),
+  description: z.string().optional(),
   transport: z.literal("stdio"),
   command: z.string().min(1),
   args: z.array(z.string()),
@@ -17,6 +18,7 @@ export const McpServerConfigSchema = z.object({
   enabled: z.boolean(),
   autoRestart: z.boolean(),
   maxRestarts: z.number().int().min(0).max(10).optional().default(3),
+  source: z.enum(["builtin", "user"]).optional(),
 });
 
 export const McpServersFileSchema = z.object({

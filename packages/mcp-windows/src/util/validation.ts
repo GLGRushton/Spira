@@ -1,6 +1,5 @@
+export { EmptySchema } from "@spira/mcp-util/validation";
 import { z } from "zod";
-
-export const EmptySchema = z.object({});
 
 export const SetVolumeSchema = z.object({
   level: z.number().int().min(0).max(100),

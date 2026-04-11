@@ -1,6 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { errorResult, successResult } from "@spira/mcp-util/results";
 import { callSpiraUiBridge } from "../util/bridge-client.js";
-import { errorResult, successResult } from "../util/results.js";
 import { AgentRoomQuerySchema, EmptySchema, McpServerQuerySchema } from "../util/validation.js";
 
 export const registerRoomTools = (server: McpServer): void => {

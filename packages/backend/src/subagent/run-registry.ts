@@ -7,6 +7,7 @@ import type {
   SubagentRunStatus,
 } from "@spira/shared";
 import type { SpiraEventBus } from "../util/event-bus.js";
+import { setUnrefTimeout } from "../util/timers.js";
 import type { SubagentRunLaunch } from "./subagent-runner.js";
 
 const DEFAULT_RETENTION_MS = 10 * 60_000;
@@ -112,7 +113,7 @@ export class SubagentRunRegistry {
         clearTimeout(timeout);
         resolve();
       };
-      const timeout = setTimeout(waiter, Math.max(0, timeoutMs));
+      const timeout = setUnrefTimeout(waiter, Math.max(0, timeoutMs));
       trackedRun.waiters.add(waiter);
     });
 
@@ -230,7 +231,7 @@ export class SubagentRunRegistry {
 
   private armIdleTimer(trackedRun: TrackedSubagentRun): void {
     this.clearIdleTimer(trackedRun);
-    trackedRun.idleTimer = setTimeout(() => {
+    trackedRun.idleTimer = setUnrefTimeout(() => {
       void this.expire(trackedRun.snapshot.runId);
     }, this.idleTimeoutMs);
   }
@@ -243,10 +244,8 @@ export class SubagentRunRegistry {
   }
 
   private schedulePrune(trackedRun: TrackedSubagentRun): void {
-    if (trackedRun.pruneTimer) {
-      clearTimeout(trackedRun.pruneTimer);
-    }
-    trackedRun.pruneTimer = setTimeout(() => {
+    this.clearPruneTimer(trackedRun);
+    trackedRun.pruneTimer = setUnrefTimeout(() => {
       this.deleteRun(trackedRun.snapshot.runId);
     }, this.retentionMs);
   }
@@ -294,11 +293,16 @@ export class SubagentRunRegistry {
     }
 
     this.clearIdleTimer(trackedRun);
-    if (trackedRun.pruneTimer) {
-      clearTimeout(trackedRun.pruneTimer);
-    }
+    this.clearPruneTimer(trackedRun);
     this.notifyWaiters(trackedRun);
     this.runs.delete(runId);
+  }
+
+  private clearPruneTimer(trackedRun: TrackedSubagentRun): void {
+    if (trackedRun.pruneTimer) {
+      clearTimeout(trackedRun.pruneTimer);
+      trackedRun.pruneTimer = undefined;
+    }
   }
 
   private notifyWaiters(trackedRun: TrackedSubagentRun): void {
@@ -313,6 +317,7 @@ export class SubagentRunRegistry {
       runId: snapshot.runId,
       roomId: snapshot.roomId,
       domain: snapshot.domain,
+      label: snapshot.domain,
       status,
       occurredAt: snapshot.updatedAt,
       ...(snapshot.summary ? { summary: snapshot.summary } : {}),

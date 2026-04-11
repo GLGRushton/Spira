@@ -1,7 +1,7 @@
 import { AnimatePresence, motion } from "framer-motion";
 import { useMemo } from "react";
-import { useVisionStore } from "../stores/vision-store.js";
 import { useStationStore } from "../stores/station-store.js";
+import { useVisionStore } from "../stores/vision-store.js";
 import styles from "./ScreenCaptureIndicator.module.css";
 
 const getLabel = (toolName: string | null, args: unknown): string => {

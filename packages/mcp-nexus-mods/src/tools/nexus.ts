@@ -1,6 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { errorResult, successResult } from "@spira/mcp-util/results";
 import { NexusModsClient } from "../util/nexus-client.js";
-import { errorResult, successResult } from "../util/results.js";
 import {
   DownloadModFileSchema,
   GetGameSchema,

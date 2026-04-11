@@ -1,3 +1,4 @@
+export { EmptySchema } from "@spira/mcp-util/validation";
 import { z } from "zod";
 
 const WindowTargetFields = {
@@ -38,8 +39,6 @@ const requireNodeSelector = <T extends z.ZodTypeAny>(schema: T) =>
       typeof value.controlType === "string",
     "Provide at least one selector field: name, automationId, className, or controlType.",
   );
-
-export const EmptySchema = z.object({});
 
 export const WindowTargetSchema = requireWindowTarget(WindowTargetBaseSchema);
 

@@ -1,5 +1,6 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
+import type { SpiraMemoryDatabase } from "@spira/memory-db";
 import {
   type McpServerConfig,
   McpServerConfigSchema,
@@ -13,6 +14,7 @@ import { z } from "zod";
 import { resolveAppPath } from "../util/app-paths.js";
 import { ConfigError } from "../util/errors.js";
 import type { SpiraEventBus } from "../util/event-bus.js";
+import { setUnrefTimeout } from "../util/timers.js";
 import type { McpClientPool } from "./client-pool.js";
 
 interface McpServerEntry {
@@ -49,6 +51,8 @@ export const createDisconnectedStatus = (
 ): McpServerStatus => ({
   id: config.id,
   name: config.name,
+  description: config.description,
+  source: config.source ?? "builtin",
   enabled: config.enabled,
   state: config.enabled ? "starting" : "disconnected",
   toolCount: 0,
@@ -97,12 +101,13 @@ export class McpRegistry {
   private configMutation = Promise.resolve();
   private suppressStatusPublishes = false;
   private publishPending = false;
-  private stderrPublishTimer: ReturnType<typeof setTimeout> | undefined;
+  private stderrPublishTimer: NodeJS.Timeout | undefined;
 
   constructor(
     private readonly bus: SpiraEventBus,
     private readonly logger: Logger,
     private readonly pool: McpClientPool,
+    private readonly memoryDb: SpiraMemoryDatabase | null = null,
   ) {
     this.bus.on("mcp:server-crashed", (serverId) => {
       this.handleServerCrash(serverId);
@@ -114,7 +119,7 @@ export class McpRegistry {
 
   async initialize(): Promise<void> {
     try {
-      const configFile = await this.loadConfig();
+      const configFile = await this.loadRuntimeConfig();
       await this.applyConfigFile(configFile);
     } catch (error) {
       this.logger.error({ error }, "Failed to initialize MCP registry");
@@ -124,7 +129,7 @@ export class McpRegistry {
 
   async reloadFromDisk(): Promise<void> {
     await this.runConfigMutation(async () => {
-      const configFile = await this.loadConfig();
+      const configFile = await this.loadRuntimeConfig();
       const resumePublishing = this.pauseStatusPublishes();
       try {
         await this.pool.disconnectAll();
@@ -159,7 +164,7 @@ export class McpRegistry {
 
   async addServer(config: McpServerConfig): Promise<void> {
     await this.runConfigMutation(async () => {
-      const fileConfig = McpServerConfigSchema.parse(config);
+      const fileConfig = McpServerConfigSchema.parse({ ...config, source: "user" });
       if (this.servers.has(fileConfig.id)) {
         throw new ConfigError(`MCP server ${fileConfig.id} already exists`);
       }
@@ -177,7 +182,15 @@ export class McpRegistry {
         if (fileConfig.enabled) {
           await this.connectEntry(entry, { throwOnFailure: true, publishFailureStatus: false });
         }
-        await this.writeConfig(this.serializeConfig());
+        if (this.memoryDb) {
+          this.memoryDb.upsertMcpServerConfig({
+            ...fileConfig,
+            description: fileConfig.description,
+            source: "user",
+          });
+        } else {
+          await this.writeConfig(this.serializeConfig());
+        }
       } catch (error) {
         this.servers.delete(fileConfig.id);
         this.publishStatuses();
@@ -192,13 +205,20 @@ export class McpRegistry {
   async removeServer(serverId: string): Promise<void> {
     await this.runConfigMutation(async () => {
       const entry = this.requireEntry(serverId);
+      if ((entry.fileConfig.source ?? "builtin") === "builtin") {
+        throw new ConfigError(`Built-in MCP server ${serverId} cannot be removed`);
+      }
 
       await this.pool.disconnect(serverId);
       this.servers.delete(serverId);
       this.publishStatuses();
 
       try {
-        await this.writeConfig(this.serializeConfig());
+        if (this.memoryDb) {
+          this.memoryDb.removeMcpServerConfig(serverId);
+        } else {
+          await this.writeConfig(this.serializeConfig());
+        }
       } catch (error) {
         entry.connectedAt = undefined;
         entry.status = createDisconnectedStatus(entry.fileConfig, entry.status);
@@ -235,7 +255,11 @@ export class McpRegistry {
         this.publishStatuses();
 
         try {
-          await this.writeConfig(this.serializeConfig());
+          if (this.memoryDb) {
+            this.memoryDb.setMcpServerEnabled(serverId, enabled);
+          } else {
+            await this.writeConfig(this.serializeConfig());
+          }
         } catch (error) {
           entry.fileConfig.enabled = previousEnabled;
           entry.runtimeConfig = toRuntimeConfig(entry.fileConfig);
@@ -260,7 +284,11 @@ export class McpRegistry {
 
       try {
         await this.connectEntry(entry, { throwOnFailure: true, publishFailureStatus: false });
-        await this.writeConfig(this.serializeConfig());
+        if (this.memoryDb) {
+          this.memoryDb.setMcpServerEnabled(serverId, enabled);
+        } else {
+          await this.writeConfig(this.serializeConfig());
+        }
       } catch (error) {
         await this.pool.disconnect(serverId).catch((disconnectError) => {
           this.logger.warn({ error: disconnectError, serverId }, "Failed to rollback enabled MCP server");
@@ -296,6 +324,34 @@ export class McpRegistry {
     }));
   }
 
+  private async loadRuntimeConfig(): Promise<z.infer<typeof McpServersFileSchema>> {
+    const fileConfig = await this.loadConfig();
+    if (!this.memoryDb) {
+      return fileConfig;
+    }
+
+    this.configSchema = fileConfig.$schema;
+    this.memoryDb.seedBuiltinMcpServerConfigs(fileConfig.servers.map((config) => ({ ...config, source: "builtin" })));
+    return {
+      ...(fileConfig.$schema ? { $schema: fileConfig.$schema } : {}),
+      servers: this.memoryDb.listMcpServerConfigs().map((config) =>
+        McpServerConfigSchema.parse({
+          id: config.id,
+          name: config.name,
+          description: config.description,
+          source: config.source,
+          transport: config.transport,
+          command: config.command,
+          args: config.args,
+          env: config.env,
+          enabled: config.enabled,
+          autoRestart: config.autoRestart,
+          maxRestarts: config.maxRestarts,
+        }),
+      ),
+    };
+  }
+
   private async loadConfig(): Promise<z.infer<typeof McpServersFileSchema>> {
     const configPath = this.getConfigPath();
 
@@ -319,7 +375,8 @@ export class McpRegistry {
     const previousServers = new Map(this.servers);
     this.servers.clear();
 
-    for (const config of configFile.servers) {
+    for (const rawConfig of configFile.servers) {
+      const config = { ...rawConfig, source: rawConfig.source ?? "builtin" } satisfies McpServerConfig;
       const previousStatus = previousServers.get(config.id)?.status;
       this.servers.set(config.id, {
         fileConfig: config,
@@ -376,6 +433,8 @@ export class McpRegistry {
       entry.status = {
         id: entry.fileConfig.id,
         name: entry.fileConfig.name,
+        description: entry.fileConfig.description,
+        source: entry.fileConfig.source ?? "builtin",
         enabled: entry.fileConfig.enabled,
         state: "connected",
         toolCount: tools.length,
@@ -393,6 +452,8 @@ export class McpRegistry {
         entry.status = {
           id: entry.fileConfig.id,
           name: entry.fileConfig.name,
+          description: entry.fileConfig.description,
+          source: entry.fileConfig.source ?? "builtin",
           enabled: entry.fileConfig.enabled,
           state: "error",
           toolCount: 0,
@@ -444,6 +505,8 @@ export class McpRegistry {
     entry.status = {
       id: entry.fileConfig.id,
       name: entry.fileConfig.name,
+      description: entry.fileConfig.description,
+      source: entry.fileConfig.source ?? "builtin",
       enabled: entry.fileConfig.enabled,
       state: "error",
       toolCount: 0,
@@ -476,7 +539,7 @@ export class McpRegistry {
       return;
     }
 
-    this.stderrPublishTimer = setTimeout(() => {
+    this.stderrPublishTimer = setUnrefTimeout(() => {
       this.stderrPublishTimer = undefined;
       this.publishStatuses();
     }, 75);

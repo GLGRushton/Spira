@@ -5,6 +5,7 @@ import { type Interface, createInterface } from "node:readline";
 import type { Logger } from "pino";
 import { resolveUnpackedAppPath } from "../util/app-paths.js";
 import { VoiceError } from "../util/errors.js";
+import { setUnrefTimeout } from "../util/timers.js";
 import type { WakeWordProvider } from "./wake-word.js";
 
 interface OpenWakeWordProviderOptions {
@@ -76,7 +77,7 @@ export class OpenWakeWordProvider implements WakeWordProvider {
 
     await new Promise<void>((resolve, reject) => {
       let settled = false;
-      const timeout = setTimeout(() => {
+      const timeout = setUnrefTimeout(() => {
         finish(new VoiceError("Timed out waiting for openWakeWord worker readiness"));
       }, READY_TIMEOUT_MS);
 

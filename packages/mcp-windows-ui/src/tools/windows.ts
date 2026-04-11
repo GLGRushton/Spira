@@ -1,6 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { errorResult, successResult } from "@spira/mcp-util/results";
 import { activateWindow, captureWindow, clickWindowPoint, listWindows, sendKeysToWindow } from "../util/automation.js";
-import { errorResult, successResult } from "../util/results.js";
 import {
   ActivateWindowSchema,
   CaptureWindowSchema,

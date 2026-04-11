@@ -6,6 +6,7 @@ import type {
   PermissionRequestPayload,
   SubagentCompletedEvent,
   SubagentDeltaEvent,
+  SubagentDomain,
   SubagentErrorEvent,
   SubagentLockAcquiredEvent,
   SubagentLockDeniedEvent,
@@ -40,6 +41,7 @@ export interface EventMap {
   "mcp:server-crashed": [serverId: string];
   "mcp:server-stderr": [serverId: string, line: string];
   "mcp:servers-changed": [statuses: McpServerStatus[]];
+  "subagent:catalog-changed": [agents: SubagentDomain[]];
   "subagent:started": [event: SubagentStartedEvent];
   "subagent:tool-call": [event: SubagentToolCallEvent];
   "subagent:tool-result": [event: SubagentToolResultEvent];

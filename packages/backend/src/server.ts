@@ -4,6 +4,7 @@ import {
   type McpServerStatus,
   PROTOCOL_VERSION,
   type ServerMessage,
+  type SubagentDomain,
   type VoicePipelineState,
 } from "@spira/shared";
 import WebSocket, { WebSocketServer } from "ws";
@@ -25,10 +26,14 @@ export class WsServer {
     private readonly generation = 0,
     private readonly buildId = "dev",
     private readonly getMcpStatuses: () => McpServerStatus[] = () => [],
+    private readonly getSubagentCatalog: () => SubagentDomain[] = () => [],
   ) {
     this.busListeners = [
       this.registerBusHandler("mcp:servers-changed", (servers) => {
         this.send({ type: "mcp:status", servers });
+      }),
+      this.registerBusHandler("subagent:catalog-changed", (agents) => {
+        this.send({ type: "subagent:catalog", agents });
       }),
       this.registerBusHandler("voice:pipeline", ({ state }) => {
         this.send({ type: "state:change", state: mapVoiceStateToAssistantState(state) });
@@ -121,6 +126,7 @@ export class WsServer {
     });
     this.send({ type: "voice:muted", muted: this.voiceMuted });
     this.send({ type: "mcp:status", servers: this.getMcpStatuses() });
+    this.send({ type: "subagent:catalog", agents: this.getSubagentCatalog() });
 
     socket.on("message", (raw) => {
       const parsed = this.parseClientMessage(raw.toString());

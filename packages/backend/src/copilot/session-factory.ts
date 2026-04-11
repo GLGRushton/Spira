@@ -5,6 +5,7 @@ import { CopilotClient, type CopilotSession, type SessionConfig } from "@github/
 import type { Env } from "@spira/shared";
 import type { Logger } from "pino";
 import { CopilotError } from "../util/errors.js";
+import { setUnrefTimeout } from "../util/timers.js";
 
 const require = createRequire(import.meta.url);
 const COPILOT_AUTH_ENV_KEYS = ["COPILOT_SDK_AUTH_TOKEN", "GITHUB_ACCESS_TOKEN", "GITHUB_TOKEN", "GH_TOKEN"] as const;
@@ -122,7 +123,7 @@ export const withTimeout = async <T>(promise: Promise<T>, timeoutMs: number, tim
     return await Promise.race([
       promise,
       new Promise<T>((_resolve, reject) => {
-        timeoutId = setTimeout(() => {
+        timeoutId = setUnrefTimeout(() => {
           reject(new CopilotError(timeoutMessage));
         }, timeoutMs);
       }),

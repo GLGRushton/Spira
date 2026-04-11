@@ -1,5 +1,5 @@
+import { runPs } from "@spira/mcp-util/powershell";
 import { type OcrResult, buildWindowsOcrScript } from "@spira/shared";
-import { runPs } from "./powershell.js";
 
 export async function recognizeWindowImage(imagePath: string): Promise<OcrResult> {
   const { stdout } = await runPs(buildWindowsOcrScript(imagePath), 20_000);

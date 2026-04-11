@@ -20,7 +20,6 @@ type SessionManagerInternals = {
   createSession(): Promise<{ sessionId: string; disconnect: () => Promise<void> }>;
   refreshSessionForToolChanges(): Promise<void>;
   handleSessionEvent(event: { type: "session.idle"; data: Record<string, never> }): void;
-  getUpgradeToolInstructions(): string;
   getSessionConfig(): { tools: Array<{ name: string }> };
 };
 
@@ -158,18 +157,6 @@ describe("CopilotSessionManager", () => {
     expect(session.disconnect).toHaveBeenCalledTimes(1);
     expect(internals.session).toBeNull();
     expect(internals.registeredToolSignature).toBeNull();
-  });
-
-  it("advertises spira_propose_upgrade even when no vision tools are connected", () => {
-    const manager = new CopilotSessionManager(
-      new SpiraEventBus(),
-      parseEnv({}),
-      { getTools: () => [] } as never,
-      async () => undefined,
-    );
-    const internals = manager as unknown as SessionManagerInternals;
-
-    expect(internals.getUpgradeToolInstructions()).toContain("spira_propose_upgrade");
   });
 
   it("replaces delegated MCP tools with delegation tools when subagents are enabled", () => {

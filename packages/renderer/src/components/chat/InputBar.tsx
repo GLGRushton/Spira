@@ -3,8 +3,8 @@ import { useEffect, useRef } from "react";
 import {
   PENDING_ASSISTANT_ID,
   createChatEntityId,
-  getChatSession,
   getAwaitingAssistantQuestion,
+  getChatSession,
   useChatStore,
 } from "../../stores/chat-store.js";
 import { useStationStore } from "../../stores/station-store.js";
@@ -16,7 +16,9 @@ const RESET_TIMEOUT_MS = 5_000;
 export function InputBar() {
   const activeStationId = useStationStore((store) => store.activeStationId);
   const addUserMessage = useChatStore((store) => store.addUserMessage);
-  const awaitingQuestion = useChatStore((store) => getAwaitingAssistantQuestion(getChatSession(store, activeStationId).messages));
+  const awaitingQuestion = useChatStore((store) =>
+    getAwaitingAssistantQuestion(getChatSession(store, activeStationId).messages),
+  );
   const composerFocusToken = useChatStore((store) => getChatSession(store, activeStationId).composerFocusToken);
   const draft = useChatStore((store) => getChatSession(store, activeStationId).draft);
   const activeConversationId = useChatStore((store) => getChatSession(store, activeStationId).activeConversationId);
@@ -120,8 +122,8 @@ export function InputBar() {
       className={styles.container}
       onKeyDown={(event) => {
         if (event.key === "Escape" && isResetConfirming && !isResetting) {
-            event.preventDefault();
-            setResetConfirming(false, activeStationId);
+          event.preventDefault();
+          setResetConfirming(false, activeStationId);
         }
       }}
     >
@@ -150,8 +152,8 @@ export function InputBar() {
               <button
                 type="button"
                 className={styles.secondary}
-                 disabled={isStreaming || isResetting}
-                 onClick={() => setResetConfirming(false, activeStationId)}
+                disabled={isStreaming || isResetting}
+                onClick={() => setResetConfirming(false, activeStationId)}
               >
                 Cancel
               </button>

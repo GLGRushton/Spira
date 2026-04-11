@@ -1,75 +1,14 @@
 import { useEffect } from "react";
-import { useAudioStore } from "../stores/audio-store.js";
 import { createChatEntityId, getChatSession, useChatStore } from "../stores/chat-store.js";
-import { useConnectionStore } from "../stores/connection-store.js";
-import { useMcpStore } from "../stores/mcp-store.js";
-import { usePermissionStore } from "../stores/permission-store.js";
-import { useRoomStore } from "../stores/room-store.js";
-import { useSettingsStore } from "../stores/settings-store.js";
 import { PRIMARY_STATION_ID, getStation, useStationStore } from "../stores/station-store.js";
-import { useUpgradeStore } from "../stores/upgrade-store.js";
-import { useVisionStore } from "../stores/vision-store.js";
 import { registerChatHandlers } from "./ipc/register-chat-handlers.js";
 import { activateSpiraUiRuntime, registerUiHandlers } from "./ipc/register-ui-handlers.js";
 import type { IpcStationTrackerMap } from "./ipc/session-tracker.js";
+import { useIpcActions } from "./ipc/use-ipc-actions.js";
 
 export function useIpc(): void {
-  const hydrateStations = useStationStore((store) => store.hydrateStations);
-  const upsertStation = useStationStore((store) => store.upsertStation);
-  const ensureStation = useStationStore((store) => store.ensureStation);
-  const removeStation = useStationStore((store) => store.removeStation);
-  const setActiveStation = useStationStore((store) => store.setActiveStation);
-  const setStationConversation = useStationStore((store) => store.setStationConversation);
-  const setStationState = useStationStore((store) => store.setStationState);
-  const markStationActivity = useStationStore((store) => store.markActivity);
   const activeStationId = useStationStore((store) => store.activeStationId);
-  const addUserMessage = useChatStore((store) => store.addUserMessage);
-  const ensureStationSession = useChatStore((store) => store.ensureStationSession);
-  const removeStationSession = useChatStore((store) => store.removeStationSession);
-  const hydrateConversation = useChatStore((store) => store.hydrateConversation);
-  const startAssistantMessage = useChatStore((store) => store.startAssistantMessage);
-  const appendDelta = useChatStore((store) => store.appendDelta);
-  const finaliseMessage = useChatStore((store) => store.finaliseMessage);
-  const completeMessage = useChatStore((store) => store.completeMessage);
-  const abortStreamingMessage = useChatStore((store) => store.abortStreamingMessage);
-  const clearStreamingState = useChatStore((store) => store.clearStreamingState);
-  const addToolCall = useChatStore((store) => store.addToolCall);
-  const updateToolResult = useChatStore((store) => store.updateToolResult);
-  const setActiveConversation = useChatStore((store) => store.setActiveConversation);
-  const setAborting = useChatStore((store) => store.setAborting);
-  const setResetConfirming = useChatStore((store) => store.setResetConfirming);
-  const setResetting = useChatStore((store) => store.setResetting);
-  const setSessionNotice = useChatStore((store) => store.setSessionNotice);
-  const setServers = useMcpStore((store) => store.setServers);
-  const clearRoomState = useRoomStore((store) => store.clearAll);
-  const syncRoomsFromServers = useRoomStore((store) => store.syncServers);
-  const handleRoomToolCall = useRoomStore((store) => store.handleToolCall);
-  const handleSubagentStarted = useRoomStore((store) => store.handleSubagentStarted);
-  const handleSubagentToolCall = useRoomStore((store) => store.handleSubagentToolCall);
-  const handleSubagentToolResult = useRoomStore((store) => store.handleSubagentToolResult);
-  const handleSubagentDelta = useRoomStore((store) => store.handleSubagentDelta);
-  const handleSubagentStatus = useRoomStore((store) => store.handleSubagentStatus);
-  const handleSubagentCompleted = useRoomStore((store) => store.handleSubagentCompleted);
-  const handleSubagentError = useRoomStore((store) => store.handleSubagentError);
-  const handleSubagentLockAcquired = useRoomStore((store) => store.handleSubagentLockAcquired);
-  const handleSubagentLockDenied = useRoomStore((store) => store.handleSubagentLockDenied);
-  const handleSubagentLockReleased = useRoomStore((store) => store.handleSubagentLockReleased);
-  const pruneRoomFlights = useRoomStore((store) => store.pruneFlights);
-  const setAudioLevel = useAudioStore((store) => store.setAudioLevel);
-  const setTtsAmplitude = useAudioStore((store) => store.setTtsAmplitude);
-  const applySettings = useSettingsStore((store) => store.applySettings);
-  const setConnectionStatus = useConnectionStore((store) => store.setStatus);
-  const addPermissionRequest = usePermissionStore((store) => store.addRequest);
-  const removePermissionRequest = usePermissionStore((store) => store.removeRequest);
-  const clearPermissionRequests = usePermissionStore((store) => store.clearRequests);
-  const setActiveCapture = useVisionStore((store) => store.setActiveCapture);
-  const clearActiveCapture = useVisionStore((store) => store.clearActiveCapture);
-  const clearAllActiveCaptures = useVisionStore((store) => store.clearAllActiveCaptures);
-  const clearBanner = useUpgradeStore((store) => store.clearBanner);
-  const setProtocolMismatch = useUpgradeStore((store) => store.setProtocolMismatch);
-  const clearProtocolMismatch = useUpgradeStore((store) => store.clearProtocolMismatch);
-  const showUpgradeProposal = useUpgradeStore((store) => store.showProposal);
-  const showUpgradeStatus = useUpgradeStore((store) => store.showStatus);
+  const actions = useIpcActions();
 
   useEffect(() => {
     const trackers: IpcStationTrackerMap = new Map();
@@ -78,81 +17,82 @@ export function useIpc(): void {
       window.electronAPI.send({ type: "station:list", requestId: `station-list-${createChatEntityId()}` });
     };
 
-    ensureStation(PRIMARY_STATION_ID);
-    ensureStationSession(PRIMARY_STATION_ID);
+    actions.station.ensureStation(PRIMARY_STATION_ID);
+    actions.chat.ensureStationSession(PRIMARY_STATION_ID);
 
     void window.electronAPI.getConnectionStatus().then((status) => {
-      setConnectionStatus(status);
+      actions.connection.setConnectionStatus(status);
     });
 
     const unsubscribers = [
       ...registerChatHandlers(trackers, runtimeState, {
-        hydrateConversation,
-        ensureStationSession,
-        removeStationSession,
+        hydrateConversation: actions.chat.hydrateConversation,
+        ensureStationSession: actions.chat.ensureStationSession,
+        removeStationSession: actions.chat.removeStationSession,
         setAssistantState: (state, stationId) => {
-          setStationState(stationId ?? PRIMARY_STATION_ID, state);
+          actions.station.setStationState(stationId ?? PRIMARY_STATION_ID, state);
         },
-        addUserMessage,
-        startAssistantMessage,
-        appendDelta,
-        finaliseMessage,
-        completeMessage,
-        abortStreamingMessage,
-        clearStreamingState,
-        addToolCall,
-        updateToolResult,
-        setActiveConversation,
-        setAborting,
-        setResetConfirming,
-        setResetting,
-        setSessionNotice,
-        hydrateStations,
-        upsertStation,
-        setStationConversation,
-        setActiveStation,
-        removeStation,
-        markStationActivity,
-        clearRoomState,
-        handleRoomToolCall,
-        clearPermissionRequests,
-        clearAllActiveCaptures,
-        setActiveCapture,
-        clearActiveCapture,
-        clearBanner,
-        setConnectionStatus,
-        setProtocolMismatch,
-        clearProtocolMismatch,
+        addUserMessage: actions.chat.addUserMessage,
+        startAssistantMessage: actions.chat.startAssistantMessage,
+        appendDelta: actions.chat.appendDelta,
+        finaliseMessage: actions.chat.finaliseMessage,
+        completeMessage: actions.chat.completeMessage,
+        abortStreamingMessage: actions.chat.abortStreamingMessage,
+        clearStreamingState: actions.chat.clearStreamingState,
+        addToolCall: actions.chat.addToolCall,
+        updateToolResult: actions.chat.updateToolResult,
+        setActiveConversation: actions.chat.setActiveConversation,
+        setAborting: actions.chat.setAborting,
+        setResetConfirming: actions.chat.setResetConfirming,
+        setResetting: actions.chat.setResetting,
+        setSessionNotice: actions.chat.setSessionNotice,
+        hydrateStations: actions.station.hydrateStations,
+        upsertStation: actions.station.upsertStation,
+        setStationConversation: actions.station.setStationConversation,
+        setActiveStation: actions.station.setActiveStation,
+        removeStation: actions.station.removeStation,
+        markStationActivity: actions.station.markStationActivity,
+        clearRoomState: actions.room.clearRoomState,
+        handleRoomToolCall: actions.room.handleRoomToolCall,
+        clearPermissionRequests: actions.permission.clearPermissionRequests,
+        clearAllActiveCaptures: actions.vision.clearAllActiveCaptures,
+        setActiveCapture: actions.vision.setActiveCapture,
+        clearActiveCapture: actions.vision.clearActiveCapture,
+        clearBanner: actions.upgrade.clearBanner,
+        setConnectionStatus: actions.connection.setConnectionStatus,
+        setProtocolMismatch: actions.upgrade.setProtocolMismatch,
+        clearProtocolMismatch: actions.upgrade.clearProtocolMismatch,
         requestStationList,
       }),
       ...registerUiHandlers({
-        setServers,
-        syncRoomsFromServers,
-        addPermissionRequest,
-        removePermissionRequest,
-        showUpgradeProposal,
-        showUpgradeStatus,
-        setAudioLevel,
-        setTtsAmplitude,
-        applySettings,
-        setConnectionStatus,
-        clearStreamingState,
-        setAborting,
-        setResetConfirming,
-        setResetting,
-        clearPermissionRequests,
-        clearAllActiveCaptures,
-        clearRoomState,
-        handleSubagentStarted,
-        handleSubagentToolCall,
-        handleSubagentToolResult,
-        handleSubagentDelta,
-        handleSubagentStatus,
-        handleSubagentCompleted,
-        handleSubagentError,
-        handleSubagentLockAcquired,
-        handleSubagentLockDenied,
-        handleSubagentLockReleased,
+        setServers: actions.mcp.setServers,
+        setSubagentCatalog: actions.subagent.setSubagentCatalog,
+        syncRoomsFromServers: actions.room.syncRoomsFromServers,
+        addPermissionRequest: actions.permission.addPermissionRequest,
+        removePermissionRequest: actions.permission.removePermissionRequest,
+        showUpgradeProposal: actions.upgrade.showUpgradeProposal,
+        showUpgradeStatus: actions.upgrade.showUpgradeStatus,
+        setAudioLevel: actions.audio.setAudioLevel,
+        setTtsAmplitude: actions.audio.setTtsAmplitude,
+        applySettings: actions.settings.applySettings,
+        setConnectionStatus: actions.connection.setConnectionStatus,
+        clearStreamingState: actions.chat.clearStreamingState,
+        setAborting: actions.chat.setAborting,
+        setResetConfirming: actions.chat.setResetConfirming,
+        setResetting: actions.chat.setResetting,
+        clearPermissionRequests: actions.permission.clearPermissionRequests,
+        clearAllActiveCaptures: actions.vision.clearAllActiveCaptures,
+        clearRoomState: actions.room.clearRoomState,
+        handleSubagentStarted: actions.room.handleSubagentStarted,
+        handleSubagentToolCall: actions.room.handleSubagentToolCall,
+        handleSubagentToolResult: actions.room.handleSubagentToolResult,
+        handleSubagentDelta: actions.room.handleSubagentDelta,
+        handleSubagentStatus: actions.room.handleSubagentStatus,
+        handleSubagentCompleted: actions.room.handleSubagentCompleted,
+        handleSubagentError: actions.room.handleSubagentError,
+        handleSubagentLockAcquired: actions.room.handleSubagentLockAcquired,
+        handleSubagentLockDenied: actions.room.handleSubagentLockDenied,
+        handleSubagentLockReleased: actions.room.handleSubagentLockReleased,
       }),
     ];
 
@@ -161,7 +101,7 @@ export function useIpc(): void {
     const deactivateSpiraUiRuntime = activateSpiraUiRuntime();
 
     const pruneInterval = window.setInterval(() => {
-      pruneRoomFlights();
+      actions.room.pruneRoomFlights();
     }, 1000);
 
     return () => {
@@ -172,72 +112,28 @@ export function useIpc(): void {
       }
     };
   }, [
-    addPermissionRequest,
-    addToolCall,
-    addUserMessage,
-    abortStreamingMessage,
-    applySettings,
-    appendDelta,
-    clearAllActiveCaptures,
-    clearActiveCapture,
-    clearBanner,
-    clearStreamingState,
-    clearProtocolMismatch,
-    clearPermissionRequests,
-    clearRoomState,
-    completeMessage,
-    ensureStation,
-    ensureStationSession,
-    hydrateConversation,
-    finaliseMessage,
-    hydrateStations,
-    markStationActivity,
-    removeStation,
-    removeStationSession,
-    removePermissionRequest,
-    setActiveStation,
-    setStationConversation,
-    setActiveConversation,
-    setActiveCapture,
-    setAborting,
-    setAudioLevel,
-    setConnectionStatus,
-    setStationState,
-    setResetConfirming,
-    setResetting,
-    setSessionNotice,
-    syncRoomsFromServers,
-    setProtocolMismatch,
-    setServers,
-    setTtsAmplitude,
-    showUpgradeProposal,
-    showUpgradeStatus,
-    startAssistantMessage,
-    updateToolResult,
-    upsertStation,
-    handleRoomToolCall,
-    handleSubagentDelta,
-    handleSubagentStatus,
-    handleSubagentCompleted,
-    handleSubagentError,
-    handleSubagentLockAcquired,
-    handleSubagentLockDenied,
-    handleSubagentLockReleased,
-    handleSubagentStarted,
-    handleSubagentToolCall,
-    handleSubagentToolResult,
-    pruneRoomFlights,
+    actions.audio,
+    actions.chat,
+    actions.connection,
+    actions.mcp,
+    actions.permission,
+    actions.room,
+    actions.settings,
+    actions.station,
+    actions.subagent,
+    actions.upgrade,
+    actions.vision,
   ]);
 
   const activeSession = useChatStore((store) => getChatSession(store, activeStationId));
   const activeStation = useStationStore((store) => getStation(store, activeStationId));
 
   useEffect(() => {
-    ensureStation(activeStationId, {
+    actions.station.ensureStation(activeStationId, {
       conversationId: activeStation.conversationId,
       title: activeStation.title,
     });
-    ensureStationSession(activeStationId);
+    actions.chat.ensureStationSession(activeStationId);
 
     if (activeSession.messages.length > 0 || !activeStation.conversationId) {
       return;
@@ -249,8 +145,8 @@ export function useIpc(): void {
         return;
       }
 
-      hydrateConversation(conversation, activeStationId);
-      setActiveConversation(conversation.id, conversation.title, activeStationId);
+      actions.chat.hydrateConversation(conversation, activeStationId);
+      actions.chat.setActiveConversation(conversation.id, conversation.title, activeStationId);
     });
 
     return () => {
@@ -261,9 +157,7 @@ export function useIpc(): void {
     activeStation.conversationId,
     activeStation.title,
     activeStationId,
-    ensureStation,
-    ensureStationSession,
-    hydrateConversation,
-    setActiveConversation,
+    actions.chat,
+    actions.station,
   ]);
 }

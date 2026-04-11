@@ -165,4 +165,126 @@ describe("SpiraMemoryDatabase", () => {
     database.setSessionState("copilot-session-id", null);
     expect(database.getSessionState("copilot-session-id")).toBeNull();
   });
+
+  it("stores seeded MCP server configs and preserves built-in enabled overrides", () => {
+    const database = createTestDatabase();
+
+    database.seedBuiltinMcpServerConfigs([
+      {
+        id: "windows-system",
+        name: "Windows System",
+        description: "Host control",
+        transport: "stdio",
+        command: "node",
+        args: ["packages/mcp-windows/dist/index.js"],
+        env: {},
+        enabled: true,
+        autoRestart: true,
+        maxRestarts: 3,
+      },
+    ]);
+    database.setMcpServerEnabled("windows-system", false);
+    database.seedBuiltinMcpServerConfigs([
+      {
+        id: "windows-system",
+        name: "Windows System",
+        description: "Updated description",
+        transport: "stdio",
+        command: "node",
+        args: ["packages/mcp-windows/dist/index.js"],
+        env: {},
+        enabled: true,
+        autoRestart: true,
+        maxRestarts: 3,
+      },
+    ]);
+    database.upsertMcpServerConfig({
+      id: "youtrack",
+      name: "YouTrack",
+      description: "Custom tracker",
+      source: "user",
+      transport: "stdio",
+      command: "node",
+      args: ["packages/mcp-youtrack/dist/index.js"],
+      env: { YOUTRACK_TOKEN: "secret" },
+      enabled: true,
+      autoRestart: true,
+      maxRestarts: 5,
+    });
+
+    expect(database.listMcpServerConfigs()).toMatchObject([
+      {
+        id: "windows-system",
+        source: "builtin",
+        enabled: false,
+        description: "Updated description",
+      },
+      {
+        id: "youtrack",
+        source: "user",
+        name: "YouTrack",
+      },
+    ]);
+  });
+
+  it("stores custom subagent configs and preserves built-in ready overrides", () => {
+    const database = createTestDatabase();
+
+    database.seedBuiltinSubagentConfigs([
+      {
+        id: "windows",
+        label: "Windows Agent",
+        description: "Windows control",
+        source: "builtin",
+        serverIds: ["windows-system"],
+        allowedToolNames: null,
+        delegationToolName: "delegate_to_windows",
+        allowWrites: true,
+        systemPrompt: "",
+        ready: true,
+      },
+    ]);
+    database.setSubagentReady("windows", false);
+    database.seedBuiltinSubagentConfigs([
+      {
+        id: "windows",
+        label: "Windows Agent",
+        description: "Updated description",
+        source: "builtin",
+        serverIds: ["windows-system", "vision"],
+        allowedToolNames: null,
+        delegationToolName: "delegate_to_windows",
+        allowWrites: true,
+        systemPrompt: "",
+        ready: true,
+      },
+    ]);
+    database.upsertSubagentConfig({
+      id: "youtrack-ops",
+      label: "YouTrack Ops",
+      description: "Ticket triage",
+      source: "user",
+      serverIds: ["youtrack"],
+      allowedToolNames: ["youtrack_list_issues"],
+      delegationToolName: "delegate_to_youtrack_ops",
+      allowWrites: false,
+      systemPrompt: "Focus on ticket summarisation.",
+      ready: true,
+    });
+
+    expect(database.listSubagentConfigs()).toMatchObject([
+      {
+        id: "windows",
+        source: "builtin",
+        ready: false,
+        description: "Updated description",
+        serverIds: ["windows-system", "vision"],
+      },
+      {
+        id: "youtrack-ops",
+        source: "user",
+        allowedToolNames: ["youtrack_list_issues"],
+      },
+    ]);
+  });
 });

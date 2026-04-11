@@ -136,11 +136,14 @@ export function ConversationArchivePanel({
       setStationConversation(activeStationId, conversation.id, conversation.title);
       await window.electronAPI.markConversationViewed(conversationId);
       if (conversationId !== activeConversationId) {
-        setSessionNotice({
-          kind: "warning",
-          message:
-            "Loaded an archived conversation. The visible transcript is restored from the database; Shinra may need a fresh live turn to regain backend context.",
-        }, activeStationId);
+        setSessionNotice(
+          {
+            kind: "warning",
+            message:
+              "Loaded an archived conversation. The visible transcript is restored from the database; Shinra may need a fresh live turn to regain backend context.",
+          },
+          activeStationId,
+        );
       }
       onClose();
     } catch (loadError) {

@@ -117,11 +117,6 @@ const agentLookup = new Map<string, `agent:${string}`>();
 const DEFAULT_STATION_ID = "primary";
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null;
-const SUBAGENT_LABELS: Record<SubagentDomainId, string> = {
-  windows: "Windows Agent",
-  spira: "Spira Agent",
-  nexus: "Nexus Agent",
-};
 
 const getString = (value: unknown): string | undefined =>
   typeof value === "string" && value.trim() ? value.trim() : undefined;
@@ -169,7 +164,7 @@ const resolveStationId = (stationId?: StationId): StationId => stationId ?? DEFA
 const toScopedCallKey = (stationId: StationId, callId: string): string => `${stationId}:${callId}`;
 const toScopedAgentKey = (stationId: StationId, agentId: string): string => `${stationId}:${agentId}`;
 
-const getSubagentLabel = (domain: SubagentDomainId): string => SUBAGENT_LABELS[domain];
+const getSubagentLabel = (domain: SubagentDomainId, label?: string): string => label?.trim() || domain;
 const getRoomLabel = (
   rooms: AgentRoom[],
   roomId: `agent:${string}`,
@@ -466,7 +461,7 @@ export const useRoomStore = create<RoomStore>((set) => ({
     agentLookup.set(toScopedAgentKey(resolvedStationId, event.runId), event.roomId);
     set((state) => ({
       agentRooms: upsertAgentRoom(state.agentRooms, event.roomId, resolvedStationId, {
-        label: getSubagentLabel(event.domain),
+        label: getSubagentLabel(event.domain, event.label),
         caption: describeSubagentAttempt(event.attempt, event.allowWrites),
         status: "active",
         kind: "subagent",
@@ -491,8 +486,8 @@ export const useRoomStore = create<RoomStore>((set) => ({
           lastToolName: event.toolName,
           detail: event.serverId ? `${event.toolName} via ${event.serverId}` : event.toolName,
           toolHistory: upsertToolHistory(
-            state.agentRooms.find((room) => room.roomId === event.roomId && room.stationId === resolvedStationId)?.toolHistory ??
-              [],
+            state.agentRooms.find((room) => room.roomId === event.roomId && room.stationId === resolvedStationId)
+              ?.toolHistory ?? [],
             {
               callId: event.callId,
               toolName: event.toolName,
@@ -520,8 +515,8 @@ export const useRoomStore = create<RoomStore>((set) => ({
           lastToolName: event.toolName,
           detail: event.details ?? `${event.toolName} ${event.status}`,
           toolHistory: upsertToolHistory(
-            state.agentRooms.find((room) => room.roomId === event.roomId && room.stationId === resolvedStationId)?.toolHistory ??
-              [],
+            state.agentRooms.find((room) => room.roomId === event.roomId && room.stationId === resolvedStationId)
+              ?.toolHistory ?? [],
             {
               callId: event.callId,
               toolName: event.toolName,
@@ -544,7 +539,9 @@ export const useRoomStore = create<RoomStore>((set) => ({
   handleSubagentDelta: (event, stationId) => {
     const resolvedStationId = resolveStationId(stationId);
     set((state) => {
-      const existingRoom = state.agentRooms.find((room) => room.roomId === event.roomId && room.stationId === resolvedStationId);
+      const existingRoom = state.agentRooms.find(
+        (room) => room.roomId === event.roomId && room.stationId === resolvedStationId,
+      );
       return {
         agentRooms: upsertAgentRoom(state.agentRooms, event.roomId, resolvedStationId, {
           label: getRoomLabel(state.agentRooms, event.roomId, resolvedStationId),
@@ -561,7 +558,7 @@ export const useRoomStore = create<RoomStore>((set) => ({
       const descriptor = describeSubagentStatus(event.status);
       return {
         agentRooms: upsertAgentRoom(state.agentRooms, event.roomId, resolvedStationId, {
-          label: getSubagentLabel(event.domain),
+          label: getSubagentLabel(event.domain, event.label),
           caption: descriptor.caption,
           status: descriptor.status,
           kind: "subagent",
@@ -577,7 +574,7 @@ export const useRoomStore = create<RoomStore>((set) => ({
     const resolvedStationId = resolveStationId(stationId);
     set((state) => ({
       agentRooms: upsertAgentRoom(state.agentRooms, event.roomId, resolvedStationId, {
-        label: getSubagentLabel(event.domain),
+        label: getSubagentLabel(event.domain, event.label),
         caption: event.envelope.followupNeeded ? "Completed with follow-up" : "Completed",
         status: event.envelope.status === "failed" ? "error" : "idle",
         kind: "subagent",
@@ -589,13 +586,13 @@ export const useRoomStore = create<RoomStore>((set) => ({
         liveText: "",
         envelope: event.envelope,
         toolHistory: mergeToolHistory(
-          state.agentRooms.find((room) => room.roomId === event.roomId && room.stationId === resolvedStationId)?.toolHistory ??
-            [],
+          state.agentRooms.find((room) => room.roomId === event.roomId && room.stationId === resolvedStationId)
+            ?.toolHistory ?? [],
           event.envelope.toolCalls,
         ),
         errorHistory: mergeErrorHistory(
-          state.agentRooms.find((room) => room.roomId === event.roomId && room.stationId === resolvedStationId)?.errorHistory ??
-            [],
+          state.agentRooms.find((room) => room.roomId === event.roomId && room.stationId === resolvedStationId)
+            ?.errorHistory ?? [],
           event.envelope.errors,
         ),
       }),
@@ -605,7 +602,7 @@ export const useRoomStore = create<RoomStore>((set) => ({
     const resolvedStationId = resolveStationId(stationId);
     set((state) => ({
       agentRooms: upsertAgentRoom(state.agentRooms, event.roomId, resolvedStationId, {
-        label: getSubagentLabel(event.domain),
+        label: getSubagentLabel(event.domain, event.label),
         caption: event.willRetry ? "Retrying subagent run" : "Run failed",
         status: event.willRetry ? "active" : "error",
         kind: "subagent",
@@ -614,8 +611,8 @@ export const useRoomStore = create<RoomStore>((set) => ({
         attempt: event.attempt,
         detail: event.error.message,
         errorHistory: mergeErrorHistory(
-          state.agentRooms.find((room) => room.roomId === event.roomId && room.stationId === resolvedStationId)?.errorHistory ??
-            [],
+          state.agentRooms.find((room) => room.roomId === event.roomId && room.stationId === resolvedStationId)
+            ?.errorHistory ?? [],
           [event.error],
         ),
       }),
@@ -651,11 +648,10 @@ export const useRoomStore = create<RoomStore>((set) => ({
       agentRooms: upsertAgentRoom(state.agentRooms, event.roomId, resolvedStationId, {
         label: getRoomLabel(state.agentRooms, event.roomId, resolvedStationId),
         caption: "Write lock released",
-        status:
-          state.agentRooms.find((room) => room.roomId === event.roomId && room.stationId === resolvedStationId)
-            ?.activeToolCount
-            ? "active"
-            : "idle",
+        status: state.agentRooms.find((room) => room.roomId === event.roomId && room.stationId === resolvedStationId)
+          ?.activeToolCount
+          ? "active"
+          : "idle",
         runId: event.runId,
         detail: `Lock ${event.intentId} released`,
       }),

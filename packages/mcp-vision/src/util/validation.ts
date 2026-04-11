@@ -1,10 +1,5 @@
+export { EmptySchema } from "@spira/mcp-util/validation";
 import { z } from "zod";
-
-export const ExampleEchoSchema = z.object({
-  message: z.string().min(1).max(500),
-});
-
-export const EmptySchema = z.object({});
 
 export const CaptureScreenSchema = z.object({
   monitorIndex: z.number().int().min(0).default(0),

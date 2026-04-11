@@ -1,8 +1,8 @@
 import type {
   ConversationMessage as SharedChatMessage,
+  ToolCallEntry as SharedToolCallEntry,
   StationId,
   StoredConversation,
-  ToolCallEntry as SharedToolCallEntry,
 } from "@spira/shared";
 import { create } from "zustand";
 import { PRIMARY_STATION_ID, useStationStore } from "./station-store.js";
@@ -241,7 +241,7 @@ export const useChatStore = create<ChatStore>((set) => ({
       })),
     );
   },
-  setActiveConversation: (activeConversationId, activeConversationTitle = null, stationId) => {
+  setActiveConversation: (activeConversationId, activeConversationTitle = null, stationId = undefined) => {
     const resolvedStationId = resolveStationId(stationId);
     set((state) =>
       updateSessionState(state, resolvedStationId, (session) => ({

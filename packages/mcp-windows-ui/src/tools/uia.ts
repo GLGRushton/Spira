@@ -1,6 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { errorResult, successResult } from "@spira/mcp-util/results";
 import { actOnUiNode, findUiNodes, getUiTree, scrapeVirtualList } from "../util/automation.js";
-import { errorResult, successResult } from "../util/results.js";
 import { UiActionSchema, UiFindNodesSchema, UiScrapeVirtualListSchema, UiTreeSchema } from "../util/validation.js";
 
 export const registerUiAutomationTools = (server: McpServer): void => {

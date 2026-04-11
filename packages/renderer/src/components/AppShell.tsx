@@ -5,6 +5,7 @@ import { useMcpStore } from "../stores/mcp-store.js";
 import { useNavigationStore } from "../stores/navigation-store.js";
 import { useRoomStore } from "../stores/room-store.js";
 import { getStation, useStationStore } from "../stores/station-store.js";
+import { useSubagentStore } from "../stores/subagent-store.js";
 import styles from "./AppShell.module.css";
 import { AssistantStatusStrip } from "./AssistantStatusStrip.js";
 import { GlassPanel } from "./GlassPanel.js";
@@ -32,6 +33,7 @@ export function AppShell() {
   const assistantState = useStationStore((store) => getStation(store, activeStationId).state);
   const stationMap = useStationStore((store) => store.stations);
   const servers = useMcpStore((store) => store.servers);
+  const subagents = useSubagentStore((store) => store.agents);
   const allAgentRooms = useRoomStore((store) => store.agentRooms);
   const allFlights = useRoomStore((store) => store.flights);
   const view = useNavigationStore((store) => store.activeView);
@@ -81,14 +83,15 @@ export function AppShell() {
                 exit={{ opacity: 0, scale: 1.015 }}
                 transition={{ duration: 0.26, ease: "easeOut" }}
               >
-                  <BaseDeck
-                    activeView={view}
-                    activeStationId={activeStationId}
-                    assistantState={assistantState}
-                    stations={stations}
-                    servers={servers}
-                    agentRooms={agentRooms}
-                    flights={flights}
+                <BaseDeck
+                  activeView={view}
+                  activeStationId={activeStationId}
+                  assistantState={assistantState}
+                  stations={stations}
+                  servers={servers}
+                  subagents={subagents}
+                  agentRooms={agentRooms}
+                  flights={flights}
                   onViewChange={setView}
                 />
               </motion.div>
@@ -114,7 +117,7 @@ export function AppShell() {
                     ) : view === "operations" ? (
                       <OperationsRoster onOpenBridge={() => setView("bridge")} />
                     ) : view === "barracks" ? (
-                      <BarracksDetail servers={servers} agentRooms={agentRooms} />
+                      <BarracksDetail servers={servers} agents={subagents} agentRooms={agentRooms} />
                     ) : view === "mcp" ? (
                       <McpClusterDetail servers={servers} onSelectServer={(serverId) => setView(`mcp:${serverId}`)} />
                     ) : view === "agents" ? (
