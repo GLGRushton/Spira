@@ -1,16 +1,19 @@
 import type { Readable } from "node:stream";
 import { Client as McpClient } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Tool as SdkMcpTool } from "@modelcontextprotocol/sdk/types.js";
-import type { McpServerConfig, McpTool } from "@spira/shared";
+import { type McpServerConfig, type McpTool, resolveMcpToolAccess } from "@spira/shared";
 import type { Logger } from "pino";
 import { appRootDir } from "../util/app-paths.js";
 import { McpError } from "../util/errors.js";
 import type { SpiraEventBus } from "../util/event-bus.js";
 
+type SupportedTransport = StdioClientTransport | StreamableHTTPClientTransport;
+
 interface McpClientEntry {
   readonly client: McpClient;
-  readonly transport: StdioClientTransport;
+  readonly transport: SupportedTransport;
   readonly config: McpServerConfig;
   readonly tools: McpTool[];
   readonly connectedAt: number;
@@ -44,6 +47,15 @@ const serializeContentBlock = (block: Record<string, unknown>): string => {
 const normalizeEnv = (env: NodeJS.ProcessEnv & Record<string, string | undefined>): Record<string, string> =>
   Object.fromEntries(Object.entries(env).filter((entry): entry is [string, string] => typeof entry[1] === "string"));
 
+const normalizeHeaders = (headers?: Record<string, string>): Record<string, string> | undefined => {
+  if (!headers) {
+    return undefined;
+  }
+
+  const entries = Object.entries(headers).filter((entry): entry is [string, string] => typeof entry[1] === "string");
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+};
+
 const normalizeTool = (config: McpServerConfig, tool: SdkMcpTool): McpTool => ({
   serverId: config.id,
   serverName: config.name,
@@ -53,6 +65,7 @@ const normalizeTool = (config: McpServerConfig, tool: SdkMcpTool): McpTool => ({
   outputSchema: tool.outputSchema,
   annotations: tool.annotations,
   execution: tool.execution,
+  access: resolveMcpToolAccess(tool.name, tool.annotations, config.toolAccess),
 });
 
 export class McpClientPool {
@@ -64,26 +77,45 @@ export class McpClientPool {
     private readonly logger: Logger,
   ) {}
 
-  async connect(config: McpServerConfig): Promise<McpClient> {
-    if (config.transport !== "stdio") {
-      throw new McpError(`Unsupported MCP transport for ${config.id}: ${config.transport}`);
+  private createTransport(config: McpServerConfig): { transport: SupportedTransport; stderrStream: Readable | null } {
+    if (config.transport === "stdio") {
+      const transport = new StdioClientTransport({
+        command: config.command,
+        args: config.args,
+        cwd: appRootDir,
+        env: normalizeEnv({ ...process.env, ...config.env }),
+        stderr: "pipe",
+      });
+
+      return {
+        transport,
+        stderrStream: transport.stderr as Readable | null,
+      };
     }
 
+    if (config.transport === "streamable-http") {
+      return {
+        transport: new StreamableHTTPClientTransport(new URL(config.url), {
+          requestInit: {
+            headers: normalizeHeaders(config.headers),
+          },
+        }),
+        stderrStream: null,
+      };
+    }
+
+    throw new McpError("Unsupported MCP transport");
+  }
+
+  async connect(config: McpServerConfig): Promise<McpClient> {
     await this.disconnect(config.id).catch((error) => {
       this.logger.warn({ error, serverId: config.id }, "Failed to disconnect existing MCP client before reconnecting");
     });
 
-    const transport = new StdioClientTransport({
-      command: config.command,
-      args: config.args,
-      cwd: appRootDir,
-      env: normalizeEnv({ ...process.env, ...config.env }),
-      stderr: "pipe",
-    });
+    const { transport, stderrStream } = this.createTransport(config);
 
     const client = new McpClient({ name: "spira-backend", version: "0.1.0" }, {});
 
-    const stderrStream = transport.stderr as Readable | null;
     stderrStream?.setEncoding("utf8");
     const stderrHandler = (chunk: Buffer | string): void => {
       const lines = chunk
@@ -106,7 +138,7 @@ export class McpClientPool {
 
       this.clients.delete(config.id);
       this.crashedServers.add(config.id);
-      this.logger.warn({ serverId: config.id }, "MCP server process exited unexpectedly");
+      this.logger.warn({ serverId: config.id }, "MCP server connection closed unexpectedly");
       this.bus.emit("mcp:server-crashed", config.id);
     };
     transport.onclose = closeHandler;

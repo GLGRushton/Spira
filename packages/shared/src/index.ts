@@ -9,6 +9,12 @@ export type {
 export type { ChatMessage, ToolCallStatus } from "./chat-types.js";
 export type { Env, McpServersFile } from "./config-schema.js";
 export type {
+  ProjectRepoMappingSummary,
+  ProjectRepoMappingsSnapshot,
+  WorkspaceRepoSummary,
+} from "./project-repo-types.js";
+export { normalizeProjectKey } from "./project-repo-types.js";
+export type {
   ConnectionStatus,
   ElectronApi,
   RendererFatalPayload,
@@ -17,9 +23,13 @@ export type {
 } from "./electron-api.js";
 export type {
   McpServerConfig,
+  McpServerUpdateConfig,
   McpServerSource,
   McpServerDiagnostics,
   McpServerStatus,
+  McpToolAccess,
+  McpToolAccessMode,
+  McpToolAccessPolicy,
   McpTool,
   McpToolAnnotations,
   McpToolExecution,
@@ -38,6 +48,7 @@ export type {
 export type {
   BuiltinSubagentDomainId,
   NormalizedStateChange,
+  SubagentCreateConfig,
   SubagentDomain,
   SubagentArtifact,
   SubagentCompletedEvent,
@@ -75,6 +86,13 @@ export type {
   RuntimeConfigUpdate,
 } from "./runtime-config.js";
 export type {
+  YouTrackAccountSummary,
+  YouTrackProjectSummary,
+  YouTrackStateMapping,
+  YouTrackStatusSummary,
+  YouTrackTicketSummary,
+} from "./youtrack-types.js";
+export type {
   SpiraUiAction,
   SpiraUiActionType,
   SpiraUiAssistantDockSummary,
@@ -86,6 +104,7 @@ export type {
   SpiraUiBridgeResponse,
   SpiraUiBridgeResult,
   SpiraUiCapabilities,
+  SpiraUiCreateSubagentConfig,
   SpiraUiChatTranscript,
   SpiraUiChatSummary,
   SpiraUiMessageSummary,
@@ -102,6 +121,7 @@ export type { ITransport } from "./transport.js";
 export type { VoicePipelineEvent, VoicePipelineState, TranscriptionResult, OrbVisualParams } from "./voice-types.js";
 export type { OcrLine, OcrRectangle, OcrResult, OcrWord } from "./windows-ocr.js";
 export { McpServerConfigSchema, McpServersFileSchema, EnvSchema, parseEnv } from "./config-schema.js";
+export { normalizeMcpToolAccessPolicy, resolveMcpToolAccess } from "./mcp-types.js";
 export { markdownToSpeechText } from "./markdown-to-speech.js";
 export { summarizeConversationTitle } from "./conversation-title.js";
 export {
@@ -120,6 +140,7 @@ export {
   SPIRA_UI_WAIT_CONDITION_TYPES,
 } from "./spira-ui-control.js";
 export { RUNTIME_CONFIG_KEYS } from "./runtime-config.js";
+export { DEFAULT_YOUTRACK_STATE_MAPPING } from "./youtrack-types.js";
 export {
   classifyUpgradeScope,
   getRelevantUpgradeFiles,

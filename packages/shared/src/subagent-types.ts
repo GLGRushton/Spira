@@ -1,6 +1,6 @@
 import type { ToolCallStatus } from "./chat-types.js";
 
-export const SUBAGENT_DOMAIN_IDS = ["windows", "spira", "nexus"] as const;
+export const SUBAGENT_DOMAIN_IDS = ["windows", "spira", "nexus", "data-entry"] as const;
 export type BuiltinSubagentDomainId = (typeof SUBAGENT_DOMAIN_IDS)[number];
 export type SubagentDomainId = string;
 export const SUBAGENT_SCOPE_IDS = [...SUBAGENT_DOMAIN_IDS, "shinra"] as const;
@@ -20,6 +20,11 @@ export interface SubagentDomain {
   ready?: boolean;
   source?: SubagentSource;
 }
+
+export type SubagentCreateConfig = Omit<SubagentDomain, "id" | "source" | "delegationToolName"> & {
+  id?: string;
+  delegationToolName?: string;
+};
 
 export const SUBAGENT_DOMAINS: readonly SubagentDomain[] = [
   {
@@ -53,6 +58,19 @@ export const SUBAGENT_DOMAINS: readonly SubagentDomain[] = [
     serverIds: ["nexus-mods"],
     allowedToolNames: null,
     delegationToolName: "delegate_to_nexus",
+    allowWrites: true,
+    systemPrompt: "",
+    ready: true,
+    source: "builtin",
+  },
+  {
+    id: "data-entry",
+    label: "Data Entry Agent",
+    description:
+      "Creates and inspects custom MCP servers and custom subagents inside Spira's built-in data entry lane.",
+    serverIds: ["spira-data-entry"],
+    allowedToolNames: null,
+    delegationToolName: "delegate_to_data_entry",
     allowWrites: true,
     systemPrompt: "",
     ready: true,

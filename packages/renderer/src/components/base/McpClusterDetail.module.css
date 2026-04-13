@@ -123,6 +123,17 @@
   font-size: 12px;
 }
 
+.fieldHint {
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.fieldHint code {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, "SF Mono", Consolas, "Liberation Mono", Menlo, monospace);
+  font-size: 11px;
+}
+
 .fullWidth {
   grid-column: 1 / -1;
 }

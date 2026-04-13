@@ -8,6 +8,7 @@
     { "path": "packages/mcp-util" },
     { "path": "packages/mcp-memories" },
     { "path": "packages/mcp-spira-ui" },
+    { "path": "packages/mcp-spira-data-entry" },
     { "path": "packages/mcp-nexus-mods" },
     { "path": "packages/mcp-vision" },
     { "path": "packages/mcp-windows" },

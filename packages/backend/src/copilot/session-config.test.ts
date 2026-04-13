@@ -18,6 +18,7 @@ describe("session-config", () => {
     } as never);
 
     expect(instructions).toContain("delegate_to_windows");
+    expect(instructions).toContain("delegate_to_data_entry");
     expect(instructions).toContain("read_subagent");
   });
 

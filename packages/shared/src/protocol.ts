@@ -1,10 +1,12 @@
 import type { AssistantState } from "./assistant-state.js";
 import type { ChatMessage, ToolCallStatus } from "./chat-types.js";
 import type { ConversationSearchMatch, StoredConversation, StoredConversationSummary } from "./conversation-types.js";
-import type { McpServerConfig } from "./mcp-types.js";
+import type { McpServerConfig, McpServerUpdateConfig } from "./mcp-types.js";
 import type { McpServerStatus } from "./mcp-types.js";
+import type { ProjectRepoMappingsSnapshot } from "./project-repo-types.js";
 import type {
   SubagentCompletedEvent,
+  SubagentCreateConfig,
   SubagentDeltaEvent,
   SubagentDomain,
   SubagentErrorEvent,
@@ -17,6 +19,7 @@ import type {
   SubagentToolResultEvent,
 } from "./subagent-types.js";
 import type { UpgradeProposal, UpgradeStatus } from "./upgrade.js";
+import type { YouTrackProjectSummary, YouTrackStatusSummary, YouTrackTicketSummary } from "./youtrack-types.js";
 
 export interface ErrorPayload {
   code: string;
@@ -51,7 +54,7 @@ export interface StationSummary {
   isStreaming: boolean;
 }
 
-export const PROTOCOL_VERSION = 5;
+export const PROTOCOL_VERSION = 9;
 
 export const TTS_PROVIDERS = ["elevenlabs", "kokoro"] as const;
 export type TtsProvider = (typeof TTS_PROVIDERS)[number];
@@ -76,6 +79,12 @@ export type ClientMessage =
   | { type: "conversation:search"; requestId: string; query: string; limit?: number }
   | { type: "conversation:mark-viewed"; requestId: string; conversationId: string }
   | { type: "conversation:archive"; requestId: string; conversationId: string }
+  | { type: "youtrack:status:get"; requestId: string; enabled: boolean }
+  | { type: "youtrack:tickets:list"; requestId: string; enabled: boolean; limit?: number }
+  | { type: "youtrack:projects:search"; requestId: string; enabled: boolean; query: string; limit?: number }
+  | { type: "projects:snapshot:get"; requestId: string }
+  | { type: "projects:workspace-root:set"; requestId: string; workspaceRoot: string | null }
+  | { type: "projects:mapping:set"; requestId: string; projectKey: string; repoRelativePaths: string[] }
   | { type: "tts:speak"; text: string }
   | { type: "tts:stop" }
   | { type: "voice:toggle" }
@@ -85,11 +94,12 @@ export type ClientMessage =
   | { type: "settings:update"; settings: Partial<UserSettings> }
   | { type: "permission:respond"; requestId: string; approved: boolean }
   | { type: "mcp:add-server"; config: McpServerConfig }
+  | { type: "mcp:update-server"; serverId: string; patch: McpServerUpdateConfig }
   | { type: "mcp:remove-server"; serverId: string }
   | { type: "mcp:set-enabled"; serverId: string; enabled: boolean }
   | {
       type: "subagent:create";
-      config: Omit<SubagentDomain, "source" | "delegationToolName"> & { id?: string; delegationToolName?: string };
+      config: SubagentCreateConfig;
     }
   | {
       type: "subagent:update";
@@ -123,6 +133,12 @@ export type ServerMessage =
   | { type: "conversation:search:result"; requestId: string; matches: ConversationSearchMatch[] }
   | { type: "conversation:mark-viewed:result"; requestId: string; success: boolean }
   | { type: "conversation:archive:result"; requestId: string; success: boolean }
+  | { type: "youtrack:status:result"; requestId: string; status: YouTrackStatusSummary }
+  | { type: "youtrack:tickets:list:result"; requestId: string; tickets: YouTrackTicketSummary[] }
+  | { type: "youtrack:projects:search:result"; requestId: string; projects: YouTrackProjectSummary[] }
+  | { type: "projects:snapshot:result"; requestId: string; snapshot: ProjectRepoMappingsSnapshot }
+  | ({ type: "youtrack:request-error"; requestId: string } & ErrorPayload)
+  | ({ type: "projects:request-error"; requestId: string } & ErrorPayload)
   | ({ type: "conversation:request-error"; requestId: string } & ErrorPayload)
   | {
       type: "tool:call";
@@ -157,6 +173,7 @@ export type ServerMessage =
 export interface UserSettings {
   voiceEnabled: boolean;
   wakeWordEnabled: boolean;
+  youTrackEnabled: boolean;
   ttsProvider: TtsProvider;
   whisperModel: "tiny.en" | "base.en" | "small.en";
   wakeWordProvider: WakeWordProviderSetting;

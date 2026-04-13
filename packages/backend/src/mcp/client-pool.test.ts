@@ -3,8 +3,8 @@ import type { McpServerConfig } from "@spira/shared";
 import { describe, expect, it, vi } from "vitest";
 import { SpiraEventBus } from "../util/event-bus.js";
 
-class FakeTransport {
-  static instances: FakeTransport[] = [];
+class FakeStdioTransport {
+  static instances: FakeStdioTransport[] = [];
 
   readonly stderr = new EventEmitter();
   readonly close = vi.fn(async () => {});
@@ -12,7 +12,21 @@ class FakeTransport {
 
   constructor(readonly options: Record<string, unknown>) {
     (this.stderr as EventEmitter & { setEncoding: (encoding: string) => void }).setEncoding = vi.fn();
-    FakeTransport.instances.push(this);
+    FakeStdioTransport.instances.push(this);
+  }
+}
+
+class FakeStreamableHttpTransport {
+  static instances: FakeStreamableHttpTransport[] = [];
+
+  readonly close = vi.fn(async () => {});
+  onclose: (() => void) | undefined;
+
+  constructor(
+    readonly url: URL,
+    readonly options: Record<string, unknown>,
+  ) {
+    FakeStreamableHttpTransport.instances.push(this);
   }
 }
 
@@ -23,7 +37,7 @@ class FakeClient {
   static connectError: unknown = null;
   static callToolError: unknown = null;
 
-  readonly connect = vi.fn(async (_transport: FakeTransport) => {
+  readonly connect = vi.fn(async (_transport: unknown) => {
     if (FakeClient.connectError) {
       throw FakeClient.connectError;
     }
@@ -54,6 +68,17 @@ const createConfig = (): McpServerConfig => ({
   maxRestarts: 3,
 });
 
+const createRemoteConfig = (): McpServerConfig => ({
+  id: "youtrack",
+  name: "YouTrack",
+  transport: "streamable-http",
+  url: "https://example.youtrack.cloud/mcp",
+  headers: { Authorization: "Bearer secret" },
+  enabled: true,
+  autoRestart: true,
+  maxRestarts: 3,
+});
+
 const createLogger = () => ({
   info: vi.fn(),
   warn: vi.fn(),
@@ -63,7 +88,8 @@ const createLogger = () => ({
 
 const loadClientPool = async () => {
   vi.resetModules();
-  FakeTransport.instances.length = 0;
+  FakeStdioTransport.instances.length = 0;
+  FakeStreamableHttpTransport.instances.length = 0;
   FakeClient.instances.length = 0;
   FakeClient.nextTools = [];
   FakeClient.nextCallResult = null;
@@ -74,7 +100,10 @@ const loadClientPool = async () => {
     Client: FakeClient,
   }));
   vi.doMock("@modelcontextprotocol/sdk/client/stdio.js", () => ({
-    StdioClientTransport: FakeTransport,
+    StdioClientTransport: FakeStdioTransport,
+  }));
+  vi.doMock("@modelcontextprotocol/sdk/client/streamableHttp.js", () => ({
+    StreamableHTTPClientTransport: FakeStreamableHttpTransport,
   }));
 
   return await import("./client-pool.js");
@@ -106,6 +135,7 @@ describe("McpClientPool", () => {
         name: "capture_screen",
         description: "Capture the active window",
         inputSchema: { type: "object", properties: { windowId: { type: "string" } } },
+        access: { mode: "write", source: "default" },
       },
     ]);
     await expect(pool.callTool(config.id, "capture_screen", "not-an-object")).resolves.toEqual({ ok: true });
@@ -113,7 +143,7 @@ describe("McpClientPool", () => {
       name: "capture_screen",
       arguments: {},
     });
-    expect(FakeTransport.instances[0]?.options).toMatchObject({
+    expect(FakeStdioTransport.instances[0]?.options).toMatchObject({
       command: "node",
       args: ["packages/mcp-vision/dist/index.js"],
       stderr: "pipe",
@@ -138,14 +168,32 @@ describe("McpClientPool", () => {
 
     await pool.connect(config);
 
-    FakeTransport.instances[0]?.stderr.emit("data", " first line \n\nsecond line  ");
-    FakeTransport.instances[0]?.onclose?.();
+    FakeStdioTransport.instances[0]?.stderr.emit("data", " first line \n\nsecond line  ");
+    FakeStdioTransport.instances[0]?.onclose?.();
 
     expect(stderrEvents).toEqual(["vision:first line", "vision:second line"]);
     expect(crashEvents).toEqual(["vision"]);
     expect(pool.isCrashed("vision")).toBe(true);
     expect(pool.listTools("vision")).toEqual([]);
     expect(logger.warn).toHaveBeenCalled();
+  });
+
+  it("resolves read-only access from explicit MCP server policy", async () => {
+    const { McpClientPool } = await loadClientPool();
+    FakeClient.nextTools = [{ name: "find_projects", inputSchema: { type: "object", properties: {} } }];
+
+    const pool = new McpClientPool(new SpiraEventBus(), createLogger() as never);
+    const config = createConfig();
+    config.toolAccess = { readOnlyToolNames: ["find_projects"] };
+
+    await pool.connect(config);
+
+    expect(pool.listTools(config.id)).toEqual([
+      expect.objectContaining({
+        name: "find_projects",
+        access: { mode: "read", source: "policy" },
+      }),
+    ]);
   });
 
   it("disconnects cleanly and removes transport listeners", async () => {
@@ -160,7 +208,7 @@ describe("McpClientPool", () => {
     });
 
     await pool.connect(config);
-    const transport = FakeTransport.instances[0];
+    const transport = FakeStdioTransport.instances[0];
     const client = FakeClient.instances[0];
 
     expect(transport?.stderr.listenerCount("data")).toBe(1);
@@ -174,6 +222,32 @@ describe("McpClientPool", () => {
     expect(client?.close).toHaveBeenCalledTimes(1);
     expect(transport?.close).toHaveBeenCalledTimes(1);
     expect(crashEvents).toEqual([]);
+  });
+
+  it("connects a remote streamable HTTP server", async () => {
+    const { McpClientPool } = await loadClientPool();
+    FakeClient.nextTools = [{ name: "youtrack_search_issues", inputSchema: { type: "object", properties: {} } }];
+
+    const pool = new McpClientPool(new SpiraEventBus(), createLogger() as never);
+    const config = createRemoteConfig();
+
+    await pool.connect(config);
+
+    expect(pool.listTools(config.id)).toEqual([
+      expect.objectContaining({
+        serverId: "youtrack",
+        serverName: "YouTrack",
+        name: "youtrack_search_issues",
+      }),
+    ]);
+    expect(FakeStreamableHttpTransport.instances[0]?.url.toString()).toBe("https://example.youtrack.cloud/mcp");
+    expect(FakeStreamableHttpTransport.instances[0]?.options).toMatchObject({
+      requestInit: {
+        headers: {
+          Authorization: "Bearer secret",
+        },
+      },
+    });
   });
 
   it("returns alternate MCP tool result shapes", async () => {
@@ -223,6 +297,6 @@ describe("McpClientPool", () => {
       message: "Failed to connect MCP server Spira Vision: spawn failed",
     });
     expect(FakeClient.instances[0]?.close).toHaveBeenCalledTimes(1);
-    expect(FakeTransport.instances[0]?.close).toHaveBeenCalledTimes(1);
+    expect(FakeStdioTransport.instances[0]?.close).toHaveBeenCalledTimes(1);
   });
 });

@@ -15,6 +15,7 @@ import { usePermissionStore } from "../stores/permission-store.js";
 import { useRoomStore } from "../stores/room-store.js";
 import { useSettingsStore } from "../stores/settings-store.js";
 import { getStation, useStationStore } from "../stores/station-store.js";
+import { useSubagentStore } from "../stores/subagent-store.js";
 import { useUpgradeStore } from "../stores/upgrade-store.js";
 import { useVisionStore } from "../stores/vision-store.js";
 
@@ -74,6 +75,7 @@ export const buildSpiraUiSnapshot = (): SpiraUiSnapshot => {
     settings: {
       voiceEnabled: settings.voiceEnabled,
       wakeWordEnabled: settings.wakeWordEnabled,
+      youTrackEnabled: settings.youTrackEnabled,
       ttsProvider: settings.ttsProvider,
       whisperModel: settings.whisperModel,
       wakeWordProvider: settings.wakeWordProvider,
@@ -87,6 +89,7 @@ export const buildSpiraUiSnapshot = (): SpiraUiSnapshot => {
     upgradeBanner: upgrade.banner ? { ...upgrade.banner } : null,
     protocolBanner: upgrade.protocolBanner ? { ...upgrade.protocolBanner } : null,
     mcpServers: [...useMcpStore.getState().servers],
+    subagents: [...useSubagentStore.getState().agents],
     agentRooms: room.agentRooms
       .filter((agentRoom) => agentRoom.stationId === activeStationId)
       .map((agentRoom) => ({ ...agentRoom })),

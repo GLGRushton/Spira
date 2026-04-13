@@ -734,7 +734,7 @@ export class SubagentRunner {
     execute: () => Promise<unknown>,
     writesAllowed: boolean,
   ): Promise<unknown> {
-    if (tool.annotations?.readOnlyHint === true) {
+    if (tool.access?.mode === "read") {
       return execute();
     }
 

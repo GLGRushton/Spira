@@ -203,10 +203,10 @@ describe("SpiraMemoryDatabase", () => {
       name: "YouTrack",
       description: "Custom tracker",
       source: "user",
-      transport: "stdio",
-      command: "node",
-      args: ["packages/mcp-youtrack/dist/index.js"],
-      env: { YOUTRACK_TOKEN: "secret" },
+      transport: "streamable-http",
+      url: "https://example.youtrack.cloud/mcp",
+      headers: { Authorization: "Bearer secret" },
+      toolAccess: { readOnlyToolNames: ["find_projects"], writeToolNames: ["create_issue"] },
       enabled: true,
       autoRestart: true,
       maxRestarts: 5,
@@ -223,8 +223,38 @@ describe("SpiraMemoryDatabase", () => {
         id: "youtrack",
         source: "user",
         name: "YouTrack",
+        transport: "streamable-http",
+        url: "https://example.youtrack.cloud/mcp",
+        headers: { Authorization: "Bearer secret" },
+        toolAccess: { readOnlyToolNames: ["find_projects"], writeToolNames: ["create_issue"] },
       },
     ]);
+  });
+
+  it("round-trips remote MCP server configs without requiring stdio fields", () => {
+    const database = createTestDatabase();
+
+    database.upsertMcpServerConfig({
+      id: "youtrack",
+      name: "YouTrack",
+      description: "Remote tracker",
+      source: "user",
+      transport: "streamable-http",
+      url: "https://example.youtrack.cloud/mcp",
+      headers: { Authorization: "Bearer secret" },
+      enabled: true,
+      autoRestart: false,
+      maxRestarts: 3,
+    });
+
+    expect(database.getMcpServerConfig("youtrack")).toMatchObject({
+      id: "youtrack",
+      transport: "streamable-http",
+      url: "https://example.youtrack.cloud/mcp",
+      headers: { Authorization: "Bearer secret" },
+      enabled: true,
+      autoRestart: false,
+    });
   });
 
   it("stores custom subagent configs and preserves built-in ready overrides", () => {
@@ -284,6 +314,39 @@ describe("SpiraMemoryDatabase", () => {
         id: "youtrack-ops",
         source: "user",
         allowedToolNames: ["youtrack_list_issues"],
+      },
+    ]);
+  });
+
+  it("stores the workspace root and replaces project repo mappings", () => {
+    const database = createTestDatabase();
+
+    expect(database.getProjectWorkspaceRoot()).toBeNull();
+
+    database.setProjectWorkspaceRoot("C:\\Repos");
+    expect(database.getProjectWorkspaceRoot()).toBe("C:\\Repos");
+
+    database.setProjectRepoMapping("SPI", ["client-app", "shared\\sdk"]);
+    database.setProjectRepoMapping("OPS", ["ops-tools"]);
+    database.setProjectRepoMapping("SPI", ["shared\\sdk", "service-api"]);
+
+    expect(database.listProjectRepoMappings()).toMatchObject([
+      {
+        projectKey: "OPS",
+        repoRelativePaths: ["ops-tools"],
+      },
+      {
+        projectKey: "SPI",
+        repoRelativePaths: ["service-api", "shared\\sdk"],
+      },
+    ]);
+
+    database.setProjectRepoMapping("SPI", []);
+
+    expect(database.listProjectRepoMappings()).toMatchObject([
+      {
+        projectKey: "OPS",
+        repoRelativePaths: ["ops-tools"],
       },
     ]);
   });

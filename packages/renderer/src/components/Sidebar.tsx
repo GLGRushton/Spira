@@ -12,13 +12,14 @@ interface SidebarProps {
 }
 
 const items: Array<{ id: SidebarView; label: string; caption: string }> = [
-  { id: "ship", label: "Ship", caption: "Base overview" },
+  { id: "ship", label: "Ship", caption: "Deck overview" },
   { id: "operations", label: "Operations", caption: "Command stations" },
-  { id: "bridge", label: "Bridge", caption: "Command + Shinra" },
+  { id: "bridge", label: "Bridge", caption: "Mission control + Shinra" },
   { id: "barracks", label: "Barracks", caption: "Delegation roster" },
-  { id: "mcp", label: "Armoury", caption: "Grouped local tools" },
+  { id: "mcp", label: "Armoury", caption: "Machina tools" },
   { id: "agents", label: "Field Office", caption: "Live delegation rooms" },
-  { id: "settings", label: "Settings", caption: "Voice + MCP" },
+  { id: "projects", label: "Missions", caption: "Ticket intake and scope" },
+  { id: "settings", label: "Settings", caption: "Voice, keys, and tuning" },
 ];
 
 const alwaysVisibleItems = items.filter((item) => item.id === "ship" || item.id === "bridge");
@@ -26,6 +27,7 @@ const collapsibleItems = items.filter((item) => item.id !== "ship" && item.id !=
 const isCollapsibleView = (view: SidebarView): boolean =>
   view === "operations" ||
   view === "barracks" ||
+  view === "projects" ||
   view === "settings" ||
   view === "mcp" ||
   view === "agents" ||
@@ -68,10 +70,15 @@ export function Sidebar({ activeView, onViewChange }: SidebarProps) {
   return (
     <aside className={styles.sidebar}>
       <div className={styles.logoBlock}>
-        <div className={styles.logoMark}>S</div>
+        <div className={styles.logoMark} aria-hidden="true">
+          <span className={styles.logoCore}>S</span>
+          <span className={`${styles.logoMote} ${styles.logoMoteA}`} />
+          <span className={`${styles.logoMote} ${styles.logoMoteB}`} />
+          <span className={`${styles.logoMote} ${styles.logoMoteC}`} />
+        </div>
         <div>
           <div className={styles.logoText}>Spira</div>
-          <div className={styles.logoCaption}>Shinra Operations</div>
+          <div className={styles.logoCaption}>Shinra command</div>
         </div>
       </div>
 
@@ -96,9 +103,9 @@ export function Sidebar({ activeView, onViewChange }: SidebarProps) {
             aria-expanded={roomsExpanded}
             aria-controls="sidebar-room-list"
           >
-            <span className={styles.collapseToggleLabel}>More rooms</span>
+            <span className={styles.collapseToggleLabel}>Stations &amp; systems</span>
             <span className={styles.collapseToggleIcon} aria-hidden="true">
-              {roomsExpanded ? "-" : "+"}
+              {roomsExpanded ? "▾" : "▸"}
             </span>
           </button>
 
@@ -125,7 +132,7 @@ export function Sidebar({ activeView, onViewChange }: SidebarProps) {
           <div>
             <div className={styles.stationEyebrow}>Command stations</div>
             <div className={styles.stationTitle}>
-              {busyStations.length > 0 ? `${busyStations.length} active` : "Standing by"}
+              {busyStations.length > 0 ? `${busyStations.length} active` : "Quiet watch"}
             </div>
           </div>
           <button
@@ -136,7 +143,7 @@ export function Sidebar({ activeView, onViewChange }: SidebarProps) {
               window.electronAPI.send({ type: "station:create" });
             }}
           >
-            + Station
+            + New station
           </button>
         </div>
         <div className={styles.stationList}>
@@ -158,7 +165,8 @@ export function Sidebar({ activeView, onViewChange }: SidebarProps) {
                 <span className={styles.stationCopy}>
                   <span className={styles.stationLabel}>{station.label}</span>
                   <span className={styles.stationCaption}>
-                    {station.title?.trim() || (station.stationId === activeStationId ? "Focused station" : "Ready")}
+                    {station.title?.trim() ||
+                      (station.stationId === activeStationId ? "Bridge focus" : "Awaiting orders")}
                   </span>
                 </span>
                 {station.hasUnread ? <span className={styles.stationUnread}>•</span> : null}

@@ -1,14 +1,33 @@
 .container {
+  position: relative;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 12px;
-  padding-top: 14px;
-  border-top: 1px solid rgba(30, 45, 74, 0.88);
+  padding: 16px;
+  border-top: 1px solid rgba(34, 49, 75, 0.88);
+  border: 1px solid rgba(141, 214, 234, 0.14);
+  border-radius: 20px;
+  background: radial-gradient(circle at 86% 18%, rgba(227, 191, 119, 0.08), transparent 18%),
+    linear-gradient(180deg, rgba(14, 20, 44, 0.9), rgba(8, 12, 30, 0.86));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04), var(--shadow-aura);
+  overflow: hidden;
+}
+
+.container::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 12px;
+  bottom: 12px;
+  width: 2px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, rgba(141, 214, 234, 0.88), rgba(227, 191, 119, 0.9));
+  box-shadow: 0 0 12px rgba(227, 191, 119, 0.2);
 }
 
 .awaitingBanner {
   grid-column: 1 / -1;
-  color: var(--accent-cyan);
+  color: var(--accent-amber);
   font-size: 0.8rem;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -16,17 +35,18 @@
 
 .input {
   resize: none;
-  min-height: 70px;
-  padding: 12px 14px;
+  min-height: 88px;
+  padding: 14px 16px;
   border: 1px solid rgba(30, 45, 74, 0.88);
-  border-radius: 12px;
-  background: rgba(26, 32, 72, 0.75);
+  border-radius: 18px;
+  background: radial-gradient(circle at top, rgba(141, 214, 234, 0.05), transparent 28%), rgba(26, 32, 72, 0.75);
   color: var(--text-primary);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
 .awaitingInput {
-  border-color: rgba(0, 229, 255, 0.34);
-  box-shadow: 0 0 0 1px rgba(0, 229, 255, 0.16);
+  border-color: rgba(227, 191, 119, 0.34);
+  box-shadow: 0 0 0 1px rgba(227, 191, 119, 0.12), var(--shadow-aura);
 }
 
 .input::placeholder {
@@ -49,22 +69,23 @@
 .send {
   align-self: flex-end;
   padding: 0 18px;
-  border-radius: 12px;
+  border-radius: 16px;
   font-weight: 700;
   cursor: pointer;
 }
 
 .secondary {
   min-height: 40px;
-  border: 1px solid rgba(0, 229, 255, 0.18);
-  background: rgba(17, 22, 56, 0.72);
+  border: 1px solid rgba(141, 214, 234, 0.18);
+  background: linear-gradient(180deg, rgba(20, 28, 62, 0.82), rgba(12, 18, 42, 0.88));
   color: var(--text-primary);
 }
 
 .secondary:hover,
 .secondary:focus-visible {
-  border-color: rgba(0, 229, 255, 0.32);
-  background: rgba(24, 31, 74, 0.9);
+  border-color: rgba(227, 191, 119, 0.3);
+  background: linear-gradient(180deg, rgba(25, 35, 76, 0.94), rgba(14, 20, 48, 0.96));
+  box-shadow: var(--shadow-aura);
 }
 
 .destructive {
@@ -78,9 +99,11 @@
 }
 
 .send {
-  min-height: 40px;
-  background: linear-gradient(180deg, rgba(0, 212, 170, 0.95), rgba(0, 170, 136, 0.95));
-  color: #041018;
+  min-height: 46px;
+  min-width: 132px;
+  background: linear-gradient(180deg, rgba(227, 191, 119, 0.95), rgba(190, 143, 65, 0.95));
+  color: #1a1207;
+  box-shadow: 0 10px 24px rgba(117, 78, 24, 0.26), 0 0 0 1px rgba(227, 191, 119, 0.18);
 }
 
 .stop {

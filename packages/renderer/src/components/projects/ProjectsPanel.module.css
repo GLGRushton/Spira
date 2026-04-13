@@ -1,0 +1,408 @@
+.panel {
+  height: 100%;
+  min-height: 0;
+  overflow-y: auto;
+  display: grid;
+  gap: 18px;
+  padding-right: 4px;
+  scrollbar-gutter: stable;
+}
+
+.header,
+.sectionHeader,
+.mappingTopline,
+.inlineActions,
+.statusTopline,
+.repoRow,
+.repoRowMain,
+.repoRowMeta,
+.editorFooter,
+.inlineCreateRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.headerActions {
+  display: grid;
+  gap: 10px;
+  justify-items: end;
+}
+
+.eyebrow,
+.sectionLabel,
+.repoMeta {
+  color: var(--text-secondary);
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.title {
+  font-family: var(--font-display);
+  font-size: 28px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-display);
+}
+
+.caption,
+.sectionCaption,
+.activePath,
+.mappingWarning,
+.mappingMeta,
+.selectionSummary,
+.notice,
+.error,
+.statusMeta {
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.setupGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.statusFacts,
+.workList {
+  display: grid;
+  gap: 12px;
+}
+
+.statusFacts {
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.section,
+.statusCard,
+.workspaceCard,
+.mappingCard,
+.repoRow,
+.emptyState,
+.blockedState,
+.notice,
+.error {
+  border: 1px solid rgba(141, 214, 234, 0.12);
+  border-radius: var(--radius-md);
+  background: linear-gradient(180deg, rgba(12, 18, 38, 0.82), rgba(8, 12, 30, 0.8));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.section {
+  padding: 16px;
+  display: grid;
+  gap: 14px;
+}
+
+.sectionEmphasis {
+  border-color: rgba(141, 214, 234, 0.24);
+}
+
+.statusCard,
+.workspaceCard {
+  padding: 16px;
+  display: grid;
+  gap: 10px;
+}
+
+.statusConnected {
+  border-color: rgba(104, 198, 180, 0.28);
+}
+
+.statusWarning {
+  border-color: rgba(228, 180, 83, 0.28);
+}
+
+.statusError {
+  border-color: rgba(227, 120, 120, 0.28);
+}
+
+.statusTitle {
+  font-size: 18px;
+  color: var(--text-display);
+}
+
+.statusBadge {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: rgba(141, 214, 234, 0.1);
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+.statusMeta {
+  font-size: 12px;
+  word-break: break-all;
+}
+
+.statusFact {
+  display: grid;
+  gap: 4px;
+}
+
+.statusFactValue {
+  color: var(--text-primary);
+  font-size: 14px;
+}
+
+.formGrid,
+.repoList,
+.mappingGrid,
+.mappingPaths {
+  display: grid;
+  gap: 10px;
+}
+
+.repoListScrollable {
+  max-height: 360px;
+  overflow-y: auto;
+  padding-right: 6px;
+}
+
+.field {
+  display: grid;
+  gap: 8px;
+}
+
+.field span,
+.field label {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.input {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid rgba(141, 214, 234, 0.18);
+  border-radius: var(--radius-sm);
+  background: rgba(8, 12, 30, 0.78);
+  color: var(--text-primary);
+}
+
+.actionButton,
+.secondaryButton,
+.inspectButton {
+  padding: 9px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(141, 214, 234, 0.22);
+  background: rgba(141, 214, 234, 0.08);
+  color: var(--text-primary);
+}
+
+.secondaryButton {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.inspectButton {
+  padding-inline: 10px;
+}
+
+.repoRow {
+  padding: 12px 14px;
+  flex-wrap: wrap;
+}
+
+.repoRowMain {
+  flex: 1;
+  min-width: 0;
+}
+
+.repoRowMeta {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.repoCopy {
+  display: grid;
+  gap: 2px;
+  flex: 1;
+}
+
+.repoCopy span {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.repoBadges {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.repoBadge,
+.repoBadgeMuted {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+}
+
+.repoBadge {
+  background: rgba(141, 214, 234, 0.12);
+  color: var(--text-primary);
+}
+
+.repoBadgeActive {
+  background: rgba(104, 198, 180, 0.18);
+  color: #d7fff6;
+}
+
+.repoBadgeMuted {
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-secondary);
+}
+
+.workCard {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid rgba(141, 214, 234, 0.12);
+  border-radius: var(--radius-md);
+  background: linear-gradient(180deg, rgba(12, 18, 38, 0.82), rgba(8, 12, 30, 0.8));
+  color: inherit;
+  text-decoration: none;
+}
+
+.workCard:hover {
+  border-color: rgba(141, 214, 234, 0.28);
+}
+
+.workHeader,
+.workBadges,
+.workMetaRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.workHeader {
+  align-items: flex-start;
+}
+
+.workHeaderCopy {
+  display: grid;
+  gap: 4px;
+}
+
+.workHeaderCopy strong,
+.ticketId {
+  color: var(--text-display);
+}
+
+.ticketId {
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.ticketScopeBadge {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+}
+
+.ticketScopeMapped {
+  background: rgba(104, 198, 180, 0.18);
+  color: #d7fff6;
+}
+
+.ticketScopeUnmapped {
+  background: rgba(228, 180, 83, 0.16);
+  color: #ffe3ad;
+}
+
+.workMeta {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.mappingCard {
+  padding: 14px;
+  display: grid;
+  gap: 10px;
+}
+
+.mappingCardActive {
+  border-color: rgba(141, 214, 234, 0.26);
+}
+
+.mappingHeaderCopy {
+  display: grid;
+  gap: 4px;
+}
+
+.pathBadge {
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(141, 214, 234, 0.1);
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+.emptyState,
+.blockedState,
+.notice,
+.error {
+  padding: 12px 14px;
+}
+
+.blockedState {
+  border-color: rgba(228, 180, 83, 0.22);
+  color: #ffe3ad;
+}
+
+.notice {
+  border-color: rgba(104, 198, 180, 0.22);
+  color: var(--text-primary);
+}
+
+.error,
+.mappingWarning {
+  border-color: rgba(227, 120, 120, 0.22);
+  color: #ffd2d2;
+}
+
+@media (max-width: 960px) {
+  .setupGrid,
+  .header,
+  .sectionHeader,
+  .repoRow,
+  .repoRowMain,
+  .repoRowMeta,
+  .editorFooter,
+  .workHeader,
+  .workMetaRow {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .setupGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .headerActions {
+    justify-items: stretch;
+  }
+
+  .repoBadges {
+    justify-content: flex-start;
+  }
+
+  .workBadges {
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
+}

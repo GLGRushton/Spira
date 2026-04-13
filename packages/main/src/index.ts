@@ -11,6 +11,8 @@ import {
   type ConnectionStatus,
   type ConversationMessage,
   type ConversationSearchMatch,
+  DEFAULT_YOUTRACK_STATE_MAPPING,
+  type ProjectRepoMappingsSnapshot,
   RUNTIME_CONFIG_KEYS,
   type RendererFatalPayload,
   type RuntimeConfigApplyResult,
@@ -21,11 +23,14 @@ import {
   type StoredConversationSummary,
   type UpgradeProposal,
   type UserSettings,
+  type YouTrackProjectSummary,
+  type YouTrackStatusSummary,
+  type YouTrackTicketSummary,
   normalizeTtsProvider,
   normalizeWakeWordProvider,
 } from "@spira/shared";
-import type { IpcMainEvent, IpcMainInvokeEvent, Tray } from "electron";
-import { BrowserWindow, app, ipcMain, safeStorage } from "electron";
+import type { IpcMainEvent, IpcMainInvokeEvent, OpenDialogOptions, Tray } from "electron";
+import { BrowserWindow, app, dialog, ipcMain, safeStorage } from "electron";
 import WebSocket from "ws";
 import { setupAutoUpdater } from "./auto-update.js";
 import { BackendLifecycle } from "./backend-lifecycle.js";
@@ -46,6 +51,13 @@ const CONVERSATION_GET_CHANNEL = "conversation:get";
 const CONVERSATION_SEARCH_CHANNEL = "conversation:search";
 const CONVERSATION_MARK_VIEWED_CHANNEL = "conversation:mark-viewed";
 const CONVERSATION_ARCHIVE_CHANNEL = "conversation:archive";
+const YOUTRACK_STATUS_GET_CHANNEL = "youtrack:status:get";
+const YOUTRACK_TICKETS_LIST_CHANNEL = "youtrack:tickets:list";
+const YOUTRACK_PROJECTS_SEARCH_CHANNEL = "youtrack:projects:search";
+const PROJECT_REPO_MAPPINGS_GET_CHANNEL = "projects:mappings:get";
+const PROJECT_WORKSPACE_ROOT_SET_CHANNEL = "projects:workspace-root:set";
+const PROJECT_REPO_MAPPING_SET_CHANNEL = "projects:mapping:set";
+const DIRECTORY_PICK_CHANNEL = "dialog:pick-directory";
 const RUNTIME_CONFIG_GET_CHANNEL = "runtime-config:get";
 const RUNTIME_CONFIG_SET_CHANNEL = "runtime-config:set";
 const UPGRADE_RESPONSE_CHANNEL = "upgrade:respond";
@@ -222,6 +234,16 @@ const RUNTIME_CONFIG_METADATA: Record<RuntimeConfigKey, { envKey: string; label:
     label: "Nexus Mods API key",
     description: "Enables authenticated Nexus Mods downloads in the MCP toolset.",
   },
+  youTrackBaseUrl: {
+    envKey: "YOUTRACK_BASE_URL",
+    label: "YouTrack base URL",
+    description: "Base URL for your YouTrack instance, such as https://example.youtrack.cloud.",
+  },
+  youTrackToken: {
+    envKey: "YOUTRACK_TOKEN",
+    label: "YouTrack permanent token",
+    description: "Used for native YouTrack authentication and assigned-ticket intake.",
+  },
 };
 
 const normalizeRuntimeConfigValue = (value: unknown): string | null | undefined => {
@@ -349,6 +371,7 @@ const getDefaultSettings = (): UserSettings => ({
   })(),
   voiceEnabled: true,
   wakeWordEnabled: true,
+  youTrackEnabled: false,
   ttsProvider: getEffectiveRuntimeValue("elevenLabsApiKey") ? "elevenlabs" : "kokoro",
   whisperModel: "base.en",
   wakeWordProvider: normalizeWakeWordProvider(process.env.WAKE_WORD_PROVIDER),
@@ -472,6 +495,92 @@ const handleGetSettings = () => ({
   ...normalizeStoredSettings(settingsStore?.store ?? {}),
 });
 const handleGetConnectionStatus = () => currentConnectionStatus;
+const getYouTrackEnabledSetting = (): boolean =>
+  Boolean(normalizeStoredSettings(settingsStore?.store ?? {}).youTrackEnabled);
+const buildLocalYouTrackStatus = (enabled = getYouTrackEnabledSetting()): YouTrackStatusSummary => {
+  const baseUrl = getEffectiveRuntimeValue("youTrackBaseUrl") ?? null;
+  const configured = Boolean(baseUrl && getEffectiveRuntimeValue("youTrackToken"));
+  if (!enabled) {
+    return {
+      enabled,
+      configured,
+      state: "disabled",
+      baseUrl,
+      account: null,
+      stateMapping: structuredClone(DEFAULT_YOUTRACK_STATE_MAPPING),
+      message: configured
+        ? "YouTrack integration is configured but currently disabled."
+        : "Enable YouTrack after adding an instance URL and permanent token.",
+    };
+  }
+
+  if (!configured) {
+    return {
+      enabled,
+      configured,
+      state: "missing-config",
+      baseUrl,
+      account: null,
+      stateMapping: structuredClone(DEFAULT_YOUTRACK_STATE_MAPPING),
+      message: "Add a YouTrack base URL and permanent token to connect Spira natively.",
+    };
+  }
+
+  return {
+    enabled,
+    configured,
+    state: "error",
+    baseUrl,
+    account: null,
+    stateMapping: structuredClone(DEFAULT_YOUTRACK_STATE_MAPPING),
+    message: "The embedded backend is unavailable, so YouTrack status could not be refreshed.",
+  };
+};
+const handleGetYouTrackStatus = async (_event: IpcMainInvokeEvent): Promise<YouTrackStatusSummary> =>
+  (await bridge?.getYouTrackStatus(getYouTrackEnabledSetting())) ?? buildLocalYouTrackStatus();
+const handleListYouTrackTickets = async (
+  _event: IpcMainInvokeEvent,
+  input?: { limit?: number },
+): Promise<YouTrackTicketSummary[]> =>
+  (await bridge?.listYouTrackTickets(getYouTrackEnabledSetting(), input?.limit)) ?? [];
+const handleSearchYouTrackProjects = async (
+  _event: IpcMainInvokeEvent,
+  input?: { query?: string; limit?: number },
+): Promise<YouTrackProjectSummary[]> =>
+  (await bridge?.searchYouTrackProjects(getYouTrackEnabledSetting(), input?.query ?? "", input?.limit)) ?? [];
+const buildLocalProjectRepoMappingsSnapshot = (): ProjectRepoMappingsSnapshot => ({
+  workspaceRoot: null,
+  repos: [],
+  mappings: [],
+});
+const handleGetProjectRepoMappings = async (_event: IpcMainInvokeEvent): Promise<ProjectRepoMappingsSnapshot> =>
+  (await bridge?.getProjectRepoMappings()) ?? buildLocalProjectRepoMappingsSnapshot();
+const handleSetProjectWorkspaceRoot = async (
+  _event: IpcMainInvokeEvent,
+  input?: { workspaceRoot?: string | null },
+): Promise<ProjectRepoMappingsSnapshot> =>
+  (await bridge?.setProjectWorkspaceRoot(input?.workspaceRoot ?? null)) ?? buildLocalProjectRepoMappingsSnapshot();
+const handleSetProjectRepoMapping = async (
+  _event: IpcMainInvokeEvent,
+  input?: { projectKey?: string; repoRelativePaths?: string[] },
+): Promise<ProjectRepoMappingsSnapshot> => {
+  if (!input?.projectKey) {
+    throw new Error("Project key is required.");
+  }
+
+  return (
+    (await bridge?.setProjectRepoMapping(input.projectKey, input.repoRelativePaths ?? [])) ??
+    buildLocalProjectRepoMappingsSnapshot()
+  );
+};
+const handlePickDirectory = async (_event: IpcMainInvokeEvent, input?: { title?: string }): Promise<string | null> => {
+  const options: OpenDialogOptions = {
+    title: input?.title ?? "Select workspace root",
+    properties: ["openDirectory"],
+  };
+  const result = mainWindow ? await dialog.showOpenDialog(mainWindow, options) : await dialog.showOpenDialog(options);
+  return result.canceled ? null : (result.filePaths[0] ?? null);
+};
 
 const mapConversationMessage = (message: ArchivedConversationMessage): ConversationMessage | null => {
   if (message.role !== "user" && message.role !== "assistant") {
@@ -662,6 +771,7 @@ const handleUpgradeResponse = async (
 const VALID_SETTINGS_KEYS: ReadonlySet<keyof UserSettings> = new Set([
   "voiceEnabled",
   "wakeWordEnabled",
+  "youTrackEnabled",
   "ttsProvider",
   "whisperModel",
   "wakeWordProvider",
@@ -804,6 +914,13 @@ const shutdownApp = async (): Promise<void> => {
     ipcMain.removeHandler(CONVERSATION_SEARCH_CHANNEL);
     ipcMain.removeHandler(CONVERSATION_MARK_VIEWED_CHANNEL);
     ipcMain.removeHandler(CONVERSATION_ARCHIVE_CHANNEL);
+    ipcMain.removeHandler(YOUTRACK_STATUS_GET_CHANNEL);
+    ipcMain.removeHandler(YOUTRACK_TICKETS_LIST_CHANNEL);
+    ipcMain.removeHandler(YOUTRACK_PROJECTS_SEARCH_CHANNEL);
+    ipcMain.removeHandler(PROJECT_REPO_MAPPINGS_GET_CHANNEL);
+    ipcMain.removeHandler(PROJECT_WORKSPACE_ROOT_SET_CHANNEL);
+    ipcMain.removeHandler(PROJECT_REPO_MAPPING_SET_CHANNEL);
+    ipcMain.removeHandler(DIRECTORY_PICK_CHANNEL);
     ipcMain.removeHandler(RUNTIME_CONFIG_GET_CHANNEL);
     ipcMain.removeHandler(RUNTIME_CONFIG_SET_CHANNEL);
     ipcMain.removeHandler(UPGRADE_RESPONSE_CHANNEL);
@@ -838,6 +955,13 @@ void app.whenReady().then(async () => {
   ipcMain.handle(CONVERSATION_SEARCH_CHANNEL, handleSearchConversations);
   ipcMain.handle(CONVERSATION_MARK_VIEWED_CHANNEL, handleMarkConversationViewed);
   ipcMain.handle(CONVERSATION_ARCHIVE_CHANNEL, handleArchiveConversation);
+  ipcMain.handle(YOUTRACK_STATUS_GET_CHANNEL, handleGetYouTrackStatus);
+  ipcMain.handle(YOUTRACK_TICKETS_LIST_CHANNEL, handleListYouTrackTickets);
+  ipcMain.handle(YOUTRACK_PROJECTS_SEARCH_CHANNEL, handleSearchYouTrackProjects);
+  ipcMain.handle(PROJECT_REPO_MAPPINGS_GET_CHANNEL, handleGetProjectRepoMappings);
+  ipcMain.handle(PROJECT_WORKSPACE_ROOT_SET_CHANNEL, handleSetProjectWorkspaceRoot);
+  ipcMain.handle(PROJECT_REPO_MAPPING_SET_CHANNEL, handleSetProjectRepoMapping);
+  ipcMain.handle(DIRECTORY_PICK_CHANNEL, handlePickDirectory);
   ipcMain.handle(RUNTIME_CONFIG_GET_CHANNEL, handleGetRuntimeConfig);
   ipcMain.handle(RUNTIME_CONFIG_SET_CHANNEL, handleSetRuntimeConfig);
   ipcMain.handle(UPGRADE_RESPONSE_CHANNEL, handleUpgradeResponse);

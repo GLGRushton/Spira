@@ -25,6 +25,7 @@ import { BridgeRoomDetail } from "./base/BridgeRoomDetail.js";
 import { McpClusterDetail } from "./base/McpClusterDetail.js";
 import { McpRoomDetail } from "./base/McpRoomDetail.js";
 import { OperationsRoster } from "./operations/OperationsRoster.js";
+import { ProjectsPanel } from "./projects/ProjectsPanel.js";
 
 export function AppShell() {
   useIpc();
@@ -80,7 +81,7 @@ export function AppShell() {
                 className={`${styles.stage} ${styles.shipStage}`}
                 initial={{ opacity: 0, scale: 0.985 }}
                 animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0, scale: 1.015 }}
+                exit={{ opacity: 0, scale: 1.015, filter: "blur(3px)" }}
                 transition={{ duration: 0.26, ease: "easeOut" }}
               >
                 <BaseDeck
@@ -101,13 +102,13 @@ export function AppShell() {
                 className={styles.stage}
                 initial={{ opacity: 0, y: 18, scale: 0.96 }}
                 animate={{ opacity: 1, y: 0, scale: 1 }}
-                exit={{ opacity: 0, y: -18, scale: 1.02 }}
+                exit={{ opacity: 0, y: -18, scale: 1.02, filter: "blur(3px)" }}
                 transition={{ duration: 0.26, ease: "easeOut" }}
               >
                 <GlassPanel padding="md" className={styles.contentPanel}>
                   <div className={styles.roomChrome}>
                     <button type="button" className={styles.backButton} onClick={() => setView("ship")}>
-                      ← Back to ship
+                      &lt; Return to deck
                     </button>
                   </div>
 
@@ -122,6 +123,8 @@ export function AppShell() {
                       <McpClusterDetail servers={servers} onSelectServer={(serverId) => setView(`mcp:${serverId}`)} />
                     ) : view === "agents" ? (
                       <AgentClusterDetail rooms={agentRooms} onSelectRoom={(roomId) => setView(roomId)} />
+                    ) : view === "projects" ? (
+                      <ProjectsPanel />
                     ) : view === "settings" ? (
                       <SettingsPanel />
                     ) : selectedServer ? (

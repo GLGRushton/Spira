@@ -120,6 +120,13 @@
   gap: 10px;
 }
 
+.configGroups,
+.configGroup,
+.groupHeader {
+  display: grid;
+  gap: 12px;
+}
+
 .secretCard {
   display: grid;
   gap: 12px;

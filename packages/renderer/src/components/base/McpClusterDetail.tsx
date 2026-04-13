@@ -195,6 +195,10 @@ export function McpClusterDetail({ servers, onSelectServer }: McpClusterDetailPr
                 onChange={(event) => setDraft((current) => ({ ...current, argsText: event.target.value }))}
                 placeholder="-y&#10;@scope/youtrack-mcp"
               />
+              <span className={styles.fieldHint}>
+                Enter raw arguments only, one per line. For <code>mcp-remote</code>, use <code>-y</code>, then{" "}
+                <code>mcp-remote</code>, then a full <code>https://...</code> URL. Do not paste JSON arrays or quotes.
+              </span>
             </label>
             <label className={styles.field}>
               <span>Environment (KEY=VALUE)</span>
@@ -204,6 +208,10 @@ export function McpClusterDetail({ servers, onSelectServer }: McpClusterDetailPr
                 onChange={(event) => setDraft((current) => ({ ...current, envText: event.target.value }))}
                 placeholder="YOUTRACK_URL=https://example.youtrack.cloud&#10;YOUTRACK_TOKEN=..."
               />
+              <span className={styles.fieldHint}>
+                Use one <code>KEY=VALUE</code> pair per line. If an argument references{" "}
+                <code>Authorization:${"{AUTH_HEADER}"}</code>, set <code>AUTH_HEADER=Bearer ...</code> here.
+              </span>
             </label>
           </div>
         </div>

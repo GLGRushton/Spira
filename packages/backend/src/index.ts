@@ -24,6 +24,7 @@ import { DEFAULT_STATION_ID, StationRegistry } from "./copilot/station-registry.
 import { McpClientPool } from "./mcp/client-pool.js";
 import { McpRegistry } from "./mcp/registry.js";
 import { McpToolAggregator } from "./mcp/tool-aggregator.js";
+import { ProjectRegistry } from "./projects/registry.js";
 import { WsServer } from "./server.js";
 import { SubagentRegistry } from "./subagent/registry.js";
 import { resolveAppPath } from "./util/app-paths.js";
@@ -39,6 +40,13 @@ import { NullWakeWordProvider } from "./voice/wake-word-null.js";
 import { OpenWakeWordProvider } from "./voice/wake-word-openwakeword.js";
 import { PorcupineWakeWordProvider, type WakeWordProvider } from "./voice/wake-word.js";
 import { WsTransport } from "./ws-transport.js";
+import {
+  MANAGED_YOUTRACK_BUILTIN_DOMAIN_IDS,
+  MANAGED_YOUTRACK_BUILTIN_SERVER_IDS,
+  buildYouTrackBuiltinMcpServers,
+  buildYouTrackBuiltinSubagents,
+} from "./youtrack/builtin.js";
+import { YouTrackService } from "./youtrack/service.js";
 
 const logger = createLogger("backend");
 
@@ -56,6 +64,8 @@ let voiceConfiguration: VoiceConfiguration | null = null;
 let wakeWordEnabled = true;
 let speechEnabled = true;
 let memoryDb: SpiraMemoryDatabase | null = null;
+let youTrackService: YouTrackService | null = null;
+let projectRegistry: ProjectRegistry | null = null;
 
 const BACKEND_BUILD_ID = process.env.SPIRA_BUILD_ID?.trim() || "dev";
 const BACKEND_GENERATION = Number(process.env.SPIRA_GENERATION ?? "0");
@@ -311,6 +321,7 @@ const shutdown = async (signal: NodeJS.Signals | "manual") => {
   wakeWordEnabled = true;
   speechEnabled = true;
   memoryDb = null;
+  youTrackService = null;
   server = null;
   bus = null;
 };
@@ -431,6 +442,198 @@ const handleClientMessage = async (message: ClientMessage): Promise<void> => {
     return;
   }
 
+  if (message.type === "youtrack:status:get") {
+    if (!youTrackService) {
+      transport?.send({
+        type: "youtrack:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(
+          new Error("YouTrack service is unavailable."),
+          "YOUTRACK_UNAVAILABLE",
+          "YouTrack service is unavailable.",
+          "youtrack",
+        ),
+      });
+      return;
+    }
+
+    try {
+      transport?.send({
+        type: "youtrack:status:result",
+        requestId: message.requestId,
+        status: await youTrackService.getStatus(message.enabled),
+      });
+    } catch (error) {
+      logger.error({ err: error, requestId: message.requestId }, "Failed to get YouTrack status");
+      transport?.send({
+        type: "youtrack:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(error, "YOUTRACK_STATUS_FAILED", "Failed to get YouTrack status.", "youtrack"),
+      });
+    }
+    return;
+  }
+
+  if (message.type === "youtrack:tickets:list") {
+    if (!youTrackService) {
+      transport?.send({
+        type: "youtrack:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(
+          new Error("YouTrack service is unavailable."),
+          "YOUTRACK_UNAVAILABLE",
+          "YouTrack service is unavailable.",
+          "youtrack",
+        ),
+      });
+      return;
+    }
+
+    try {
+      transport?.send({
+        type: "youtrack:tickets:list:result",
+        requestId: message.requestId,
+        tickets: await youTrackService.listAssignedTickets(message.enabled, message.limit),
+      });
+    } catch (error) {
+      logger.error({ err: error, requestId: message.requestId }, "Failed to list assigned YouTrack tickets");
+      transport?.send({
+        type: "youtrack:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(error, "YOUTRACK_TICKETS_FAILED", "Failed to list assigned YouTrack tickets.", "youtrack"),
+      });
+    }
+    return;
+  }
+
+  if (message.type === "youtrack:projects:search") {
+    if (!youTrackService) {
+      transport?.send({
+        type: "youtrack:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(
+          new Error("YouTrack service is unavailable."),
+          "YOUTRACK_UNAVAILABLE",
+          "YouTrack service is unavailable.",
+          "youtrack",
+        ),
+      });
+      return;
+    }
+
+    try {
+      transport?.send({
+        type: "youtrack:projects:search:result",
+        requestId: message.requestId,
+        projects: await youTrackService.searchProjects(message.enabled, message.query, message.limit),
+      });
+    } catch (error) {
+      logger.error({ err: error, requestId: message.requestId }, "Failed to search YouTrack projects");
+      transport?.send({
+        type: "youtrack:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(error, "YOUTRACK_PROJECT_SEARCH_FAILED", "Failed to search YouTrack projects.", "youtrack"),
+      });
+    }
+    return;
+  }
+
+  if (message.type === "projects:snapshot:get") {
+    if (!projectRegistry) {
+      transport?.send({
+        type: "projects:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(
+          new Error("Project registry is unavailable."),
+          "PROJECTS_UNAVAILABLE",
+          "Project registry is unavailable.",
+          "projects",
+        ),
+      });
+      return;
+    }
+
+    try {
+      transport?.send({
+        type: "projects:snapshot:result",
+        requestId: message.requestId,
+        snapshot: await projectRegistry.getSnapshot(),
+      });
+    } catch (error) {
+      logger.error({ err: error, requestId: message.requestId }, "Failed to get project mappings");
+      transport?.send({
+        type: "projects:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(error, "PROJECTS_READ_FAILED", "Failed to get project mappings.", "projects"),
+      });
+    }
+    return;
+  }
+
+  if (message.type === "projects:workspace-root:set") {
+    if (!projectRegistry) {
+      transport?.send({
+        type: "projects:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(
+          new Error("Project registry is unavailable."),
+          "PROJECTS_UNAVAILABLE",
+          "Project registry is unavailable.",
+          "projects",
+        ),
+      });
+      return;
+    }
+
+    try {
+      transport?.send({
+        type: "projects:snapshot:result",
+        requestId: message.requestId,
+        snapshot: await projectRegistry.setWorkspaceRoot(message.workspaceRoot),
+      });
+    } catch (error) {
+      logger.error({ err: error, requestId: message.requestId }, "Failed to update workspace root");
+      transport?.send({
+        type: "projects:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(error, "PROJECTS_WORKSPACE_FAILED", "Failed to update workspace root.", "projects"),
+      });
+    }
+    return;
+  }
+
+  if (message.type === "projects:mapping:set") {
+    if (!projectRegistry) {
+      transport?.send({
+        type: "projects:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(
+          new Error("Project registry is unavailable."),
+          "PROJECTS_UNAVAILABLE",
+          "Project registry is unavailable.",
+          "projects",
+        ),
+      });
+      return;
+    }
+
+    try {
+      transport?.send({
+        type: "projects:snapshot:result",
+        requestId: message.requestId,
+        snapshot: await projectRegistry.setProjectMapping(message.projectKey, message.repoRelativePaths),
+      });
+    } catch (error) {
+      logger.error({ err: error, requestId: message.requestId }, "Failed to update project repo mapping");
+      transport?.send({
+        type: "projects:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(error, "PROJECTS_MAPPING_FAILED", "Failed to update project repo mapping.", "projects"),
+      });
+    }
+    return;
+  }
+
   if (message.type === "chat:send") {
     try {
       await stationRegistry?.sendMessage(message.text, {
@@ -530,6 +733,19 @@ const handleClientMessage = async (message: ClientMessage): Promise<void> => {
       transport?.send({
         type: "error",
         ...toErrorPayload(error, "MCP_REMOVE_FAILED", `Failed to remove MCP server ${message.serverId}`, "mcp"),
+      });
+    }
+    return;
+  }
+
+  if (message.type === "mcp:update-server") {
+    try {
+      await mcpRegistry?.updateServer(message.serverId, message.patch);
+    } catch (error) {
+      logger.error({ err: error, serverId: message.serverId }, "Failed to update MCP server");
+      transport?.send({
+        type: "error",
+        ...toErrorPayload(error, "MCP_UPDATE_FAILED", `Failed to update MCP server ${message.serverId}`, "mcp"),
       });
     }
     return;
@@ -720,6 +936,7 @@ const handleClientMessage = async (message: ClientMessage): Promise<void> => {
 const bootstrap = async () => {
   const env = createEnv();
   backendEnv = env;
+  youTrackService = new YouTrackService(env, logger);
   voiceConfiguration = getVoiceConfiguration(env);
 
   logger.info({ nodeEnv: process.env.NODE_ENV ?? "development", port: env.SPIRA_PORT }, "Starting Spira backend");
@@ -736,8 +953,18 @@ const bootstrap = async () => {
   }
   const pool = new McpClientPool(bus, logger);
   const aggregator = new McpToolAggregator(pool);
-  mcpRegistry = new McpRegistry(bus, logger, pool, memoryDb);
-  subagentRegistry = new SubagentRegistry(bus, memoryDb);
+  const builtInYouTrackServers = buildYouTrackBuiltinMcpServers(env);
+  const builtInYouTrackSubagents = buildYouTrackBuiltinSubagents(env);
+  projectRegistry = new ProjectRegistry(memoryDb);
+  mcpRegistry = new McpRegistry(
+    bus,
+    logger,
+    pool,
+    memoryDb,
+    builtInYouTrackServers,
+    MANAGED_YOUTRACK_BUILTIN_SERVER_IDS,
+  );
+  subagentRegistry = new SubagentRegistry(bus, memoryDb, builtInYouTrackSubagents, MANAGED_YOUTRACK_BUILTIN_DOMAIN_IDS);
   server = new WsServer(
     bus,
     env.SPIRA_PORT,

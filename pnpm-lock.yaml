@@ -154,6 +154,31 @@ importers:
         specifier: ^5.4.0
         version: 5.9.3
 
+  packages/mcp-spira-data-entry:
+    dependencies:
+      '@modelcontextprotocol/sdk':
+        specifier: ^1.0.0
+        version: 1.29.0(zod@3.25.76)
+      '@spira/mcp-util':
+        specifier: workspace:*
+        version: link:../mcp-util
+      '@spira/shared':
+        specifier: workspace:*
+        version: link:../shared
+      zod:
+        specifier: ^3.23.0
+        version: 3.25.76
+    devDependencies:
+      '@types/node':
+        specifier: ^24.0.0
+        version: 24.12.2
+      tsx:
+        specifier: ^4.0.0
+        version: 4.21.0
+      typescript:
+        specifier: ^5.4.0
+        version: 5.9.3
+
   packages/mcp-spira-ui:
     dependencies:
       '@modelcontextprotocol/sdk':
@@ -190,6 +215,12 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: ^1.0.0
         version: 1.29.0(zod@3.25.76)
+      '@spira/shared':
+        specifier: workspace:*
+        version: link:../shared
+      ws:
+        specifier: ^8.18.0
+        version: 8.20.0
       zod:
         specifier: ^3.23.0
         version: 3.25.76
@@ -197,6 +228,9 @@ importers:
       '@types/node':
         specifier: ^24.0.0
         version: 24.12.2
+      '@types/ws':
+        specifier: ^8.5.0
+        version: 8.18.1
       typescript:
         specifier: ^5.4.0
         version: 5.9.3

@@ -3,25 +3,25 @@
   height: 9px;
   border-radius: 50%;
   display: inline-flex;
-  box-shadow: 0 0 12px currentColor;
+  box-shadow: 0 0 0 2px rgba(8, 12, 30, 0.45), 0 0 12px currentColor, 0 0 22px currentColor;
 }
 
 .connected {
-  color: #22c55e;
-  background: #22c55e;
+  color: var(--accent-teal);
+  background: var(--accent-teal);
 }
 
 .connecting {
-  color: #f59e0b;
-  background: #f59e0b;
+  color: var(--accent-amber);
+  background: var(--accent-amber);
 }
 
 .disconnected {
-  color: #ef4444;
-  background: #ef4444;
+  color: var(--state-error);
+  background: var(--state-error);
 }
 
 .upgrading {
-  color: #60a5fa;
-  background: #60a5fa;
+  color: var(--accent-cyan);
+  background: var(--accent-cyan);
 }

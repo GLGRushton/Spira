@@ -4,30 +4,89 @@
   align-items: center;
   justify-content: space-between;
   padding: 0 8px 0 14px;
-  background: rgba(17, 22, 56, 0.96);
+  background: linear-gradient(180deg, rgba(20, 28, 52, 0.98), rgba(11, 16, 34, 0.98)), rgba(17, 22, 56, 0.96);
   border-bottom: 1px solid var(--border-default);
   -webkit-app-region: drag;
   user-select: none;
+  box-shadow: inset 0 -1px 0 rgba(255, 255, 255, 0.04), 0 10px 28px rgba(0, 0, 0, 0.18);
 }
 
 .brand {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
+}
+
+.brandMark {
+  position: relative;
+  width: 26px;
+  height: 26px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  border: 1px solid rgba(227, 191, 119, 0.28);
+  background: radial-gradient(
+      circle at center,
+      rgba(141, 214, 234, 0.2),
+      rgba(104, 198, 180, 0.08) 42%,
+      transparent 66%
+    ), rgba(12, 17, 34, 0.9);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), var(--shadow-aura);
+}
+
+.brandCore,
+.brandMote {
+  position: absolute;
+  border-radius: 999px;
+}
+
+.brandCore {
+  inset: 8px;
+  background: linear-gradient(180deg, rgba(227, 191, 119, 0.96), rgba(141, 214, 234, 0.72));
+  box-shadow: 0 0 12px rgba(227, 191, 119, 0.45);
+}
+
+.brandMote {
+  width: 4px;
+  height: 4px;
+  background: rgba(244, 233, 205, 0.95);
+  box-shadow: 0 0 8px rgba(244, 233, 205, 0.55);
+}
+
+.brandMoteA {
+  top: 3px;
+  right: 6px;
+}
+
+.brandMoteB {
+  bottom: 4px;
+  left: 4px;
+}
+
+.brandMoteC {
+  top: 10px;
+  left: 1px;
+}
+
+.brandDivider {
+  width: 1px;
+  height: 18px;
+  background: linear-gradient(180deg, rgba(141, 214, 234, 0.1), rgba(227, 191, 119, 0.45), rgba(141, 214, 234, 0.1));
 }
 
 .logo {
-  color: var(--accent-teal);
-  font-size: 14px;
+  color: var(--accent-amber);
+  font-size: 16px;
   font-weight: 700;
-  letter-spacing: 0.16em;
+  letter-spacing: 0.12em;
   text-transform: uppercase;
+  font-family: var(--font-display);
+  text-shadow: 0 0 14px rgba(227, 191, 119, 0.16);
 }
 
 .subtitle {
-  color: var(--text-muted);
-  font-size: 10px;
-  letter-spacing: 0.08em;
+  color: rgba(214, 224, 241, 0.62);
+  font-size: 11px;
+  letter-spacing: 0.16em;
   text-transform: uppercase;
 }
 
@@ -40,7 +99,7 @@
 
 .controlButton {
   width: 36px;
-  height: 24px;
+  height: 26px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -51,8 +110,9 @@
 }
 
 .controlButton:hover {
-  background: rgba(0, 212, 170, 0.12);
+  background: rgba(104, 198, 180, 0.12);
   color: var(--text-primary);
+  box-shadow: 0 0 0 1px rgba(141, 214, 234, 0.12);
 }
 
 .closeButton:hover {

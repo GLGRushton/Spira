@@ -7,19 +7,41 @@ const BooleanEnvFlagSchema = z
   .default("false")
   .transform((value) => value === "true");
 
-export const McpServerConfigSchema = z.object({
+const McpToolAccessPolicySchema = z
+  .object({
+    readOnlyToolNames: z.array(z.string().trim().min(1)).optional(),
+    writeToolNames: z.array(z.string().trim().min(1)).optional(),
+  })
+  .optional();
+
+const McpServerConfigBaseSchema = z.object({
   id: z.string().regex(/^[a-z0-9-]+$/, "Lowercase alphanumeric and hyphens only"),
   name: z.string().min(1),
   description: z.string().optional(),
-  transport: z.literal("stdio"),
-  command: z.string().min(1),
-  args: z.array(z.string()),
-  env: z.record(z.string()).optional(),
+  toolAccess: McpToolAccessPolicySchema,
   enabled: z.boolean(),
   autoRestart: z.boolean(),
   maxRestarts: z.number().int().min(0).max(10).optional().default(3),
   source: z.enum(["builtin", "user"]).optional(),
 });
+
+const StdioMcpServerConfigSchema = McpServerConfigBaseSchema.extend({
+  transport: z.literal("stdio"),
+  command: z.string().min(1),
+  args: z.array(z.string()),
+  env: z.record(z.string()).optional(),
+});
+
+const StreamableHttpMcpServerConfigSchema = McpServerConfigBaseSchema.extend({
+  transport: z.literal("streamable-http"),
+  url: z.string().url(),
+  headers: z.record(z.string()).optional(),
+});
+
+export const McpServerConfigSchema = z.discriminatedUnion("transport", [
+  StdioMcpServerConfigSchema,
+  StreamableHttpMcpServerConfigSchema,
+]);
 
 export const McpServersFileSchema = z.object({
   $schema: z.string().optional(),
@@ -29,6 +51,8 @@ export const McpServersFileSchema = z.object({
 /** Validates environment variables loaded from .env */
 export const EnvSchema = z.object({
   GITHUB_TOKEN: z.string().default(""),
+  YOUTRACK_BASE_URL: z.string().optional(),
+  YOUTRACK_TOKEN: z.string().optional(),
   PICOVOICE_ACCESS_KEY: z.string().optional(),
   ELEVENLABS_API_KEY: z.string().optional(),
   ELEVENLABS_VOICE_ID: z.string().optional(),

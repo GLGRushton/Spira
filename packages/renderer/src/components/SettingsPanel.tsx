@@ -12,6 +12,10 @@ import { useMcpStore } from "../stores/mcp-store.js";
 import { useSettingsStore } from "../stores/settings-store.js";
 import styles from "./SettingsPanel.module.css";
 
+const YOUTRACK_RUNTIME_CONFIG_KEYS: RuntimeConfigKey[] = ["youTrackBaseUrl", "youTrackToken"];
+const YOUTRACK_RUNTIME_CONFIG_KEY_SET = new Set<RuntimeConfigKey>(YOUTRACK_RUNTIME_CONFIG_KEYS);
+const OTHER_RUNTIME_CONFIG_KEYS = RUNTIME_CONFIG_KEYS.filter((key) => !YOUTRACK_RUNTIME_CONFIG_KEY_SET.has(key));
+
 export function SettingsPanel() {
   const servers = useMcpStore((store) => store.servers);
   const speechEnabled = useSettingsStore((store) => store.voiceEnabled);
@@ -131,6 +135,61 @@ export function SettingsPanel() {
     setRuntimeConfigNotice(null);
     setRuntimeConfigDrafts((current) => ({ ...current, [key]: value }));
   };
+
+  const renderRuntimeConfigCards = (keys: RuntimeConfigKey[]) =>
+    keys.map((key) => {
+      if (!runtimeConfig) {
+        return null;
+      }
+
+      const entry = runtimeConfig[key];
+      const draft = runtimeConfigDrafts[entry.key] ?? "";
+      const isBusy = activeRuntimeConfigKey === entry.key;
+      return (
+        <div key={entry.key} className={styles.secretCard}>
+          <div className={styles.secretMeta}>
+            <div>
+              <span className={styles.label}>{entry.label}</span>
+              <span className={styles.caption}>{entry.description}</span>
+            </div>
+            <span
+              className={`${styles.statusBadge} ${entry.configured ? styles.statusConfigured : styles.statusUnset}`}
+            >
+              {describeRuntimeConfigSource(entry)}
+            </span>
+          </div>
+          <div className={styles.secretControls}>
+            <input
+              className={styles.textInput}
+              type="password"
+              value={draft}
+              autoComplete="off"
+              spellCheck={false}
+              placeholder={entry.configured ? "Enter a replacement value" : "Enter a value"}
+              onChange={(event) => handleRuntimeConfigDraftChange(entry.key, event.target.value)}
+            />
+            <div className={styles.secretActions}>
+              <button
+                type="button"
+                className={styles.ghostButton}
+                disabled={isBusy || !draft.trim()}
+                onClick={() => updateRuntimeConfig(entry.key, draft)}
+              >
+                Save
+              </button>
+              <button
+                type="button"
+                className={styles.dangerButton}
+                disabled={isBusy || entry.source === "unset" || entry.source === "cleared"}
+                onClick={() => updateRuntimeConfig(entry.key, null)}
+              >
+                Clear
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    });
 
   return (
     <div className={styles.panel}>
@@ -300,66 +359,33 @@ export function SettingsPanel() {
           <div>
             <h2>Secure runtime config</h2>
             <p>
-              Store backend-only secrets in the main process. Embedded backend changes apply immediately after restart.
+              Store backend-only secrets in the main process. Missions uses the YouTrack URL and token configured here.
             </p>
           </div>
         </div>
         {runtimeConfigNotice ? <div className={styles.notice}>{runtimeConfigNotice}</div> : null}
-        <div className={styles.keyGrid}>
-          {runtimeConfig ? (
-            RUNTIME_CONFIG_KEYS.map((key) => {
-              const entry = runtimeConfig[key];
-              const draft = runtimeConfigDrafts[entry.key] ?? "";
-              const isBusy = activeRuntimeConfigKey === entry.key;
-              return (
-                <div key={entry.key} className={styles.secretCard}>
-                  <div className={styles.secretMeta}>
-                    <div>
-                      <span className={styles.label}>{entry.label}</span>
-                      <span className={styles.caption}>{entry.description}</span>
-                    </div>
-                    <span
-                      className={`${styles.statusBadge} ${entry.configured ? styles.statusConfigured : styles.statusUnset}`}
-                    >
-                      {describeRuntimeConfigSource(entry)}
-                    </span>
-                  </div>
-                  <div className={styles.secretControls}>
-                    <input
-                      className={styles.textInput}
-                      type="password"
-                      value={draft}
-                      autoComplete="off"
-                      spellCheck={false}
-                      placeholder={entry.configured ? "Enter a replacement value" : "Enter a value"}
-                      onChange={(event) => handleRuntimeConfigDraftChange(entry.key, event.target.value)}
-                    />
-                    <div className={styles.secretActions}>
-                      <button
-                        type="button"
-                        className={styles.ghostButton}
-                        disabled={isBusy || !draft.trim()}
-                        onClick={() => updateRuntimeConfig(entry.key, draft)}
-                      >
-                        Save
-                      </button>
-                      <button
-                        type="button"
-                        className={styles.dangerButton}
-                        disabled={isBusy || entry.source === "unset" || entry.source === "cleared"}
-                        onClick={() => updateRuntimeConfig(entry.key, null)}
-                      >
-                        Clear
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              );
-            })
-          ) : (
-            <div className={styles.empty}>Loading secure runtime configuration…</div>
-          )}
-        </div>
+        {runtimeConfig ? (
+          <div className={styles.configGroups}>
+            <div className={styles.configGroup}>
+              <div className={styles.groupHeader}>
+                <span className={styles.label}>YouTrack credentials</span>
+                <span className={styles.caption}>This is the only YouTrack setup that stays in Settings.</span>
+              </div>
+              <div className={styles.keyGrid}>{renderRuntimeConfigCards(YOUTRACK_RUNTIME_CONFIG_KEYS)}</div>
+            </div>
+            <div className={styles.configGroup}>
+              <div className={styles.groupHeader}>
+                <span className={styles.label}>Other secure keys</span>
+                <span className={styles.caption}>
+                  Everything else here powers the rest of Spira&apos;s backend integrations.
+                </span>
+              </div>
+              <div className={styles.keyGrid}>{renderRuntimeConfigCards(OTHER_RUNTIME_CONFIG_KEYS)}</div>
+            </div>
+          </div>
+        ) : (
+          <div className={styles.empty}>Loading secure runtime configuration…</div>
+        )}
       </section>
     </div>
   );

@@ -7,19 +7,19 @@
 }
 
 .question {
-  border-color: rgba(0, 229, 255, 0.36);
-  box-shadow: 0 0 0 1px rgba(0, 229, 255, 0.12), 0 12px 36px rgba(5, 10, 30, 0.25);
+  border-color: rgba(227, 191, 119, 0.3);
+  box-shadow: 0 0 0 1px rgba(227, 191, 119, 0.08), 0 12px 36px rgba(5, 10, 30, 0.25);
 }
 
 .user {
   margin-left: auto;
-  background: linear-gradient(180deg, rgba(0, 212, 170, 0.18), rgba(0, 140, 112, 0.24));
-  border-color: rgba(0, 212, 170, 0.35);
+  background: linear-gradient(180deg, rgba(104, 198, 180, 0.18), rgba(51, 104, 104, 0.2));
+  border-color: rgba(104, 198, 180, 0.28);
 }
 
 .assistant {
   margin-right: auto;
-  background: rgba(17, 22, 56, 0.82);
+  background: radial-gradient(circle at top, rgba(141, 214, 234, 0.05), transparent 34%), rgba(17, 22, 56, 0.84);
 }
 
 .headerRow {
@@ -46,9 +46,9 @@
 
 .questionPill {
   padding: 3px 8px;
-  border: 1px solid rgba(0, 229, 255, 0.22);
-  border-radius: 999px;
-  color: var(--accent-cyan);
+  border: 1px solid rgba(227, 191, 119, 0.22);
+  border-radius: 14px;
+  color: var(--accent-amber);
   font-size: 10px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -81,7 +81,7 @@
 
 .actionButton:hover,
 .actionButton:focus-visible {
-  color: var(--accent-cyan);
+  color: var(--accent-amber);
 }
 
 .actionButton:disabled {
@@ -130,7 +130,7 @@
 }
 
 .content th {
-  color: var(--accent-cyan);
+  color: var(--accent-amber);
   font-weight: 600;
   background: rgba(38, 50, 92, 0.45);
 }

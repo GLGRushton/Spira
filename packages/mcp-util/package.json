@@ -25,6 +25,10 @@
     "./validation": {
       "types": "./dist/validation.d.ts",
       "import": "./dist/validation.js"
+    },
+    "./spira-ui-bridge-client": {
+      "types": "./dist/spira-ui-bridge-client.d.ts",
+      "import": "./dist/spira-ui-bridge-client.js"
     }
   },
   "scripts": {
@@ -32,10 +36,13 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
+    "@spira/shared": "workspace:*",
+    "ws": "^8.18.0",
     "zod": "^3.23.0"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
+    "@types/ws": "^8.5.0",
     "typescript": "^5.4.0"
   }
 }

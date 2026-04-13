@@ -91,13 +91,13 @@ export function ChatPanel() {
     <div className={styles.panel}>
       <div className={styles.toolbar}>
         <div>
-          <div className={styles.toolbarEyebrow}>Conversation archive</div>
+          <div className={styles.toolbarEyebrow}>Mission log</div>
           <div className={styles.toolbarTitle}>
-            {activeConversationTitle?.trim() || (activeConversationId ? "Untitled conversation" : "New conversation")}
+            {activeConversationTitle?.trim() || (activeConversationId ? "Untitled conversation" : "Fresh transmission")}
           </div>
         </div>
         <button type="button" className={styles.archiveToggle} onClick={() => setArchiveOpen((open) => !open)}>
-          {archiveOpen ? "Hide archive" : "Open archive"}
+          {archiveOpen ? "Hide log" : "Open log"}
         </button>
       </div>
       {sessionNotice ? (
@@ -115,8 +115,8 @@ export function ChatPanel() {
       <div ref={scrollRef} className={styles.messages}>
         {messages.length === 0 ? (
           <section className={styles.emptyState}>
-            <div className={styles.emptyEyebrow}>Bridge / Conversation</div>
-            <h3 className={styles.emptyTitle}>Shinra is standing by.</h3>
+            <div className={styles.emptyEyebrow}>Bridge / Mission log</div>
+            <h3 className={styles.emptyTitle}>Shinra is awaiting orders.</h3>
             <p className={styles.emptyCopy}>
               Ask for a code change, a system investigation, or a quick read of the repo and I will get to work.
             </p>

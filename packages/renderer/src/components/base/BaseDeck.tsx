@@ -51,6 +51,9 @@ export function BaseDeck({
   const activeSettingsFlights = flights.filter(
     (flight) => (flight.status === "running" || flight.status === "pending") && flight.toRoomId === "settings",
   ).length;
+  const activeMissionsFlights = flights.filter(
+    (flight) => (flight.status === "running" || flight.status === "pending") && flight.toRoomId === "projects",
+  ).length;
   const activeBarracksFlights = flights.filter(
     (flight) => (flight.status === "running" || flight.status === "pending") && flight.toRoomId === "barracks",
   ).length;
@@ -126,12 +129,12 @@ export function BaseDeck({
     <section className={styles.deck}>
       <div className={styles.header}>
         <div>
-          <div className={styles.eyebrow}>Ship view</div>
+          <div className={styles.eyebrow}>Deck overview</div>
           <h1 className={styles.title}>Shinra command deck</h1>
         </div>
         <p className={styles.caption}>
-          A grouped cross-section of the ship. Click a room to zoom into its operations while live tool traffic flows
-          across the deck toward the Armoury, Barracks, Field Office, and operations hubs.
+          A living cross-section of the ship. Open any room to focus its work while live traffic runs between the
+          Bridge, Armoury, Barracks, Field Office, and systems deck.
         </p>
       </div>
 
@@ -151,15 +154,15 @@ export function BaseDeck({
           title="Bridge / Command"
           caption="Primary room"
           status={assistantState}
-          metric="75% tactical chat + 25% Shinra systems"
+          metric="Live relay and Shinra systems"
           tone="bridge"
           badge={activeBridgeFlights ? `${activeBridgeFlights} live` : stateLabel(assistantState)}
           onClick={() => onViewChange("bridge")}
         >
           <div className={styles.bridgePreview}>
             <div className={styles.commandLane}>
-              <span className={styles.previewLabel}>Command lane</span>
-              <strong className={styles.previewValue}>Live relay and mission control</strong>
+              <span className={styles.previewLabel}>Mission thread</span>
+              <strong className={styles.previewValue}>Live relay and command flow</strong>
             </div>
             <div className={styles.shinraLane}>
               <div className={styles.miniPanel}>
@@ -277,6 +280,31 @@ export function BaseDeck({
         </RoomCard>
 
         <RoomCard
+          roomId="projects"
+          roomRef={bindRoomNode("projects")}
+          active={activeView === "projects"}
+          className={styles.projectsRoom}
+          title="Missions"
+          caption="Ticket intake + scope"
+          status="connected"
+          metric="YouTrack intake, repo boundaries, and mapped project scope"
+          tone="ops"
+          badge={activeMissionsFlights ? `${activeMissionsFlights} live` : "Flow"}
+          onClick={() => onViewChange("projects")}
+        >
+          <div className={styles.listPreview}>
+            <div className={styles.listRow}>
+              <span>Assigned work</span>
+              <span>Intake</span>
+            </div>
+            <div className={styles.listRow}>
+              <span>Repo scope</span>
+              <span>Mapped</span>
+            </div>
+          </div>
+        </RoomCard>
+
+        <RoomCard
           roomId="settings"
           roomRef={bindRoomNode("settings")}
           active={activeView === "settings"}
@@ -286,7 +314,7 @@ export function BaseDeck({
           status="connected"
           metric="Voice link, runtime tuning, and utility tooling"
           tone="ops"
-          badge={activeSettingsFlights ? `${activeSettingsFlights} live` : "Stable"}
+          badge={activeSettingsFlights ? `${activeSettingsFlights} live` : "Calm"}
           onClick={() => onViewChange("settings")}
         >
           <div className={styles.listPreview}>
@@ -300,12 +328,6 @@ export function BaseDeck({
             </div>
           </div>
         </RoomCard>
-
-        <div className={`${styles.voidCell} ${styles.voidLowerRight}`}>
-          <span className={styles.voidLabel}>Expansion bay</span>
-          <strong className={styles.voidTitle}>Reserved slot</strong>
-          <span className={styles.voidCopy}>Available for future rooms.</span>
-        </div>
       </div>
     </section>
   );

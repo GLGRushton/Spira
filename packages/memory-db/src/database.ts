@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 import type { McpServerConfig, McpServerSource, SubagentDomain, SubagentSource } from "@spira/shared";
-import { summarizeConversationTitle } from "@spira/shared";
+import { normalizeMcpToolAccessPolicy, summarizeConversationTitle } from "@spira/shared";
 import BetterSqlite3 from "better-sqlite3";
 
 const SQLITE_BUSY_TIMEOUT_MS = 5_000;
@@ -111,18 +111,18 @@ export interface OpenSpiraMemoryDatabaseOptions {
   readonly?: boolean;
 }
 
-export interface McpServerConfigRecord extends McpServerConfig {
+export type McpServerConfigRecord = McpServerConfig & {
   description: string;
   source: McpServerSource;
   createdAt: number;
   updatedAt: number;
-}
+};
 
-export interface UpsertMcpServerConfigInput extends McpServerConfig {
+export type UpsertMcpServerConfigInput = McpServerConfig & {
   description?: string;
   source: McpServerSource;
   createdAt?: number;
-}
+};
 
 export interface SubagentConfigRecord extends SubagentDomain {
   source: SubagentSource;
@@ -132,6 +132,12 @@ export interface SubagentConfigRecord extends SubagentDomain {
 
 export interface UpsertSubagentConfigInput extends SubagentDomain {
   createdAt?: number;
+}
+
+export interface ProjectRepoMappingRecord {
+  projectKey: string;
+  repoRelativePaths: string[];
+  updatedAt: number;
 }
 
 interface MigrationDefinition {
@@ -193,15 +199,28 @@ interface SessionStateRow {
   value: string | null;
 }
 
+interface ProjectWorkspaceConfigRow {
+  workspaceRoot: string | null;
+}
+
+interface ProjectRepoMappingRow {
+  projectKey: string;
+  repoRelativePath: string;
+  updatedAt: number;
+}
+
 interface McpServerConfigRow {
   id: string;
   name: string;
   description: string;
   source: string;
-  transport: "stdio";
+  transport: "stdio" | "streamable-http";
   command: string;
   argsJson: string;
   envJson: string | null;
+  url: string | null;
+  headersJson: string | null;
+  toolAccessJson: string | null;
   enabled: number;
   autoRestart: number;
   maxRestarts: number;
@@ -353,6 +372,90 @@ const MIGRATIONS: MigrationDefinition[] = [
       "CREATE INDEX idx_subagent_configs_ready ON subagent_configs(ready, updated_at DESC)",
     ],
   },
+  {
+    version: 6,
+    statements: ["ALTER TABLE mcp_server_configs ADD COLUMN tool_access_json TEXT"],
+  },
+  {
+    version: 7,
+    statements: [
+      `CREATE TABLE project_workspace_config (
+        id INTEGER PRIMARY KEY CHECK(id = 1),
+        workspace_root TEXT,
+        updated_at INTEGER NOT NULL
+      )`,
+      `CREATE TABLE project_repo_mappings (
+        project_key TEXT NOT NULL,
+        repo_relative_path TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (project_key, repo_relative_path)
+      )`,
+      "CREATE INDEX idx_project_repo_mappings_project_key ON project_repo_mappings(project_key, updated_at DESC)",
+    ],
+  },
+  {
+    version: 8,
+    statements: [
+      `CREATE TABLE mcp_server_configs_v2 (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        description TEXT NOT NULL DEFAULT '',
+        source TEXT NOT NULL CHECK(source IN ('builtin', 'user')),
+        transport TEXT NOT NULL CHECK(transport IN ('stdio', 'streamable-http')),
+        command TEXT NOT NULL DEFAULT '',
+        args_json TEXT NOT NULL DEFAULT '[]',
+        env_json TEXT,
+        url TEXT,
+        headers_json TEXT,
+        tool_access_json TEXT,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        auto_restart INTEGER NOT NULL DEFAULT 1,
+        max_restarts INTEGER NOT NULL DEFAULT 3,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      )`,
+      `INSERT INTO mcp_server_configs_v2 (
+         id,
+         name,
+         description,
+         source,
+         transport,
+         command,
+         args_json,
+         env_json,
+         url,
+         headers_json,
+         tool_access_json,
+         enabled,
+         auto_restart,
+         max_restarts,
+         created_at,
+         updated_at
+       )
+       SELECT
+         id,
+         name,
+         description,
+         source,
+         transport,
+         command,
+         args_json,
+         env_json,
+         NULL,
+         NULL,
+         tool_access_json,
+         enabled,
+         auto_restart,
+         max_restarts,
+         created_at,
+         updated_at
+       FROM mcp_server_configs`,
+      "DROP TABLE mcp_server_configs",
+      "ALTER TABLE mcp_server_configs_v2 RENAME TO mcp_server_configs",
+      "CREATE INDEX idx_mcp_server_configs_source ON mcp_server_configs(source, updated_at DESC)",
+    ],
+  },
 ];
 
 type SqliteDatabase = InstanceType<typeof BetterSqlite3>;
@@ -398,6 +501,8 @@ const parseStringArray = (value: string | null, fallback: string[] = []): string
 const normalizeStringArray = (value: readonly string[] | null | undefined): string[] =>
   (value ?? []).map((entry) => entry.trim()).filter((entry) => entry.length > 0);
 
+const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null;
+
 const toFtsQuery = (query: string): string => {
   const tokens = query
     .trim()
@@ -435,21 +540,63 @@ const mapMcpServerConfigRow = (row: McpServerConfigRow): McpServerConfigRecord =
           Object.entries(envValue).flatMap(([key, value]) => (typeof value === "string" ? [[key, value]] : [])),
         )
       : {};
+  const toolAccessValue = tryParseJson(row.toolAccessJson);
+  const toolAccess =
+    isRecord(toolAccessValue) && !Array.isArray(toolAccessValue)
+      ? {
+          ...(Array.isArray(toolAccessValue.readOnlyToolNames)
+            ? {
+                readOnlyToolNames: toolAccessValue.readOnlyToolNames.filter(
+                  (value): value is string => typeof value === "string",
+                ),
+              }
+            : {}),
+          ...(Array.isArray(toolAccessValue.writeToolNames)
+            ? {
+                writeToolNames: toolAccessValue.writeToolNames.filter(
+                  (value): value is string => typeof value === "string",
+                ),
+              }
+            : {}),
+        }
+      : undefined;
 
-  return {
+  const common = {
     id: String(row.id),
     name: String(row.name),
     description: String(row.description),
     source: row.source,
-    transport: row.transport,
-    command: String(row.command),
-    args: parseStringArray(row.argsJson),
-    env,
+    ...(normalizeMcpToolAccessPolicy(toolAccess) ? { toolAccess: normalizeMcpToolAccessPolicy(toolAccess) } : {}),
     enabled: toBoolean(row.enabled),
     autoRestart: toBoolean(row.autoRestart),
     maxRestarts: Number(row.maxRestarts),
     createdAt: Number(row.createdAt),
     updatedAt: Number(row.updatedAt),
+  } as const;
+
+  if (row.transport === "streamable-http") {
+    const headersValue = tryParseJson(row.headersJson);
+    const headers =
+      headersValue && typeof headersValue === "object" && !Array.isArray(headersValue)
+        ? Object.fromEntries(
+            Object.entries(headersValue).flatMap(([key, value]) => (typeof value === "string" ? [[key, value]] : [])),
+          )
+        : {};
+
+    return {
+      ...common,
+      transport: "streamable-http",
+      url: String(row.url ?? ""),
+      headers,
+    };
+  }
+
+  return {
+    ...common,
+    transport: "stdio",
+    command: String(row.command),
+    args: parseStringArray(row.argsJson),
+    env,
   };
 };
 
@@ -915,6 +1062,124 @@ export class SpiraMemoryDatabase {
       });
   }
 
+  getProjectWorkspaceRoot(): string | null {
+    const row = this.db
+      .prepare(
+        `SELECT
+           workspace_root AS workspaceRoot
+         FROM project_workspace_config
+         WHERE id = 1`,
+      )
+      .get() as ProjectWorkspaceConfigRow | undefined;
+
+    if (!row) {
+      return null;
+    }
+
+    return row.workspaceRoot === null ? null : String(row.workspaceRoot);
+  }
+
+  setProjectWorkspaceRoot(workspaceRoot: string | null): void {
+    this.assertWritable();
+    const updatedAt = Date.now();
+    this.db
+      .prepare(
+        `INSERT INTO project_workspace_config (id, workspace_root, updated_at)
+         VALUES (1, @workspaceRoot, @updatedAt)
+         ON CONFLICT(id) DO UPDATE SET
+           workspace_root = excluded.workspace_root,
+           updated_at = excluded.updated_at`,
+      )
+      .run({
+        workspaceRoot,
+        updatedAt,
+      });
+  }
+
+  listProjectRepoMappings(): ProjectRepoMappingRecord[] {
+    const rows = this.db
+      .prepare(
+        `SELECT
+           project_key AS projectKey,
+           repo_relative_path AS repoRelativePath,
+           updated_at AS updatedAt
+         FROM project_repo_mappings
+         ORDER BY project_key COLLATE NOCASE ASC, repo_relative_path COLLATE NOCASE ASC`,
+      )
+      .all() as unknown as ProjectRepoMappingRow[];
+
+    const grouped = new Map<string, ProjectRepoMappingRecord>();
+    for (const row of rows) {
+      const existing = grouped.get(row.projectKey);
+      if (existing) {
+        existing.repoRelativePaths.push(String(row.repoRelativePath));
+        existing.updatedAt = Math.max(existing.updatedAt, Number(row.updatedAt));
+        continue;
+      }
+
+      grouped.set(row.projectKey, {
+        projectKey: String(row.projectKey),
+        repoRelativePaths: [String(row.repoRelativePath)],
+        updatedAt: Number(row.updatedAt),
+      });
+    }
+
+    return [...grouped.values()];
+  }
+
+  setProjectRepoMapping(projectKey: string, repoRelativePaths: readonly string[]): ProjectRepoMappingRecord {
+    this.assertWritable();
+    const normalizedProjectKey = projectKey.trim();
+    if (!normalizedProjectKey) {
+      throw new Error("Project key cannot be empty.");
+    }
+
+    const normalizedPaths = [...new Set(repoRelativePaths.map((pathEntry) => pathEntry.trim()).filter(Boolean))].sort(
+      (left, right) => left.localeCompare(right),
+    );
+    const now = Date.now();
+
+    const replace = this.db.transaction((paths: readonly string[]) => {
+      this.db
+        .prepare(
+          `DELETE FROM project_repo_mappings
+           WHERE project_key = @projectKey`,
+        )
+        .run({ projectKey: normalizedProjectKey });
+
+      const insert = this.db.prepare(
+        `INSERT INTO project_repo_mappings (
+           project_key,
+           repo_relative_path,
+           created_at,
+           updated_at
+         ) VALUES (
+           @projectKey,
+           @repoRelativePath,
+           @createdAt,
+           @updatedAt
+         )`,
+      );
+
+      for (const repoRelativePath of paths) {
+        insert.run({
+          projectKey: normalizedProjectKey,
+          repoRelativePath,
+          createdAt: now,
+          updatedAt: now,
+        });
+      }
+    });
+
+    replace(normalizedPaths);
+
+    return {
+      projectKey: normalizedProjectKey,
+      repoRelativePaths: normalizedPaths,
+      updatedAt: now,
+    };
+  }
+
   listMcpServerConfigs(): McpServerConfigRecord[] {
     const rows = this.db
       .prepare(
@@ -927,6 +1192,9 @@ export class SpiraMemoryDatabase {
            command,
            args_json AS argsJson,
            env_json AS envJson,
+           url,
+           headers_json AS headersJson,
+           tool_access_json AS toolAccessJson,
            enabled,
            auto_restart AS autoRestart,
            max_restarts AS maxRestarts,
@@ -952,6 +1220,9 @@ export class SpiraMemoryDatabase {
            command,
            args_json AS argsJson,
            env_json AS envJson,
+           url,
+           headers_json AS headersJson,
+           tool_access_json AS toolAccessJson,
            enabled,
            auto_restart AS autoRestart,
            max_restarts AS maxRestarts,
@@ -970,15 +1241,30 @@ export class SpiraMemoryDatabase {
     const now = input.createdAt ?? Date.now();
     const existing = this.getMcpServerConfig(input.id);
     const description = normalizeText(input.description);
+    const transportPayload =
+      input.transport === "streamable-http"
+        ? {
+            command: "",
+            argsJson: "[]",
+            envJson: null,
+            url: input.url.trim(),
+            headersJson: serializeJson(input.headers ?? {}),
+          }
+        : {
+            command: input.command.trim(),
+            argsJson: serializeJson(normalizeStringArray(input.args)) ?? "[]",
+            envJson: serializeJson(input.env ?? {}),
+            url: null,
+            headersJson: null,
+          };
     const payload = {
       id: input.id,
       name: input.name.trim(),
       description,
       source: input.source,
       transport: input.transport,
-      command: input.command.trim(),
-      argsJson: serializeJson(normalizeStringArray(input.args)) ?? "[]",
-      envJson: serializeJson(input.env ?? {}),
+      ...transportPayload,
+      toolAccessJson: serializeJson(normalizeMcpToolAccessPolicy(input.toolAccess) ?? null),
       enabled: input.enabled ? 1 : 0,
       autoRestart: input.autoRestart ? 1 : 0,
       maxRestarts: input.maxRestarts ?? 3,
@@ -989,8 +1275,11 @@ export class SpiraMemoryDatabase {
     if (!payload.name) {
       throw new Error("MCP server name cannot be empty.");
     }
-    if (!payload.command) {
+    if (input.transport === "stdio" && !payload.command) {
       throw new Error("MCP server command cannot be empty.");
+    }
+    if (input.transport === "streamable-http" && !payload.url) {
+      throw new Error("MCP server URL cannot be empty.");
     }
 
     this.db
@@ -1004,6 +1293,9 @@ export class SpiraMemoryDatabase {
            command,
            args_json,
            env_json,
+           url,
+           headers_json,
+           tool_access_json,
            enabled,
            auto_restart,
            max_restarts,
@@ -1018,6 +1310,9 @@ export class SpiraMemoryDatabase {
            @command,
            @argsJson,
            @envJson,
+           @url,
+           @headersJson,
+           @toolAccessJson,
            @enabled,
            @autoRestart,
            @maxRestarts,
@@ -1032,6 +1327,9 @@ export class SpiraMemoryDatabase {
            command = excluded.command,
            args_json = excluded.args_json,
            env_json = excluded.env_json,
+           url = excluded.url,
+           headers_json = excluded.headers_json,
+           tool_access_json = excluded.tool_access_json,
            enabled = excluded.enabled,
            auto_restart = excluded.auto_restart,
            max_restarts = excluded.max_restarts,

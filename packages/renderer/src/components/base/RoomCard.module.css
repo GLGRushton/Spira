@@ -4,22 +4,23 @@
   display: grid;
   grid-template-rows: auto 1fr;
   gap: 14px;
-  padding: 16px 16px 18px;
-  border: 1px solid rgba(0, 229, 255, 0.14);
+  padding: 18px 18px 20px;
+  border: 1px solid rgba(141, 214, 234, 0.14);
   border-radius: var(--radius-md);
-  background: linear-gradient(180deg, rgba(17, 22, 56, 0.92), rgba(8, 12, 30, 0.94));
+  background: radial-gradient(circle at top, rgba(141, 214, 234, 0.05), transparent 36%),
+    linear-gradient(180deg, rgba(17, 22, 56, 0.93), rgba(8, 12, 30, 0.95));
   text-align: left;
   cursor: pointer;
-  transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease, transform 0.2s ease;
 }
 
 .card::before,
 .card::after {
   content: "";
   position: absolute;
-  width: 18px;
-  height: 18px;
-  border-color: rgba(0, 229, 255, 0.22);
+  width: 30px;
+  height: 30px;
+  border-color: rgba(227, 191, 119, 0.46);
   border-style: solid;
   pointer-events: none;
 }
@@ -37,33 +38,39 @@
 }
 
 .card:hover {
+  border-color: rgba(227, 191, 119, 0.24);
+  box-shadow: 0 0 0 1px rgba(227, 191, 119, 0.07), var(--shadow-aura);
   transform: translateY(-2px);
-  border-color: rgba(0, 229, 255, 0.26);
 }
 
 .active {
-  border-color: rgba(0, 212, 170, 0.38);
-  box-shadow: 0 0 0 1px rgba(0, 212, 170, 0.18), var(--shadow-glow);
+  border-color: rgba(227, 191, 119, 0.34);
+  box-shadow: 0 0 0 1px rgba(227, 191, 119, 0.12), var(--shadow-glow), var(--shadow-aura);
 }
 
 .bridge {
-  background: linear-gradient(180deg, rgba(17, 22, 56, 0.98), rgba(9, 17, 43, 0.98));
+  background: radial-gradient(circle at 88% 18%, rgba(227, 191, 119, 0.12), transparent 22%),
+    linear-gradient(180deg, rgba(18, 24, 58, 0.98), rgba(9, 17, 43, 0.98));
 }
 
 .command {
-  background: linear-gradient(180deg, rgba(17, 22, 56, 0.96), rgba(18, 17, 52, 0.98));
+  background: radial-gradient(circle at 82% 16%, rgba(141, 214, 234, 0.08), transparent 24%),
+    linear-gradient(180deg, rgba(17, 22, 56, 0.96), rgba(18, 17, 52, 0.98));
 }
 
 .mcp {
-  background: linear-gradient(180deg, rgba(14, 24, 54, 0.96), rgba(8, 12, 30, 0.98));
+  background: radial-gradient(circle at 82% 18%, rgba(141, 214, 234, 0.12), transparent 22%),
+    linear-gradient(180deg, rgba(14, 24, 54, 0.96), rgba(8, 12, 30, 0.98));
 }
 
 .ops {
-  background: linear-gradient(180deg, rgba(20, 20, 54, 0.96), rgba(12, 10, 33, 0.98));
+  background: radial-gradient(circle at 84% 18%, rgba(227, 191, 119, 0.1), transparent 22%),
+    linear-gradient(180deg, rgba(20, 20, 54, 0.96), rgba(12, 10, 33, 0.98));
 }
 
 .agent {
-  background: linear-gradient(180deg, rgba(12, 28, 48, 0.96), rgba(8, 18, 32, 0.98));
+  background: radial-gradient(circle at 84% 18%, rgba(104, 198, 180, 0.1), transparent 22%),
+    linear-gradient(180deg, rgba(12, 28, 48, 0.96), rgba(8, 18, 32, 0.98));
 }
 
 .topline {
@@ -76,7 +83,8 @@
   width: 10px;
   height: 10px;
   border-radius: 999px;
-  box-shadow: 0 0 14px currentColor;
+  box-shadow: 0 0 0 2px rgba(8, 12, 30, 0.46), 0 0 14px currentColor, 0 0 26px
+    color-mix(in srgb, currentColor 38%, transparent);
 }
 
 .idle,
@@ -104,22 +112,22 @@
 
 .error,
 .disconnected {
-  color: #ef4444;
-  background: #ef4444;
+  color: var(--state-error);
+  background: var(--state-error);
 }
 
 .caption {
-  color: var(--text-secondary);
+  color: var(--accent-amber);
   font-size: 10px;
-  letter-spacing: 0.12em;
+  letter-spacing: 0.16em;
   text-transform: uppercase;
 }
 
 .badge {
   margin-left: auto;
   padding: 4px 8px;
-  border: 1px solid rgba(0, 229, 255, 0.16);
-  border-radius: 999px;
+  border: 1px solid rgba(141, 214, 234, 0.16);
+  border-radius: 14px;
   color: var(--text-secondary);
   font-size: 10px;
   letter-spacing: 0.08em;
@@ -133,10 +141,13 @@
 }
 
 .title {
-  font-size: 20px;
+  font-size: 22px;
   font-weight: 700;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.03em;
   text-transform: uppercase;
+  font-family: var(--font-display);
+  color: var(--text-display);
+  text-shadow: 0 0 14px rgba(227, 191, 119, 0.12);
 }
 
 .metric {

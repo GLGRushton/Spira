@@ -1,8 +1,9 @@
 import type { AssistantState } from "./assistant-state.js";
 import type { ChatMessage, ToolCallStatus } from "./chat-types.js";
 import type { ConversationSearchMatch, StoredConversation, StoredConversationSummary } from "./conversation-types.js";
-import type { McpServerConfig } from "./mcp-types.js";
+import type { McpServerConfig, McpServerUpdateConfig } from "./mcp-types.js";
 import type { McpServerStatus } from "./mcp-types.js";
+import type { ProjectRepoMappingsSnapshot } from "./project-repo-types.js";
 import type {
   ClientMessage,
   ErrorPayload,
@@ -12,8 +13,10 @@ import type {
   UserSettings,
 } from "./protocol.js";
 import type { RuntimeConfigApplyResult, RuntimeConfigSummary, RuntimeConfigUpdate } from "./runtime-config.js";
+import type { SubagentCreateConfig } from "./subagent-types.js";
 import type { SubagentDomain } from "./subagent-types.js";
 import type { UpgradeProposal, UpgradeStatus } from "./upgrade.js";
+import type { YouTrackProjectSummary, YouTrackStatusSummary, YouTrackTicketSummary } from "./youtrack-types.js";
 
 export type ConnectionStatus = "connecting" | "connected" | "disconnected" | "upgrading";
 
@@ -44,11 +47,10 @@ export interface ElectronApi {
   toggleVoice(): void;
   updateSettings(settings: Partial<UserSettings>): void;
   addMcpServer(config: McpServerConfig): void;
+  updateMcpServer(serverId: string, patch: McpServerUpdateConfig): void;
   removeMcpServer(serverId: string): void;
   setMcpServerEnabled(serverId: string, enabled: boolean): void;
-  createSubagent(
-    config: Omit<SubagentDomain, "source" | "delegationToolName"> & { id?: string; delegationToolName?: string },
-  ): void;
+  createSubagent(config: SubagentCreateConfig): void;
   updateSubagent(agentId: string, patch: Partial<Omit<SubagentDomain, "id" | "source" | "delegationToolName">>): void;
   removeSubagent(agentId: string): void;
   setSubagentReady(agentId: string, ready: boolean): void;
@@ -60,6 +62,13 @@ export interface ElectronApi {
   searchConversations(query: string, limit?: number): Promise<ConversationSearchMatch[]>;
   markConversationViewed(conversationId: string): Promise<void>;
   archiveConversation(conversationId: string): Promise<boolean>;
+  getYouTrackStatus(): Promise<YouTrackStatusSummary>;
+  listYouTrackTickets(limit?: number): Promise<YouTrackTicketSummary[]>;
+  searchYouTrackProjects(query: string, limit?: number): Promise<YouTrackProjectSummary[]>;
+  getProjectRepoMappings(): Promise<ProjectRepoMappingsSnapshot>;
+  setProjectWorkspaceRoot(workspaceRoot: string | null): Promise<ProjectRepoMappingsSnapshot>;
+  setProjectRepoMapping(projectKey: string, repoRelativePaths: string[]): Promise<ProjectRepoMappingsSnapshot>;
+  pickDirectory(title?: string): Promise<string | null>;
   getRuntimeConfig(): Promise<RuntimeConfigSummary>;
   setRuntimeConfig(update: RuntimeConfigUpdate): Promise<RuntimeConfigApplyResult>;
   setSettings(data: Partial<UserSettings>): Promise<void>;

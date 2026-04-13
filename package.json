@@ -9,6 +9,7 @@
     "dev:renderer": "pnpm -F @spira/renderer dev",
     "dev:mcp-nexus": "pnpm -F @spira/mcp-nexus-mods dev",
     "dev:mcp-memories": "pnpm -F @spira/mcp-memories dev",
+    "dev:mcp-spira-data-entry": "pnpm -F @spira/mcp-spira-data-entry dev",
     "dev:mcp-spira-ui": "pnpm -F @spira/mcp-spira-ui dev",
     "dev:mcp-vision": "pnpm -F @spira/mcp-vision dev",
     "dev:mcp-windows": "pnpm -F @spira/mcp-windows dev",

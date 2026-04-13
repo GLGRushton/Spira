@@ -2,25 +2,30 @@
   height: 100%;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
-  gap: 16px;
+  gap: 18px;
 }
 
 .header {
   display: flex;
   justify-content: space-between;
   gap: 16px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid rgba(141, 214, 234, 0.12);
 }
 
 .eyebrow {
-  color: var(--text-secondary);
+  color: var(--accent-amber);
   font-size: 11px;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.16em;
   text-transform: uppercase;
 }
 
 .title {
-  font-size: clamp(24px, 4vw, 36px);
+  font-size: clamp(28px, 4vw, 40px);
   text-transform: capitalize;
+  font-family: var(--font-display);
+  color: var(--text-display);
+  text-shadow: 0 0 18px rgba(227, 191, 119, 0.14);
 }
 
 .caption {
@@ -35,7 +40,7 @@
   min-height: 0;
   display: grid;
   grid-template-columns: minmax(0, 3fr) minmax(240px, 1fr);
-  gap: 16px;
+  gap: 20px;
 }
 
 .chatStage,
@@ -43,12 +48,16 @@
   min-height: 0;
   border: 1px solid var(--border-default);
   border-radius: var(--radius-md);
-  background: rgba(8, 12, 30, 0.48);
+  background: rgba(8, 12, 30, 0.5);
   overflow: hidden;
+  position: relative;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04), var(--shadow-aura);
 }
 
 .chatStage {
-  padding: 16px;
+  padding: 18px;
+  background: radial-gradient(circle at 88% 16%, rgba(141, 214, 234, 0.06), transparent 20%),
+    linear-gradient(180deg, rgba(11, 16, 34, 0.88), rgba(8, 12, 30, 0.76));
 }
 
 .visualColumn {
@@ -60,7 +69,7 @@
 
 .shinraStage {
   --presence-color: var(--state-idle);
-  padding: 14px;
+  padding: 16px;
   display: grid;
   align-content: start;
   gap: 12px;
@@ -69,7 +78,35 @@
       circle at top,
       color-mix(in srgb, var(--presence-color) 12%, transparent),
       transparent 58%
-    ), rgba(8, 12, 30, 0.48);
+    ), radial-gradient(circle at 50% 100%, rgba(227, 191, 119, 0.08), transparent 42%),
+    linear-gradient(180deg, rgba(13, 18, 40, 0.86), rgba(8, 12, 30, 0.72));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04), var(--shadow-aura);
+}
+
+.shinraStage::before,
+.chatStage::before {
+  content: "";
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  width: 26px;
+  height: 26px;
+  border-top: 1px solid rgba(227, 191, 119, 0.34);
+  border-left: 1px solid rgba(227, 191, 119, 0.34);
+  pointer-events: none;
+}
+
+.shinraStage::after,
+.chatStage::after {
+  content: "";
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  width: 26px;
+  height: 26px;
+  border-right: 1px solid rgba(141, 214, 234, 0.28);
+  border-bottom: 1px solid rgba(141, 214, 234, 0.28);
+  pointer-events: none;
 }
 
 .sectionHeader {
@@ -116,14 +153,14 @@
 }
 
 .sectionEyebrow {
-  color: var(--text-secondary);
+  color: var(--accent-amber);
   font-size: 11px;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.14em;
   text-transform: uppercase;
 }
 
 .orbWrap {
-  min-height: 180px;
+  min-height: 220px;
   display: grid;
   place-items: center;
   padding: 12px 0;
@@ -137,7 +174,12 @@
   width: 170px;
   height: 170px;
   border-radius: 999px;
-  background: radial-gradient(circle, color-mix(in srgb, var(--presence-color) 22%, transparent), transparent 68%);
+  background: radial-gradient(
+    circle,
+    color-mix(in srgb, var(--presence-color) 20%, transparent),
+    rgba(227, 191, 119, 0.08),
+    transparent 72%
+  );
   transform: translate(-50%, -50%);
   opacity: 0.8;
   filter: blur(8px);
@@ -147,14 +189,14 @@
 
 .statusCluster {
   display: grid;
-  gap: 8px;
+  gap: 10px;
   align-content: start;
 }
 
 .statusLine {
   margin: 0;
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: 13px;
   line-height: 1.5;
 }
 

@@ -1,6 +1,14 @@
 import type { McpServerConfig } from "@spira/shared";
 import { afterEach, describe, expect, it } from "vitest";
-import { createDisconnectedStatus, deriveRemediationHint, toRuntimeConfig } from "./registry.js";
+import { SpiraEventBus } from "../util/event-bus.js";
+import {
+  McpRegistry,
+  createDisconnectedStatus,
+  deriveRemediationHint,
+  filterManagedBuiltinServerConfigs,
+  mergeBuiltinServerConfigs,
+  toRuntimeConfig,
+} from "./registry.js";
 
 const originalNodeEnv = process.env.NODE_ENV;
 
@@ -48,6 +56,32 @@ describe("toRuntimeConfig", () => {
     ).toEqual({
       ...baseConfig,
       command: "python",
+    });
+  });
+
+  it("leaves remote MCP transports unchanged in development", () => {
+    process.env.NODE_ENV = "development";
+
+    expect(
+      toRuntimeConfig({
+        id: "youtrack",
+        name: "YouTrack",
+        transport: "streamable-http",
+        url: "https://example.youtrack.cloud/mcp",
+        headers: { Authorization: "Bearer secret" },
+        enabled: true,
+        autoRestart: true,
+        maxRestarts: 3,
+      }),
+    ).toEqual({
+      id: "youtrack",
+      name: "YouTrack",
+      transport: "streamable-http",
+      url: "https://example.youtrack.cloud/mcp",
+      headers: { Authorization: "Bearer secret" },
+      enabled: true,
+      autoRestart: true,
+      maxRestarts: 3,
     });
   });
 });
@@ -101,11 +135,133 @@ describe("createDisconnectedStatus", () => {
       lastConnectedAt: 456,
     });
   });
+
+  it("includes normalized tool access policy in disconnected status", () => {
+    expect(
+      createDisconnectedStatus({
+        ...baseConfig,
+        toolAccess: {
+          readOnlyToolNames: ["find_projects", "find_projects"],
+          writeToolNames: ["create_issue"],
+        },
+      }),
+    ).toMatchObject({
+      toolAccess: {
+        readOnlyToolNames: ["find_projects"],
+        writeToolNames: ["create_issue"],
+      },
+    });
+  });
+
+  it("preserves tool access policy when a server is connected", async () => {
+    const pool = {
+      connect: async () => undefined,
+      disconnect: async () => undefined,
+      listTools: () => [{ name: "find_projects" }, { name: "create_issue" }],
+      getConnectedAt: () => 123,
+      isCrashed: () => false,
+    };
+    const memoryDb = {
+      upsertMcpServerConfig: (config: McpServerConfig) => config,
+    };
+    const logger = {
+      info: () => undefined,
+      warn: () => undefined,
+      error: () => undefined,
+    };
+
+    const registry = new McpRegistry(new SpiraEventBus(), logger as never, pool as never, memoryDb as never);
+    await registry.addServer({
+      ...baseConfig,
+      id: "youtrackpersonal",
+      name: "YouTrack Personal MCP",
+      toolAccess: {
+        readOnlyToolNames: ["find_projects"],
+        writeToolNames: ["create_issue"],
+      },
+    });
+
+    expect(registry.getStatus()).toEqual([
+      expect.objectContaining({
+        id: "youtrackpersonal",
+        state: "connected",
+        toolAccess: {
+          readOnlyToolNames: ["find_projects"],
+          writeToolNames: ["create_issue"],
+        },
+      }),
+    ]);
+  });
+
+  it("reserves managed dynamic builtin ids for future activation", async () => {
+    const pool = {
+      connect: async () => undefined,
+      disconnect: async () => undefined,
+      listTools: () => [],
+      getConnectedAt: () => 0,
+      isCrashed: () => false,
+    };
+    const logger = {
+      info: () => undefined,
+      warn: () => undefined,
+      error: () => undefined,
+    };
+    const registry = new McpRegistry(new SpiraEventBus(), logger as never, pool as never, null, [], ["youtrack"]);
+
+    await expect(
+      registry.addServer({
+        ...baseConfig,
+        id: "youtrack",
+        name: "Shadow YouTrack",
+      }),
+    ).rejects.toThrow("reserved");
+  });
+});
+
+describe("dynamic builtins", () => {
+  it("merges dynamic builtins over file config ids", () => {
+    const dynamicConfig: McpServerConfig = {
+      ...baseConfig,
+      id: "youtrack",
+      name: "YouTrack",
+      source: "builtin",
+    };
+
+    expect(mergeBuiltinServerConfigs([baseConfig], [dynamicConfig])).toEqual([baseConfig, dynamicConfig]);
+    expect(
+      mergeBuiltinServerConfigs([{ ...baseConfig, id: "youtrack", name: "Old YouTrack" }], [dynamicConfig]),
+    ).toEqual([dynamicConfig]);
+  });
+
+  it("filters stale managed builtins from persisted config", () => {
+    const dynamicConfig: McpServerConfig = {
+      ...baseConfig,
+      id: "youtrack",
+      name: "YouTrack",
+      source: "builtin",
+    };
+
+    expect(filterManagedBuiltinServerConfigs([baseConfig, dynamicConfig], [], ["youtrack"])).toEqual([baseConfig]);
+    expect(filterManagedBuiltinServerConfigs([baseConfig, dynamicConfig], ["youtrack"], ["youtrack"])).toEqual([
+      baseConfig,
+      dynamicConfig,
+    ]);
+  });
 });
 
 describe("deriveRemediationHint", () => {
   it("points auth failures toward secret configuration from stderr output", () => {
     expect(deriveRemediationHint("Request failed", ["401 missing api key"])).toContain("API key");
+  });
+
+  it("points npx install prompts toward non-interactive launch args", () => {
+    expect(
+      deriveRemediationHint("Connection closed", ["Need to install the following packages:", "Ok to proceed? (y)"]),
+    ).toContain("-y");
+  });
+
+  it("points invalid remote URLs toward full https endpoints", () => {
+    expect(deriveRemediationHint("TypeError: Invalid URL", [])).toContain("https://");
   });
 
   it("points spawn failures toward command/runtime setup", () => {

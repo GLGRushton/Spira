@@ -11,6 +11,13 @@ const CONVERSATION_GET_CHANNEL = "conversation:get";
 const CONVERSATION_SEARCH_CHANNEL = "conversation:search";
 const CONVERSATION_MARK_VIEWED_CHANNEL = "conversation:mark-viewed";
 const CONVERSATION_ARCHIVE_CHANNEL = "conversation:archive";
+const YOUTRACK_STATUS_GET_CHANNEL = "youtrack:status:get";
+const YOUTRACK_TICKETS_LIST_CHANNEL = "youtrack:tickets:list";
+const YOUTRACK_PROJECTS_SEARCH_CHANNEL = "youtrack:projects:search";
+const PROJECT_REPO_MAPPINGS_GET_CHANNEL = "projects:mappings:get";
+const PROJECT_WORKSPACE_ROOT_SET_CHANNEL = "projects:workspace-root:set";
+const PROJECT_REPO_MAPPING_SET_CHANNEL = "projects:mapping:set";
+const DIRECTORY_PICK_CHANNEL = "dialog:pick-directory";
 const RUNTIME_CONFIG_GET_CHANNEL = "runtime-config:get";
 const RUNTIME_CONFIG_SET_CHANNEL = "runtime-config:set";
 const UPGRADE_RESPONSE_CHANNEL = "upgrade:respond";
@@ -93,6 +100,9 @@ const electronAPI = {
   addMcpServer(config) {
     electronAPI.send({ type: "mcp:add-server", config });
   },
+  updateMcpServer(serverId, patch) {
+    electronAPI.send({ type: "mcp:update-server", serverId, patch });
+  },
   removeMcpServer(serverId) {
     electronAPI.send({ type: "mcp:remove-server", serverId });
   },
@@ -134,6 +144,27 @@ const electronAPI = {
   },
   archiveConversation(conversationId) {
     return ipcRenderer.invoke(CONVERSATION_ARCHIVE_CHANNEL, { conversationId });
+  },
+  getYouTrackStatus() {
+    return ipcRenderer.invoke(YOUTRACK_STATUS_GET_CHANNEL);
+  },
+  listYouTrackTickets(limit) {
+    return ipcRenderer.invoke(YOUTRACK_TICKETS_LIST_CHANNEL, { limit });
+  },
+  searchYouTrackProjects(query, limit) {
+    return ipcRenderer.invoke(YOUTRACK_PROJECTS_SEARCH_CHANNEL, { query, limit });
+  },
+  getProjectRepoMappings() {
+    return ipcRenderer.invoke(PROJECT_REPO_MAPPINGS_GET_CHANNEL);
+  },
+  setProjectWorkspaceRoot(workspaceRoot) {
+    return ipcRenderer.invoke(PROJECT_WORKSPACE_ROOT_SET_CHANNEL, { workspaceRoot });
+  },
+  setProjectRepoMapping(projectKey, repoRelativePaths) {
+    return ipcRenderer.invoke(PROJECT_REPO_MAPPING_SET_CHANNEL, { projectKey, repoRelativePaths });
+  },
+  pickDirectory(title) {
+    return ipcRenderer.invoke(DIRECTORY_PICK_CHANNEL, { title });
   },
   getRuntimeConfig() {
     return ipcRenderer.invoke(RUNTIME_CONFIG_GET_CHANNEL);

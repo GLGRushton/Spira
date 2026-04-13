@@ -40,9 +40,7 @@ export interface ToolBridgeOptions {
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null;
 
 const isPermissionlessTool = (tool: McpTool): boolean =>
-  !tool.name.startsWith("vision_") &&
-  tool.annotations?.readOnlyHint === true &&
-  tool.annotations?.destructiveHint !== true;
+  !tool.name.startsWith("vision_") && tool.access?.mode === "read";
 
 const toSuccessResult = (result: unknown): ToolResultObject => ({
   textResultForLlm: typeof result === "string" ? result : JSON.stringify(result ?? null),

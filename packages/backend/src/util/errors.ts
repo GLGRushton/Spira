@@ -40,6 +40,12 @@ export class CopilotError extends SpiraError {
   }
 }
 
+export class YouTrackError extends SpiraError {
+  constructor(message: string, cause?: unknown) {
+    super("YOUTRACK_ERROR", message, cause);
+  }
+}
+
 const MAX_ERROR_CAUSE_DEPTH = 5;
 
 const stringifyUnknownError = (error: unknown): string => {

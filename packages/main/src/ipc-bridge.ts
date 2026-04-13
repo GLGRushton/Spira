@@ -3,9 +3,13 @@ import type {
   ClientMessage,
   ConnectionStatus,
   ConversationSearchMatch,
+  ProjectRepoMappingsSnapshot,
   ServerMessage,
   StoredConversation,
   StoredConversationSummary,
+  YouTrackProjectSummary,
+  YouTrackStatusSummary,
+  YouTrackTicketSummary,
 } from "@spira/shared";
 import { PROTOCOL_VERSION } from "@spira/shared";
 import type { BrowserWindow, IpcMainEvent } from "electron";
@@ -33,10 +37,28 @@ type ConversationResponseMessage =
   | Extract<ServerMessage, { type: "conversation:mark-viewed:result" }>
   | Extract<ServerMessage, { type: "conversation:archive:result" }>
   | Extract<ServerMessage, { type: "conversation:request-error" }>;
+type YouTrackRequestMessage =
+  | Extract<ClientMessage, { type: "youtrack:status:get" }>
+  | Extract<ClientMessage, { type: "youtrack:tickets:list" }>
+  | Extract<ClientMessage, { type: "youtrack:projects:search" }>;
+type YouTrackResponseMessage =
+  | Extract<ServerMessage, { type: "youtrack:status:result" }>
+  | Extract<ServerMessage, { type: "youtrack:tickets:list:result" }>
+  | Extract<ServerMessage, { type: "youtrack:projects:search:result" }>
+  | Extract<ServerMessage, { type: "youtrack:request-error" }>;
+type ProjectRequestMessage =
+  | Extract<ClientMessage, { type: "projects:snapshot:get" }>
+  | Extract<ClientMessage, { type: "projects:workspace-root:set" }>
+  | Extract<ClientMessage, { type: "projects:mapping:set" }>;
+type ProjectResponseMessage =
+  | Extract<ServerMessage, { type: "projects:snapshot:result" }>
+  | Extract<ServerMessage, { type: "projects:request-error" }>;
+type BackendRequestMessage = ConversationRequestMessage | YouTrackRequestMessage | ProjectRequestMessage;
+type BackendResponseMessage = ConversationResponseMessage | YouTrackResponseMessage | ProjectResponseMessage;
 
 interface IpcBridgeRequest {
-  expectedType: ConversationResponseMessage["type"];
-  resolve: (value: ConversationResponseMessage) => void;
+  expectedType: BackendResponseMessage["type"];
+  resolve: (value: BackendResponseMessage) => void;
   reject: (error: Error) => void;
   timer: NodeJS.Timeout;
 }
@@ -49,9 +71,15 @@ export interface IpcBridgeHandle {
   searchConversations(query: string, limit?: number): Promise<ConversationSearchMatch[]>;
   markConversationViewed(conversationId: string): Promise<boolean>;
   archiveConversation(conversationId: string): Promise<boolean>;
+  getYouTrackStatus(enabled: boolean): Promise<YouTrackStatusSummary>;
+  listYouTrackTickets(enabled: boolean, limit?: number): Promise<YouTrackTicketSummary[]>;
+  searchYouTrackProjects(enabled: boolean, query: string, limit?: number): Promise<YouTrackProjectSummary[]>;
+  getProjectRepoMappings(): Promise<ProjectRepoMappingsSnapshot>;
+  setProjectWorkspaceRoot(workspaceRoot: string | null): Promise<ProjectRepoMappingsSnapshot>;
+  setProjectRepoMapping(projectKey: string, repoRelativePaths: string[]): Promise<ProjectRepoMappingsSnapshot>;
 }
 
-const isConversationResponseMessage = (message: ServerMessage): message is ConversationResponseMessage =>
+const isBackendResponseMessage = (message: ServerMessage): message is BackendResponseMessage =>
   typeof (message as { requestId?: unknown }).requestId === "string" &&
   (message.type === "conversation:recent:result" ||
     message.type === "conversation:list:result" ||
@@ -59,7 +87,13 @@ const isConversationResponseMessage = (message: ServerMessage): message is Conve
     message.type === "conversation:search:result" ||
     message.type === "conversation:mark-viewed:result" ||
     message.type === "conversation:archive:result" ||
-    message.type === "conversation:request-error");
+    message.type === "conversation:request-error" ||
+    message.type === "youtrack:status:result" ||
+    message.type === "youtrack:tickets:list:result" ||
+    message.type === "youtrack:projects:search:result" ||
+    message.type === "youtrack:request-error" ||
+    message.type === "projects:snapshot:result" ||
+    message.type === "projects:request-error");
 
 export function setupIpcBridge(
   win: BrowserWindow,
@@ -81,7 +115,7 @@ export function setupIpcBridge(
   let reconnectTimer: NodeJS.Timeout | null = null;
   let lastBackendGeneration: number | null = null;
   const latestServerMessages = new Map<ServerMessage["type"], ServerMessage>();
-  const pendingConversationRequests = new Map<string, IpcBridgeRequest>();
+  const pendingRequests = new Map<string, IpcBridgeRequest>();
 
   const emitConnectionStatus = (status: ConnectionStatus) => {
     options.onConnectionStatusChange?.(status);
@@ -103,42 +137,42 @@ export function setupIpcBridge(
     pending.push(serialized);
   };
 
-  const clearPendingConversationRequest = (requestId: string) => {
-    const request = pendingConversationRequests.get(requestId);
+  const clearPendingRequest = (requestId: string) => {
+    const request = pendingRequests.get(requestId);
     if (!request) {
       return;
     }
 
     clearTimeout(request.timer);
-    pendingConversationRequests.delete(requestId);
+    pendingRequests.delete(requestId);
   };
 
-  const rejectPendingConversationRequests = (error: Error) => {
-    for (const [requestId, request] of pendingConversationRequests.entries()) {
+  const rejectPendingRequests = (error: Error) => {
+    for (const [requestId, request] of pendingRequests.entries()) {
       clearTimeout(request.timer);
-      pendingConversationRequests.delete(requestId);
+      pendingRequests.delete(requestId);
       request.reject(error);
     }
   };
 
-  const requestConversation = <TType extends ConversationResponseMessage["type"]>(
-    message: ConversationRequestMessage,
+  const requestBackend = <TType extends BackendResponseMessage["type"]>(
+    message: BackendRequestMessage,
     expectedType: TType,
-  ): Promise<Extract<ConversationResponseMessage, { type: TType }>> =>
-    new Promise<Extract<ConversationResponseMessage, { type: TType }>>((resolve, reject) => {
+  ): Promise<Extract<BackendResponseMessage, { type: TType }>> =>
+    new Promise<Extract<BackendResponseMessage, { type: TType }>>((resolve, reject) => {
       if (disposed) {
         reject(new Error("IPC bridge is no longer available."));
         return;
       }
 
       const timer = setTimeout(() => {
-        pendingConversationRequests.delete(message.requestId);
-        reject(new Error("Timed out waiting for the conversation archive response."));
+        pendingRequests.delete(message.requestId);
+        reject(new Error("Timed out waiting for the backend response."));
       }, CONVERSATION_REQUEST_TIMEOUT_MS);
 
-      pendingConversationRequests.set(message.requestId, {
+      pendingRequests.set(message.requestId, {
         expectedType,
-        resolve: (value) => resolve(value as Extract<ConversationResponseMessage, { type: TType }>),
+        resolve: (value) => resolve(value as Extract<BackendResponseMessage, { type: TType }>),
         reject,
         timer,
       });
@@ -219,11 +253,15 @@ export function setupIpcBridge(
         return;
       }
 
-      if (isConversationResponseMessage(parsed)) {
-        const request = pendingConversationRequests.get(parsed.requestId);
+      if (isBackendResponseMessage(parsed)) {
+        const request = pendingRequests.get(parsed.requestId);
         if (request) {
-          clearPendingConversationRequest(parsed.requestId);
-          if (parsed.type === "conversation:request-error") {
+          clearPendingRequest(parsed.requestId);
+          if (
+            parsed.type === "conversation:request-error" ||
+            parsed.type === "youtrack:request-error" ||
+            parsed.type === "projects:request-error"
+          ) {
             request.reject(new Error(parsed.message));
             return;
           }
@@ -237,7 +275,7 @@ export function setupIpcBridge(
             return;
           }
 
-          request.resolve(parsed as Extract<ConversationResponseMessage, { type: typeof request.expectedType }>);
+          request.resolve(parsed as Extract<BackendResponseMessage, { type: typeof request.expectedType }>);
           return;
         }
       }
@@ -269,7 +307,7 @@ export function setupIpcBridge(
     socket.on("close", () => {
       socketReady = false;
       socket = null;
-      rejectPendingConversationRequests(new Error("Backend disconnected before the archive request completed."));
+      rejectPendingRequests(new Error("Backend disconnected before the pending request completed."));
       if (disposed) {
         return;
       }
@@ -288,9 +326,7 @@ export function setupIpcBridge(
     ipcMain.off("spira:to-backend", handleRendererMessage);
     win.webContents.off("did-finish-load", replayLatestServerMessages);
     socketReady = false;
-    rejectPendingConversationRequests(
-      new Error("IPC bridge disposed while waiting for a conversation archive response."),
-    );
+    rejectPendingRequests(new Error("IPC bridge disposed while waiting for a backend request response."));
     if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
       socket.close();
     }
@@ -299,7 +335,7 @@ export function setupIpcBridge(
   return {
     dispose,
     getRecentConversation: () =>
-      requestConversation(
+      requestBackend(
         {
           type: "conversation:recent:get",
           requestId: randomUUID(),
@@ -307,7 +343,7 @@ export function setupIpcBridge(
         "conversation:recent:result",
       ).then((response) => response.conversation),
     listConversations: (limit, offset) =>
-      requestConversation(
+      requestBackend(
         {
           type: "conversation:list",
           requestId: randomUUID(),
@@ -317,7 +353,7 @@ export function setupIpcBridge(
         "conversation:list:result",
       ).then((response) => response.conversations),
     getConversation: (conversationId) =>
-      requestConversation(
+      requestBackend(
         {
           type: "conversation:get",
           requestId: randomUUID(),
@@ -326,7 +362,7 @@ export function setupIpcBridge(
         "conversation:get:result",
       ).then((response) => response.conversation),
     searchConversations: (query, limit) =>
-      requestConversation(
+      requestBackend(
         {
           type: "conversation:search",
           requestId: randomUUID(),
@@ -336,7 +372,7 @@ export function setupIpcBridge(
         "conversation:search:result",
       ).then((response) => response.matches),
     markConversationViewed: (conversationId) =>
-      requestConversation(
+      requestBackend(
         {
           type: "conversation:mark-viewed",
           requestId: randomUUID(),
@@ -345,7 +381,7 @@ export function setupIpcBridge(
         "conversation:mark-viewed:result",
       ).then((response) => response.success),
     archiveConversation: (conversationId) =>
-      requestConversation(
+      requestBackend(
         {
           type: "conversation:archive",
           requestId: randomUUID(),
@@ -353,5 +389,62 @@ export function setupIpcBridge(
         },
         "conversation:archive:result",
       ).then((response) => response.success),
+    getYouTrackStatus: (enabled) =>
+      requestBackend(
+        {
+          type: "youtrack:status:get",
+          requestId: randomUUID(),
+          enabled,
+        },
+        "youtrack:status:result",
+      ).then((response) => response.status),
+    listYouTrackTickets: (enabled, limit) =>
+      requestBackend(
+        {
+          type: "youtrack:tickets:list",
+          requestId: randomUUID(),
+          enabled,
+          limit,
+        },
+        "youtrack:tickets:list:result",
+      ).then((response) => response.tickets),
+    searchYouTrackProjects: (enabled, query, limit) =>
+      requestBackend(
+        {
+          type: "youtrack:projects:search",
+          requestId: randomUUID(),
+          enabled,
+          query,
+          limit,
+        },
+        "youtrack:projects:search:result",
+      ).then((response) => response.projects),
+    getProjectRepoMappings: () =>
+      requestBackend(
+        {
+          type: "projects:snapshot:get",
+          requestId: randomUUID(),
+        },
+        "projects:snapshot:result",
+      ).then((response) => response.snapshot),
+    setProjectWorkspaceRoot: (workspaceRoot) =>
+      requestBackend(
+        {
+          type: "projects:workspace-root:set",
+          requestId: randomUUID(),
+          workspaceRoot,
+        },
+        "projects:snapshot:result",
+      ).then((response) => response.snapshot),
+    setProjectRepoMapping: (projectKey, repoRelativePaths) =>
+      requestBackend(
+        {
+          type: "projects:mapping:set",
+          requestId: randomUUID(),
+          projectKey,
+          repoRelativePaths,
+        },
+        "projects:snapshot:result",
+      ).then((response) => response.snapshot),
   };
 }

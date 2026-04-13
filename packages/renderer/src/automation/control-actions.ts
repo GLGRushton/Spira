@@ -1,4 +1,4 @@
-import type { SpiraUiAction, SpiraUiSnapshot } from "@spira/shared";
+import { type SpiraUiAction, type SpiraUiSnapshot, normalizeMcpToolAccessPolicy } from "@spira/shared";
 import { PENDING_ASSISTANT_ID, createChatEntityId, getChatSession, useChatStore } from "../stores/chat-store.js";
 import { useMcpStore } from "../stores/mcp-store.js";
 import { useNavigationStore } from "../stores/navigation-store.js";
@@ -6,6 +6,7 @@ import { usePermissionStore } from "../stores/permission-store.js";
 import { useRoomStore } from "../stores/room-store.js";
 import { useSettingsStore } from "../stores/settings-store.js";
 import { useStationStore } from "../stores/station-store.js";
+import { useSubagentStore } from "../stores/subagent-store.js";
 import { useUpgradeStore } from "../stores/upgrade-store.js";
 import { useVisionStore } from "../stores/vision-store.js";
 import { buildSpiraUiSnapshot } from "./control-snapshot.js";
@@ -28,6 +29,114 @@ const updateSettings = async (settings: Parameters<typeof window.electronAPI.set
   await window.electronAPI.setSettings(settings);
   window.electronAPI.updateSettings(settings);
 };
+
+const waitForMcpServerStatus = async (
+  serverId: string,
+  serverName: string,
+  predicate: (server: ReturnType<typeof useMcpStore.getState>["servers"][number]) => boolean,
+  timeoutMs = 15_000,
+): Promise<void> =>
+  await new Promise<void>((resolve, reject) => {
+    let unsubscribeStatus = () => {};
+    let unsubscribeError = () => {};
+    const finish = (callback: () => void): void => {
+      clearTimeout(timer);
+      unsubscribeStatus();
+      unsubscribeError();
+      callback();
+    };
+
+    const handleStatuses = (servers: ReturnType<typeof useMcpStore.getState>["servers"]): void => {
+      const server = servers.find((entry) => entry.id === serverId);
+      if (!server) {
+        return;
+      }
+
+      if (predicate(server)) {
+        finish(resolve);
+      }
+    };
+
+    unsubscribeStatus = window.electronAPI.onMcpStatus((servers) => {
+      handleStatuses(servers);
+    });
+    unsubscribeError = window.electronAPI.onError((error) => {
+      if (error.source !== "mcp") {
+        return;
+      }
+
+      const haystack = `${error.message}\n${error.details ?? ""}`;
+      if (!haystack.includes(serverId) && !haystack.includes(serverName)) {
+        return;
+      }
+
+      finish(() => reject(new Error(error.details ? `${error.message} ${error.details}` : error.message)));
+    });
+    const timer = window.setTimeout(() => {
+      finish(() => reject(new Error(`Timed out waiting for MCP server "${serverId}" to update.`)));
+    }, timeoutMs);
+
+    handleStatuses(useMcpStore.getState().servers);
+  });
+
+const waitForMcpServerCreation = async (
+  serverId: string,
+  enabled: boolean,
+  serverName: string,
+  timeoutMs = 15_000,
+): Promise<void> =>
+  await waitForMcpServerStatus(
+    serverId,
+    serverName,
+    (server) => !enabled || server.state === "connected" || server.state === "disconnected",
+    timeoutMs,
+  );
+
+const waitForSubagentCatalog = async (
+  agentIdentity: string,
+  predicate: (agent: ReturnType<typeof useSubagentStore.getState>["agents"][number]) => boolean,
+  timeoutMs = 15_000,
+): Promise<void> =>
+  await new Promise<void>((resolve, reject) => {
+    let unsubscribeCatalog = () => {};
+    let unsubscribeError = () => {};
+    const finish = (callback: () => void): void => {
+      clearTimeout(timer);
+      unsubscribeCatalog();
+      unsubscribeError();
+      callback();
+    };
+
+    const handleCatalog = (agents: ReturnType<typeof useSubagentStore.getState>["agents"]): void => {
+      if (agents.some((agent) => (agent.id === agentIdentity || agent.label === agentIdentity) && predicate(agent))) {
+        finish(resolve);
+      }
+    };
+
+    unsubscribeCatalog = window.electronAPI.onSubagentCatalog((agents) => {
+      handleCatalog(agents);
+    });
+    unsubscribeError = window.electronAPI.onError((error) => {
+      if (error.source !== "subagent") {
+        return;
+      }
+
+      const haystack = `${error.message}\n${error.details ?? ""}`;
+      if (!haystack.includes(agentIdentity) && !haystack.includes("create subagent")) {
+        return;
+      }
+
+      finish(() => reject(new Error(error.details ? `${error.message} ${error.details}` : error.message)));
+    });
+    const timer = window.setTimeout(() => {
+      finish(() => reject(new Error(`Timed out waiting for subagent "${agentIdentity}" to update.`)));
+    }, timeoutMs);
+
+    handleCatalog(useSubagentStore.getState().agents);
+  });
+
+const waitForSubagentCreation = async (agentIdentity: string, timeoutMs = 15_000): Promise<void> =>
+  await waitForSubagentCatalog(agentIdentity, () => true, timeoutMs);
 
 export const performSpiraUiAction = async (action: SpiraUiAction): Promise<SpiraUiSnapshot> => {
   switch (action.type) {
@@ -146,6 +255,43 @@ export const performSpiraUiAction = async (action: SpiraUiAction): Promise<Spira
       if (!action.approved && useUpgradeStore.getState().banner?.proposalId === action.proposalId) {
         useUpgradeStore.getState().clearBanner();
       }
+      return buildSpiraUiSnapshot();
+    case "add-mcp-server":
+      window.electronAPI.addMcpServer(action.config);
+      await waitForMcpServerCreation(action.config.id, action.config.enabled, action.config.name);
+      return buildSpiraUiSnapshot();
+    case "update-mcp-server":
+      window.electronAPI.updateMcpServer(action.serverId, action.patch);
+      await waitForMcpServerStatus(
+        action.serverId,
+        action.patch.name ?? action.serverId,
+        (server) =>
+          (action.patch.enabled === false || server.state === "connected" || server.state === "disconnected") &&
+          (action.patch.name === undefined || server.name === action.patch.name) &&
+          (action.patch.description === undefined || server.description === action.patch.description) &&
+          (action.patch.toolAccess === undefined ||
+            JSON.stringify(server.toolAccess ?? null) ===
+              JSON.stringify(normalizeMcpToolAccessPolicy(action.patch.toolAccess) ?? null)),
+      );
+      return buildSpiraUiSnapshot();
+    case "create-subagent":
+      window.electronAPI.createSubagent(action.config);
+      await waitForSubagentCreation(action.config.id ?? action.config.label);
+      return buildSpiraUiSnapshot();
+    case "update-subagent":
+      window.electronAPI.updateSubagent(action.agentId, action.patch);
+      await waitForSubagentCatalog(
+        action.agentId,
+        (agent) =>
+          (action.patch.description === undefined || agent.description === action.patch.description) &&
+          (action.patch.serverIds === undefined ||
+            JSON.stringify(agent.serverIds) === JSON.stringify(action.patch.serverIds)) &&
+          (action.patch.allowedToolNames === undefined ||
+            JSON.stringify(agent.allowedToolNames) === JSON.stringify(action.patch.allowedToolNames)) &&
+          (action.patch.allowWrites === undefined || agent.allowWrites === action.patch.allowWrites) &&
+          (action.patch.systemPrompt === undefined || agent.systemPrompt === action.patch.systemPrompt) &&
+          (action.patch.ready === undefined || agent.ready === action.patch.ready),
+      );
       return buildSpiraUiSnapshot();
     default: {
       const exhaustiveCheck: never = action;

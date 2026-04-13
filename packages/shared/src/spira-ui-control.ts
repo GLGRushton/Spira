@@ -1,12 +1,24 @@
 import type { AssistantState } from "./assistant-state.js";
 import type { ConnectionStatus } from "./electron-api.js";
+import type { McpServerConfig, McpServerUpdateConfig } from "./mcp-types.js";
 import type { McpServerStatus } from "./mcp-types.js";
 import type { PermissionRequestPayload, TtsProvider, UserSettings } from "./protocol.js";
+import type { SubagentCreateConfig } from "./subagent-types.js";
+import type { SubagentDomain } from "./subagent-types.js";
 import type { SubagentDomainId } from "./subagent-types.js";
 import type { UpgradeScope } from "./upgrade.js";
 
 export const SPIRA_UI_CONTROL_BRIDGE_VERSION = 1;
-export const SPIRA_UI_ROOT_VIEWS = ["ship", "operations", "bridge", "barracks", "mcp", "agents", "settings"] as const;
+export const SPIRA_UI_ROOT_VIEWS = [
+  "ship",
+  "operations",
+  "bridge",
+  "barracks",
+  "mcp",
+  "agents",
+  "projects",
+  "settings",
+] as const;
 export type SpiraUiRootView = (typeof SPIRA_UI_ROOT_VIEWS)[number];
 export type SpiraUiView = SpiraUiRootView | `mcp:${string}` | `agent:${string}`;
 
@@ -26,6 +38,10 @@ export const SPIRA_UI_ACTION_TYPES = [
   "set-tts-provider",
   "respond-permission",
   "respond-upgrade",
+  "add-mcp-server",
+  "update-mcp-server",
+  "create-subagent",
+  "update-subagent",
 ] as const;
 export type SpiraUiActionType = (typeof SPIRA_UI_ACTION_TYPES)[number];
 
@@ -124,10 +140,13 @@ export interface SpiraUiSnapshot {
   upgradeBanner: SpiraUiUpgradeBannerSummary | null;
   protocolBanner: SpiraUiUpgradeBannerSummary | null;
   mcpServers: McpServerStatus[];
+  subagents: SubagentDomain[];
   agentRooms: SpiraUiAgentRoomSummary[];
   chat: SpiraUiChatSummary;
   assistantDock: SpiraUiAssistantDockSummary;
 }
+
+export type SpiraUiCreateSubagentConfig = SubagentCreateConfig;
 
 export interface SpiraUiCapabilities {
   bridgeVersion: number;
@@ -151,7 +170,15 @@ export type SpiraUiAction =
   | { type: "toggle-spoken-replies" }
   | { type: "set-tts-provider"; provider: TtsProvider }
   | { type: "respond-permission"; requestId: string; approved: boolean }
-  | { type: "respond-upgrade"; proposalId: string; approved: boolean };
+  | { type: "respond-upgrade"; proposalId: string; approved: boolean }
+  | { type: "add-mcp-server"; config: McpServerConfig }
+  | { type: "update-mcp-server"; serverId: string; patch: McpServerUpdateConfig }
+  | { type: "create-subagent"; config: SpiraUiCreateSubagentConfig }
+  | {
+      type: "update-subagent";
+      agentId: string;
+      patch: Partial<Omit<SubagentDomain, "id" | "source" | "delegationToolName">>;
+    };
 
 export type SpiraUiWaitCondition =
   | { type: "active-view"; view: SpiraUiView }

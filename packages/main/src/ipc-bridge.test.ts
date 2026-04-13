@@ -148,4 +148,52 @@ describe("setupIpcBridge", () => {
     expect(forwardedMessages).toContain("backend:hello");
     expect(forwardedMessages).not.toContain("conversation:recent:result");
   });
+
+  it("requests YouTrack project suggestions through the backend bridge", async () => {
+    const { setupIpcBridge } = await loadBridge();
+    const webContents = new FakeWebContents();
+    const window = {
+      isDestroyed: () => false,
+      webContents,
+    } as unknown as BrowserWindow;
+
+    const bridge = setupIpcBridge(window, 9720, { rendererBuildId: "test-renderer" });
+    const socket = FakeWebSocket.instances[0];
+    socket?.open();
+    socket?.receive({
+      type: "backend:hello",
+      generation: 7,
+      protocolVersion: PROTOCOL_VERSION,
+      backendBuildId: "backend-test",
+    });
+
+    const pendingProjects = bridge.searchYouTrackProjects(true, "spi", 5);
+    const projectSearchRequest = getLastSentPayload(socket as FakeWebSocket);
+    expect(projectSearchRequest).toMatchObject({
+      type: "youtrack:projects:search",
+      enabled: true,
+      query: "spi",
+      limit: 5,
+    });
+
+    socket?.receive({
+      type: "youtrack:projects:search:result",
+      requestId: String(projectSearchRequest.requestId),
+      projects: [
+        {
+          id: "0-13",
+          shortName: "SPI",
+          name: "Spira",
+        },
+      ],
+    });
+
+    await expect(pendingProjects).resolves.toEqual([
+      {
+        id: "0-13",
+        shortName: "SPI",
+        name: "Spira",
+      },
+    ]);
+  });
 });

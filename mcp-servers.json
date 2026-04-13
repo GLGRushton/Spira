@@ -36,9 +36,22 @@
     {
       "id": "spira-ui",
       "name": "Spira UI",
+      "description": "Semantic control bridge for the live Spira interface and state snapshot.",
       "transport": "stdio",
       "command": "node",
       "args": ["packages/mcp-spira-ui/dist/index.js"],
+      "env": {},
+      "enabled": true,
+      "autoRestart": true,
+      "maxRestarts": 3
+    },
+    {
+      "id": "spira-data-entry",
+      "name": "Spira Data Entry",
+      "description": "Structured entry tools for custom MCP servers and custom subagents.",
+      "transport": "stdio",
+      "command": "node",
+      "args": ["packages/mcp-spira-data-entry/dist/index.js"],
       "env": {},
       "enabled": true,
       "autoRestart": true,

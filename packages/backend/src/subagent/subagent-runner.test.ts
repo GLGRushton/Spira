@@ -24,6 +24,7 @@ const createToolAggregator = () =>
               name: "spira_ui_get_snapshot",
               description: "Read Spira snapshot.",
               inputSchema: { type: "object", properties: {}, additionalProperties: false },
+              access: { mode: "read", source: "annotation" },
             },
           ]
         : [],

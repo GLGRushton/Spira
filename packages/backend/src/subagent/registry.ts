@@ -1,5 +1,5 @@
 import type { SpiraMemoryDatabase, SubagentConfigRecord } from "@spira/memory-db";
-import type { McpTool, SubagentDomain } from "@spira/shared";
+import type { McpTool, SubagentCreateConfig, SubagentDomain } from "@spira/shared";
 import { SUBAGENT_DOMAINS } from "@spira/shared";
 import { ConfigError } from "../util/errors.js";
 import type { SpiraEventBus } from "../util/event-bus.js";
@@ -32,10 +32,30 @@ const normalizeDomain = (domain: SubagentDomain): SubagentDomain => ({
 
 const toDomainRecord = (record: SubagentConfigRecord): SubagentDomain => normalizeDomain(record);
 
+export const mergeBuiltinDomains = (
+  builtinDomains: readonly SubagentDomain[],
+  dynamicBuiltinDomains: readonly SubagentDomain[],
+): SubagentDomain[] => {
+  const dynamicIds = new Set(dynamicBuiltinDomains.map((domain) => domain.id));
+  return [...builtinDomains.filter((domain) => !dynamicIds.has(domain.id)), ...dynamicBuiltinDomains];
+};
+
+export const filterManagedBuiltinDomains = (
+  domains: readonly SubagentDomain[],
+  activeBuiltinDomainIds: readonly string[],
+  managedBuiltinDomainIds: readonly string[],
+): SubagentDomain[] => {
+  const activeIds = new Set(activeBuiltinDomainIds);
+  const managedIds = new Set(managedBuiltinDomainIds);
+  return domains.filter((domain) => !managedIds.has(domain.id) || activeIds.has(domain.id));
+};
+
 export class SubagentRegistry {
   constructor(
     private readonly bus: SpiraEventBus,
     private readonly memoryDb: SpiraMemoryDatabase | null,
+    private readonly dynamicBuiltinDomains: readonly SubagentDomain[] = [],
+    private readonly managedBuiltinDomainIds: readonly string[] = [],
   ) {}
 
   initialize(): void {
@@ -44,16 +64,20 @@ export class SubagentRegistry {
       return;
     }
 
-    this.memoryDb.seedBuiltinSubagentConfigs(SUBAGENT_DOMAINS);
+    this.memoryDb.seedBuiltinSubagentConfigs(mergeBuiltinDomains(SUBAGENT_DOMAINS, this.dynamicBuiltinDomains));
     this.publishCatalog();
   }
 
   listAll(): SubagentDomain[] {
     if (!this.memoryDb) {
-      return [...SUBAGENT_DOMAINS];
+      return mergeBuiltinDomains(SUBAGENT_DOMAINS, this.dynamicBuiltinDomains);
     }
 
-    return this.memoryDb.listSubagentConfigs().map(toDomainRecord);
+    return filterManagedBuiltinDomains(
+      this.memoryDb.listSubagentConfigs().map(toDomainRecord),
+      this.dynamicBuiltinDomains.map((domain) => domain.id),
+      this.managedBuiltinDomainIds,
+    );
   }
 
   listReady(): SubagentDomain[] {
@@ -84,9 +108,7 @@ export class SubagentRegistry {
     return scopedTools.filter((tool) => allowedToolNames.has(tool.name));
   }
 
-  createCustom(
-    input: Omit<SubagentDomain, "source" | "delegationToolName"> & { id?: string; delegationToolName?: string },
-  ): SubagentDomain {
+  createCustom(input: SubagentCreateConfig): SubagentDomain {
     if (!this.memoryDb) {
       throw new ConfigError("Subagent persistence is unavailable");
     }
@@ -98,7 +120,7 @@ export class SubagentRegistry {
     if (this.get(id)) {
       throw new ConfigError(`Subagent ${id} already exists`);
     }
-    if (RESERVED_SUBAGENT_IDS.has(id)) {
+    if (RESERVED_SUBAGENT_IDS.has(id) || this.managedBuiltinDomainIds.includes(id)) {
       throw new ConfigError(`Subagent id ${id} is reserved`);
     }
 

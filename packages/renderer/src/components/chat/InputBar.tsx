@@ -128,7 +128,7 @@ export function InputBar() {
       }}
     >
       {awaitingQuestion && !isStreaming && !isResetting ? (
-        <div className={styles.awaitingBanner}>Shinra is waiting for your answer.</div>
+        <div className={styles.awaitingBanner}>Shinra is awaiting your answer.</div>
       ) : null}
       <textarea
         ref={inputRef}
@@ -186,7 +186,7 @@ export function InputBar() {
                   );
                 }}
               >
-                Clear
+                Clear local log
               </button>
               <button
                 type="button"
@@ -212,7 +212,7 @@ export function InputBar() {
               : submit
           }
         >
-          {isResetting ? "Resetting..." : isStreaming ? (isAborting ? "Stopping..." : "Stop") : "Send"}
+          {isResetting ? "Resetting..." : isStreaming ? (isAborting ? "Stopping..." : "Stop") : "Transmit"}
         </button>
       </div>
     </div>

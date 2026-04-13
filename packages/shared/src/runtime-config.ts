@@ -3,6 +3,8 @@ export const RUNTIME_CONFIG_KEYS = [
   "elevenLabsApiKey",
   "picovoiceAccessKey",
   "nexusModsApiKey",
+  "youTrackBaseUrl",
+  "youTrackToken",
 ] as const;
 
 export type RuntimeConfigKey = (typeof RUNTIME_CONFIG_KEYS)[number];
