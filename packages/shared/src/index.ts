@@ -15,6 +15,32 @@ export type {
 } from "./project-repo-types.js";
 export { normalizeProjectKey } from "./project-repo-types.js";
 export type {
+  CancelTicketRunWorkResult,
+  CommitTicketRunResult,
+  CompleteTicketRunResult,
+  CreateTicketRunPullRequestResult,
+  ContinueTicketRunWorkResult,
+  GenerateTicketRunCommitDraftResult,
+  RetryTicketRunSyncResult,
+  SetTicketRunCommitDraftResult,
+  StartTicketRunWorkResult,
+  StartTicketRunRequest,
+  StartTicketRunResult,
+  SyncTicketRunRemoteResult,
+  TicketRunDiffFileSummary,
+  TicketRunGitState,
+  TicketRunGitStateResult,
+  TicketRunAttemptStatus,
+  TicketRunAttemptSummary,
+  TicketRunCleanupState,
+  TicketRunPullRequestLinks,
+  TicketRunPushAction,
+  TicketRunSnapshot,
+  TicketRunStatus,
+  TicketRunSummary,
+  TicketRunWorktreeSummary,
+} from "./ticket-run-types.js";
+export type {
   ConnectionStatus,
   ElectronApi,
   RendererFatalPayload,
@@ -133,6 +159,7 @@ export {
 } from "./protocol.js";
 export { SUBAGENT_DOMAIN_IDS, SUBAGENT_SCOPE_IDS } from "./subagent-types.js";
 export { SUBAGENT_DOMAINS } from "./subagent-types.js";
+export { TICKET_RUN_ATTEMPT_STATUSES, TICKET_RUN_CLEANUP_STATES, TICKET_RUN_STATUSES } from "./ticket-run-types.js";
 export {
   SPIRA_UI_ACTION_TYPES,
   SPIRA_UI_CONTROL_BRIDGE_VERSION,

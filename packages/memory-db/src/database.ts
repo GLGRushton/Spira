@@ -1,8 +1,26 @@
 import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import path from "node:path";
-import type { McpServerConfig, McpServerSource, SubagentDomain, SubagentSource } from "@spira/shared";
-import { normalizeMcpToolAccessPolicy, summarizeConversationTitle } from "@spira/shared";
+import type {
+  McpServerConfig,
+  McpServerSource,
+  SubagentDomain,
+  SubagentSource,
+  TicketRunAttemptStatus,
+  TicketRunAttemptSummary,
+  TicketRunCleanupState,
+  TicketRunSnapshot,
+  TicketRunStatus,
+  TicketRunSummary,
+  TicketRunWorktreeSummary,
+} from "@spira/shared";
+import {
+  TICKET_RUN_ATTEMPT_STATUSES,
+  TICKET_RUN_CLEANUP_STATES,
+  TICKET_RUN_STATUSES,
+  normalizeMcpToolAccessPolicy,
+  summarizeConversationTitle,
+} from "@spira/shared";
 import BetterSqlite3 from "better-sqlite3";
 
 const SQLITE_BUSY_TIMEOUT_MS = 5_000;
@@ -140,6 +158,46 @@ export interface ProjectRepoMappingRecord {
   updatedAt: number;
 }
 
+export interface UpsertTicketRunWorktreeInput {
+  repoRelativePath: string;
+  repoAbsolutePath: string;
+  worktreePath: string;
+  branchName: string;
+  cleanupState?: TicketRunCleanupState;
+  createdAt?: number;
+  updatedAt?: number;
+}
+
+export interface UpsertTicketRunInput {
+  runId: string;
+  stationId?: string | null;
+  ticketId: string;
+  ticketSummary: string;
+  ticketUrl: string;
+  projectKey: string;
+  status: TicketRunStatus;
+  statusMessage?: string | null;
+  commitMessageDraft?: string | null;
+  startedAt?: number;
+  createdAt?: number;
+  worktrees: readonly UpsertTicketRunWorktreeInput[];
+  attempts?: readonly UpsertTicketRunAttemptInput[];
+}
+
+export interface UpsertTicketRunAttemptInput {
+  attemptId: string;
+  subagentRunId?: string | null;
+  sequence: number;
+  status: TicketRunAttemptStatus;
+  prompt?: string | null;
+  summary?: string | null;
+  followupNeeded?: boolean;
+  startedAt?: number;
+  createdAt?: number;
+  updatedAt?: number;
+  completedAt?: number | null;
+}
+
 interface MigrationDefinition {
   version: number;
   statements: string[];
@@ -207,6 +265,47 @@ interface ProjectRepoMappingRow {
   projectKey: string;
   repoRelativePath: string;
   updatedAt: number;
+}
+
+interface TicketRunRow {
+  runId: string;
+  stationId: string | null;
+  ticketId: string;
+  ticketSummary: string;
+  ticketUrl: string;
+  projectKey: string;
+  status: string;
+  statusMessage: string | null;
+  commitMessageDraft: string | null;
+  startedAt: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+interface TicketRunWorktreeRow {
+  runId: string;
+  repoRelativePath: string;
+  repoAbsolutePath: string;
+  worktreePath: string;
+  branchName: string;
+  cleanupState: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+interface TicketRunAttemptRow {
+  attemptId: string;
+  runId: string;
+  subagentRunId: string | null;
+  sequence: number;
+  status: string;
+  prompt: string | null;
+  summary: string | null;
+  followupNeeded: number;
+  startedAt: number;
+  createdAt: number;
+  updatedAt: number;
+  completedAt: number | null;
 }
 
 interface McpServerConfigRow {
@@ -456,6 +555,150 @@ const MIGRATIONS: MigrationDefinition[] = [
       "CREATE INDEX idx_mcp_server_configs_source ON mcp_server_configs(source, updated_at DESC)",
     ],
   },
+  {
+    version: 9,
+    statements: [
+      `CREATE TABLE ticket_runs (
+        run_id TEXT PRIMARY KEY,
+        ticket_id TEXT NOT NULL,
+        ticket_summary TEXT NOT NULL,
+        ticket_url TEXT NOT NULL,
+        project_key TEXT NOT NULL,
+        status TEXT NOT NULL CHECK(status IN ('starting', 'ready', 'blocked', 'error', 'done')),
+        status_message TEXT,
+        started_at INTEGER NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      )`,
+      `CREATE TABLE ticket_run_worktrees (
+        run_id TEXT NOT NULL,
+        repo_relative_path TEXT NOT NULL,
+        repo_absolute_path TEXT NOT NULL,
+        worktree_path TEXT NOT NULL,
+        branch_name TEXT NOT NULL,
+        cleanup_state TEXT NOT NULL CHECK(cleanup_state IN ('retained', 'removed')),
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (run_id, repo_relative_path),
+        FOREIGN KEY(run_id) REFERENCES ticket_runs(run_id) ON DELETE CASCADE
+      )`,
+      "CREATE INDEX idx_ticket_run_worktrees_cleanup_state ON ticket_run_worktrees(cleanup_state, updated_at DESC)",
+    ],
+  },
+  {
+    version: 10,
+    statements: [
+      "ALTER TABLE ticket_run_worktrees RENAME TO ticket_run_worktrees_v9",
+      "ALTER TABLE ticket_runs RENAME TO ticket_runs_v9",
+      "DROP INDEX IF EXISTS idx_ticket_run_worktrees_cleanup_state",
+      "DROP INDEX IF EXISTS idx_ticket_runs_ticket_id",
+      "DROP INDEX IF EXISTS idx_ticket_runs_status",
+      `CREATE TABLE ticket_runs (
+        run_id TEXT PRIMARY KEY,
+        ticket_id TEXT NOT NULL,
+        ticket_summary TEXT NOT NULL,
+        ticket_url TEXT NOT NULL,
+        project_key TEXT NOT NULL,
+        status TEXT NOT NULL CHECK(status IN ('starting', 'ready', 'blocked', 'working', 'awaiting-review', 'error', 'done')),
+        status_message TEXT,
+        started_at INTEGER NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      )`,
+      `INSERT INTO ticket_runs (
+        run_id,
+        ticket_id,
+        ticket_summary,
+        ticket_url,
+        project_key,
+        status,
+        status_message,
+        started_at,
+        created_at,
+        updated_at
+      )
+      SELECT
+        run_id,
+        ticket_id,
+        ticket_summary,
+        ticket_url,
+        project_key,
+        status,
+        status_message,
+        started_at,
+        created_at,
+        updated_at
+      FROM ticket_runs_v9`,
+      "CREATE UNIQUE INDEX idx_ticket_runs_ticket_id ON ticket_runs(ticket_id)",
+      "CREATE INDEX idx_ticket_runs_status ON ticket_runs(status, updated_at DESC)",
+      `CREATE TABLE ticket_run_worktrees (
+        run_id TEXT NOT NULL,
+        repo_relative_path TEXT NOT NULL,
+        repo_absolute_path TEXT NOT NULL,
+        worktree_path TEXT NOT NULL,
+        branch_name TEXT NOT NULL,
+        cleanup_state TEXT NOT NULL CHECK(cleanup_state IN ('retained', 'removed')),
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (run_id, repo_relative_path),
+        FOREIGN KEY(run_id) REFERENCES ticket_runs(run_id) ON DELETE CASCADE
+      )`,
+      `INSERT INTO ticket_run_worktrees (
+        run_id,
+        repo_relative_path,
+        repo_absolute_path,
+        worktree_path,
+        branch_name,
+        cleanup_state,
+        created_at,
+        updated_at
+      )
+      SELECT
+        run_id,
+        repo_relative_path,
+        repo_absolute_path,
+        worktree_path,
+        branch_name,
+        cleanup_state,
+        created_at,
+        updated_at
+      FROM ticket_run_worktrees_v9`,
+      `CREATE TABLE ticket_run_attempts (
+        attempt_id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL,
+        subagent_run_id TEXT,
+        sequence INTEGER NOT NULL,
+        status TEXT NOT NULL CHECK(status IN ('running', 'completed', 'failed', 'cancelled')),
+        prompt TEXT,
+        summary TEXT,
+        followup_needed INTEGER NOT NULL DEFAULT 0,
+        started_at INTEGER NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        completed_at INTEGER,
+        FOREIGN KEY(run_id) REFERENCES ticket_runs(run_id) ON DELETE CASCADE
+      )`,
+      "DROP TABLE ticket_run_worktrees_v9",
+      "DROP TABLE ticket_runs_v9",
+      "CREATE UNIQUE INDEX idx_ticket_runs_ticket_id_v10 ON ticket_runs(ticket_id)",
+      "CREATE INDEX idx_ticket_runs_status_v10 ON ticket_runs(status, updated_at DESC)",
+      "CREATE INDEX idx_ticket_run_worktrees_cleanup_state_v10 ON ticket_run_worktrees(cleanup_state, updated_at DESC)",
+      "CREATE UNIQUE INDEX idx_ticket_run_attempts_sequence_v10 ON ticket_run_attempts(run_id, sequence)",
+      "CREATE INDEX idx_ticket_run_attempts_status_v10 ON ticket_run_attempts(status, updated_at DESC)",
+      "CREATE INDEX idx_ticket_run_attempts_subagent_run_id_v10 ON ticket_run_attempts(subagent_run_id)",
+    ],
+  },
+  {
+    version: 11,
+    statements: [
+      "ALTER TABLE ticket_runs ADD COLUMN station_id TEXT",
+      "CREATE INDEX idx_ticket_runs_station_id_v11 ON ticket_runs(station_id)",
+    ],
+  },
+  {
+    version: 12,
+    statements: ["ALTER TABLE ticket_runs ADD COLUMN commit_message_draft TEXT"],
+  },
 ];
 
 type SqliteDatabase = InstanceType<typeof BetterSqlite3>;
@@ -528,6 +771,24 @@ function assertMcpServerSource(source: string): asserts source is McpServerSourc
 function assertSubagentSource(source: string): asserts source is SubagentSource {
   if (source !== "builtin" && source !== "user") {
     throw new Error(`Unsupported subagent source: ${source}`);
+  }
+}
+
+function assertTicketRunStatus(status: string): asserts status is TicketRunStatus {
+  if (!TICKET_RUN_STATUSES.includes(status as TicketRunStatus)) {
+    throw new Error(`Unsupported ticket run status: ${status}`);
+  }
+}
+
+function assertTicketRunAttemptStatus(status: string): asserts status is TicketRunAttemptStatus {
+  if (!TICKET_RUN_ATTEMPT_STATUSES.includes(status as TicketRunAttemptStatus)) {
+    throw new Error(`Unsupported ticket run attempt status: ${status}`);
+  }
+}
+
+function assertTicketRunCleanupState(state: string): asserts state is TicketRunCleanupState {
+  if (!TICKET_RUN_CLEANUP_STATES.includes(state as TicketRunCleanupState)) {
+    throw new Error(`Unsupported ticket run cleanup state: ${state}`);
   }
 }
 
@@ -615,6 +876,61 @@ const mapSubagentConfigRow = (row: SubagentConfigRow): SubagentConfigRecord => {
     ready: toBoolean(row.ready),
     createdAt: Number(row.createdAt),
     updatedAt: Number(row.updatedAt),
+  };
+};
+
+const mapTicketRunWorktreeRow = (row: TicketRunWorktreeRow): TicketRunWorktreeSummary => {
+  assertTicketRunCleanupState(row.cleanupState);
+  return {
+    repoRelativePath: String(row.repoRelativePath),
+    repoAbsolutePath: String(row.repoAbsolutePath),
+    worktreePath: String(row.worktreePath),
+    branchName: String(row.branchName),
+    cleanupState: row.cleanupState,
+    createdAt: Number(row.createdAt),
+    updatedAt: Number(row.updatedAt),
+  };
+};
+
+const mapTicketRunAttemptRow = (row: TicketRunAttemptRow): TicketRunAttemptSummary => {
+  assertTicketRunAttemptStatus(row.status);
+  return {
+    attemptId: String(row.attemptId),
+    runId: String(row.runId),
+    subagentRunId: row.subagentRunId === null ? null : String(row.subagentRunId),
+    sequence: Number(row.sequence),
+    status: row.status,
+    prompt: row.prompt === null ? null : String(row.prompt),
+    summary: row.summary === null ? null : String(row.summary),
+    followupNeeded: toBoolean(row.followupNeeded),
+    startedAt: Number(row.startedAt),
+    createdAt: Number(row.createdAt),
+    updatedAt: Number(row.updatedAt),
+    completedAt: row.completedAt === null ? null : Number(row.completedAt),
+  };
+};
+
+const mapTicketRunRow = (
+  row: TicketRunRow,
+  worktrees: readonly TicketRunWorktreeSummary[],
+  attempts: readonly TicketRunAttemptSummary[],
+): TicketRunSummary => {
+  assertTicketRunStatus(row.status);
+  return {
+    runId: String(row.runId),
+    stationId: row.stationId === null ? null : String(row.stationId),
+    ticketId: String(row.ticketId),
+    ticketSummary: String(row.ticketSummary),
+    ticketUrl: String(row.ticketUrl),
+    projectKey: String(row.projectKey),
+    status: row.status,
+    statusMessage: row.statusMessage === null ? null : String(row.statusMessage),
+    commitMessageDraft: row.commitMessageDraft === null ? null : String(row.commitMessageDraft),
+    startedAt: Number(row.startedAt),
+    createdAt: Number(row.createdAt),
+    updatedAt: Number(row.updatedAt),
+    worktrees: [...worktrees],
+    attempts: [...attempts],
   };
 };
 
@@ -1177,6 +1493,380 @@ export class SpiraMemoryDatabase {
       projectKey: normalizedProjectKey,
       repoRelativePaths: normalizedPaths,
       updatedAt: now,
+    };
+  }
+
+  listTicketRuns(): TicketRunSummary[] {
+    const runRows = this.db
+      .prepare(
+        `SELECT
+           run_id AS runId,
+           station_id AS stationId,
+           ticket_id AS ticketId,
+           ticket_summary AS ticketSummary,
+           ticket_url AS ticketUrl,
+           project_key AS projectKey,
+           status,
+           status_message AS statusMessage,
+           commit_message_draft AS commitMessageDraft,
+           started_at AS startedAt,
+           created_at AS createdAt,
+           updated_at AS updatedAt
+         FROM ticket_runs
+         ORDER BY updated_at DESC, created_at DESC`,
+      )
+      .all() as unknown as TicketRunRow[];
+
+    const worktreeRows = this.db
+      .prepare(
+        `SELECT
+           run_id AS runId,
+           repo_relative_path AS repoRelativePath,
+           repo_absolute_path AS repoAbsolutePath,
+           worktree_path AS worktreePath,
+           branch_name AS branchName,
+           cleanup_state AS cleanupState,
+           created_at AS createdAt,
+           updated_at AS updatedAt
+         FROM ticket_run_worktrees
+         ORDER BY run_id ASC, repo_relative_path COLLATE NOCASE ASC`,
+      )
+      .all() as unknown as TicketRunWorktreeRow[];
+
+    const worktreesByRun = new Map<string, TicketRunWorktreeSummary[]>();
+    for (const row of worktreeRows) {
+      const worktrees = worktreesByRun.get(row.runId) ?? [];
+      worktrees.push(mapTicketRunWorktreeRow(row));
+      worktreesByRun.set(row.runId, worktrees);
+    }
+
+    const attemptRows = this.db
+      .prepare(
+        `SELECT
+           attempt_id AS attemptId,
+           run_id AS runId,
+           subagent_run_id AS subagentRunId,
+           sequence,
+           status,
+           prompt,
+           summary,
+           followup_needed AS followupNeeded,
+           started_at AS startedAt,
+           created_at AS createdAt,
+           updated_at AS updatedAt,
+           completed_at AS completedAt
+         FROM ticket_run_attempts
+         ORDER BY run_id ASC, sequence ASC`,
+      )
+      .all() as unknown as TicketRunAttemptRow[];
+
+    const attemptsByRun = new Map<string, TicketRunAttemptSummary[]>();
+    for (const row of attemptRows) {
+      const attempts = attemptsByRun.get(row.runId) ?? [];
+      attempts.push(mapTicketRunAttemptRow(row));
+      attemptsByRun.set(row.runId, attempts);
+    }
+
+    return runRows.map((row) =>
+      mapTicketRunRow(row, worktreesByRun.get(row.runId) ?? [], attemptsByRun.get(row.runId) ?? []),
+    );
+  }
+
+  getTicketRun(runId: string): TicketRunSummary | null {
+    const row = this.db
+      .prepare(
+        `SELECT
+           run_id AS runId,
+           station_id AS stationId,
+           ticket_id AS ticketId,
+           ticket_summary AS ticketSummary,
+           ticket_url AS ticketUrl,
+           project_key AS projectKey,
+           status,
+           status_message AS statusMessage,
+           commit_message_draft AS commitMessageDraft,
+           started_at AS startedAt,
+           created_at AS createdAt,
+           updated_at AS updatedAt
+         FROM ticket_runs
+         WHERE run_id = @runId`,
+      )
+      .get({ runId }) as TicketRunRow | undefined;
+
+    if (!row) {
+      return null;
+    }
+
+    const worktrees = this.db
+      .prepare(
+        `SELECT
+           run_id AS runId,
+           repo_relative_path AS repoRelativePath,
+           repo_absolute_path AS repoAbsolutePath,
+           worktree_path AS worktreePath,
+           branch_name AS branchName,
+           cleanup_state AS cleanupState,
+           created_at AS createdAt,
+           updated_at AS updatedAt
+         FROM ticket_run_worktrees
+         WHERE run_id = @runId
+         ORDER BY repo_relative_path COLLATE NOCASE ASC`,
+      )
+      .all({ runId }) as unknown as TicketRunWorktreeRow[];
+
+    const attempts = this.db
+      .prepare(
+        `SELECT
+           attempt_id AS attemptId,
+           run_id AS runId,
+           subagent_run_id AS subagentRunId,
+           sequence,
+           status,
+           prompt,
+           summary,
+           followup_needed AS followupNeeded,
+           started_at AS startedAt,
+           created_at AS createdAt,
+           updated_at AS updatedAt,
+           completed_at AS completedAt
+         FROM ticket_run_attempts
+         WHERE run_id = @runId
+         ORDER BY sequence ASC`,
+      )
+      .all({ runId }) as unknown as TicketRunAttemptRow[];
+
+    return mapTicketRunRow(
+      row,
+      worktrees.map((worktree) => mapTicketRunWorktreeRow(worktree)),
+      attempts.map((attempt) => mapTicketRunAttemptRow(attempt)),
+    );
+  }
+
+  getTicketRunByTicketId(ticketId: string): TicketRunSummary | null {
+    const row = this.db
+      .prepare(
+        `SELECT
+            run_id AS runId
+          FROM ticket_runs
+         WHERE ticket_id = @ticketId`,
+      )
+      .get({ ticketId }) as { runId: string } | undefined;
+
+    return row ? this.getTicketRun(String(row.runId)) : null;
+  }
+
+  upsertTicketRun(input: UpsertTicketRunInput): TicketRunSummary {
+    this.assertWritable();
+    const runId = input.runId.trim();
+    const stationId = normalizeTitle(input.stationId);
+    const ticketId = input.ticketId.trim();
+    const ticketSummary = input.ticketSummary.trim();
+    const ticketUrl = input.ticketUrl.trim();
+    const projectKey = input.projectKey.trim();
+    if (!runId || !ticketId || !ticketSummary || !ticketUrl || !projectKey) {
+      throw new Error("Ticket runs require non-empty run, ticket, summary, URL, and project key values.");
+    }
+
+    const now = Date.now();
+    const createdAt = input.createdAt ?? now;
+    const startedAt = input.startedAt ?? createdAt;
+    const statusMessage = normalizeTitle(input.statusMessage);
+    const commitMessageDraft = normalizeTitle(input.commitMessageDraft);
+    const status = input.status;
+    assertTicketRunStatus(status);
+    const normalizedWorktrees = input.worktrees.map((worktree) => {
+      const repoRelativePath = worktree.repoRelativePath.trim();
+      const repoAbsolutePath = worktree.repoAbsolutePath.trim();
+      const worktreePath = worktree.worktreePath.trim();
+      const branchName = worktree.branchName.trim();
+      if (!repoRelativePath || !repoAbsolutePath || !worktreePath || !branchName) {
+        throw new Error("Ticket run worktrees require repo path, absolute path, worktree path, and branch name.");
+      }
+
+      const cleanupState = worktree.cleanupState ?? "retained";
+      assertTicketRunCleanupState(cleanupState);
+      return {
+        repoRelativePath,
+        repoAbsolutePath,
+        worktreePath,
+        branchName,
+        cleanupState,
+        createdAt: worktree.createdAt ?? createdAt,
+        updatedAt: worktree.updatedAt ?? now,
+      };
+    });
+    const normalizedAttempts = (input.attempts ?? []).map((attempt) => {
+      const attemptId = attempt.attemptId.trim();
+      const prompt = normalizeTitle(attempt.prompt);
+      const summary = normalizeTitle(attempt.summary);
+      if (!attemptId) {
+        throw new Error("Ticket run attempts require a non-empty attempt id.");
+      }
+      assertTicketRunAttemptStatus(attempt.status);
+      return {
+        attemptId,
+        subagentRunId: normalizeTitle(attempt.subagentRunId),
+        sequence: attempt.sequence,
+        status: attempt.status,
+        prompt,
+        summary,
+        followupNeeded: attempt.followupNeeded ? 1 : 0,
+        startedAt: attempt.startedAt ?? now,
+        createdAt: attempt.createdAt ?? now,
+        updatedAt: attempt.updatedAt ?? now,
+        completedAt: attempt.completedAt ?? null,
+      };
+    });
+
+    const replace = this.db.transaction(() => {
+      this.db
+        .prepare(
+          `INSERT INTO ticket_runs (
+             run_id,
+             station_id,
+             ticket_id,
+             ticket_summary,
+             ticket_url,
+             project_key,
+             status,
+             status_message,
+             commit_message_draft,
+             started_at,
+             created_at,
+             updated_at
+           ) VALUES (
+             @runId,
+             @stationId,
+             @ticketId,
+             @ticketSummary,
+             @ticketUrl,
+             @projectKey,
+             @status,
+             @statusMessage,
+             @commitMessageDraft,
+             @startedAt,
+             @createdAt,
+             @updatedAt
+           )
+           ON CONFLICT(run_id) DO UPDATE SET
+              ticket_id = excluded.ticket_id,
+              station_id = excluded.station_id,
+              ticket_summary = excluded.ticket_summary,
+             ticket_url = excluded.ticket_url,
+              project_key = excluded.project_key,
+              status = excluded.status,
+              status_message = excluded.status_message,
+              commit_message_draft = excluded.commit_message_draft,
+              started_at = excluded.started_at,
+              updated_at = excluded.updated_at`,
+        )
+        .run({
+          runId,
+          stationId,
+          ticketId,
+          ticketSummary,
+          ticketUrl,
+          projectKey,
+          status,
+          statusMessage,
+          commitMessageDraft,
+          startedAt,
+          createdAt,
+          updatedAt: now,
+        });
+
+      this.db
+        .prepare(
+          `DELETE FROM ticket_run_worktrees
+           WHERE run_id = @runId`,
+        )
+        .run({ runId });
+
+      const insert = this.db.prepare(
+        `INSERT INTO ticket_run_worktrees (
+           run_id,
+           repo_relative_path,
+           repo_absolute_path,
+           worktree_path,
+           branch_name,
+           cleanup_state,
+           created_at,
+           updated_at
+         ) VALUES (
+           @runId,
+           @repoRelativePath,
+           @repoAbsolutePath,
+           @worktreePath,
+           @branchName,
+           @cleanupState,
+           @createdAt,
+           @updatedAt
+         )`,
+      );
+
+      for (const worktree of normalizedWorktrees) {
+        insert.run({
+          runId,
+          ...worktree,
+        });
+      }
+
+      this.db
+        .prepare(
+          `DELETE FROM ticket_run_attempts
+           WHERE run_id = @runId`,
+        )
+        .run({ runId });
+
+      const insertAttempt = this.db.prepare(
+        `INSERT INTO ticket_run_attempts (
+           attempt_id,
+           run_id,
+           subagent_run_id,
+           sequence,
+           status,
+           prompt,
+           summary,
+           followup_needed,
+           started_at,
+           created_at,
+           updated_at,
+           completed_at
+         ) VALUES (
+           @attemptId,
+           @runId,
+           @subagentRunId,
+           @sequence,
+           @status,
+           @prompt,
+           @summary,
+           @followupNeeded,
+           @startedAt,
+           @createdAt,
+           @updatedAt,
+           @completedAt
+         )`,
+      );
+
+      for (const attempt of normalizedAttempts) {
+        insertAttempt.run({
+          runId,
+          ...attempt,
+        });
+      }
+    });
+
+    replace();
+    const record = this.getTicketRun(runId);
+    if (!record) {
+      throw new Error(`Failed to persist ticket run ${runId}.`);
+    }
+    return record;
+  }
+
+  getTicketRunSnapshot(): TicketRunSnapshot {
+    return {
+      runs: this.listTicketRuns(),
     };
   }
 

@@ -196,4 +196,133 @@ describe("setupIpcBridge", () => {
       },
     ]);
   });
+
+  it("starts Missions ticket runs through the backend bridge", async () => {
+    const { setupIpcBridge } = await loadBridge();
+    const webContents = new FakeWebContents();
+    const window = {
+      isDestroyed: () => false,
+      webContents,
+    } as unknown as BrowserWindow;
+
+    const bridge = setupIpcBridge(window, 9720, { rendererBuildId: "test-renderer" });
+    const socket = FakeWebSocket.instances[0];
+    socket?.open();
+    socket?.receive({
+      type: "backend:hello",
+      generation: 7,
+      protocolVersion: PROTOCOL_VERSION,
+      backendBuildId: "backend-test",
+    });
+
+    const pendingStart = bridge.startTicketRun({
+      ticketId: "SPI-101",
+      ticketSummary: "Start Missions pickup",
+      ticketUrl: "https://example.youtrack.cloud/issue/SPI-101",
+      projectKey: "SPI",
+    });
+    const startRequest = getLastSentPayload(socket as FakeWebSocket);
+    expect(startRequest).toMatchObject({
+      type: "missions:ticket-run:start",
+      ticket: {
+        ticketId: "SPI-101",
+        ticketSummary: "Start Missions pickup",
+        ticketUrl: "https://example.youtrack.cloud/issue/SPI-101",
+        projectKey: "SPI",
+      },
+    });
+
+    socket?.receive({
+      type: "missions:ticket-run:start:result",
+      requestId: String(startRequest.requestId),
+      result: {
+        reusedExistingRun: false,
+        snapshot: {
+          runs: [],
+        },
+        run: {
+          runId: "run-1",
+          stationId: null,
+          ticketId: "SPI-101",
+          ticketSummary: "Start Missions pickup",
+          ticketUrl: "https://example.youtrack.cloud/issue/SPI-101",
+          projectKey: "SPI",
+          status: "ready",
+          statusMessage: "Worktree ready.",
+          commitMessageDraft: null,
+          createdAt: 1,
+          updatedAt: 2,
+          startedAt: 1,
+          worktrees: [],
+          attempts: [],
+        },
+      },
+    });
+
+    await expect(pendingStart).resolves.toMatchObject({
+      run: {
+        runId: "run-1",
+        ticketId: "SPI-101",
+        status: "ready",
+      },
+      reusedExistingRun: false,
+    });
+  });
+
+  it("retries Missions ticket sync through the backend bridge", async () => {
+    const { setupIpcBridge } = await loadBridge();
+    const webContents = new FakeWebContents();
+    const window = {
+      isDestroyed: () => false,
+      webContents,
+    } as unknown as BrowserWindow;
+
+    const bridge = setupIpcBridge(window, 9720, { rendererBuildId: "test-renderer" });
+    const socket = FakeWebSocket.instances[0];
+    socket?.open();
+    socket?.receive({
+      type: "backend:hello",
+      generation: 7,
+      protocolVersion: PROTOCOL_VERSION,
+      backendBuildId: "backend-test",
+    });
+
+    const pendingSync = bridge.retryTicketRunSync("run-1");
+    const syncRequest = getLastSentPayload(socket as FakeWebSocket);
+    expect(syncRequest).toMatchObject({
+      type: "missions:ticket-run:sync",
+      runId: "run-1",
+    });
+
+    socket?.receive({
+      type: "missions:ticket-run:sync:result",
+      requestId: String(syncRequest.requestId),
+      result: {
+        snapshot: { runs: [] },
+        run: {
+          runId: "run-1",
+          stationId: null,
+          ticketId: "SPI-101",
+          ticketSummary: "Start Missions pickup",
+          ticketUrl: "https://example.youtrack.cloud/issue/SPI-101",
+          projectKey: "SPI",
+          status: "ready",
+          statusMessage: "Synced",
+          commitMessageDraft: null,
+          createdAt: 1,
+          updatedAt: 2,
+          startedAt: 1,
+          worktrees: [],
+          attempts: [],
+        },
+      },
+    });
+
+    await expect(pendingSync).resolves.toMatchObject({
+      run: {
+        runId: "run-1",
+        status: "ready",
+      },
+    });
+  });
 });

@@ -31,6 +31,9 @@ const createManager = (
       save(sessionId: string | null): void;
     } | null;
     envInput?: Record<string, string | undefined>;
+    allowUpgradeTools?: boolean;
+    requestUpgradeProposal?: (() => Promise<void> | void) | undefined;
+    applyHotCapabilityUpgrade?: (() => Promise<void> | void) | undefined;
   },
 ) => {
   const bus = new SpiraEventBus();
@@ -45,8 +48,8 @@ const createManager = (
     bus,
     parseEnv(options?.envInput ?? {}),
     aggregator as never,
-    undefined,
-    undefined,
+    options?.requestUpgradeProposal,
+    options?.applyHotCapabilityUpgrade,
     options,
   );
 };
@@ -216,6 +219,29 @@ describe("CopilotSessionManager", () => {
     );
     expect(toolNames).not.toContain("system_get_memory_info");
     expect(toolNames).not.toContain("delegate_to_nexus");
+  });
+
+  it("includes the upgrade tool for stations that allow upgrades", () => {
+    const manager = createManager([], {
+      requestUpgradeProposal: vi.fn(),
+      applyHotCapabilityUpgrade: vi.fn(),
+    });
+    const internals = manager as unknown as SessionManagerInternals;
+    const toolNames = internals.getSessionConfig().tools.map((tool) => tool.name);
+
+    expect(toolNames).toContain("spira_propose_upgrade");
+  });
+
+  it("omits the upgrade tool for stations that disable upgrades", () => {
+    const manager = createManager([], {
+      requestUpgradeProposal: vi.fn(),
+      applyHotCapabilityUpgrade: vi.fn(),
+      allowUpgradeTools: false,
+    });
+    const internals = manager as unknown as SessionManagerInternals;
+    const toolNames = internals.getSessionConfig().tools.map((tool) => tool.name);
+
+    expect(toolNames).not.toContain("spira_propose_upgrade");
   });
 
   it("recreates the session and retries when the SDK reports Session not found", async () => {

@@ -51,6 +51,7 @@ export const McpServersFileSchema = z.object({
 /** Validates environment variables loaded from .env */
 export const EnvSchema = z.object({
   GITHUB_TOKEN: z.string().default(""),
+  MISSION_GITHUB_TOKEN: z.string().optional(),
   YOUTRACK_BASE_URL: z.string().optional(),
   YOUTRACK_TOKEN: z.string().optional(),
   PICOVOICE_ACCESS_KEY: z.string().optional(),

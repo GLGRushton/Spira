@@ -1,5 +1,6 @@
 export const RUNTIME_CONFIG_KEYS = [
   "githubToken",
+  "missionGitHubToken",
   "elevenLabsApiKey",
   "picovoiceAccessKey",
   "nexusModsApiKey",

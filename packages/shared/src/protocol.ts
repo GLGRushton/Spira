@@ -18,6 +18,22 @@ import type {
   SubagentToolCallEvent,
   SubagentToolResultEvent,
 } from "./subagent-types.js";
+import type {
+  CancelTicketRunWorkResult,
+  CommitTicketRunResult,
+  CompleteTicketRunResult,
+  ContinueTicketRunWorkResult,
+  CreateTicketRunPullRequestResult,
+  GenerateTicketRunCommitDraftResult,
+  RetryTicketRunSyncResult,
+  SetTicketRunCommitDraftResult,
+  StartTicketRunRequest,
+  StartTicketRunResult,
+  StartTicketRunWorkResult,
+  SyncTicketRunRemoteResult,
+  TicketRunGitStateResult,
+  TicketRunSnapshot,
+} from "./ticket-run-types.js";
 import type { UpgradeProposal, UpgradeStatus } from "./upgrade.js";
 import type { YouTrackProjectSummary, YouTrackStatusSummary, YouTrackTicketSummary } from "./youtrack-types.js";
 
@@ -54,7 +70,7 @@ export interface StationSummary {
   isStreaming: boolean;
 }
 
-export const PROTOCOL_VERSION = 9;
+export const PROTOCOL_VERSION = 13;
 
 export const TTS_PROVIDERS = ["elevenlabs", "kokoro"] as const;
 export type TtsProvider = (typeof TTS_PROVIDERS)[number];
@@ -85,6 +101,20 @@ export type ClientMessage =
   | { type: "projects:snapshot:get"; requestId: string }
   | { type: "projects:workspace-root:set"; requestId: string; workspaceRoot: string | null }
   | { type: "projects:mapping:set"; requestId: string; projectKey: string; repoRelativePaths: string[] }
+  | { type: "missions:runs:get"; requestId: string }
+  | { type: "missions:ticket-run:start"; requestId: string; ticket: StartTicketRunRequest }
+  | { type: "missions:ticket-run:sync"; requestId: string; runId: string }
+  | { type: "missions:ticket-run:work:start"; requestId: string; runId: string }
+  | { type: "missions:ticket-run:work:continue"; requestId: string; runId: string; prompt?: string }
+  | { type: "missions:ticket-run:work:cancel"; requestId: string; runId: string }
+  | { type: "missions:ticket-run:complete"; requestId: string; runId: string }
+  | { type: "missions:ticket-run:git-state:get"; requestId: string; runId: string }
+  | { type: "missions:ticket-run:commit-draft:generate"; requestId: string; runId: string }
+  | { type: "missions:ticket-run:commit-draft:set"; requestId: string; runId: string; message: string }
+  | { type: "missions:ticket-run:commit"; requestId: string; runId: string; message: string }
+  | { type: "missions:ticket-run:publish"; requestId: string; runId: string }
+  | { type: "missions:ticket-run:push"; requestId: string; runId: string }
+  | { type: "missions:ticket-run:pull-request:create"; requestId: string; runId: string }
   | { type: "tts:speak"; text: string }
   | { type: "tts:stop" }
   | { type: "voice:toggle" }
@@ -137,8 +167,76 @@ export type ServerMessage =
   | { type: "youtrack:tickets:list:result"; requestId: string; tickets: YouTrackTicketSummary[] }
   | { type: "youtrack:projects:search:result"; requestId: string; projects: YouTrackProjectSummary[] }
   | { type: "projects:snapshot:result"; requestId: string; snapshot: ProjectRepoMappingsSnapshot }
+  | { type: "missions:runs:result"; requestId: string; snapshot: TicketRunSnapshot }
+  | {
+      type: "missions:ticket-run:start:result";
+      requestId: string;
+      result: StartTicketRunResult;
+    }
+  | {
+      type: "missions:ticket-run:sync:result";
+      requestId: string;
+      result: RetryTicketRunSyncResult;
+    }
+  | {
+      type: "missions:ticket-run:work:start:result";
+      requestId: string;
+      result: StartTicketRunWorkResult;
+    }
+  | {
+      type: "missions:ticket-run:work:continue:result";
+      requestId: string;
+      result: ContinueTicketRunWorkResult;
+    }
+  | {
+      type: "missions:ticket-run:work:cancel:result";
+      requestId: string;
+      result: CancelTicketRunWorkResult;
+    }
+  | {
+      type: "missions:ticket-run:complete:result";
+      requestId: string;
+      result: CompleteTicketRunResult;
+    }
+  | {
+      type: "missions:ticket-run:git-state:result";
+      requestId: string;
+      result: TicketRunGitStateResult;
+    }
+  | {
+      type: "missions:ticket-run:commit-draft:generate:result";
+      requestId: string;
+      result: GenerateTicketRunCommitDraftResult;
+    }
+  | {
+      type: "missions:ticket-run:commit-draft:set:result";
+      requestId: string;
+      result: SetTicketRunCommitDraftResult;
+    }
+  | {
+      type: "missions:ticket-run:commit:result";
+      requestId: string;
+      result: CommitTicketRunResult;
+    }
+  | {
+      type: "missions:ticket-run:publish:result";
+      requestId: string;
+      result: SyncTicketRunRemoteResult;
+    }
+  | {
+      type: "missions:ticket-run:push:result";
+      requestId: string;
+      result: SyncTicketRunRemoteResult;
+    }
+  | {
+      type: "missions:ticket-run:pull-request:create:result";
+      requestId: string;
+      result: CreateTicketRunPullRequestResult;
+    }
+  | { type: "missions:runs:updated"; snapshot: TicketRunSnapshot }
   | ({ type: "youtrack:request-error"; requestId: string } & ErrorPayload)
   | ({ type: "projects:request-error"; requestId: string } & ErrorPayload)
+  | ({ type: "missions:request-error"; requestId: string } & ErrorPayload)
   | ({ type: "conversation:request-error"; requestId: string } & ErrorPayload)
   | {
       type: "tool:call";

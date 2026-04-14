@@ -65,7 +65,7 @@ export const buildYouTrackBuiltinSubagents = (env: Env): SubagentDomain[] =>
           serverIds: [YOUTRACK_BUILTIN_SERVER_ID],
           allowedToolNames: null,
           delegationToolName: "delegate_to_youtrack",
-          allowWrites: false,
+          allowWrites: true,
           systemPrompt:
             "Focus on YouTrack issue triage, project discovery, and ticket context gathering. Use only the YouTrack tool surface unless the caller explicitly asks for broader coordination.",
           ready: true,

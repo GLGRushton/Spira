@@ -1,12 +1,26 @@
 import { randomUUID } from "node:crypto";
 import type {
+  CancelTicketRunWorkResult,
   ClientMessage,
+  CommitTicketRunResult,
+  CompleteTicketRunResult,
   ConnectionStatus,
+  ContinueTicketRunWorkResult,
   ConversationSearchMatch,
+  CreateTicketRunPullRequestResult,
+  GenerateTicketRunCommitDraftResult,
   ProjectRepoMappingsSnapshot,
+  RetryTicketRunSyncResult,
   ServerMessage,
+  SetTicketRunCommitDraftResult,
+  StartTicketRunRequest,
+  StartTicketRunResult,
+  StartTicketRunWorkResult,
   StoredConversation,
   StoredConversationSummary,
+  SyncTicketRunRemoteResult,
+  TicketRunGitStateResult,
+  TicketRunSnapshot,
   YouTrackProjectSummary,
   YouTrackStatusSummary,
   YouTrackTicketSummary,
@@ -25,7 +39,11 @@ interface IpcBridgeOptions {
   isUpgrading?: () => boolean;
 }
 
-const REPLAYABLE_SERVER_MESSAGES = new Set<ServerMessage["type"]>(["mcp:status", "subagent:catalog"]);
+const REPLAYABLE_SERVER_MESSAGES = new Set<ServerMessage["type"]>([
+  "mcp:status",
+  "subagent:catalog",
+  "missions:runs:updated",
+]);
 const CONVERSATION_REQUEST_TIMEOUT_MS = 10_000;
 
 type ConversationRequestMessage = Extract<ClientMessage, { requestId: string }>;
@@ -53,8 +71,47 @@ type ProjectRequestMessage =
 type ProjectResponseMessage =
   | Extract<ServerMessage, { type: "projects:snapshot:result" }>
   | Extract<ServerMessage, { type: "projects:request-error" }>;
-type BackendRequestMessage = ConversationRequestMessage | YouTrackRequestMessage | ProjectRequestMessage;
-type BackendResponseMessage = ConversationResponseMessage | YouTrackResponseMessage | ProjectResponseMessage;
+type MissionsRequestMessage =
+  | Extract<ClientMessage, { type: "missions:runs:get" }>
+  | Extract<ClientMessage, { type: "missions:ticket-run:start" }>
+  | Extract<ClientMessage, { type: "missions:ticket-run:sync" }>
+  | Extract<ClientMessage, { type: "missions:ticket-run:work:start" }>
+  | Extract<ClientMessage, { type: "missions:ticket-run:work:continue" }>
+  | Extract<ClientMessage, { type: "missions:ticket-run:work:cancel" }>
+  | Extract<ClientMessage, { type: "missions:ticket-run:complete" }>
+  | Extract<ClientMessage, { type: "missions:ticket-run:git-state:get" }>
+  | Extract<ClientMessage, { type: "missions:ticket-run:commit-draft:generate" }>
+  | Extract<ClientMessage, { type: "missions:ticket-run:commit-draft:set" }>
+  | Extract<ClientMessage, { type: "missions:ticket-run:commit" }>
+  | Extract<ClientMessage, { type: "missions:ticket-run:publish" }>
+  | Extract<ClientMessage, { type: "missions:ticket-run:push" }>
+  | Extract<ClientMessage, { type: "missions:ticket-run:pull-request:create" }>;
+type MissionsResponseMessage =
+  | Extract<ServerMessage, { type: "missions:runs:result" }>
+  | Extract<ServerMessage, { type: "missions:ticket-run:start:result" }>
+  | Extract<ServerMessage, { type: "missions:ticket-run:sync:result" }>
+  | Extract<ServerMessage, { type: "missions:ticket-run:work:start:result" }>
+  | Extract<ServerMessage, { type: "missions:ticket-run:work:continue:result" }>
+  | Extract<ServerMessage, { type: "missions:ticket-run:work:cancel:result" }>
+  | Extract<ServerMessage, { type: "missions:ticket-run:complete:result" }>
+  | Extract<ServerMessage, { type: "missions:ticket-run:git-state:result" }>
+  | Extract<ServerMessage, { type: "missions:ticket-run:commit-draft:generate:result" }>
+  | Extract<ServerMessage, { type: "missions:ticket-run:commit-draft:set:result" }>
+  | Extract<ServerMessage, { type: "missions:ticket-run:commit:result" }>
+  | Extract<ServerMessage, { type: "missions:ticket-run:publish:result" }>
+  | Extract<ServerMessage, { type: "missions:ticket-run:push:result" }>
+  | Extract<ServerMessage, { type: "missions:ticket-run:pull-request:create:result" }>
+  | Extract<ServerMessage, { type: "missions:request-error" }>;
+type BackendRequestMessage =
+  | ConversationRequestMessage
+  | YouTrackRequestMessage
+  | ProjectRequestMessage
+  | MissionsRequestMessage;
+type BackendResponseMessage =
+  | ConversationResponseMessage
+  | YouTrackResponseMessage
+  | ProjectResponseMessage
+  | MissionsResponseMessage;
 
 interface IpcBridgeRequest {
   expectedType: BackendResponseMessage["type"];
@@ -77,6 +134,20 @@ export interface IpcBridgeHandle {
   getProjectRepoMappings(): Promise<ProjectRepoMappingsSnapshot>;
   setProjectWorkspaceRoot(workspaceRoot: string | null): Promise<ProjectRepoMappingsSnapshot>;
   setProjectRepoMapping(projectKey: string, repoRelativePaths: string[]): Promise<ProjectRepoMappingsSnapshot>;
+  getTicketRuns(): Promise<TicketRunSnapshot>;
+  startTicketRun(ticket: StartTicketRunRequest): Promise<StartTicketRunResult>;
+  retryTicketRunSync(runId: string): Promise<RetryTicketRunSyncResult>;
+  startTicketRunWork(runId: string): Promise<StartTicketRunWorkResult>;
+  continueTicketRunWork(runId: string, prompt?: string): Promise<ContinueTicketRunWorkResult>;
+  cancelTicketRunWork(runId: string): Promise<CancelTicketRunWorkResult>;
+  completeTicketRun(runId: string): Promise<CompleteTicketRunResult>;
+  getTicketRunGitState(runId: string): Promise<TicketRunGitStateResult>;
+  generateTicketRunCommitDraft(runId: string): Promise<GenerateTicketRunCommitDraftResult>;
+  setTicketRunCommitDraft(runId: string, message: string): Promise<SetTicketRunCommitDraftResult>;
+  commitTicketRun(runId: string, message: string): Promise<CommitTicketRunResult>;
+  publishTicketRun(runId: string): Promise<SyncTicketRunRemoteResult>;
+  pushTicketRun(runId: string): Promise<SyncTicketRunRemoteResult>;
+  createTicketRunPullRequest(runId: string): Promise<CreateTicketRunPullRequestResult>;
 }
 
 const isBackendResponseMessage = (message: ServerMessage): message is BackendResponseMessage =>
@@ -93,7 +164,22 @@ const isBackendResponseMessage = (message: ServerMessage): message is BackendRes
     message.type === "youtrack:projects:search:result" ||
     message.type === "youtrack:request-error" ||
     message.type === "projects:snapshot:result" ||
-    message.type === "projects:request-error");
+    message.type === "projects:request-error" ||
+    message.type === "missions:runs:result" ||
+    message.type === "missions:ticket-run:start:result" ||
+    message.type === "missions:ticket-run:sync:result" ||
+    message.type === "missions:ticket-run:work:start:result" ||
+    message.type === "missions:ticket-run:work:continue:result" ||
+    message.type === "missions:ticket-run:work:cancel:result" ||
+    message.type === "missions:ticket-run:complete:result" ||
+    message.type === "missions:ticket-run:git-state:result" ||
+    message.type === "missions:ticket-run:commit-draft:generate:result" ||
+    message.type === "missions:ticket-run:commit-draft:set:result" ||
+    message.type === "missions:ticket-run:commit:result" ||
+    message.type === "missions:ticket-run:publish:result" ||
+    message.type === "missions:ticket-run:push:result" ||
+    message.type === "missions:ticket-run:pull-request:create:result" ||
+    message.type === "missions:request-error");
 
 export function setupIpcBridge(
   win: BrowserWindow,
@@ -260,7 +346,8 @@ export function setupIpcBridge(
           if (
             parsed.type === "conversation:request-error" ||
             parsed.type === "youtrack:request-error" ||
-            parsed.type === "projects:request-error"
+            parsed.type === "projects:request-error" ||
+            parsed.type === "missions:request-error"
           ) {
             request.reject(new Error(parsed.message));
             return;
@@ -446,5 +533,133 @@ export function setupIpcBridge(
         },
         "projects:snapshot:result",
       ).then((response) => response.snapshot),
+    getTicketRuns: () =>
+      requestBackend(
+        {
+          type: "missions:runs:get",
+          requestId: randomUUID(),
+        },
+        "missions:runs:result",
+      ).then((response) => response.snapshot),
+    startTicketRun: (ticket) =>
+      requestBackend(
+        {
+          type: "missions:ticket-run:start",
+          requestId: randomUUID(),
+          ticket,
+        },
+        "missions:ticket-run:start:result",
+      ).then((response) => response.result),
+    retryTicketRunSync: (runId) =>
+      requestBackend(
+        {
+          type: "missions:ticket-run:sync",
+          requestId: randomUUID(),
+          runId,
+        },
+        "missions:ticket-run:sync:result",
+      ).then((response) => response.result),
+    startTicketRunWork: (runId) =>
+      requestBackend(
+        {
+          type: "missions:ticket-run:work:start",
+          requestId: randomUUID(),
+          runId,
+        },
+        "missions:ticket-run:work:start:result",
+      ).then((response) => response.result),
+    continueTicketRunWork: (runId, prompt) =>
+      requestBackend(
+        {
+          type: "missions:ticket-run:work:continue",
+          requestId: randomUUID(),
+          runId,
+          ...(prompt !== undefined ? { prompt } : {}),
+        },
+        "missions:ticket-run:work:continue:result",
+      ).then((response) => response.result),
+    cancelTicketRunWork: (runId) =>
+      requestBackend(
+        {
+          type: "missions:ticket-run:work:cancel",
+          requestId: randomUUID(),
+          runId,
+        },
+        "missions:ticket-run:work:cancel:result",
+      ).then((response) => response.result),
+    completeTicketRun: (runId) =>
+      requestBackend(
+        {
+          type: "missions:ticket-run:complete",
+          requestId: randomUUID(),
+          runId,
+        },
+        "missions:ticket-run:complete:result",
+      ).then((response) => response.result),
+    getTicketRunGitState: (runId) =>
+      requestBackend(
+        {
+          type: "missions:ticket-run:git-state:get",
+          requestId: randomUUID(),
+          runId,
+        },
+        "missions:ticket-run:git-state:result",
+      ).then((response) => response.result),
+    generateTicketRunCommitDraft: (runId) =>
+      requestBackend(
+        {
+          type: "missions:ticket-run:commit-draft:generate",
+          requestId: randomUUID(),
+          runId,
+        },
+        "missions:ticket-run:commit-draft:generate:result",
+      ).then((response) => response.result),
+    setTicketRunCommitDraft: (runId, message) =>
+      requestBackend(
+        {
+          type: "missions:ticket-run:commit-draft:set",
+          requestId: randomUUID(),
+          runId,
+          message,
+        },
+        "missions:ticket-run:commit-draft:set:result",
+      ).then((response) => response.result),
+    commitTicketRun: (runId, message) =>
+      requestBackend(
+        {
+          type: "missions:ticket-run:commit",
+          requestId: randomUUID(),
+          runId,
+          message,
+        },
+        "missions:ticket-run:commit:result",
+      ).then((response) => response.result),
+    publishTicketRun: (runId) =>
+      requestBackend(
+        {
+          type: "missions:ticket-run:publish",
+          requestId: randomUUID(),
+          runId,
+        },
+        "missions:ticket-run:publish:result",
+      ).then((response) => response.result),
+    pushTicketRun: (runId) =>
+      requestBackend(
+        {
+          type: "missions:ticket-run:push",
+          requestId: randomUUID(),
+          runId,
+        },
+        "missions:ticket-run:push:result",
+      ).then((response) => response.result),
+    createTicketRunPullRequest: (runId) =>
+      requestBackend(
+        {
+          type: "missions:ticket-run:pull-request:create",
+          requestId: randomUUID(),
+          runId,
+        },
+        "missions:ticket-run:pull-request:create:result",
+      ).then((response) => response.result),
   };
 }

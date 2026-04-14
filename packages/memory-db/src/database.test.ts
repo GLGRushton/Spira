@@ -350,4 +350,68 @@ describe("SpiraMemoryDatabase", () => {
       },
     ]);
   });
+
+  it("persists ticket runs with worktree details", () => {
+    const database = createTestDatabase();
+
+    const saved = database.upsertTicketRun({
+      runId: "run-1",
+      stationId: "mission:run-1",
+      ticketId: "SPI-101",
+      ticketSummary: "Start Missions pickup",
+      ticketUrl: "https://example.youtrack.cloud/issue/SPI-101",
+      projectKey: "SPI",
+      status: "ready",
+      statusMessage: "Worktree ready.",
+      createdAt: 1_000,
+      startedAt: 1_000,
+      worktrees: [
+        {
+          repoRelativePath: "service-api",
+          repoAbsolutePath: "C:\\Repos\\service-api",
+          worktreePath: "C:\\Repos\\.spira-worktrees\\spi-101-service-api",
+          branchName: "feat/spi-101-start-missions-pickup",
+          cleanupState: "retained",
+          createdAt: 1_000,
+          updatedAt: 1_100,
+        },
+      ],
+      attempts: [
+        {
+          attemptId: "attempt-1",
+          subagentRunId: "subagent-1",
+          sequence: 1,
+          status: "completed",
+          summary: "Ready for review.",
+          followupNeeded: true,
+          startedAt: 1_000,
+          createdAt: 1_000,
+          updatedAt: 1_200,
+          completedAt: 1_200,
+        },
+      ],
+    });
+
+    expect(saved.worktrees).toHaveLength(1);
+    expect(saved.attempts).toHaveLength(1);
+    expect(database.getTicketRun("run-1")).toMatchObject({
+      stationId: "mission:run-1",
+      ticketId: "SPI-101",
+      status: "ready",
+      attempts: [
+        {
+          status: "completed",
+          summary: "Ready for review.",
+        },
+      ],
+      worktrees: [
+        {
+          repoRelativePath: "service-api",
+          branchName: "feat/spi-101-start-missions-pickup",
+        },
+      ],
+    });
+    expect(database.getTicketRunByTicketId("SPI-101")?.runId).toBe("run-1");
+    expect(database.getTicketRunSnapshot().runs).toHaveLength(1);
+  });
 });

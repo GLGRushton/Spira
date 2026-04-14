@@ -72,6 +72,16 @@ describe("getCopilotTools", () => {
     expect(toolNames).toEqual(["spira_propose_upgrade"]);
   });
 
+  it("omits the upgrade tool when upgrade proposals are unavailable", () => {
+    const aggregator = createAggregator();
+
+    const toolNames = getCopilotTools(aggregator as never, {
+      excludeServerIds: ["windows-system", "spira-ui", "memories"],
+    }).map((tool) => tool.name);
+
+    expect(toolNames).toEqual([]);
+  });
+
   it("builds scoped delegation tools alongside included MCP tools", () => {
     const aggregator = createAggregator();
 

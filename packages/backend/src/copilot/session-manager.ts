@@ -15,6 +15,7 @@ import type {
   SubagentDomain,
   SubagentEnvelope,
   SubagentRunHandle,
+  SubagentRunSnapshot,
   UpgradeProposal,
 } from "@spira/shared";
 import { SUBAGENT_DOMAINS } from "@spira/shared";
@@ -57,6 +58,14 @@ interface SessionManagerOptions {
   sessionPersistence?: SessionPersistence | null;
   subagentLockManager?: SubagentLockManager;
   subagentRegistry?: SubagentRegistry | null;
+  additionalInstructions?: string | null;
+  workingDirectory?: string | null;
+  allowUpgradeTools?: boolean;
+}
+
+export interface ManagedSubagentLaunch {
+  handle: SubagentRunHandle;
+  completion: Promise<SubagentRunSnapshot | null>;
 }
 
 type ReportedCopilotError = CopilotError & { reportedToClient?: boolean };
@@ -97,6 +106,9 @@ export class CopilotSessionManager {
   private readonly subagentRunRegistry: SubagentRunRegistry;
   private readonly subagentRunners = new Map<string, SubagentRunner>();
   private readonly subagentRegistry: SubagentRegistry | null;
+  private readonly additionalInstructions: string | null;
+  private readonly workingDirectory: string | null;
+  private readonly allowUpgradeTools: boolean;
 
   constructor(
     private readonly bus: SpiraEventBus,
@@ -110,6 +122,9 @@ export class CopilotSessionManager {
     this.subagentLockManager = options.subagentLockManager ?? new SubagentLockManager();
     this.subagentRunRegistry = new SubagentRunRegistry({ bus: this.bus });
     this.subagentRegistry = options.subagentRegistry ?? null;
+    this.additionalInstructions = options.additionalInstructions?.trim() || null;
+    this.workingDirectory = options.workingDirectory?.trim() || null;
+    this.allowUpgradeTools = options.allowUpgradeTools ?? true;
     this.activeSessionId = this.sessionPersistence?.load() ?? null;
     this.bus.on("mcp:servers-changed", () => {
       void this.refreshSessionForToolChanges();
@@ -238,6 +253,31 @@ export class CopilotSessionManager {
     return true;
   }
 
+  launchManagedSubagent(
+    domain: SubagentDomain,
+    args: SubagentDelegationArgs,
+    options: { workingDirectory?: string } = {},
+  ): ManagedSubagentLaunch {
+    const launch = this.createSubagentRunner(domain, options.workingDirectory).launch(args);
+    const handle = this.subagentRunRegistry.track(domain.id, args, launch);
+    return {
+      handle,
+      completion: this.subagentRunRegistry.waitFor(handle.runId, 24 * 60 * 60 * 1000),
+    };
+  }
+
+  writeManagedSubagent(runId: string, input: string): Promise<SubagentRunSnapshot | null> {
+    return this.subagentRunRegistry.write(runId, input);
+  }
+
+  waitForManagedSubagent(runId: string, timeoutMs?: number): Promise<SubagentRunSnapshot | null> {
+    return this.subagentRunRegistry.waitFor(runId, timeoutMs);
+  }
+
+  stopManagedSubagent(runId: string): Promise<SubagentRunSnapshot | null> {
+    return this.subagentRunRegistry.stop(runId);
+  }
+
   private async getOrCreateSession(): Promise<CopilotSession> {
     if (this.session) {
       return this.session;
@@ -343,15 +383,17 @@ export class CopilotSessionManager {
   }
 
   private getSessionConfig(): Omit<SessionConfig, "sessionId"> {
+    const toolBridgeOptions = this.getToolBridgeOptions();
     return createSessionConfig({
       env: this.env,
       onEvent: (event) => {
         this.handleSessionEvent(event);
       },
       onPermissionRequest: (request) => this.handlePermissionRequest(request),
-      requestUpgradeProposal: this.requestUpgradeProposal,
+      additionalInstructions: this.additionalInstructions,
       toolAggregator: this.toolAggregator,
-      toolBridgeOptions: this.getToolBridgeOptions(),
+      toolBridgeOptions,
+      workingDirectory: this.workingDirectory,
     });
   }
 
@@ -642,8 +684,12 @@ export class CopilotSessionManager {
       (domain) => this.getDelegationDomainTools(domain.id, this.toolAggregator.getTools()).length,
     );
     return {
-      requestUpgradeProposal: this.requestUpgradeProposal,
-      applyHotCapabilityUpgrade: this.applyHotCapabilityUpgrade,
+      ...(this.allowUpgradeTools
+        ? {
+            requestUpgradeProposal: this.requestUpgradeProposal,
+            applyHotCapabilityUpgrade: this.applyHotCapabilityUpgrade,
+          }
+        : {}),
       ...(subagentsEnabled
         ? {
             excludeServerIds: this.getDelegatedServerIds(),
@@ -681,17 +727,22 @@ export class CopilotSessionManager {
       throw new CopilotError(`Unknown subagent domain ${domainId}`);
     }
 
-    const runner = new SubagentRunner({
+    const runner = this.createSubagentRunner(domain);
+    this.subagentRunners.set(domainId, runner);
+    return runner;
+  }
+
+  private createSubagentRunner(domain: SubagentDomain, workingDirectory?: string): SubagentRunner {
+    return new SubagentRunner({
       bus: this.bus,
       env: this.env,
       toolAggregator: this.toolAggregator,
       domain,
+      workingDirectory,
       getClient: () => this.getOrCreateClient(),
       onPermissionRequest: (request) => this.handlePermissionRequest(request),
       lockManager: this.subagentLockManager,
     });
-    this.subagentRunners.set(domainId, runner);
-    return runner;
   }
 
   private getDelegationDomains(): SubagentDomain[] {

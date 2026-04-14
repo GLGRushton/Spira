@@ -7,7 +7,9 @@ import type {
   McpServerStatus,
   StationId,
   StationSummary,
+  SubagentDelegationArgs,
   SubagentDomain,
+  SubagentRunSnapshot,
   UpgradeProposal,
 } from "@spira/shared";
 import type { McpToolAggregator } from "../mcp/tool-aggregator.js";
@@ -15,10 +17,12 @@ import { SubagentLockManager } from "../subagent/lock-manager.js";
 import type { SubagentRegistry } from "../subagent/registry.js";
 import { SpiraError } from "../util/errors.js";
 import { type EventMap, SpiraEventBus } from "../util/event-bus.js";
+import { setUnrefTimeout } from "../util/timers.js";
 import { buildContinuityPreamble, buildConversationMemoryContent } from "./continuity.js";
 import { CopilotSessionManager, type SessionPersistence } from "./session-manager.js";
 
 export const DEFAULT_STATION_ID = "primary";
+const DEFAULT_STATION_RESPONSE_TIMEOUT_MS = 30 * 60 * 1000;
 
 const LEGACY_SESSION_STATE_SESSION_ID_KEY = "copilot-session-id";
 const LEGACY_SESSION_STATE_CONVERSATION_ID_KEY = "active-conversation-id";
@@ -40,6 +44,16 @@ interface StationContext {
 interface CreateStationOptions {
   stationId?: StationId;
   label?: string;
+  additionalInstructions?: string;
+  workingDirectory?: string;
+  allowUpgradeTools?: boolean;
+}
+
+export interface AwaitStationResponseResult {
+  text: string;
+  messageId: string;
+  timestamp: number;
+  autoSpeak?: boolean;
 }
 
 interface EmitAssistantMessageOptions {
@@ -65,6 +79,9 @@ interface StationRegistryOptions {
       sessionPersistence: SessionPersistence | null;
       subagentLockManager: SubagentLockManager;
       subagentRegistry: SubagentRegistry | null;
+      additionalInstructions?: string | null;
+      workingDirectory?: string | null;
+      allowUpgradeTools?: boolean;
     },
   ) => CopilotSessionManager;
 }
@@ -132,6 +149,9 @@ export class StationRegistry {
           sessionPersistence,
           subagentLockManager: this.subagentLockManager,
           subagentRegistry: this.options.subagentRegistry ?? null,
+          additionalInstructions: createOptions.additionalInstructions ?? null,
+          workingDirectory: createOptions.workingDirectory ?? null,
+          allowUpgradeTools: createOptions.allowUpgradeTools,
         })
       : new CopilotSessionManager(
           bus,
@@ -143,6 +163,9 @@ export class StationRegistry {
             sessionPersistence,
             subagentLockManager: this.subagentLockManager,
             subagentRegistry: this.options.subagentRegistry ?? null,
+            additionalInstructions: createOptions.additionalInstructions ?? null,
+            workingDirectory: createOptions.workingDirectory ?? null,
+            allowUpgradeTools: createOptions.allowUpgradeTools,
           },
         );
     const station: StationContext = {
@@ -247,12 +270,128 @@ export class StationRegistry {
     await station.manager.sendMessage(text, { continuityPreamble });
   }
 
+  async sendMessageAndAwaitResponse(
+    text: string,
+    options: { stationId?: StationId; conversationId?: string; timeoutMs?: number } = {},
+  ): Promise<AwaitStationResponseResult> {
+    const station = this.ensureStation(options.stationId);
+
+    return await new Promise<AwaitStationResponseResult>((resolve, reject) => {
+      let completedResponse: AwaitStationResponseResult | null = null;
+      let settled = false;
+      let sawActiveState = station.state !== "idle";
+      const timeout = setUnrefTimeout(() => {
+        fail(
+          new SpiraError(
+            "STATION_RESPONSE_TIMEOUT",
+            `Station ${station.stationId} did not finish responding before the timeout elapsed.`,
+          ),
+        );
+      }, options.timeoutMs ?? DEFAULT_STATION_RESPONSE_TIMEOUT_MS);
+
+      const cleanup = () => {
+        clearTimeout(timeout);
+        station.bus.off("copilot:response-end", handleResponseEnd);
+        station.bus.off("state:change", handleStateChange);
+        station.bus.off("copilot:error", handleError);
+      };
+
+      const finish = (result: AwaitStationResponseResult) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        cleanup();
+        resolve(result);
+      };
+
+      const fail = (error: Error) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        cleanup();
+        reject(error);
+      };
+
+      const maybeFinish = () => {
+        if (completedResponse && station.state === "idle") {
+          finish(completedResponse);
+        }
+      };
+
+      const handleResponseEnd = (response: AwaitStationResponseResult) => {
+        completedResponse = response;
+        maybeFinish();
+      };
+      const handleStateChange = (_previous: AssistantState, current: AssistantState) => {
+        if (current !== "idle") {
+          sawActiveState = true;
+          return;
+        }
+
+        if (current === "idle") {
+          if (!completedResponse && sawActiveState) {
+            fail(
+              new SpiraError(
+                "STATION_RESPONSE_ABORTED",
+                `Station ${station.stationId} stopped responding before it produced a final assistant message.`,
+              ),
+            );
+            return;
+          }
+          maybeFinish();
+        }
+      };
+      const handleError = (code: string, message: string, details?: string, source?: string) => {
+        fail(new SpiraError(code, message, { details, source }));
+      };
+
+      station.bus.on("copilot:response-end", handleResponseEnd);
+      station.bus.on("state:change", handleStateChange);
+      station.bus.on("copilot:error", handleError);
+
+      void this.sendMessage(text, options).catch((error) => {
+        fail(error instanceof Error ? error : new Error(String(error)));
+      });
+    });
+  }
+
   async sendVoiceMessage(stationId: StationId, text: string): Promise<void> {
     const station = this.ensureStation(stationId);
     const continuityPreamble = this.getContinuityPreamble(station, text);
     this.persistUserMessage(station, text, Date.now());
     station.updatedAt = Date.now();
     await station.manager.sendVoiceMessage(text, { continuityPreamble });
+  }
+
+  launchManagedSubagent(
+    domain: SubagentDomain,
+    args: SubagentDelegationArgs,
+    options: { stationId?: StationId; workingDirectory?: string } = {},
+  ) {
+    const station = this.ensureStation(options.stationId);
+    return station.manager.launchManagedSubagent(domain, args, {
+      workingDirectory: options.workingDirectory,
+    });
+  }
+
+  writeManagedSubagent(runId: string, input: string, stationId?: StationId): Promise<SubagentRunSnapshot | null> {
+    const station = this.ensureStation(stationId);
+    return station.manager.writeManagedSubagent(runId, input);
+  }
+
+  waitForManagedSubagent(
+    runId: string,
+    options: { stationId?: StationId; timeoutMs?: number } = {},
+  ): Promise<SubagentRunSnapshot | null> {
+    const station = this.ensureStation(options.stationId);
+    return station.manager.waitForManagedSubagent(runId, options.timeoutMs);
+  }
+
+  stopManagedSubagent(runId: string, stationId?: StationId): Promise<SubagentRunSnapshot | null> {
+    const station = this.ensureStation(stationId);
+    return station.manager.stopManagedSubagent(runId);
   }
 
   async abortStation(stationId?: StationId): Promise<void> {

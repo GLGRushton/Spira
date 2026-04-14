@@ -64,10 +64,11 @@ export function OperationsRoster({ onOpenBridge }: OperationsRosterProps) {
       <div className={styles.grid}>
         {stationCards.map((station) => {
           const isFocused = station.stationId === activeStationId;
+          const taskLabel = station.title?.trim() || station.session.activeConversationTitle || "Fresh briefing";
           return (
             <article key={station.stationId} className={`${styles.card} ${isFocused ? styles.focused : ""}`}>
               <div className={styles.cardTop}>
-                <div>
+                <div className={styles.cardIdentity}>
                   <div className={styles.cardEyebrow}>Command station</div>
                   <h3 className={styles.cardTitle}>{station.label}</h3>
                 </div>
@@ -80,9 +81,7 @@ export function OperationsRoster({ onOpenBridge }: OperationsRosterProps) {
               <div className={styles.metrics}>
                 <div className={styles.metric}>
                   <span>Task</span>
-                  <strong>
-                    {station.title?.trim() || station.session.activeConversationTitle || "Fresh briefing"}
-                  </strong>
+                  <strong title={taskLabel}>{taskLabel}</strong>
                 </div>
                 <div className={styles.metric}>
                   <span>Last activity</span>
@@ -90,7 +89,9 @@ export function OperationsRoster({ onOpenBridge }: OperationsRosterProps) {
                 </div>
               </div>
 
-              <p className={styles.preview}>{station.preview}</p>
+              <p className={styles.preview} title={station.preview}>
+                {station.preview}
+              </p>
 
               <div className={styles.footer}>
                 <button

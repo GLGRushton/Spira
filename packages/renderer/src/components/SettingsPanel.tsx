@@ -14,7 +14,11 @@ import styles from "./SettingsPanel.module.css";
 
 const YOUTRACK_RUNTIME_CONFIG_KEYS: RuntimeConfigKey[] = ["youTrackBaseUrl", "youTrackToken"];
 const YOUTRACK_RUNTIME_CONFIG_KEY_SET = new Set<RuntimeConfigKey>(YOUTRACK_RUNTIME_CONFIG_KEYS);
-const OTHER_RUNTIME_CONFIG_KEYS = RUNTIME_CONFIG_KEYS.filter((key) => !YOUTRACK_RUNTIME_CONFIG_KEY_SET.has(key));
+const MISSION_GIT_RUNTIME_CONFIG_KEYS: RuntimeConfigKey[] = ["missionGitHubToken"];
+const MISSION_GIT_RUNTIME_CONFIG_KEY_SET = new Set<RuntimeConfigKey>(MISSION_GIT_RUNTIME_CONFIG_KEYS);
+const OTHER_RUNTIME_CONFIG_KEYS = RUNTIME_CONFIG_KEYS.filter(
+  (key) => !YOUTRACK_RUNTIME_CONFIG_KEY_SET.has(key) && !MISSION_GIT_RUNTIME_CONFIG_KEY_SET.has(key),
+);
 
 export function SettingsPanel() {
   const servers = useMcpStore((store) => store.servers);
@@ -372,6 +376,15 @@ export function SettingsPanel() {
                 <span className={styles.caption}>This is the only YouTrack setup that stays in Settings.</span>
               </div>
               <div className={styles.keyGrid}>{renderRuntimeConfigCards(YOUTRACK_RUNTIME_CONFIG_KEYS)}</div>
+            </div>
+            <div className={styles.configGroup}>
+              <div className={styles.groupHeader}>
+                <span className={styles.label}>Mission git credentials</span>
+                <span className={styles.caption}>
+                  This PAT is dedicated to mission commits, publish, push, and GitHub author lookup.
+                </span>
+              </div>
+              <div className={styles.keyGrid}>{renderRuntimeConfigCards(MISSION_GIT_RUNTIME_CONFIG_KEYS)}</div>
             </div>
             <div className={styles.configGroup}>
               <div className={styles.groupHeader}>

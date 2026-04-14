@@ -98,6 +98,7 @@ interface SubagentRunnerOptions {
   env: Env;
   toolAggregator: McpToolAggregator;
   domain: SubagentDomain;
+  workingDirectory?: string;
   getClient?: () => Promise<CopilotClient>;
   now?: () => number;
   runIdFactory?: () => string;
@@ -565,7 +566,7 @@ export class SubagentRunner {
           },
         },
       },
-      workingDirectory: appRootDir,
+      workingDirectory: this.options.workingDirectory ?? appRootDir,
       tools: getCopilotTools(this.options.toolAggregator, {
         includeServerIds: this.options.domain.serverIds,
         wrapToolExecution: (tool, toolArgs, execute) => {

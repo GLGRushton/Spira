@@ -45,6 +45,11 @@ interface YouTrackApiProject {
   name?: string;
 }
 
+interface YouTrackCommandPayload {
+  query: string;
+  issues: Array<{ idReadable: string }>;
+}
+
 const YOUTRACK_REQUEST_TIMEOUT_MS = 10_000;
 
 const cloneStateMapping = (): YouTrackStateMapping => ({
@@ -137,6 +142,15 @@ export const mapYouTrackProject = (project: YouTrackApiProject): YouTrackProject
     shortName: project.shortName,
     name: project.name,
   };
+};
+
+export const getPreferredInProgressState = (stateMapping: YouTrackStateMapping): string => {
+  const preferred = stateMapping.inProgress.find((state) => normalizeStateName(state));
+  if (!preferred) {
+    throw new YouTrackError("YouTrack in-progress state mapping is empty.");
+  }
+
+  return preferred.trim();
 };
 
 export class YouTrackService {
@@ -302,6 +316,31 @@ export class YouTrackService {
       .sort((left, right) => left.shortName.localeCompare(right.shortName));
   }
 
+  async transitionTicketToInProgress(ticketId: string): Promise<void> {
+    const normalizedTicketId = ticketId.trim();
+    if (!normalizedTicketId) {
+      throw new YouTrackError("Ticket id is required to update a YouTrack issue.");
+    }
+
+    const baseUrl = this.getBaseUrl();
+    const token = this.env.YOUTRACK_TOKEN?.trim();
+    if (!baseUrl || !token) {
+      throw new YouTrackError("YouTrack is not fully configured.");
+    }
+
+    const apiBaseUrl = validateApiBaseUrl(baseUrl);
+    const targetState = getPreferredInProgressState(this.stateMapping);
+    await this.sendJson(
+      `${apiBaseUrl}/api/commands`,
+      token,
+      {
+        query: `State ${targetState}`,
+        issues: [{ idReadable: normalizedTicketId }],
+      },
+      "ticket transition",
+    );
+  }
+
   private async fetchCurrentUser(): Promise<YouTrackAccountSummary> {
     const baseUrl = this.getBaseUrl();
     const token = this.env.YOUTRACK_TOKEN?.trim();
@@ -327,6 +366,22 @@ export class YouTrackService {
   }
 
   private async fetchJson<T>(url: string, token: string, operation: string): Promise<T> {
+    const response = await this.request(url, token, operation);
+    return (await response.json()) as T;
+  }
+
+  private async sendJson(url: string, token: string, body: YouTrackCommandPayload, operation: string): Promise<void> {
+    await this.request(url, token, operation, {
+      method: "POST",
+      headers: {
+        ...buildHeaders(token),
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+  }
+
+  private async request(url: string, token: string, operation: string, init?: Parameters<typeof fetch>[1]) {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), YOUTRACK_REQUEST_TIMEOUT_MS);
 
@@ -334,6 +389,7 @@ export class YouTrackService {
       const response = await fetch(url, {
         headers: buildHeaders(token),
         signal: controller.signal,
+        ...init,
       });
 
       if (!response.ok) {
@@ -341,7 +397,7 @@ export class YouTrackService {
         throw new YouTrackError(`YouTrack ${operation} failed with status ${response.status}: ${body}`);
       }
 
-      return (await response.json()) as T;
+      return response;
     } catch (error) {
       if (error instanceof Error && error.name === "AbortError") {
         throw new YouTrackError(`YouTrack ${operation} timed out after ${YOUTRACK_REQUEST_TIMEOUT_MS}ms.`, error);

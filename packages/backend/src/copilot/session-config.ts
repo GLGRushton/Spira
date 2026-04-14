@@ -1,5 +1,5 @@
 import type { PermissionRequest, PermissionRequestResult, SessionConfig, SessionEvent } from "@github/copilot-sdk";
-import { type Env, SUBAGENT_DOMAINS, type SubagentDomain, type UpgradeProposal } from "@spira/shared";
+import { type Env, SUBAGENT_DOMAINS, type SubagentDomain } from "@spira/shared";
 import type { McpToolAggregator } from "../mcp/tool-aggregator.js";
 import { appRootDir } from "../util/app-paths.js";
 import { type ToolBridgeOptions, getCopilotTools } from "./tool-bridge.js";
@@ -89,9 +89,9 @@ export const getToolAwarenessInstructions = (
 };
 
 export const getUpgradeToolInstructions = (
-  requestUpgradeProposal?: ((proposal: UpgradeProposal) => Promise<void> | void) | undefined,
+  toolBridgeOptions: Pick<ToolBridgeOptions, "requestUpgradeProposal">,
 ): string => {
-  if (!requestUpgradeProposal) {
+  if (!toolBridgeOptions.requestUpgradeProposal) {
     return "";
   }
 
@@ -104,14 +104,15 @@ export const createSessionConfig = (options: {
   toolBridgeOptions: ToolBridgeOptions;
   onEvent: (event: SessionEvent) => void;
   onPermissionRequest: (request: PermissionRequest) => Promise<PermissionRequestResult>;
-  requestUpgradeProposal?: (proposal: UpgradeProposal) => Promise<void> | void;
+  additionalInstructions?: string | null;
+  workingDirectory?: string | null;
 }): Omit<SessionConfig, "sessionId"> => {
   const toolAwarenessInstructions = getToolAwarenessInstructions(
     options.env,
     options.toolAggregator,
     options.toolBridgeOptions.delegationDomains ?? [],
   );
-  const upgradeToolInstructions = getUpgradeToolInstructions(options.requestUpgradeProposal);
+  const upgradeToolInstructions = getUpgradeToolInstructions(options.toolBridgeOptions);
 
   return {
     clientName: "Spira",
@@ -139,6 +140,7 @@ export const createSessionConfig = (options: {
             "Prefer short, clear answers. Use the name Shinra naturally when self-identifying, but keep the focus on solving the user's task.",
             upgradeToolInstructions,
             toolAwarenessInstructions,
+            options.additionalInstructions?.trim() ?? "",
           ]
             .filter((section) => section.length > 0)
             .join("\n\n"),
@@ -150,7 +152,7 @@ export const createSessionConfig = (options: {
       },
       content: SHINRA_PERSONA_INSTRUCTIONS,
     },
-    workingDirectory: appRootDir,
+    workingDirectory: options.workingDirectory?.trim() || appRootDir,
     tools: getCopilotTools(options.toolAggregator, options.toolBridgeOptions),
   };
 };

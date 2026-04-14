@@ -15,6 +15,22 @@ import type {
 import type { RuntimeConfigApplyResult, RuntimeConfigSummary, RuntimeConfigUpdate } from "./runtime-config.js";
 import type { SubagentCreateConfig } from "./subagent-types.js";
 import type { SubagentDomain } from "./subagent-types.js";
+import type {
+  CancelTicketRunWorkResult,
+  CommitTicketRunResult,
+  CompleteTicketRunResult,
+  ContinueTicketRunWorkResult,
+  CreateTicketRunPullRequestResult,
+  GenerateTicketRunCommitDraftResult,
+  RetryTicketRunSyncResult,
+  SetTicketRunCommitDraftResult,
+  StartTicketRunRequest,
+  StartTicketRunResult,
+  StartTicketRunWorkResult,
+  SyncTicketRunRemoteResult,
+  TicketRunGitStateResult,
+  TicketRunSnapshot,
+} from "./ticket-run-types.js";
 import type { UpgradeProposal, UpgradeStatus } from "./upgrade.js";
 import type { YouTrackProjectSummary, YouTrackStatusSummary, YouTrackTicketSummary } from "./youtrack-types.js";
 
@@ -68,7 +84,22 @@ export interface ElectronApi {
   getProjectRepoMappings(): Promise<ProjectRepoMappingsSnapshot>;
   setProjectWorkspaceRoot(workspaceRoot: string | null): Promise<ProjectRepoMappingsSnapshot>;
   setProjectRepoMapping(projectKey: string, repoRelativePaths: string[]): Promise<ProjectRepoMappingsSnapshot>;
+  getTicketRuns(): Promise<TicketRunSnapshot>;
+  startTicketRun(ticket: StartTicketRunRequest): Promise<StartTicketRunResult>;
+  retryTicketRunSync(runId: string): Promise<RetryTicketRunSyncResult>;
+  startTicketRunWork(runId: string): Promise<StartTicketRunWorkResult>;
+  continueTicketRunWork(runId: string, prompt?: string): Promise<ContinueTicketRunWorkResult>;
+  cancelTicketRunWork(runId: string): Promise<CancelTicketRunWorkResult>;
+  completeTicketRun(runId: string): Promise<CompleteTicketRunResult>;
+  getTicketRunGitState(runId: string): Promise<TicketRunGitStateResult>;
+  generateTicketRunCommitDraft(runId: string): Promise<GenerateTicketRunCommitDraftResult>;
+  setTicketRunCommitDraft(runId: string, message: string): Promise<SetTicketRunCommitDraftResult>;
+  commitTicketRun(runId: string, message: string): Promise<CommitTicketRunResult>;
+  publishTicketRun(runId: string): Promise<SyncTicketRunRemoteResult>;
+  pushTicketRun(runId: string): Promise<SyncTicketRunRemoteResult>;
+  createTicketRunPullRequest(runId: string): Promise<CreateTicketRunPullRequestResult>;
   pickDirectory(title?: string): Promise<string | null>;
+  openExternal(url: string): Promise<void>;
   getRuntimeConfig(): Promise<RuntimeConfigSummary>;
   setRuntimeConfig(update: RuntimeConfigUpdate): Promise<RuntimeConfigApplyResult>;
   setSettings(data: Partial<UserSettings>): Promise<void>;

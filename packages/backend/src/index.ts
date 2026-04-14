@@ -24,6 +24,8 @@ import { DEFAULT_STATION_ID, StationRegistry } from "./copilot/station-registry.
 import { McpClientPool } from "./mcp/client-pool.js";
 import { McpRegistry } from "./mcp/registry.js";
 import { McpToolAggregator } from "./mcp/tool-aggregator.js";
+import { fetchGitHubIdentity } from "./missions/github-identity.js";
+import { type GenerateCommitDraftInput, TicketRunService } from "./missions/ticket-runs.js";
 import { ProjectRegistry } from "./projects/registry.js";
 import { WsServer } from "./server.js";
 import { SubagentRegistry } from "./subagent/registry.js";
@@ -66,6 +68,7 @@ let speechEnabled = true;
 let memoryDb: SpiraMemoryDatabase | null = null;
 let youTrackService: YouTrackService | null = null;
 let projectRegistry: ProjectRegistry | null = null;
+let ticketRunService: TicketRunService | null = null;
 
 const BACKEND_BUILD_ID = process.env.SPIRA_BUILD_ID?.trim() || "dev";
 const BACKEND_GENERATION = Number(process.env.SPIRA_GENERATION ?? "0");
@@ -168,6 +171,69 @@ const sameVoiceConfiguration = (left: VoiceConfiguration, right: VoiceConfigurat
   left.whisperModel === right.whisperModel &&
   left.wakeWordProvider === right.wakeWordProvider &&
   left.openWakeWordThreshold === right.openWakeWordThreshold;
+
+const buildMissionStationId = (runId: string): string => `mission:${runId}`;
+
+const buildMissionStationInstructions = (ticketId: string, worktreePath: string): string =>
+  [
+    `You are operating as the dedicated Missions command station for ticket ${ticketId}.`,
+    `The working directory for this station is the managed worktree at ${worktreePath}. Stay inside it unless the user explicitly asks otherwise.`,
+    "Treat this as an iterative coding mission: preserve context between prompts, keep the worktree reviewable, and report unfinished edges plainly.",
+  ].join("\n");
+
+const buildCommitDraftPrompt = ({ run, gitState }: GenerateCommitDraftInput): string => {
+  const fileSummary = gitState.files
+    .map((file) => {
+      const delta =
+        file.additions !== null || file.deletions !== null
+          ? ` (+${file.additions ?? 0} / -${file.deletions ?? 0})`
+          : "";
+      return `- [${file.status}] ${file.path}${delta}`;
+    })
+    .join("\n");
+  const patchSummary = gitState.files
+    .slice(0, 6)
+    .map((file) => `${file.path}\n${file.patch}`)
+    .join("\n\n")
+    .slice(0, 24_000);
+  const latestAttempt = run.attempts.at(-1)?.summary?.trim();
+  return [
+    `Write only a git commit message for ticket ${run.ticketId}: ${run.ticketSummary}.`,
+    "Return plain text only. No code fences. No commentary.",
+    `Format exactly as: feat(${run.ticketId}): summary, then a blank line, then up to 6 '- bullet' detail lines.`,
+    "Keep the summary concise and the bullets concrete.",
+    `Branch: ${gitState.branchName}`,
+    latestAttempt ? `Last mission summary: ${latestAttempt}` : "Last mission summary: unavailable.",
+    "Changed files:",
+    fileSummary || "- No tracked file changes were detected.",
+    patchSummary ? `Diff excerpts:\n${patchSummary}` : "No diff excerpts were available.",
+  ].join("\n\n");
+};
+
+const restoreMissionStations = (registry: StationRegistry, database: SpiraMemoryDatabase | null): void => {
+  if (!database) {
+    return;
+  }
+
+  for (const run of database.listTicketRuns()) {
+    if (!run.stationId || (run.status !== "working" && run.status !== "awaiting-review")) {
+      continue;
+    }
+
+    const worktreePath = run.worktrees[0]?.worktreePath;
+    if (!worktreePath || !existsSync(worktreePath)) {
+      continue;
+    }
+
+    registry.createStation({
+      stationId: run.stationId,
+      label: `Mission ${run.ticketId}`,
+      additionalInstructions: buildMissionStationInstructions(run.ticketId, worktreePath),
+      workingDirectory: worktreePath,
+      allowUpgradeTools: false,
+    });
+  }
+};
 
 const createWakeWordProvider = (env: Env, config: VoiceConfiguration): WakeWordProvider => {
   if (config.wakeWordProvider === "none") {
@@ -301,6 +367,8 @@ const shutdown = async (signal: NodeJS.Signals | "manual") => {
   logger.info({ signal }, "Shutting down backend");
 
   clearPendingUpgradeProposalResponses(new Error("Backend is shutting down"));
+  ticketRunService?.dispose();
+  ticketRunService = null;
   unsubscribeTransport?.();
   await voicePipeline?.stop();
   ttsPlayback?.dispose();
@@ -634,6 +702,498 @@ const handleClientMessage = async (message: ClientMessage): Promise<void> => {
     return;
   }
 
+  if (message.type === "missions:runs:get") {
+    if (!ticketRunService) {
+      transport?.send({
+        type: "missions:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(
+          new Error("Ticket run service is unavailable."),
+          "MISSIONS_UNAVAILABLE",
+          "Missions ticket runs are unavailable.",
+          "missions",
+        ),
+      });
+      return;
+    }
+
+    try {
+      transport?.send({
+        type: "missions:runs:result",
+        requestId: message.requestId,
+        snapshot: await ticketRunService.getSnapshot(),
+      });
+    } catch (error) {
+      logger.error({ err: error, requestId: message.requestId }, "Failed to get Missions ticket runs");
+      transport?.send({
+        type: "missions:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(error, "MISSIONS_RUNS_FAILED", "Failed to load Missions ticket runs.", "missions"),
+      });
+    }
+    return;
+  }
+
+  if (message.type === "missions:ticket-run:start") {
+    if (!ticketRunService) {
+      transport?.send({
+        type: "missions:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(
+          new Error("Ticket run service is unavailable."),
+          "MISSIONS_UNAVAILABLE",
+          "Missions ticket runs are unavailable.",
+          "missions",
+        ),
+      });
+      return;
+    }
+
+    try {
+      transport?.send({
+        type: "missions:ticket-run:start:result",
+        requestId: message.requestId,
+        result: await ticketRunService.startRun(message.ticket),
+      });
+    } catch (error) {
+      logger.error(
+        { err: error, requestId: message.requestId, ticketId: message.ticket.ticketId },
+        "Failed to start ticket run",
+      );
+      transport?.send({
+        type: "missions:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(error, "MISSIONS_RUN_START_FAILED", "Failed to start this Missions ticket run.", "missions"),
+      });
+    }
+    return;
+  }
+
+  if (message.type === "missions:ticket-run:sync") {
+    if (!ticketRunService) {
+      transport?.send({
+        type: "missions:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(
+          new Error("Ticket run service is unavailable."),
+          "MISSIONS_UNAVAILABLE",
+          "Missions ticket runs are unavailable.",
+          "missions",
+        ),
+      });
+      return;
+    }
+
+    try {
+      transport?.send({
+        type: "missions:ticket-run:sync:result",
+        requestId: message.requestId,
+        result: await ticketRunService.retryRunSync(message.runId),
+      });
+    } catch (error) {
+      logger.error(
+        { err: error, requestId: message.requestId, runId: message.runId },
+        "Failed to retry ticket run sync",
+      );
+      transport?.send({
+        type: "missions:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(error, "MISSIONS_RUN_SYNC_FAILED", "Failed to retry this Missions ticket sync.", "missions"),
+      });
+    }
+    return;
+  }
+
+  if (message.type === "missions:ticket-run:work:start") {
+    if (!ticketRunService) {
+      transport?.send({
+        type: "missions:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(
+          new Error("Ticket run service is unavailable."),
+          "MISSIONS_UNAVAILABLE",
+          "Missions ticket runs are unavailable.",
+          "missions",
+        ),
+      });
+      return;
+    }
+
+    try {
+      transport?.send({
+        type: "missions:ticket-run:work:start:result",
+        requestId: message.requestId,
+        result: await ticketRunService.startWork(message.runId),
+      });
+    } catch (error) {
+      logger.error({ err: error, requestId: message.requestId, runId: message.runId }, "Failed to start mission work");
+      transport?.send({
+        type: "missions:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(error, "MISSIONS_WORK_START_FAILED", "Failed to start this mission work pass.", "missions"),
+      });
+    }
+    return;
+  }
+
+  if (message.type === "missions:ticket-run:work:continue") {
+    if (!ticketRunService) {
+      transport?.send({
+        type: "missions:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(
+          new Error("Ticket run service is unavailable."),
+          "MISSIONS_UNAVAILABLE",
+          "Missions ticket runs are unavailable.",
+          "missions",
+        ),
+      });
+      return;
+    }
+
+    try {
+      transport?.send({
+        type: "missions:ticket-run:work:continue:result",
+        requestId: message.requestId,
+        result: await ticketRunService.continueWork(message.runId, message.prompt),
+      });
+    } catch (error) {
+      logger.error(
+        { err: error, requestId: message.requestId, runId: message.runId },
+        "Failed to continue mission work",
+      );
+      transport?.send({
+        type: "missions:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(
+          error,
+          "MISSIONS_WORK_CONTINUE_FAILED",
+          "Failed to continue this mission work pass.",
+          "missions",
+        ),
+      });
+    }
+    return;
+  }
+
+  if (message.type === "missions:ticket-run:work:cancel") {
+    if (!ticketRunService) {
+      transport?.send({
+        type: "missions:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(
+          new Error("Ticket run service is unavailable."),
+          "MISSIONS_UNAVAILABLE",
+          "Missions ticket runs are unavailable.",
+          "missions",
+        ),
+      });
+      return;
+    }
+
+    try {
+      transport?.send({
+        type: "missions:ticket-run:work:cancel:result",
+        requestId: message.requestId,
+        result: await ticketRunService.cancelWork(message.runId),
+      });
+    } catch (error) {
+      logger.error({ err: error, requestId: message.requestId, runId: message.runId }, "Failed to cancel mission work");
+      transport?.send({
+        type: "missions:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(error, "MISSIONS_WORK_CANCEL_FAILED", "Failed to cancel this mission work pass.", "missions"),
+      });
+    }
+    return;
+  }
+
+  if (message.type === "missions:ticket-run:complete") {
+    if (!ticketRunService) {
+      transport?.send({
+        type: "missions:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(
+          new Error("Ticket run service is unavailable."),
+          "MISSIONS_UNAVAILABLE",
+          "Missions ticket runs are unavailable.",
+          "missions",
+        ),
+      });
+      return;
+    }
+
+    try {
+      transport?.send({
+        type: "missions:ticket-run:complete:result",
+        requestId: message.requestId,
+        result: await ticketRunService.completeRun(message.runId),
+      });
+    } catch (error) {
+      logger.error({ err: error, requestId: message.requestId, runId: message.runId }, "Failed to complete mission");
+      transport?.send({
+        type: "missions:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(error, "MISSIONS_COMPLETE_FAILED", "Failed to mark this mission complete.", "missions"),
+      });
+    }
+    return;
+  }
+
+  if (message.type === "missions:ticket-run:git-state:get") {
+    if (!ticketRunService) {
+      transport?.send({
+        type: "missions:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(
+          new Error("Ticket run service is unavailable."),
+          "MISSIONS_UNAVAILABLE",
+          "Missions ticket runs are unavailable.",
+          "missions",
+        ),
+      });
+      return;
+    }
+
+    try {
+      transport?.send({
+        type: "missions:ticket-run:git-state:result",
+        requestId: message.requestId,
+        result: await ticketRunService.getGitState(message.runId),
+      });
+    } catch (error) {
+      logger.error(
+        { err: error, requestId: message.requestId, runId: message.runId },
+        "Failed to load mission git state",
+      );
+      transport?.send({
+        type: "missions:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(error, "MISSIONS_GIT_STATE_FAILED", "Failed to load mission git state.", "missions"),
+      });
+    }
+    return;
+  }
+
+  if (message.type === "missions:ticket-run:commit-draft:generate") {
+    if (!ticketRunService) {
+      transport?.send({
+        type: "missions:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(
+          new Error("Ticket run service is unavailable."),
+          "MISSIONS_UNAVAILABLE",
+          "Missions ticket runs are unavailable.",
+          "missions",
+        ),
+      });
+      return;
+    }
+
+    try {
+      transport?.send({
+        type: "missions:ticket-run:commit-draft:generate:result",
+        requestId: message.requestId,
+        result: await ticketRunService.generateCommitDraft(message.runId),
+      });
+    } catch (error) {
+      logger.error(
+        { err: error, requestId: message.requestId, runId: message.runId },
+        "Failed to generate commit draft",
+      );
+      transport?.send({
+        type: "missions:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(
+          error,
+          "MISSIONS_COMMIT_DRAFT_FAILED",
+          "Failed to generate a mission commit draft.",
+          "missions",
+        ),
+      });
+    }
+    return;
+  }
+
+  if (message.type === "missions:ticket-run:commit-draft:set") {
+    if (!ticketRunService) {
+      transport?.send({
+        type: "missions:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(
+          new Error("Ticket run service is unavailable."),
+          "MISSIONS_UNAVAILABLE",
+          "Missions ticket runs are unavailable.",
+          "missions",
+        ),
+      });
+      return;
+    }
+
+    try {
+      transport?.send({
+        type: "missions:ticket-run:commit-draft:set:result",
+        requestId: message.requestId,
+        result: await ticketRunService.setCommitDraft(message.runId, message.message),
+      });
+    } catch (error) {
+      logger.error({ err: error, requestId: message.requestId, runId: message.runId }, "Failed to save commit draft");
+      transport?.send({
+        type: "missions:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(
+          error,
+          "MISSIONS_COMMIT_DRAFT_SAVE_FAILED",
+          "Failed to save the mission commit draft.",
+          "missions",
+        ),
+      });
+    }
+    return;
+  }
+
+  if (message.type === "missions:ticket-run:commit") {
+    if (!ticketRunService) {
+      transport?.send({
+        type: "missions:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(
+          new Error("Ticket run service is unavailable."),
+          "MISSIONS_UNAVAILABLE",
+          "Missions ticket runs are unavailable.",
+          "missions",
+        ),
+      });
+      return;
+    }
+
+    try {
+      transport?.send({
+        type: "missions:ticket-run:commit:result",
+        requestId: message.requestId,
+        result: await ticketRunService.commitRun(message.runId, message.message),
+      });
+    } catch (error) {
+      logger.error(
+        { err: error, requestId: message.requestId, runId: message.runId },
+        "Failed to commit mission changes",
+      );
+      transport?.send({
+        type: "missions:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(error, "MISSIONS_COMMIT_FAILED", "Failed to commit this mission worktree.", "missions"),
+      });
+    }
+    return;
+  }
+
+  if (message.type === "missions:ticket-run:publish") {
+    if (!ticketRunService) {
+      transport?.send({
+        type: "missions:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(
+          new Error("Ticket run service is unavailable."),
+          "MISSIONS_UNAVAILABLE",
+          "Missions ticket runs are unavailable.",
+          "missions",
+        ),
+      });
+      return;
+    }
+
+    try {
+      transport?.send({
+        type: "missions:ticket-run:publish:result",
+        requestId: message.requestId,
+        result: await ticketRunService.publishRun(message.runId),
+      });
+    } catch (error) {
+      logger.error(
+        { err: error, requestId: message.requestId, runId: message.runId },
+        "Failed to publish mission branch",
+      );
+      transport?.send({
+        type: "missions:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(error, "MISSIONS_PUBLISH_FAILED", "Failed to publish this mission branch.", "missions"),
+      });
+    }
+    return;
+  }
+
+  if (message.type === "missions:ticket-run:push") {
+    if (!ticketRunService) {
+      transport?.send({
+        type: "missions:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(
+          new Error("Ticket run service is unavailable."),
+          "MISSIONS_UNAVAILABLE",
+          "Missions ticket runs are unavailable.",
+          "missions",
+        ),
+      });
+      return;
+    }
+
+    try {
+      transport?.send({
+        type: "missions:ticket-run:push:result",
+        requestId: message.requestId,
+        result: await ticketRunService.pushRun(message.runId),
+      });
+    } catch (error) {
+      logger.error({ err: error, requestId: message.requestId, runId: message.runId }, "Failed to push mission branch");
+      transport?.send({
+        type: "missions:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(error, "MISSIONS_PUSH_FAILED", "Failed to push this mission branch.", "missions"),
+      });
+    }
+    return;
+  }
+
+  if (message.type === "missions:ticket-run:pull-request:create") {
+    if (!ticketRunService) {
+      transport?.send({
+        type: "missions:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(
+          new Error("Ticket run service is unavailable."),
+          "MISSIONS_UNAVAILABLE",
+          "Missions ticket runs are unavailable.",
+          "missions",
+        ),
+      });
+      return;
+    }
+
+    try {
+      transport?.send({
+        type: "missions:ticket-run:pull-request:create:result",
+        requestId: message.requestId,
+        result: await ticketRunService.createPullRequest(message.runId),
+      });
+    } catch (error) {
+      logger.error(
+        { err: error, requestId: message.requestId, runId: message.runId },
+        "Failed to open mission pull request",
+      );
+      transport?.send({
+        type: "missions:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(
+          error,
+          "MISSIONS_PULL_REQUEST_FAILED",
+          "Failed to open this mission pull request.",
+          "missions",
+        ),
+      });
+    }
+    return;
+  }
+
   if (message.type === "chat:send") {
     try {
       await stationRegistry?.sendMessage(message.text, {
@@ -956,6 +1516,94 @@ const bootstrap = async () => {
   const builtInYouTrackServers = buildYouTrackBuiltinMcpServers(env);
   const builtInYouTrackSubagents = buildYouTrackBuiltinSubagents(env);
   projectRegistry = new ProjectRegistry(memoryDb);
+  ticketRunService = new TicketRunService({
+    memoryDb,
+    projectRegistry,
+    youTrackService,
+    logger,
+    bus,
+    launchMissionPass: async ({ run, prompt }) => {
+      if (!stationRegistry) {
+        throw new ConfigError("Mission station manager is unavailable.");
+      }
+      const worktreePath = run.worktrees[0]?.worktreePath;
+      if (!worktreePath) {
+        throw new ConfigError(`Ticket ${run.ticketId} does not have a managed worktree.`);
+      }
+      if (!existsSync(worktreePath)) {
+        throw new ConfigError(
+          `Ticket ${run.ticketId} worktree is missing at ${worktreePath}. Recreate the run before starting work.`,
+        );
+      }
+      const stationId = run.stationId ?? buildMissionStationId(run.runId);
+      stationRegistry.createStation({
+        stationId,
+        label: `Mission ${run.ticketId}`,
+        additionalInstructions: buildMissionStationInstructions(run.ticketId, worktreePath),
+        workingDirectory: worktreePath,
+        allowUpgradeTools: false,
+      });
+
+      return {
+        stationId,
+        reusedLiveAttempt: run.stationId === stationId,
+        completion: stationRegistry.sendMessageAndAwaitResponse(prompt, { stationId }).then((response) => ({
+          status: "completed" as const,
+          summary: response.text.trim() || "Mission pass completed.",
+        })),
+      };
+    },
+    cancelMissionPass: async (stationId) => {
+      if (!stationRegistry) {
+        throw new ConfigError("Mission station manager is unavailable.");
+      }
+      await stationRegistry.abortStation(stationId);
+    },
+    closeMissionStation: async (stationId) => {
+      if (!stationRegistry) {
+        throw new ConfigError("Mission station manager is unavailable.");
+      }
+      const closed = await stationRegistry.closeStation(stationId);
+      if (closed) {
+        transport?.send({ type: "station:closed", stationId });
+      }
+    },
+    generateCommitDraft: async (input) => {
+      if (!stationRegistry) {
+        throw new ConfigError("Mission station manager is unavailable.");
+      }
+      const existingStationId = input.run.stationId;
+      const temporaryStationId = existingStationId ? null : `mission-commit:${input.run.runId}`;
+      if (temporaryStationId) {
+        stationRegistry.createStation({
+          stationId: temporaryStationId,
+          label: `Commit ${input.run.ticketId}`,
+          additionalInstructions:
+            "You are drafting a commit message only. Do not modify files, do not run write actions, and do not respond with anything except the commit message text.",
+          workingDirectory: input.gitState.worktreePath,
+          allowUpgradeTools: false,
+        });
+      }
+
+      try {
+        const response = await stationRegistry.sendMessageAndAwaitResponse(buildCommitDraftPrompt(input), {
+          stationId: existingStationId ?? temporaryStationId ?? undefined,
+        });
+        return response.text;
+      } finally {
+        if (temporaryStationId) {
+          await stationRegistry.closeStation(temporaryStationId).catch((error) => {
+            logger.warn(
+              { err: error, stationId: temporaryStationId },
+              "Failed to close temporary commit draft station",
+            );
+          });
+        }
+      }
+    },
+    resolveMissionGitIdentity: async () => fetchGitHubIdentity(env.MISSION_GITHUB_TOKEN?.trim() ?? "", logger),
+    getMissionGitToken: () => env.MISSION_GITHUB_TOKEN?.trim() ?? null,
+  });
   mcpRegistry = new McpRegistry(
     bus,
     logger,
@@ -992,6 +1640,8 @@ const bootstrap = async () => {
     },
   });
   stationRegistry.createStation({ stationId: DEFAULT_STATION_ID, label: "Primary" });
+  ticketRunService?.recoverInterruptedWork();
+  restoreMissionStations(stationRegistry, memoryDb);
   ttsPlayback = new TtsPlaybackService(env, bus, logger);
 
   bus.on("voice:transcript", ({ text }) => {
@@ -1014,6 +1664,13 @@ const bootstrap = async () => {
 
   bus.on("transport:client-disconnected", () => {
     stationRegistry?.handleClientDisconnected();
+  });
+
+  bus.on("missions:runs-changed", (snapshot) => {
+    transport?.send({
+      type: "missions:runs:updated",
+      snapshot,
+    });
   });
 
   unsubscribeTransport = transport.onMessage((message) => {

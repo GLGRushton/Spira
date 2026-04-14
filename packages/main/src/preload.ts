@@ -19,7 +19,22 @@ const YOUTRACK_PROJECTS_SEARCH_CHANNEL = "youtrack:projects:search";
 const PROJECT_REPO_MAPPINGS_GET_CHANNEL = "projects:mappings:get";
 const PROJECT_WORKSPACE_ROOT_SET_CHANNEL = "projects:workspace-root:set";
 const PROJECT_REPO_MAPPING_SET_CHANNEL = "projects:mapping:set";
+const TICKET_RUNS_GET_CHANNEL = "missions:runs:get";
+const TICKET_RUN_START_CHANNEL = "missions:ticket-run:start";
+const TICKET_RUN_SYNC_CHANNEL = "missions:ticket-run:sync";
+const TICKET_RUN_WORK_START_CHANNEL = "missions:ticket-run:work:start";
+const TICKET_RUN_WORK_CONTINUE_CHANNEL = "missions:ticket-run:work:continue";
+const TICKET_RUN_WORK_CANCEL_CHANNEL = "missions:ticket-run:work:cancel";
+const TICKET_RUN_COMPLETE_CHANNEL = "missions:ticket-run:complete";
+const TICKET_RUN_GIT_STATE_CHANNEL = "missions:ticket-run:git-state:get";
+const TICKET_RUN_COMMIT_DRAFT_GENERATE_CHANNEL = "missions:ticket-run:commit-draft:generate";
+const TICKET_RUN_COMMIT_DRAFT_SET_CHANNEL = "missions:ticket-run:commit-draft:set";
+const TICKET_RUN_COMMIT_CHANNEL = "missions:ticket-run:commit";
+const TICKET_RUN_PUBLISH_CHANNEL = "missions:ticket-run:publish";
+const TICKET_RUN_PUSH_CHANNEL = "missions:ticket-run:push";
+const TICKET_RUN_PULL_REQUEST_CREATE_CHANNEL = "missions:ticket-run:pull-request:create";
 const DIRECTORY_PICK_CHANNEL = "dialog:pick-directory";
+const OPEN_EXTERNAL_CHANNEL = "shell:open-external";
 const RUNTIME_CONFIG_GET_CHANNEL = "runtime-config:get";
 const RUNTIME_CONFIG_SET_CHANNEL = "runtime-config:set";
 const UPGRADE_RESPONSE_CHANNEL = "upgrade:respond";
@@ -170,8 +185,53 @@ const electronAPI: ElectronApi = {
   setProjectRepoMapping(projectKey, repoRelativePaths) {
     return ipcRenderer.invoke(PROJECT_REPO_MAPPING_SET_CHANNEL, { projectKey, repoRelativePaths });
   },
+  getTicketRuns() {
+    return ipcRenderer.invoke(TICKET_RUNS_GET_CHANNEL);
+  },
+  startTicketRun(ticket) {
+    return ipcRenderer.invoke(TICKET_RUN_START_CHANNEL, { ticket });
+  },
+  retryTicketRunSync(runId) {
+    return ipcRenderer.invoke(TICKET_RUN_SYNC_CHANNEL, { runId });
+  },
+  startTicketRunWork(runId) {
+    return ipcRenderer.invoke(TICKET_RUN_WORK_START_CHANNEL, { runId });
+  },
+  continueTicketRunWork(runId, prompt) {
+    return ipcRenderer.invoke(TICKET_RUN_WORK_CONTINUE_CHANNEL, { runId, prompt });
+  },
+  cancelTicketRunWork(runId) {
+    return ipcRenderer.invoke(TICKET_RUN_WORK_CANCEL_CHANNEL, { runId });
+  },
+  completeTicketRun(runId) {
+    return ipcRenderer.invoke(TICKET_RUN_COMPLETE_CHANNEL, { runId });
+  },
+  getTicketRunGitState(runId) {
+    return ipcRenderer.invoke(TICKET_RUN_GIT_STATE_CHANNEL, { runId });
+  },
+  generateTicketRunCommitDraft(runId) {
+    return ipcRenderer.invoke(TICKET_RUN_COMMIT_DRAFT_GENERATE_CHANNEL, { runId });
+  },
+  setTicketRunCommitDraft(runId, message) {
+    return ipcRenderer.invoke(TICKET_RUN_COMMIT_DRAFT_SET_CHANNEL, { runId, message });
+  },
+  commitTicketRun(runId, message) {
+    return ipcRenderer.invoke(TICKET_RUN_COMMIT_CHANNEL, { runId, message });
+  },
+  publishTicketRun(runId) {
+    return ipcRenderer.invoke(TICKET_RUN_PUBLISH_CHANNEL, { runId });
+  },
+  pushTicketRun(runId) {
+    return ipcRenderer.invoke(TICKET_RUN_PUSH_CHANNEL, { runId });
+  },
+  createTicketRunPullRequest(runId) {
+    return ipcRenderer.invoke(TICKET_RUN_PULL_REQUEST_CREATE_CHANNEL, { runId });
+  },
   pickDirectory(title) {
     return ipcRenderer.invoke(DIRECTORY_PICK_CHANNEL, { title });
+  },
+  openExternal(url) {
+    return ipcRenderer.invoke(OPEN_EXTERNAL_CHANNEL, { url });
   },
   getRuntimeConfig() {
     return ipcRenderer.invoke(RUNTIME_CONFIG_GET_CHANNEL);

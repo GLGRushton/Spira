@@ -74,7 +74,7 @@ describe("buildYouTrackBuiltinSubagents", () => {
         id: YOUTRACK_BUILTIN_DOMAIN_ID,
         delegationToolName: "delegate_to_youtrack",
         serverIds: [YOUTRACK_BUILTIN_SERVER_ID],
-        allowWrites: false,
+        allowWrites: true,
         source: "builtin",
       }),
     ]);

@@ -77,6 +77,11 @@ class FakeMemoryDb {
 
 type FakeManager = {
   bus: SpiraEventBus;
+  options: {
+    additionalInstructions?: string | null;
+    workingDirectory?: string | null;
+    allowUpgradeTools?: boolean;
+  };
   clearSession: ReturnType<typeof vi.fn>;
   sendMessage: ReturnType<typeof vi.fn>;
   sendVoiceMessage: ReturnType<typeof vi.fn>;
@@ -102,9 +107,14 @@ const createRegistry = () => {
     toolAggregator: { getTools: () => [] } as never,
     transport: transport as never,
     memoryDb: memoryDb as never,
-    createSessionManager: (stationId, bus) => {
+    createSessionManager: (stationId, bus, options) => {
       const manager: FakeManager = {
         bus,
+        options: {
+          additionalInstructions: options.additionalInstructions ?? null,
+          workingDirectory: options.workingDirectory ?? null,
+          allowUpgradeTools: options.allowUpgradeTools ?? true,
+        },
         clearSession: vi.fn().mockResolvedValue(undefined),
         sendMessage: vi.fn().mockResolvedValue(undefined),
         sendVoiceMessage: vi.fn().mockResolvedValue(undefined),
@@ -190,6 +200,72 @@ describe("StationRegistry", () => {
 
     await expect(registry.sendMessage("Ghost task", { stationId: "ghost-station" })).rejects.toMatchObject({
       code: "STATION_NOT_FOUND",
+    });
+  });
+
+  it("passes station-specific session options into the session manager", () => {
+    const { registry, managers } = createRegistry();
+
+    registry.createStation({
+      stationId: "mission:run-1",
+      label: "Mission SPI-69",
+      additionalInstructions: "Stay rooted in the managed worktree.",
+      workingDirectory: "C:\\Repos\\.spira-worktrees\\spi-69-spira",
+      allowUpgradeTools: false,
+    });
+
+    const manager = managers.get("mission:run-1");
+    expect(manager?.options).toMatchObject({
+      additionalInstructions: "Stay rooted in the managed worktree.",
+      workingDirectory: "C:\\Repos\\.spira-worktrees\\spi-69-spira",
+      allowUpgradeTools: false,
+    });
+  });
+
+  it("waits for the station response to finish before resolving", async () => {
+    const { registry, managers } = createRegistry();
+    registry.createStation({ stationId: DEFAULT_STATION_ID, label: "Primary" });
+
+    const pending = registry.sendMessageAndAwaitResponse("Primary task", {
+      stationId: DEFAULT_STATION_ID,
+      conversationId: "conv-primary-1",
+    });
+
+    const manager = managers.get(DEFAULT_STATION_ID);
+    await Promise.resolve();
+    expect(manager?.sendMessage).toHaveBeenCalledWith("Primary task", {
+      continuityPreamble: null,
+    });
+
+    manager?.bus.emit("copilot:response-end", {
+      messageId: "assistant-1",
+      text: "Done.",
+      timestamp: 2_000,
+    });
+    manager?.bus.emit("state:change", "thinking", "idle");
+
+    await expect(pending).resolves.toMatchObject({
+      messageId: "assistant-1",
+      text: "Done.",
+    });
+  });
+
+  it("rejects if the station returns to idle without a final response", async () => {
+    const { registry, managers } = createRegistry();
+    registry.createStation({ stationId: DEFAULT_STATION_ID, label: "Primary" });
+
+    const pending = registry.sendMessageAndAwaitResponse("Primary task", {
+      stationId: DEFAULT_STATION_ID,
+      timeoutMs: 50,
+    });
+
+    const manager = managers.get(DEFAULT_STATION_ID);
+    await Promise.resolve();
+    manager?.bus.emit("state:change", "idle", "thinking");
+    manager?.bus.emit("state:change", "thinking", "idle");
+
+    await expect(pending).rejects.toMatchObject({
+      code: "STATION_RESPONSE_ABORTED",
     });
   });
 });

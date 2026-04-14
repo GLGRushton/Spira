@@ -15,6 +15,7 @@ import type {
   SubagentStatusEvent,
   SubagentToolCallEvent,
   SubagentToolResultEvent,
+  TicketRunSnapshot,
   VoicePipelineState,
 } from "@spira/shared";
 
@@ -41,6 +42,7 @@ export interface EventMap {
   "mcp:server-crashed": [serverId: string];
   "mcp:server-stderr": [serverId: string, line: string];
   "mcp:servers-changed": [statuses: McpServerStatus[]];
+  "missions:runs-changed": [snapshot: TicketRunSnapshot];
   "subagent:catalog-changed": [agents: SubagentDomain[]];
   "subagent:started": [event: SubagentStartedEvent];
   "subagent:tool-call": [event: SubagentToolCallEvent];

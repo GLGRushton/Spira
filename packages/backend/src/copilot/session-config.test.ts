@@ -40,7 +40,9 @@ describe("session-config", () => {
   });
 
   it("advertises spira_propose_upgrade only when upgrade proposals are available", () => {
-    expect(getUpgradeToolInstructions()).toBe("");
-    expect(getUpgradeToolInstructions(async () => undefined)).toContain("spira_propose_upgrade");
+    expect(getUpgradeToolInstructions({})).toBe("");
+    expect(getUpgradeToolInstructions({ requestUpgradeProposal: async () => undefined })).toContain(
+      "spira_propose_upgrade",
+    );
   });
 });
