@@ -87,6 +87,7 @@ export type {
 } from "./runtime-config.js";
 export type {
   YouTrackAccountSummary,
+  YouTrackLinkedIssueSummary,
   YouTrackProjectSummary,
   YouTrackStateMapping,
   YouTrackStatusSummary,
