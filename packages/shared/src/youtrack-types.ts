@@ -30,13 +30,28 @@ export interface YouTrackTicketSummary {
   url: string;
   projectKey: string;
   projectName: string;
+  type: string | null;
   state: string | null;
   assignee: string | null;
   updatedAt: number | null;
+  isEpic: boolean;
+  parent: YouTrackLinkedIssueSummary | null;
+  subtasks: YouTrackLinkedIssueSummary[];
+  blockedReason: string | null;
 }
 
 export interface YouTrackProjectSummary {
   id: string;
   shortName: string;
   name: string;
+}
+
+export interface YouTrackLinkedIssueSummary {
+  id: string;
+  summary: string;
+  url: string;
+  projectKey: string;
+  projectName: string;
+  type: string | null;
+  state: string | null;
 }

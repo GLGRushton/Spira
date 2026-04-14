@@ -56,6 +56,106 @@ const formatTicketUpdatedAt = (updatedAt: number | null): string =>
 const formatStateList = (states: string[] | undefined): string =>
   states && states.length > 0 ? states.join(", ") : "None";
 
+const normalizeTicketType = (value: string | null | undefined): string | null => {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const normalized = value.trim().toLowerCase();
+  return normalized.length > 0 ? normalized : null;
+};
+
+const isEpicType = (value: string | null | undefined): boolean => normalizeTicketType(value) === "epic";
+
+const formatLinkedIssue = (ticketId: string, summary: string): string => `${ticketId} - ${summary}`;
+
+const formatChildCount = (count: number): string => `${count} child ${count === 1 ? "task" : "tasks"}`;
+
+const describeRelationshipBadge = (ticket: YouTrackTicketSummary): string => {
+  if (ticket.isEpic) {
+    return "Epic";
+  }
+
+  if (ticket.parent) {
+    return isEpicType(ticket.parent.type) ? "Child task" : "Linked child";
+  }
+
+  return ticket.subtasks.length > 0 ? "Parent ticket" : "Ticket";
+};
+
+const describeRelationshipCopy = (ticket: YouTrackTicketSummary): string | null => {
+  if (ticket.parent) {
+    return `${isEpicType(ticket.parent.type) ? "Task of epic" : "Child of"} ${formatLinkedIssue(ticket.parent.id, ticket.parent.summary)}`;
+  }
+
+  if (ticket.subtasks.length > 0) {
+    const leadChild = ticket.subtasks[0];
+    const leadCopy =
+      ticket.subtasks.length > 1
+        ? `${formatLinkedIssue(leadChild.id, leadChild.summary)} +${ticket.subtasks.length - 1} more`
+        : formatLinkedIssue(leadChild.id, leadChild.summary);
+    return `${formatChildCount(ticket.subtasks.length)} linked: ${leadCopy}`;
+  }
+
+  if (ticket.isEpic) {
+    return "Epic with no linked child tasks yet.";
+  }
+
+  return null;
+};
+
+const describePickupLabel = (ticket: YouTrackTicketSummary): string =>
+  ticket.blockedReason ? "Pickup blocked" : "Ready in Missions";
+
+const describePickupCopy = (ticket: YouTrackTicketSummary): string =>
+  ticket.blockedReason ?? "No active epic is blocking this ticket.";
+
+type TicketGroup = {
+  key: string;
+  epicTicket: YouTrackTicketSummary | null;
+  epicReference: NonNullable<YouTrackTicketSummary["parent"]> | null;
+  tickets: YouTrackTicketSummary[];
+};
+
+const getTicketPriorityRank = (ticket: YouTrackTicketSummary): number => {
+  if (ticket.blockedReason) {
+    return 3;
+  }
+
+  if (ticket.isEpic) {
+    return 0;
+  }
+
+  if (ticket.parent) {
+    return 2;
+  }
+
+  if (ticket.subtasks.length > 0) {
+    return 1;
+  }
+
+  return 1;
+};
+
+const compareTickets = (
+  left: YouTrackTicketSummary,
+  right: YouTrackTicketSummary,
+  mappedProjectKeySet: ReadonlySet<string>,
+): number => {
+  const leftMapped = mappedProjectKeySet.has(normalizeProjectKey(left.projectKey)) ? 1 : 0;
+  const rightMapped = mappedProjectKeySet.has(normalizeProjectKey(right.projectKey)) ? 1 : 0;
+  if (leftMapped !== rightMapped) {
+    return rightMapped - leftMapped;
+  }
+
+  const relationshipRank = getTicketPriorityRank(left) - getTicketPriorityRank(right);
+  if (relationshipRank !== 0) {
+    return relationshipRank;
+  }
+
+  return (right.updatedAt ?? 0) - (left.updatedAt ?? 0);
+};
+
 export function ProjectsPanel() {
   const youTrackEnabled = useSettingsStore((store) => store.youTrackEnabled);
   const setYouTrackEnabled = useSettingsStore((store) => store.setYouTrackEnabled);
@@ -158,19 +258,37 @@ export function ProjectsPanel() {
     () => new Set(snapshot.mappings.map((mapping) => normalizeProjectKey(mapping.projectKey))),
     [snapshot.mappings],
   );
-  const sortedTickets = useMemo(
-    () =>
-      [...youTrackTickets].sort((left, right) => {
-        const leftMapped = mappedProjectKeySet.has(normalizeProjectKey(left.projectKey)) ? 1 : 0;
-        const rightMapped = mappedProjectKeySet.has(normalizeProjectKey(right.projectKey)) ? 1 : 0;
-        if (leftMapped !== rightMapped) {
-          return rightMapped - leftMapped;
-        }
+  const ticketGroups = useMemo(() => {
+    const groups = new Map<string, TicketGroup>();
 
-        return (right.updatedAt ?? 0) - (left.updatedAt ?? 0);
-      }),
-    [mappedProjectKeySet, youTrackTickets],
-  );
+    for (const ticket of [...youTrackTickets].sort((left, right) => compareTickets(left, right, mappedProjectKeySet))) {
+      const epicParent = !ticket.isEpic && ticket.parent && isEpicType(ticket.parent.type) ? ticket.parent : null;
+      const groupKey = ticket.isEpic
+        ? `epic:${ticket.id}`
+        : epicParent
+          ? `epic:${epicParent.id}`
+          : `ticket:${ticket.id}`;
+      const existingGroup = groups.get(groupKey) ?? {
+        key: groupKey,
+        epicTicket: null,
+        epicReference: null,
+        tickets: [],
+      };
+
+      if (ticket.isEpic) {
+        existingGroup.epicTicket = ticket;
+      } else if (epicParent) {
+        existingGroup.epicReference = existingGroup.epicReference ?? epicParent;
+        existingGroup.tickets.push(ticket);
+      } else {
+        existingGroup.tickets.push(ticket);
+      }
+
+      groups.set(groupKey, existingGroup);
+    }
+
+    return [...groups.values()];
+  }, [mappedProjectKeySet, youTrackTickets]);
   const activeProjectKey =
     editingProjectKey === null
       ? null
@@ -188,6 +306,114 @@ export function ProjectsPanel() {
   const setupSummary = snapshot.workspaceRoot
     ? `${snapshot.workspaceRoot} - ${snapshot.repos.length} repos discovered`
     : "No workspace selected yet.";
+
+  const renderTicketCard = (ticket: YouTrackTicketSummary, child = false) => {
+    const isMapped = mappedProjectKeySet.has(normalizeProjectKey(ticket.projectKey));
+    const relationshipCopy = describeRelationshipCopy(ticket);
+    return (
+      <article
+        className={`${styles.workCard} ${ticket.blockedReason ? styles.workCardBlocked : ""} ${
+          ticket.isEpic ? styles.workCardEpic : ""
+        } ${child ? styles.workCardChild : ""}`}
+      >
+        <div className={styles.workHeader}>
+          <div className={styles.workHeaderCopy}>
+            <span className={styles.ticketId}>{ticket.id}</span>
+            <strong>{ticket.summary}</strong>
+          </div>
+          <div className={styles.workBadges}>
+            <span
+              className={`${styles.ticketRoleBadge} ${
+                ticket.isEpic
+                  ? styles.ticketRoleEpic
+                  : ticket.parent
+                    ? styles.ticketRoleChild
+                    : styles.ticketRoleNeutral
+              }`}
+            >
+              {describeRelationshipBadge(ticket)}
+            </span>
+            <span className={styles.statusBadge}>{ticket.state ?? "Unknown state"}</span>
+            <span
+              className={`${styles.ticketScopeBadge} ${isMapped ? styles.ticketScopeMapped : styles.ticketScopeUnmapped}`}
+            >
+              {isMapped ? "Mapped scope" : "No repo mapping"}
+            </span>
+          </div>
+        </div>
+        <div className={styles.workMetaRow}>
+          <span className={styles.workMeta}>
+            {ticket.projectKey} - {ticket.projectName}
+          </span>
+          <span className={styles.workMeta}>
+            {ticket.type ?? "Type unknown"} - {ticket.assignee ?? "Unassigned"} -{" "}
+            {formatTicketUpdatedAt(ticket.updatedAt)}
+          </span>
+        </div>
+        {relationshipCopy ? (
+          <div className={styles.workRelationshipRow}>
+            <span className={styles.sectionLabel}>Relationship</span>
+            <span className={styles.workRelationshipCopy}>{relationshipCopy}</span>
+          </div>
+        ) : null}
+        <div className={styles.workRelationshipRow}>
+          <span className={styles.sectionLabel}>Mission pickup</span>
+          <span
+            className={`${styles.workRelationshipCopy} ${ticket.blockedReason ? styles.workRelationshipAlert : ""}`}
+          >
+            {describePickupLabel(ticket)}. {describePickupCopy(ticket)}
+          </span>
+        </div>
+        <div className={styles.workFooter}>
+          <a className={styles.inspectButton} href={ticket.url} target="_blank" rel="noreferrer">
+            Open in YouTrack
+          </a>
+        </div>
+      </article>
+    );
+  };
+
+  const renderEpicReferenceCard = (epic: NonNullable<YouTrackTicketSummary["parent"]>, childCount: number) => (
+    <article className={`${styles.workCard} ${styles.workCardEpic}`}>
+      <div className={styles.workHeader}>
+        <div className={styles.workHeaderCopy}>
+          <span className={styles.ticketId}>{epic.id}</span>
+          <strong>{epic.summary}</strong>
+        </div>
+        <div className={styles.workBadges}>
+          <span className={`${styles.ticketRoleBadge} ${styles.ticketRoleEpic}`}>Epic</span>
+          <span className={styles.statusBadge}>{epic.state ?? "Unknown state"}</span>
+        </div>
+      </div>
+      <div className={styles.workMetaRow}>
+        <span className={styles.workMeta}>
+          {epic.projectKey} - {epic.projectName}
+        </span>
+        <span className={styles.workMeta}>{epic.type ?? "Type unknown"}</span>
+      </div>
+      <div className={styles.workRelationshipRow}>
+        <span className={styles.sectionLabel}>Relationship</span>
+        <span className={styles.workRelationshipCopy}>
+          {formatChildCount(childCount)} grouped beneath this epic in Missions.
+        </span>
+      </div>
+      <div className={styles.workRelationshipRow}>
+        <span className={styles.sectionLabel}>Mission pickup</span>
+        <span
+          className={`${styles.workRelationshipCopy} ${epic.state === "In Progress" ? styles.workRelationshipAlert : ""}`}
+        >
+          {epic.state === "In Progress"
+            ? `Epic active. Child pickup stays blocked until ${epic.id} leaves In Progress.`
+            : "Epic shown here so child tasks stay grouped under their parent."}
+        </span>
+      </div>
+      <div className={styles.workFooter}>
+        <a className={styles.inspectButton} href={epic.url} target="_blank" rel="noreferrer">
+          Open in YouTrack
+        </a>
+      </div>
+    </article>
+  );
 
   const resetEditor = useCallback(() => {
     setEditingProjectKey(null);
@@ -404,42 +630,39 @@ export function ProjectsPanel() {
           </div>
         ) : ticketError ? (
           <div className={styles.error}>{ticketError}</div>
-        ) : sortedTickets.length === 0 ? (
+        ) : ticketGroups.length === 0 ? (
           <div className={styles.emptyState}>
             No assigned tickets are currently visible for the configured working states.
           </div>
         ) : (
           <div className={styles.workList}>
-            {sortedTickets.map((ticket) => {
-              const isMapped = mappedProjectKeySet.has(normalizeProjectKey(ticket.projectKey));
-              return (
-                <a key={ticket.id} className={styles.workCard} href={ticket.url} target="_blank" rel="noreferrer">
-                  <div className={styles.workHeader}>
-                    <div className={styles.workHeaderCopy}>
-                      <span className={styles.ticketId}>{ticket.id}</span>
-                      <strong>{ticket.summary}</strong>
+            {ticketGroups.map((group) => {
+              if (group.epicTicket || group.epicReference) {
+                const epicChildCount =
+                  group.tickets.length > 0 ? group.tickets.length : (group.epicTicket?.subtasks.length ?? 0);
+                return (
+                  <section key={group.key} className={styles.workGroup}>
+                    <div className={styles.workGroupHeader}>
+                      <span className={styles.sectionLabel}>Epic group</span>
+                      <span className={styles.workMeta}>{formatChildCount(epicChildCount)}</span>
                     </div>
-                    <div className={styles.workBadges}>
-                      <span className={styles.statusBadge}>{ticket.state ?? "Unknown state"}</span>
-                      <span
-                        className={`${styles.ticketScopeBadge} ${
-                          isMapped ? styles.ticketScopeMapped : styles.ticketScopeUnmapped
-                        }`}
-                      >
-                        {isMapped ? "Mapped scope" : "No repo mapping"}
-                      </span>
-                    </div>
-                  </div>
-                  <div className={styles.workMetaRow}>
-                    <span className={styles.workMeta}>
-                      {ticket.projectKey} - {ticket.projectName}
-                    </span>
-                    <span className={styles.workMeta}>
-                      {ticket.assignee ?? "Unassigned"} - {formatTicketUpdatedAt(ticket.updatedAt)}
-                    </span>
-                  </div>
-                </a>
-              );
+                    {group.epicTicket
+                      ? renderTicketCard(group.epicTicket)
+                      : group.epicReference
+                        ? renderEpicReferenceCard(group.epicReference, epicChildCount)
+                        : null}
+                    {group.tickets.length > 0 ? (
+                      <div className={styles.workGroupChildren}>
+                        {group.tickets.map((ticket) => (
+                          <div key={ticket.id}>{renderTicketCard(ticket, true)}</div>
+                        ))}
+                      </div>
+                    ) : null}
+                  </section>
+                );
+              }
+
+              return <div key={group.key}>{renderTicketCard(group.tickets[0])}</div>;
             })}
           </div>
         )}

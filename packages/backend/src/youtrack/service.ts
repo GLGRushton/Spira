@@ -2,6 +2,7 @@ import {
   DEFAULT_YOUTRACK_STATE_MAPPING,
   type Env,
   type YouTrackAccountSummary,
+  type YouTrackLinkedIssueSummary,
   type YouTrackProjectSummary,
   type YouTrackStateMapping,
   type YouTrackStatusSummary,
@@ -31,6 +32,12 @@ interface YouTrackApiIssue {
     name?: string;
   } | null;
   customFields?: YouTrackIssueField[];
+  parent?: YouTrackApiIssueLink | null;
+  subtasks?: YouTrackApiIssueLink | null;
+}
+
+interface YouTrackApiIssueLink {
+  issues?: YouTrackApiIssue[];
 }
 
 interface YouTrackCurrentUserResponse {
@@ -60,6 +67,15 @@ const buildHeaders = (token: string): Record<string, string> => ({
 });
 
 const normalizeStateName = (value: string | null | undefined): string | null => {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const normalized = value.trim().toLowerCase();
+  return normalized.length > 0 ? normalized : null;
+};
+
+const normalizeIssueTypeName = (value: string | null | undefined): string | null => {
   if (typeof value !== "string") {
     return null;
   }
@@ -102,18 +118,29 @@ export const matchesYouTrackState = (state: string | null | undefined, mapping: 
   }
 
   return [...mapping.todo, ...mapping.inProgress]
-    .map((entry) => normalizeStateName(entry))
-    .some((entry) => entry === normalizedState);
+    .map((entry: string) => normalizeStateName(entry))
+    .some((entry: string | null) => entry === normalizedState);
 };
 
-export const mapYouTrackIssue = (baseUrl: string, issue: YouTrackApiIssue): YouTrackTicketSummary | null => {
+const matchesYouTrackInProgressState = (state: string | null | undefined, mapping: YouTrackStateMapping): boolean => {
+  const normalizedState = normalizeStateName(state);
+  if (!normalizedState) {
+    return false;
+  }
+
+  return mapping.inProgress
+    .map((entry: string) => normalizeStateName(entry))
+    .some((entry: string | null) => entry === normalizedState);
+};
+
+const getIssueType = (issue: YouTrackApiIssue): string | null => getCustomFieldValue(issue, "Type")?.name ?? null;
+
+const isEpicType = (type: string | null | undefined): boolean => normalizeIssueTypeName(type) === "epic";
+
+const mapLinkedIssue = (baseUrl: string, issue: YouTrackApiIssue): YouTrackLinkedIssueSummary | null => {
   if (!issue.idReadable || !issue.summary || !issue.project?.shortName || !issue.project.name) {
     return null;
   }
-
-  const state = getCustomFieldValue(issue, "State")?.name ?? null;
-  const assignee =
-    getCustomFieldValue(issue, "Assignee")?.login ?? getCustomFieldValue(issue, "Assignee")?.name ?? null;
 
   return {
     id: issue.idReadable,
@@ -121,9 +148,53 @@ export const mapYouTrackIssue = (baseUrl: string, issue: YouTrackApiIssue): YouT
     url: `${baseUrl}/issue/${issue.idReadable}`,
     projectKey: issue.project.shortName,
     projectName: issue.project.name,
+    type: getIssueType(issue),
+    state: getCustomFieldValue(issue, "State")?.name ?? null,
+  };
+};
+
+export const mapYouTrackIssue = (
+  baseUrl: string,
+  issue: YouTrackApiIssue,
+  stateMapping: YouTrackStateMapping = cloneStateMapping(),
+): YouTrackTicketSummary | null => {
+  if (!issue.idReadable || !issue.summary || !issue.project?.shortName || !issue.project.name) {
+    return null;
+  }
+
+  const state = getCustomFieldValue(issue, "State")?.name ?? null;
+  const type = getIssueType(issue);
+  const assignee =
+    getCustomFieldValue(issue, "Assignee")?.login ?? getCustomFieldValue(issue, "Assignee")?.name ?? null;
+  const parent =
+    issue.parent?.issues?.flatMap((linkedIssue) => {
+      const mappedIssue = mapLinkedIssue(baseUrl, linkedIssue);
+      return mappedIssue ? [mappedIssue] : [];
+    })[0] ?? null;
+  const subtasks =
+    issue.subtasks?.issues?.flatMap((linkedIssue) => {
+      const mappedIssue = mapLinkedIssue(baseUrl, linkedIssue);
+      return mappedIssue ? [mappedIssue] : [];
+    }) ?? [];
+  const blockedReason =
+    parent && isEpicType(parent.type) && matchesYouTrackInProgressState(parent.state, stateMapping)
+      ? `${parent.id} is already active (${parent.state ?? "In Progress"}). Pick up the epic instead of the child task.`
+      : null;
+
+  return {
+    id: issue.idReadable,
+    summary: issue.summary,
+    url: `${baseUrl}/issue/${issue.idReadable}`,
+    projectKey: issue.project.shortName,
+    projectName: issue.project.name,
+    type,
     state,
     assignee,
     updatedAt: typeof issue.updated === "number" ? issue.updated : null,
+    isEpic: isEpicType(type),
+    parent,
+    subtasks,
+    blockedReason,
   };
 };
 
@@ -232,7 +303,7 @@ export class YouTrackService {
     const effectiveLimit = Math.max(limit, 1);
     const query = encodeURIComponent("assignee: me");
     const fields = encodeURIComponent(
-      "idReadable,summary,updated,project(shortName,name),customFields(name,value(name,fullName,login))",
+      "idReadable,summary,updated,project(shortName,name),customFields(name,value(name,fullName,login)),parent(issues(idReadable,summary,project(shortName,name),customFields(name,value(name)))),subtasks(issues(idReadable,summary,project(shortName,name),customFields(name,value(name))))",
     );
     const pageSize = Math.max(effectiveLimit * 2, 20);
     const matchedIssues: YouTrackTicketSummary[] = [];
@@ -250,7 +321,7 @@ export class YouTrackService {
       }
 
       for (const issue of issues) {
-        const mappedIssue = mapYouTrackIssue(baseUrl, issue);
+        const mappedIssue = mapYouTrackIssue(baseUrl, issue, this.stateMapping);
         if (!mappedIssue || !matchesYouTrackState(mappedIssue.state, this.stateMapping)) {
           continue;
         }
