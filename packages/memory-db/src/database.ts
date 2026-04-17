@@ -13,12 +13,14 @@ import type {
   TicketRunStatus,
   TicketRunSummary,
   TicketRunWorktreeSummary,
+  YouTrackStateMapping,
 } from "@spira/shared";
 import {
   TICKET_RUN_ATTEMPT_STATUSES,
   TICKET_RUN_CLEANUP_STATES,
   TICKET_RUN_STATUSES,
   normalizeMcpToolAccessPolicy,
+  normalizeYouTrackStateMapping,
   summarizeConversationTitle,
 } from "@spira/shared";
 import BetterSqlite3 from "better-sqlite3";
@@ -163,6 +165,7 @@ export interface UpsertTicketRunWorktreeInput {
   repoAbsolutePath: string;
   worktreePath: string;
   branchName: string;
+  commitMessageDraft?: string | null;
   cleanupState?: TicketRunCleanupState;
   createdAt?: number;
   updatedAt?: number;
@@ -267,6 +270,12 @@ interface ProjectRepoMappingRow {
   updatedAt: number;
 }
 
+interface YouTrackStateMappingRow {
+  todoJson: string;
+  inProgressJson: string;
+  updatedAt: number;
+}
+
 interface TicketRunRow {
   runId: string;
   stationId: string | null;
@@ -288,6 +297,7 @@ interface TicketRunWorktreeRow {
   repoAbsolutePath: string;
   worktreePath: string;
   branchName: string;
+  commitMessageDraft: string | null;
   cleanupState: string;
   createdAt: number;
   updatedAt: number;
@@ -699,6 +709,29 @@ const MIGRATIONS: MigrationDefinition[] = [
     version: 12,
     statements: ["ALTER TABLE ticket_runs ADD COLUMN commit_message_draft TEXT"],
   },
+  {
+    version: 13,
+    statements: [
+      `CREATE TABLE youtrack_state_mapping_config (
+        id INTEGER PRIMARY KEY CHECK(id = 1),
+        todo_json TEXT NOT NULL DEFAULT '[]',
+        in_progress_json TEXT NOT NULL DEFAULT '[]',
+        updated_at INTEGER NOT NULL
+      )`,
+    ],
+  },
+  {
+    version: 14,
+    statements: [
+      "ALTER TABLE ticket_run_worktrees ADD COLUMN commit_message_draft TEXT",
+      `UPDATE ticket_run_worktrees
+       SET commit_message_draft = (
+         SELECT ticket_runs.commit_message_draft
+         FROM ticket_runs
+         WHERE ticket_runs.run_id = ticket_run_worktrees.run_id
+       )`,
+    ],
+  },
 ];
 
 type SqliteDatabase = InstanceType<typeof BetterSqlite3>;
@@ -886,6 +919,7 @@ const mapTicketRunWorktreeRow = (row: TicketRunWorktreeRow): TicketRunWorktreeSu
     repoAbsolutePath: String(row.repoAbsolutePath),
     worktreePath: String(row.worktreePath),
     branchName: String(row.branchName),
+    commitMessageDraft: row.commitMessageDraft === null ? null : String(row.commitMessageDraft),
     cleanupState: row.cleanupState,
     createdAt: Number(row.createdAt),
     updatedAt: Number(row.updatedAt),
@@ -925,7 +959,8 @@ const mapTicketRunRow = (
     projectKey: String(row.projectKey),
     status: row.status,
     statusMessage: row.statusMessage === null ? null : String(row.statusMessage),
-    commitMessageDraft: row.commitMessageDraft === null ? null : String(row.commitMessageDraft),
+    commitMessageDraft:
+      row.commitMessageDraft === null ? (worktrees[0]?.commitMessageDraft ?? null) : String(row.commitMessageDraft),
     startedAt: Number(row.startedAt),
     createdAt: Number(row.createdAt),
     updatedAt: Number(row.updatedAt),
@@ -1378,6 +1413,51 @@ export class SpiraMemoryDatabase {
       });
   }
 
+  getYouTrackStateMapping(): YouTrackStateMapping | null {
+    const row = this.db
+      .prepare(
+        `SELECT
+           todo_json AS todoJson,
+           in_progress_json AS inProgressJson,
+           updated_at AS updatedAt
+         FROM youtrack_state_mapping_config
+         WHERE id = 1`,
+      )
+      .get() as YouTrackStateMappingRow | undefined;
+
+    if (!row) {
+      return null;
+    }
+
+    return normalizeYouTrackStateMapping({
+      todo: parseStringArray(row.todoJson),
+      inProgress: parseStringArray(row.inProgressJson),
+    });
+  }
+
+  setYouTrackStateMapping(mapping: YouTrackStateMapping): YouTrackStateMapping {
+    this.assertWritable();
+    const normalizedMapping = normalizeYouTrackStateMapping(mapping);
+    const updatedAt = Date.now();
+
+    this.db
+      .prepare(
+        `INSERT INTO youtrack_state_mapping_config (id, todo_json, in_progress_json, updated_at)
+         VALUES (1, @todoJson, @inProgressJson, @updatedAt)
+         ON CONFLICT(id) DO UPDATE SET
+           todo_json = excluded.todo_json,
+           in_progress_json = excluded.in_progress_json,
+           updated_at = excluded.updated_at`,
+      )
+      .run({
+        todoJson: serializeJson(normalizedMapping.todo) ?? "[]",
+        inProgressJson: serializeJson(normalizedMapping.inProgress) ?? "[]",
+        updatedAt,
+      });
+
+    return normalizedMapping;
+  }
+
   getProjectWorkspaceRoot(): string | null {
     const row = this.db
       .prepare(
@@ -1525,11 +1605,12 @@ export class SpiraMemoryDatabase {
            repo_absolute_path AS repoAbsolutePath,
            worktree_path AS worktreePath,
            branch_name AS branchName,
+           commit_message_draft AS commitMessageDraft,
            cleanup_state AS cleanupState,
            created_at AS createdAt,
            updated_at AS updatedAt
-         FROM ticket_run_worktrees
-         ORDER BY run_id ASC, repo_relative_path COLLATE NOCASE ASC`,
+          FROM ticket_run_worktrees
+          ORDER BY run_id ASC, repo_relative_path COLLATE NOCASE ASC`,
       )
       .all() as unknown as TicketRunWorktreeRow[];
 
@@ -1605,11 +1686,12 @@ export class SpiraMemoryDatabase {
            repo_absolute_path AS repoAbsolutePath,
            worktree_path AS worktreePath,
            branch_name AS branchName,
+           commit_message_draft AS commitMessageDraft,
            cleanup_state AS cleanupState,
            created_at AS createdAt,
            updated_at AS updatedAt
-         FROM ticket_run_worktrees
-         WHERE run_id = @runId
+          FROM ticket_run_worktrees
+          WHERE run_id = @runId
          ORDER BY repo_relative_path COLLATE NOCASE ASC`,
       )
       .all({ runId }) as unknown as TicketRunWorktreeRow[];
@@ -1671,7 +1753,6 @@ export class SpiraMemoryDatabase {
     const createdAt = input.createdAt ?? now;
     const startedAt = input.startedAt ?? createdAt;
     const statusMessage = normalizeTitle(input.statusMessage);
-    const commitMessageDraft = normalizeTitle(input.commitMessageDraft);
     const status = input.status;
     assertTicketRunStatus(status);
     const normalizedWorktrees = input.worktrees.map((worktree) => {
@@ -1684,17 +1765,22 @@ export class SpiraMemoryDatabase {
       }
 
       const cleanupState = worktree.cleanupState ?? "retained";
+      const commitMessageDraft = normalizeTitle(worktree.commitMessageDraft);
       assertTicketRunCleanupState(cleanupState);
       return {
         repoRelativePath,
         repoAbsolutePath,
         worktreePath,
         branchName,
+        commitMessageDraft,
         cleanupState,
         createdAt: worktree.createdAt ?? createdAt,
         updatedAt: worktree.updatedAt ?? now,
       };
     });
+    const commitMessageDraft = normalizeTitle(
+      input.commitMessageDraft ?? normalizedWorktrees[0]?.commitMessageDraft ?? null,
+    );
     const normalizedAttempts = (input.attempts ?? []).map((attempt) => {
       const attemptId = attempt.attemptId.trim();
       const prompt = normalizeTitle(attempt.prompt);
@@ -1789,6 +1875,7 @@ export class SpiraMemoryDatabase {
            repo_absolute_path,
            worktree_path,
            branch_name,
+           commit_message_draft,
            cleanup_state,
            created_at,
            updated_at
@@ -1798,6 +1885,7 @@ export class SpiraMemoryDatabase {
            @repoAbsolutePath,
            @worktreePath,
            @branchName,
+           @commitMessageDraft,
            @cleanupState,
            @createdAt,
            @updatedAt

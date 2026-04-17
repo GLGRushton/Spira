@@ -1,10 +1,20 @@
+import {
+  type MissionUiRoom,
+  type SpiraUiView,
+  type TicketRunSummary,
+  getMissionRunIdFromView,
+  isMissionView,
+} from "@spira/shared";
 import { AnimatePresence, motion } from "framer-motion";
-import { useEffect, useMemo } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo } from "react";
+import { useShallow } from "zustand/react/shallow";
 import { useIpc } from "../hooks/useIpc.js";
+import { useMissionRunsSync } from "../hooks/useMissionRunsSync.js";
 import { useMcpStore } from "../stores/mcp-store.js";
+import { getMissionRunById, getMissionRunByStationId, useMissionRunsStore } from "../stores/mission-runs-store.js";
 import { useNavigationStore } from "../stores/navigation-store.js";
 import { useRoomStore } from "../stores/room-store.js";
-import { getStation, useStationStore } from "../stores/station-store.js";
+import { PRIMARY_STATION_ID, getStation, useStationStore } from "../stores/station-store.js";
 import { useSubagentStore } from "../stores/subagent-store.js";
 import styles from "./AppShell.module.css";
 import { AssistantStatusStrip } from "./AssistantStatusStrip.js";
@@ -24,20 +34,52 @@ import { BaseDeck } from "./base/BaseDeck.js";
 import { BridgeRoomDetail } from "./base/BridgeRoomDetail.js";
 import { McpClusterDetail } from "./base/McpClusterDetail.js";
 import { McpRoomDetail } from "./base/McpRoomDetail.js";
+import { MissionNav } from "./missions/MissionNav.js";
+import { MissionShell } from "./missions/MissionShell.js";
 import { OperationsRoster } from "./operations/OperationsRoster.js";
 import { ProjectsPanel } from "./projects/ProjectsPanel.js";
 
-export function AppShell() {
-  useIpc();
+interface MissionStageProps {
+  run: TicketRunSummary;
+  activeRoom: MissionUiRoom;
+  onSelectRoom: (room: MissionUiRoom) => void;
+  onBackToShip: () => void;
+}
 
-  const activeStationId = useStationStore((store) => store.activeStationId);
-  const assistantState = useStationStore((store) => getStation(store, activeStationId).state);
-  const stationMap = useStationStore((store) => store.stations);
+function MissionStage({ run, activeRoom, onSelectRoom, onBackToShip }: MissionStageProps) {
+  return (
+    <>
+      <div className={styles.sidebarSlot}>
+        <MissionNav run={run} activeRoom={activeRoom} onSelectRoom={onSelectRoom} onBackToShip={onBackToShip} />
+      </div>
+      <main className={styles.main}>
+        <MissionShell run={run} activeRoom={activeRoom} />
+      </main>
+    </>
+  );
+}
+
+interface ShipStageProps {
+  view: SpiraUiView;
+  onViewChange: (view: SpiraUiView) => void;
+}
+
+function ShipStage({ view, onViewChange }: ShipStageProps) {
+  const { activeStationId, assistantState, stationMap } = useStationStore(
+    useShallow((store) => ({
+      activeStationId: store.activeStationId,
+      assistantState: getStation(store, store.activeStationId).state,
+      stationMap: store.stations,
+    })),
+  );
   const servers = useMcpStore((store) => store.servers);
   const subagents = useSubagentStore((store) => store.agents);
-  const allAgentRooms = useRoomStore((store) => store.agentRooms);
-  const allFlights = useRoomStore((store) => store.flights);
-  const view = useNavigationStore((store) => store.activeView);
+  const { agentRooms: allAgentRooms, flights: allFlights } = useRoomStore(
+    useShallow((store) => ({
+      agentRooms: store.agentRooms,
+      flights: store.flights,
+    })),
+  );
   const setView = useNavigationStore((store) => store.setView);
 
   const stations = useMemo(() => Object.values(stationMap), [stationMap]);
@@ -49,7 +91,6 @@ export function AppShell() {
     () => allFlights.filter((flight) => flight.stationId === activeStationId),
     [activeStationId, allFlights],
   );
-
   const selectedServer = view.startsWith("mcp:") ? servers.find((server) => server.id === view.slice(4)) : null;
   const selectedAgentRoom = view.startsWith("agent:") ? agentRooms.find((room) => room.roomId === view) : null;
   const isShipOverview = view === "ship";
@@ -64,15 +105,12 @@ export function AppShell() {
   }, [selectedAgentRoom, selectedServer, setView, view]);
 
   return (
-    <div className={styles.app}>
-      <div className={styles.titleBarSlot}>
-        <TitleBar />
-      </div>
+    <>
       <div className={styles.sidebarSlot}>
-        <Sidebar activeView={view} onViewChange={setView} />
+        <Sidebar activeView={view} onViewChange={onViewChange} />
       </div>
       <main className={styles.main}>
-        <AssistantStatusStrip activeView={view} onOpenBridge={() => setView("bridge")} />
+        <AssistantStatusStrip activeView={view} onOpenBridge={() => onViewChange("bridge")} />
         <div className={styles.stageStack}>
           <AnimatePresence mode="wait" initial={false}>
             {isShipOverview ? (
@@ -93,7 +131,7 @@ export function AppShell() {
                   subagents={subagents}
                   agentRooms={agentRooms}
                   flights={flights}
-                  onViewChange={setView}
+                  onViewChange={onViewChange}
                 />
               </motion.div>
             ) : (
@@ -116,7 +154,7 @@ export function AppShell() {
                     {view === "bridge" ? (
                       <BridgeRoomDetail assistantState={assistantState} />
                     ) : view === "operations" ? (
-                      <OperationsRoster onOpenBridge={() => setView("bridge")} />
+                      <OperationsRoster onOpenBridge={() => onViewChange("bridge")} />
                     ) : view === "barracks" ? (
                       <BarracksDetail servers={servers} agents={subagents} agentRooms={agentRooms} />
                     ) : view === "mcp" ? (
@@ -141,6 +179,75 @@ export function AppShell() {
           </AnimatePresence>
         </div>
       </main>
+    </>
+  );
+}
+
+export function AppShell() {
+  useIpc();
+  useMissionRunsSync();
+
+  const setActiveStation = useStationStore((store) => store.setActiveStation);
+  const { view, openMission, openPrimaryBridge, setMissionRoom, setView } = useNavigationStore(
+    useShallow((store) => ({
+      view: store.activeView,
+      openMission: store.openMission,
+      openPrimaryBridge: store.openPrimaryBridge,
+      setMissionRoom: store.setMissionRoom,
+      setView: store.setView,
+    })),
+  );
+  const missionRunId = getMissionRunIdFromView(view);
+  const missionViewActive = isMissionView(view);
+  const selectedMissionRun = useMissionRunsStore((store) =>
+    missionRunId ? getMissionRunById(store.snapshot, missionRunId) : null,
+  );
+  const activeMissionRoom = useNavigationStore((store) =>
+    missionRunId ? (store.missionRooms[missionRunId] ?? "details") : null,
+  );
+
+  const handleViewChange = useCallback(
+    (nextView: SpiraUiView) => {
+      if (nextView === "bridge") {
+        const currentStationId = useStationStore.getState().activeStationId;
+        const currentSnapshot = useMissionRunsStore.getState().snapshot;
+        const missionRun = getMissionRunByStationId(currentSnapshot, currentStationId);
+        if (missionRun) {
+          openMission(missionRun.runId, "bridge");
+          return;
+        }
+      }
+
+      setView(nextView);
+    },
+    [openMission, setView],
+  );
+
+  useLayoutEffect(() => {
+    if (missionViewActive && missionRunId && !selectedMissionRun) {
+      setView("projects");
+    }
+  }, [missionRunId, missionViewActive, selectedMissionRun, setView]);
+
+  return (
+    <div className={`${styles.app} ${missionViewActive ? styles.missionApp : ""}`}>
+      <div className={styles.titleBarSlot}>
+        <TitleBar />
+      </div>
+      {missionViewActive && selectedMissionRun && activeMissionRoom ? (
+        <MissionStage
+          run={selectedMissionRun}
+          activeRoom={activeMissionRoom}
+          onSelectRoom={(room) => setMissionRoom(selectedMissionRun.runId, room)}
+          onBackToShip={() => {
+            setMissionRoom(selectedMissionRun.runId, "bridge");
+            setActiveStation(PRIMARY_STATION_ID);
+            openPrimaryBridge();
+          }}
+        />
+      ) : missionViewActive ? null : (
+        <ShipStage view={view} onViewChange={handleViewChange} />
+      )}
       <ScreenCaptureIndicator />
       <PermissionPrompt />
       <UpgradeBanner />

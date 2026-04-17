@@ -1,0 +1,114 @@
+.root {
+  display: grid;
+  gap: 10px;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.label {
+  color: var(--text-display);
+  font-size: 14px;
+}
+
+.count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 2.5ch;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: rgba(141, 214, 234, 0.1);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.caption,
+.helper,
+.empty {
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.chipList {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-height: 32px;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(141, 214, 234, 0.1);
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+.chipInvalid {
+  background: rgba(227, 120, 120, 0.12);
+  box-shadow: inset 0 0 0 1px rgba(227, 120, 120, 0.24);
+}
+
+.chipLabel {
+  overflow-wrap: anywhere;
+}
+
+.chipRemove {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.inputWrap {
+  position: relative;
+}
+
+.input {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid rgba(141, 214, 234, 0.18);
+  border-radius: var(--radius-sm);
+  background: rgba(8, 12, 30, 0.78);
+  color: var(--text-primary);
+}
+
+.dropdown {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  z-index: 10;
+  display: grid;
+  gap: 4px;
+  padding: 8px;
+  border: 1px solid rgba(141, 214, 234, 0.18);
+  border-radius: var(--radius-sm);
+  background: rgba(10, 16, 34, 0.96);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.28);
+}
+
+.option {
+  padding: 8px 10px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-primary);
+  text-align: left;
+}
+
+.optionActive {
+  background: rgba(141, 214, 234, 0.12);
+}

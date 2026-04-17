@@ -1,5 +1,7 @@
 import { useMemo } from "react";
 import { getChatSession, getLatestCompletedAssistantMessage, useChatStore } from "../../stores/chat-store.js";
+import { getMissionRunByStationId, useMissionRunsStore } from "../../stores/mission-runs-store.js";
+import { useNavigationStore } from "../../stores/navigation-store.js";
 import { useStationStore } from "../../stores/station-store.js";
 import styles from "./OperationsRoster.module.css";
 
@@ -15,6 +17,8 @@ const formatTimestamp = (timestamp: number): string =>
 
 export function OperationsRoster({ onOpenBridge }: OperationsRosterProps) {
   const activeStationId = useStationStore((store) => store.activeStationId);
+  const openMission = useNavigationStore((store) => store.openMission);
+  const missionRunSnapshot = useMissionRunsStore((store) => store.snapshot);
   const stationMap = useStationStore((store) => store.stations);
   const setActiveStation = useStationStore((store) => store.setActiveStation);
   const sessions = useChatStore((store) => store.sessions);
@@ -65,6 +69,7 @@ export function OperationsRoster({ onOpenBridge }: OperationsRosterProps) {
         {stationCards.map((station) => {
           const isFocused = station.stationId === activeStationId;
           const taskLabel = station.title?.trim() || station.session.activeConversationTitle || "Fresh briefing";
+          const missionRun = getMissionRunByStationId(missionRunSnapshot, station.stationId);
           return (
             <article key={station.stationId} className={`${styles.card} ${isFocused ? styles.focused : ""}`}>
               <div className={styles.cardTop}>
@@ -99,19 +104,26 @@ export function OperationsRoster({ onOpenBridge }: OperationsRosterProps) {
                   className={styles.secondary}
                   onClick={() => {
                     setActiveStation(station.stationId);
+                    if (missionRun) {
+                      openMission(missionRun.runId);
+                    }
                   }}
                 >
-                  Focus
+                  {missionRun ? "Open mission" : "Focus"}
                 </button>
                 <button
                   type="button"
                   className={styles.primary}
                   onClick={() => {
                     setActiveStation(station.stationId);
+                    if (missionRun) {
+                      openMission(missionRun.runId, "bridge");
+                      return;
+                    }
                     onOpenBridge();
                   }}
                 >
-                  Open bridge
+                  {missionRun ? "Mission bridge" : "Open bridge"}
                 </button>
                 <button
                   type="button"

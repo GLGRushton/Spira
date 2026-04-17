@@ -2,6 +2,7 @@ import {
   PROTOCOL_VERSION,
   SPIRA_UI_CONTROL_BRIDGE_VERSION,
   SPIRA_UI_ROOT_VIEWS,
+  getMissionRunIdFromView,
   type SpiraUiChatTranscript,
   type SpiraUiMessageSummary,
   type SpiraUiSnapshot,
@@ -57,13 +58,16 @@ export const buildSpiraUiSnapshot = (): SpiraUiSnapshot => {
   const upgrade = useUpgradeStore.getState();
   const room = useRoomStore.getState();
   const settings = useSettingsStore.getState();
-  const activeView = useNavigationStore.getState().activeView;
+  const navigation = useNavigationStore.getState();
+  const activeView = navigation.activeView;
+  const activeMissionRunId = getMissionRunIdFromView(activeView);
   const assistantState = getStation(useStationStore.getState(), activeStationId).state;
 
   return {
     bridgeVersion: SPIRA_UI_CONTROL_BRIDGE_VERSION,
     protocolVersion: PROTOCOL_VERSION,
     activeView,
+    activeMissionRoom: activeMissionRunId ? navigation.missionRooms[activeMissionRunId] ?? "details" : undefined,
     rootViews: [...SPIRA_UI_ROOT_VIEWS],
     window: {
       title: document.title || "Spira",

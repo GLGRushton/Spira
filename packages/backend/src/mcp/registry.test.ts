@@ -254,6 +254,10 @@ describe("deriveRemediationHint", () => {
     expect(deriveRemediationHint("Request failed", ["401 missing api key"])).toContain("API key");
   });
 
+  it("points certificate failures toward the machine trust store", () => {
+    expect(deriveRemediationHint("self-signed certificate in certificate chain", [])).toContain("certificate store");
+  });
+
   it("points npx install prompts toward non-interactive launch args", () => {
     expect(
       deriveRemediationHint("Connection closed", ["Need to install the following packages:", "Ok to proceed? (y)"]),

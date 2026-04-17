@@ -4,6 +4,7 @@ import type { ConversationSearchMatch, StoredConversation, StoredConversationSum
 import type { McpServerConfig, McpServerUpdateConfig } from "./mcp-types.js";
 import type { McpServerStatus } from "./mcp-types.js";
 import type { ProjectRepoMappingsSnapshot } from "./project-repo-types.js";
+import type { MissionServiceSnapshot } from "./service-profile-types.js";
 import type {
   SubagentCompletedEvent,
   SubagentCreateConfig,
@@ -35,7 +36,12 @@ import type {
   TicketRunSnapshot,
 } from "./ticket-run-types.js";
 import type { UpgradeProposal, UpgradeStatus } from "./upgrade.js";
-import type { YouTrackProjectSummary, YouTrackStatusSummary, YouTrackTicketSummary } from "./youtrack-types.js";
+import type {
+  YouTrackProjectSummary,
+  YouTrackStateMapping,
+  YouTrackStatusSummary,
+  YouTrackTicketSummary,
+} from "./youtrack-types.js";
 
 export interface ErrorPayload {
   code: string;
@@ -48,7 +54,7 @@ export interface ErrorPayload {
 export interface PermissionRequestPayload {
   requestId: string;
   stationId?: StationId;
-  kind: "mcp";
+  kind: "mcp" | "custom-tool";
   toolCallId?: string;
   serverName: string;
   toolName: string;
@@ -70,7 +76,7 @@ export interface StationSummary {
   isStreaming: boolean;
 }
 
-export const PROTOCOL_VERSION = 13;
+export const PROTOCOL_VERSION = 16;
 
 export const TTS_PROVIDERS = ["elevenlabs", "kokoro"] as const;
 export type TtsProvider = (typeof TTS_PROVIDERS)[number];
@@ -98,6 +104,7 @@ export type ClientMessage =
   | { type: "youtrack:status:get"; requestId: string; enabled: boolean }
   | { type: "youtrack:tickets:list"; requestId: string; enabled: boolean; limit?: number }
   | { type: "youtrack:projects:search"; requestId: string; enabled: boolean; query: string; limit?: number }
+  | { type: "youtrack:state-mapping:set"; requestId: string; enabled: boolean; mapping: YouTrackStateMapping }
   | { type: "projects:snapshot:get"; requestId: string }
   | { type: "projects:workspace-root:set"; requestId: string; workspaceRoot: string | null }
   | { type: "projects:mapping:set"; requestId: string; projectKey: string; repoRelativePaths: string[] }
@@ -108,13 +115,22 @@ export type ClientMessage =
   | { type: "missions:ticket-run:work:continue"; requestId: string; runId: string; prompt?: string }
   | { type: "missions:ticket-run:work:cancel"; requestId: string; runId: string }
   | { type: "missions:ticket-run:complete"; requestId: string; runId: string }
-  | { type: "missions:ticket-run:git-state:get"; requestId: string; runId: string }
-  | { type: "missions:ticket-run:commit-draft:generate"; requestId: string; runId: string }
-  | { type: "missions:ticket-run:commit-draft:set"; requestId: string; runId: string; message: string }
-  | { type: "missions:ticket-run:commit"; requestId: string; runId: string; message: string }
-  | { type: "missions:ticket-run:publish"; requestId: string; runId: string }
-  | { type: "missions:ticket-run:push"; requestId: string; runId: string }
-  | { type: "missions:ticket-run:pull-request:create"; requestId: string; runId: string }
+  | { type: "missions:ticket-run:git-state:get"; requestId: string; runId: string; repoRelativePath?: string }
+  | { type: "missions:ticket-run:commit-draft:generate"; requestId: string; runId: string; repoRelativePath?: string }
+  | {
+      type: "missions:ticket-run:commit-draft:set";
+      requestId: string;
+      runId: string;
+      message: string;
+      repoRelativePath?: string;
+    }
+  | { type: "missions:ticket-run:commit"; requestId: string; runId: string; message: string; repoRelativePath?: string }
+  | { type: "missions:ticket-run:publish"; requestId: string; runId: string; repoRelativePath?: string }
+  | { type: "missions:ticket-run:push"; requestId: string; runId: string; repoRelativePath?: string }
+  | { type: "missions:ticket-run:pull-request:create"; requestId: string; runId: string; repoRelativePath?: string }
+  | { type: "missions:ticket-run:services:get"; requestId: string; runId: string }
+  | { type: "missions:ticket-run:service:start"; requestId: string; runId: string; profileId: string }
+  | { type: "missions:ticket-run:service:stop"; requestId: string; runId: string; serviceId: string }
   | { type: "tts:speak"; text: string }
   | { type: "tts:stop" }
   | { type: "voice:toggle" }
@@ -166,6 +182,7 @@ export type ServerMessage =
   | { type: "youtrack:status:result"; requestId: string; status: YouTrackStatusSummary }
   | { type: "youtrack:tickets:list:result"; requestId: string; tickets: YouTrackTicketSummary[] }
   | { type: "youtrack:projects:search:result"; requestId: string; projects: YouTrackProjectSummary[] }
+  | { type: "youtrack:state-mapping:set:result"; requestId: string; status: YouTrackStatusSummary }
   | { type: "projects:snapshot:result"; requestId: string; snapshot: ProjectRepoMappingsSnapshot }
   | { type: "missions:runs:result"; requestId: string; snapshot: TicketRunSnapshot }
   | {
@@ -233,7 +250,23 @@ export type ServerMessage =
       requestId: string;
       result: CreateTicketRunPullRequestResult;
     }
+  | {
+      type: "missions:ticket-run:services:get:result";
+      requestId: string;
+      services: MissionServiceSnapshot;
+    }
+  | {
+      type: "missions:ticket-run:service:start:result";
+      requestId: string;
+      services: MissionServiceSnapshot;
+    }
+  | {
+      type: "missions:ticket-run:service:stop:result";
+      requestId: string;
+      services: MissionServiceSnapshot;
+    }
   | { type: "missions:runs:updated"; snapshot: TicketRunSnapshot }
+  | { type: "missions:ticket-run:services:updated"; services: MissionServiceSnapshot }
   | ({ type: "youtrack:request-error"; requestId: string } & ErrorPayload)
   | ({ type: "projects:request-error"; requestId: string } & ErrorPayload)
   | ({ type: "missions:request-error"; requestId: string } & ErrorPayload)

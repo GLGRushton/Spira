@@ -6,9 +6,24 @@ interface GlassPanelProps {
   className?: string;
   glow?: boolean;
   padding?: "sm" | "md" | "lg";
+  variant?: "default" | "quiet";
 }
 
-export function GlassPanel({ children, className, glow = false, padding = "md" }: GlassPanelProps) {
-  const classes = [styles.panel, styles[padding], glow ? styles.glow : "", className ?? ""].filter(Boolean).join(" ");
+export function GlassPanel({
+  children,
+  className,
+  glow = false,
+  padding = "md",
+  variant = "default",
+}: GlassPanelProps) {
+  const classes = [
+    styles.panel,
+    styles[padding],
+    variant === "quiet" ? styles.quiet : "",
+    glow && variant !== "quiet" ? styles.glow : "",
+    className ?? "",
+  ]
+    .filter(Boolean)
+    .join(" ");
   return <section className={classes}>{children}</section>;
 }

@@ -61,6 +61,9 @@ interface SessionManagerOptions {
   additionalInstructions?: string | null;
   workingDirectory?: string | null;
   allowUpgradeTools?: boolean;
+  listMissionServices?: ToolBridgeOptions["listMissionServices"];
+  startMissionService?: ToolBridgeOptions["startMissionService"];
+  stopMissionService?: ToolBridgeOptions["stopMissionService"];
 }
 
 export interface ManagedSubagentLaunch {
@@ -84,6 +87,28 @@ const isVisionPermissionRequest = (
   args?: Record<string, unknown>;
   readOnly?: boolean;
 } => request.kind === "mcp" && typeof request.toolName === "string" && request.toolName.startsWith("vision_");
+
+const isMissionServicePermissionRequest = (
+  request: PermissionRequest,
+): request is PermissionRequest & {
+  kind: "custom-tool";
+  toolName: "spira_start_mission_service" | "spira_stop_mission_service";
+  toolCallId?: string;
+  args?: Record<string, unknown>;
+} =>
+  request.kind === "custom-tool" &&
+  (request.toolName === "spira_start_mission_service" || request.toolName === "spira_stop_mission_service");
+
+const getMissionServiceToolTitle = (toolName: string): string => {
+  switch (toolName) {
+    case "spira_start_mission_service":
+      return "Start mission service";
+    case "spira_stop_mission_service":
+      return "Stop mission service";
+    default:
+      return toolName;
+  }
+};
 
 export class CopilotSessionManager {
   private client: CopilotClient | null = null;
@@ -109,6 +134,9 @@ export class CopilotSessionManager {
   private readonly additionalInstructions: string | null;
   private readonly workingDirectory: string | null;
   private readonly allowUpgradeTools: boolean;
+  private readonly listMissionServices: ToolBridgeOptions["listMissionServices"];
+  private readonly startMissionService: ToolBridgeOptions["startMissionService"];
+  private readonly stopMissionService: ToolBridgeOptions["stopMissionService"];
 
   constructor(
     private readonly bus: SpiraEventBus,
@@ -125,6 +153,9 @@ export class CopilotSessionManager {
     this.additionalInstructions = options.additionalInstructions?.trim() || null;
     this.workingDirectory = options.workingDirectory?.trim() || null;
     this.allowUpgradeTools = options.allowUpgradeTools ?? true;
+    this.listMissionServices = options.listMissionServices;
+    this.startMissionService = options.startMissionService;
+    this.stopMissionService = options.stopMissionService;
     this.activeSessionId = this.sessionPersistence?.load() ?? null;
     this.bus.on("mcp:servers-changed", () => {
       void this.refreshSessionForToolChanges();
@@ -621,7 +652,9 @@ export class CopilotSessionManager {
   }
 
   private async handlePermissionRequest(request: PermissionRequest): Promise<PermissionRequestResult> {
-    if (!isVisionPermissionRequest(request)) {
+    const visionPermission = isVisionPermissionRequest(request);
+    const missionServicePermission = isMissionServicePermissionRequest(request);
+    if (!visionPermission && !missionServicePermission) {
       return { kind: "approved" };
     }
 
@@ -632,14 +665,17 @@ export class CopilotSessionManager {
     const requestId = randomUUID();
     const payload: PermissionRequestPayload = {
       requestId,
-      kind: "mcp",
+      kind: visionPermission ? "mcp" : "custom-tool",
       toolCallId: typeof request.toolCallId === "string" ? request.toolCallId : undefined,
-      serverName: request.serverName,
+      serverName: visionPermission ? request.serverName : "Spira mission runtime",
       toolName: request.toolName,
-      toolTitle:
-        typeof request.toolTitle === "string" && request.toolTitle.length > 0 ? request.toolTitle : request.toolName,
+      toolTitle: visionPermission
+        ? typeof request.toolTitle === "string" && request.toolTitle.length > 0
+          ? request.toolTitle
+          : request.toolName
+        : getMissionServiceToolTitle(request.toolName),
       args: request.args,
-      readOnly: request.readOnly === true,
+      readOnly: visionPermission ? request.readOnly === true : false,
     };
 
     this.bus.emit("copilot:permission-request", payload);
@@ -690,6 +726,9 @@ export class CopilotSessionManager {
             applyHotCapabilityUpgrade: this.applyHotCapabilityUpgrade,
           }
         : {}),
+      ...(this.listMissionServices ? { listMissionServices: this.listMissionServices } : {}),
+      ...(this.startMissionService ? { startMissionService: this.startMissionService } : {}),
+      ...(this.stopMissionService ? { stopMissionService: this.stopMissionService } : {}),
       ...(subagentsEnabled
         ? {
             excludeServerIds: this.getDelegatedServerIds(),

@@ -48,6 +48,17 @@ export type {
   ToolCallPayload,
 } from "./electron-api.js";
 export type {
+  MissionServiceChildProcessSummary,
+  MissionServiceLauncher,
+  MissionServiceLogLine,
+  MissionServiceLogSource,
+  MissionServiceProcessState,
+  MissionServiceProcessSummary,
+  MissionServiceProfileKind,
+  MissionServiceProfileSummary,
+  MissionServiceSnapshot,
+} from "./service-profile-types.js";
+export type {
   McpServerConfig,
   McpServerUpdateConfig,
   McpServerSource,
@@ -119,6 +130,7 @@ export type {
   YouTrackTicketSummary,
 } from "./youtrack-types.js";
 export type {
+  MissionUiRoom,
   SpiraUiAction,
   SpiraUiActionType,
   SpiraUiAssistantDockSummary,
@@ -134,6 +146,7 @@ export type {
   SpiraUiChatTranscript,
   SpiraUiChatSummary,
   SpiraUiMessageSummary,
+  SpiraMissionView,
   SpiraUiRootView,
   SpiraUiSnapshot,
   SpiraUiUpgradeBannerSummary,
@@ -157,17 +170,31 @@ export {
   TTS_PROVIDERS,
   WAKE_WORD_PROVIDERS,
 } from "./protocol.js";
+export {
+  MISSION_SERVICE_LAUNCHERS,
+  MISSION_SERVICE_LOG_SOURCES,
+  MISSION_SERVICE_PROCESS_STATES,
+  MISSION_SERVICE_PROFILE_KINDS,
+} from "./service-profile-types.js";
 export { SUBAGENT_DOMAIN_IDS, SUBAGENT_SCOPE_IDS } from "./subagent-types.js";
 export { SUBAGENT_DOMAINS } from "./subagent-types.js";
 export { TICKET_RUN_ATTEMPT_STATUSES, TICKET_RUN_CLEANUP_STATES, TICKET_RUN_STATUSES } from "./ticket-run-types.js";
 export {
+  createMissionView,
+  getMissionRunIdFromView,
+  isMissionView,
+  MISSION_UI_ROOMS,
   SPIRA_UI_ACTION_TYPES,
   SPIRA_UI_CONTROL_BRIDGE_VERSION,
   SPIRA_UI_ROOT_VIEWS,
   SPIRA_UI_WAIT_CONDITION_TYPES,
 } from "./spira-ui-control.js";
 export { RUNTIME_CONFIG_KEYS } from "./runtime-config.js";
-export { DEFAULT_YOUTRACK_STATE_MAPPING } from "./youtrack-types.js";
+export {
+  DEFAULT_YOUTRACK_STATE_MAPPING,
+  normalizeYouTrackStateMapping,
+  validateYouTrackStateMapping,
+} from "./youtrack-types.js";
 export {
   classifyUpgradeScope,
   getRelevantUpgradeFiles,

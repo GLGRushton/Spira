@@ -53,7 +53,7 @@ describe("buildTicketRunBranchName", () => {
 describe("buildTicketRunWorktreePath", () => {
   it("creates a managed worktree path beneath the workspace root", () => {
     expect(buildTicketRunWorktreePath("C:\\Repos", "SPI-123", "service-api")).toBe(
-      path.join("C:\\Repos", ".spira-worktrees", "spi-123-service-api"),
+      path.join("C:\\Repos", ".spira-worktrees", "spi-123", "service-api"),
     );
   });
 });
@@ -109,8 +109,9 @@ describe("TicketRunService", () => {
       "add",
       "-b",
       "feat/spi-101-start-missions-pickup",
-      path.join("C:\\Repos", ".spira-worktrees", "spi-101-service-api"),
+      path.join("C:\\Repos", ".spira-worktrees", "spi-101", "service-api"),
     ]);
+    expect(gitRunner).toHaveBeenCalledTimes(1);
     expect(transitionTicket).toHaveBeenCalledWith("SPI-101");
     expect(result.reusedExistingRun).toBe(false);
     expect(result.run.status).toBe("ready");
@@ -119,8 +120,209 @@ describe("TicketRunService", () => {
       repoRelativePath: "service-api",
       repoAbsolutePath: "C:\\Repos\\service-api",
       branchName: "feat/spi-101-start-missions-pickup",
+      worktreePath: path.join("C:\\Repos", ".spira-worktrees", "spi-101", "service-api"),
       cleanupState: "retained",
     });
+  });
+
+  it("starts a multi-repo run beneath a shared mission directory", async () => {
+    const database = createTestDatabase();
+    const gitRunner = vi.fn().mockResolvedValue({ stdout: "", stderr: "" });
+    const service = new TicketRunService({
+      memoryDb: database,
+      logger: createLogger(),
+      projectRegistry: {
+        getSnapshot: async () => ({
+          workspaceRoot: "C:\\Repos",
+          repos: [
+            {
+              name: "service-api",
+              relativePath: "service-api",
+              absolutePath: "C:\\Repos\\service-api",
+              hasSubmodules: false,
+              mappedProjectKeys: ["SPI"],
+            },
+            {
+              name: "web-app",
+              relativePath: "web-app",
+              absolutePath: "C:\\Repos\\web-app",
+              hasSubmodules: false,
+              mappedProjectKeys: ["SPI"],
+            },
+          ],
+          mappings: [
+            {
+              projectKey: "SPI",
+              repoRelativePaths: ["service-api", "web-app"],
+              missingRepoRelativePaths: [],
+              updatedAt: 100,
+            },
+          ],
+        }),
+      },
+      youTrackService: null,
+      runGitCommand: gitRunner,
+      runIdFactory: () => "run-1",
+      now: () => 1234,
+    });
+
+    const result = await service.startRun({
+      ticketId: "SPI-150",
+      ticketSummary: "Coordinate repo changes",
+      ticketUrl: "https://example.youtrack.cloud/issue/SPI-150",
+      projectKey: "SPI",
+    });
+
+    const missionDirectory = path.join("C:\\Repos", ".spira-worktrees", "spi-150");
+    expect(gitRunner).toHaveBeenNthCalledWith(1, "C:\\Repos\\service-api", [
+      "worktree",
+      "add",
+      "-b",
+      "feat/spi-150-coordinate-repo-changes",
+      path.join(missionDirectory, "service-api"),
+    ]);
+    expect(gitRunner).toHaveBeenNthCalledWith(2, "C:\\Repos\\web-app", [
+      "worktree",
+      "add",
+      "-b",
+      "feat/spi-150-coordinate-repo-changes",
+      path.join(missionDirectory, "web-app"),
+    ]);
+    expect(gitRunner).toHaveBeenCalledTimes(2);
+    expect(result.run.worktrees).toHaveLength(2);
+    expect(result.run.worktrees.map((worktree) => worktree.repoRelativePath)).toEqual(["service-api", "web-app"]);
+    expect(new Set(result.run.worktrees.map((worktree) => path.dirname(worktree.worktreePath)))).toEqual(
+      new Set([missionDirectory]),
+    );
+  });
+
+  it("hydrates submodules in new managed worktrees when the repo declares them", async () => {
+    const database = createTestDatabase();
+    const gitRunner = vi.fn().mockResolvedValue({ stdout: "", stderr: "" });
+    const service = new TicketRunService({
+      memoryDb: database,
+      logger: createLogger(),
+      projectRegistry: {
+        getSnapshot: async () => ({
+          workspaceRoot: "C:\\Repos",
+          repos: [
+            {
+              name: "service-api",
+              relativePath: "service-api",
+              absolutePath: "C:\\Repos\\service-api",
+              hasSubmodules: true,
+              mappedProjectKeys: ["SPI"],
+            },
+          ],
+          mappings: [
+            {
+              projectKey: "SPI",
+              repoRelativePaths: ["service-api"],
+              missingRepoRelativePaths: [],
+              updatedAt: 100,
+            },
+          ],
+        }),
+      },
+      youTrackService: null,
+      runGitCommand: gitRunner,
+      runIdFactory: () => "run-1",
+      now: () => 1234,
+    });
+
+    await service.startRun({
+      ticketId: "SPI-151",
+      ticketSummary: "Hydrate submodules",
+      ticketUrl: "https://example.youtrack.cloud/issue/SPI-151",
+      projectKey: "SPI",
+    });
+
+    const worktreePath = path.join("C:\\Repos", ".spira-worktrees", "spi-151", "service-api");
+    expect(gitRunner).toHaveBeenNthCalledWith(1, "C:\\Repos\\service-api", [
+      "worktree",
+      "add",
+      "-b",
+      "feat/spi-151-hydrate-submodules",
+      worktreePath,
+    ]);
+    expect(gitRunner).toHaveBeenNthCalledWith(2, worktreePath, ["submodule", "update", "--init", "--recursive"]);
+    expect(gitRunner).toHaveBeenCalledTimes(2);
+  });
+
+  it("fails startup and rolls back newly created worktrees when submodule hydration fails", async () => {
+    const database = createTestDatabase();
+    const worktreePath = path.join("C:\\Repos", ".spira-worktrees", "spi-152", "service-api");
+    const gitRunner = vi.fn().mockImplementation(async (cwd: string, args: readonly string[]) => {
+      const command = args.join(" ");
+      if (
+        cwd === "C:\\Repos\\service-api" &&
+        command === `worktree add -b feat/spi-152-fail-submodule-hydration ${worktreePath}`
+      ) {
+        return { stdout: "", stderr: "" };
+      }
+      if (cwd === worktreePath && command === "submodule update --init --recursive") {
+        throw new Error("Submodule auth failed");
+      }
+      if (cwd === "C:\\Repos\\service-api" && command === `worktree remove --force ${worktreePath}`) {
+        return { stdout: "", stderr: "" };
+      }
+      throw new Error(`Unexpected git command in ${cwd}: ${command}`);
+    });
+    const service = new TicketRunService({
+      memoryDb: database,
+      logger: createLogger(),
+      projectRegistry: {
+        getSnapshot: async () => ({
+          workspaceRoot: "C:\\Repos",
+          repos: [
+            {
+              name: "service-api",
+              relativePath: "service-api",
+              absolutePath: "C:\\Repos\\service-api",
+              hasSubmodules: true,
+              mappedProjectKeys: ["SPI"],
+            },
+          ],
+          mappings: [
+            {
+              projectKey: "SPI",
+              repoRelativePaths: ["service-api"],
+              missingRepoRelativePaths: [],
+              updatedAt: 100,
+            },
+          ],
+        }),
+      },
+      youTrackService: null,
+      runGitCommand: gitRunner,
+      runIdFactory: () => "run-1",
+      now: () => 1234,
+    });
+
+    const result = await service.startRun({
+      ticketId: "SPI-152",
+      ticketSummary: "Fail submodule hydration",
+      ticketUrl: "https://example.youtrack.cloud/issue/SPI-152",
+      projectKey: "SPI",
+    });
+
+    expect(result.run.status).toBe("error");
+    expect(result.run.statusMessage).toBe("Failed to hydrate submodules for service-api.");
+    expect(gitRunner).toHaveBeenNthCalledWith(1, "C:\\Repos\\service-api", [
+      "worktree",
+      "add",
+      "-b",
+      "feat/spi-152-fail-submodule-hydration",
+      worktreePath,
+    ]);
+    expect(gitRunner).toHaveBeenNthCalledWith(2, worktreePath, ["submodule", "update", "--init", "--recursive"]);
+    expect(gitRunner).toHaveBeenNthCalledWith(3, "C:\\Repos\\service-api", [
+      "worktree",
+      "remove",
+      "--force",
+      worktreePath,
+    ]);
+    expect(gitRunner).toHaveBeenCalledTimes(3);
   });
 
   it("reuses an existing run for the same ticket", async () => {
@@ -304,7 +506,7 @@ describe("TicketRunService", () => {
       "add",
       "-B",
       "feat/spi-104-retry-failed-run",
-      path.join("C:\\Repos", ".spira-worktrees", "spi-104-service-api"),
+      path.join("C:\\Repos", ".spira-worktrees", "spi-104", "service-api"),
     ]);
   });
 
@@ -349,6 +551,71 @@ describe("TicketRunService", () => {
     });
 
     expect(gitRunner).not.toHaveBeenCalled();
+    expect(transitionTicket).toHaveBeenCalledWith("SPI-105");
+    expect(result.run.status).toBe("ready");
+  });
+
+  it("rehydrates submodules when resuming an interrupted start", async () => {
+    const database = createTestDatabase();
+    database.upsertTicketRun({
+      runId: "run-1",
+      ticketId: "SPI-105",
+      ticketSummary: "Resume interrupted run",
+      ticketUrl: "https://example.youtrack.cloud/issue/SPI-105",
+      projectKey: "SPI",
+      status: "starting",
+      createdAt: 100,
+      startedAt: 100,
+      worktrees: [
+        {
+          repoRelativePath: "service-api",
+          repoAbsolutePath: "C:\\Repos\\service-api",
+          worktreePath: "C:\\Repos\\.spira-worktrees\\spi-105\\service-api",
+          branchName: "feat/spi-105-resume-interrupted-run",
+        },
+      ],
+    });
+    const gitRunner = vi.fn().mockResolvedValue({ stdout: "", stderr: "" });
+    const transitionTicket = vi.fn().mockResolvedValue(undefined);
+    const service = new TicketRunService({
+      memoryDb: database,
+      logger: createLogger(),
+      projectRegistry: {
+        getSnapshot: async () => ({
+          workspaceRoot: "C:\\Repos",
+          repos: [
+            {
+              name: "service-api",
+              relativePath: "service-api",
+              absolutePath: "C:\\Repos\\service-api",
+              hasSubmodules: true,
+              mappedProjectKeys: ["SPI"],
+            },
+          ],
+          mappings: [],
+        }),
+      },
+      youTrackService: {
+        transitionTicketToInProgress: transitionTicket,
+      },
+      runGitCommand: gitRunner,
+      now: () => 1234,
+    });
+
+    const result = await service.startRun({
+      ticketId: "SPI-105",
+      ticketSummary: "Resume interrupted run",
+      ticketUrl: "https://example.youtrack.cloud/issue/SPI-105",
+      projectKey: "SPI",
+    });
+
+    expect(gitRunner).toHaveBeenCalledTimes(1);
+    expect(gitRunner).toHaveBeenCalledWith("C:\\Repos\\.spira-worktrees\\spi-105\\service-api", [
+      "submodule",
+      "update",
+      "--init",
+      "--recursive",
+    ]);
     expect(transitionTicket).toHaveBeenCalledWith("SPI-105");
     expect(result.run.status).toBe("ready");
   });
@@ -934,5 +1201,94 @@ describe("TicketRunService", () => {
     const result = await service.getGitState("run-1");
 
     expect(result.gitState.pushAction).toBe("none");
+  });
+
+  it("persists commit drafts on the selected repo worktree", async () => {
+    const database = createTestDatabase();
+    database.upsertTicketRun({
+      runId: "run-1",
+      ticketId: "SPI-114",
+      ticketSummary: "Target repo commit draft",
+      ticketUrl: "https://example.youtrack.cloud/issue/SPI-114",
+      projectKey: "SPI",
+      status: "done",
+      createdAt: 100,
+      startedAt: 100,
+      worktrees: [
+        {
+          repoRelativePath: "service-api",
+          repoAbsolutePath: "C:\\Repos\\service-api",
+          worktreePath: "C:\\Repos\\.spira-worktrees\\spi-114\\service-api",
+          branchName: "feat/spi-114-target-repo-commit-draft",
+          commitMessageDraft: null,
+        },
+        {
+          repoRelativePath: "web-app",
+          repoAbsolutePath: "C:\\Repos\\web-app",
+          worktreePath: "C:\\Repos\\.spira-worktrees\\spi-114\\web-app",
+          branchName: "feat/spi-114-target-repo-commit-draft",
+          commitMessageDraft: null,
+        },
+      ],
+    });
+    const gitRunner = vi.fn().mockImplementation(async (cwd: string, args: readonly string[]) => {
+      const command = args.join(" ");
+      if (command === "remote get-url origin") {
+        return {
+          stdout: cwd.endsWith("\\web-app")
+            ? "https://github.com/example/web-app.git\n"
+            : "https://github.com/example/service-api.git\n",
+          stderr: "",
+        };
+      }
+      if (command.includes("rev-parse --abbrev-ref --symbolic-full-name @{upstream}")) {
+        throw new Error("no upstream");
+      }
+      if (command.includes("diff --find-renames --find-copies --name-status HEAD --")) {
+        return { stdout: cwd.endsWith("\\web-app") ? "M\tsrc/app.tsx\n" : "", stderr: "" };
+      }
+      if (command.includes("diff --find-renames --find-copies --numstat HEAD --")) {
+        return { stdout: cwd.endsWith("\\web-app") ? "2\t1\tsrc/app.tsx\n" : "", stderr: "" };
+      }
+      if (command.includes("diff --find-renames --find-copies --patch --no-color HEAD --")) {
+        return {
+          stdout: cwd.endsWith("\\web-app")
+            ? "diff --git a/src/app.tsx b/src/app.tsx\n--- a/src/app.tsx\n+++ b/src/app.tsx\n@@ -1 +1 @@\n-old\n+new\n"
+            : "",
+          stderr: "",
+        };
+      }
+      if (command === "rev-list --count HEAD --not --remotes=origin") {
+        return { stdout: "0\n", stderr: "" };
+      }
+      throw new Error(`Unexpected git command in ${cwd}: ${command}`);
+    });
+    const service = new TicketRunService({
+      memoryDb: database,
+      logger: createLogger(),
+      projectRegistry: { getSnapshot: async () => ({ workspaceRoot: null, repos: [], mappings: [] }) },
+      youTrackService: null,
+      runGitCommand: gitRunner,
+      now: () => 500,
+    });
+
+    const result = await service.setCommitDraft("run-1", "feat(SPI-114): polish web app", "web-app");
+
+    expect(result.gitState.repoRelativePath).toBe("web-app");
+    expect(result.gitState.commitMessageDraft).toBe("feat(SPI-114): polish web app");
+    expect(result.run.commitMessageDraft).toBeNull();
+    expect(result.run.worktrees).toMatchObject([
+      {
+        repoRelativePath: "service-api",
+        commitMessageDraft: null,
+      },
+      {
+        repoRelativePath: "web-app",
+        commitMessageDraft: "feat(SPI-114): polish web app",
+      },
+    ]);
+    expect(new Set(gitRunner.mock.calls.map(([cwd]) => cwd))).toEqual(
+      new Set(["C:\\Repos\\.spira-worktrees\\spi-114\\web-app"]),
+    );
   });
 });

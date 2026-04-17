@@ -1,4 +1,4 @@
-import type { AssistantState } from "@spira/shared";
+import type { AssistantState, StationId } from "@spira/shared";
 import { useShinraStatusContext } from "../../hooks/useShinraStatusContext.js";
 import { useStationStore } from "../../stores/station-store.js";
 import { ChatPanel } from "../chat/ChatPanel.js";
@@ -9,11 +9,14 @@ import { ToolSummaryChips } from "./ToolSummaryChips.js";
 
 interface BridgeRoomDetailProps {
   assistantState: AssistantState;
+  stationId?: StationId;
 }
 
-export function BridgeRoomDetail({ assistantState }: BridgeRoomDetailProps) {
-  const activeStation = useStationStore((store) => store.stations[store.activeStationId]);
-  const { context } = useShinraStatusContext();
+export function BridgeRoomDetail({ assistantState, stationId }: BridgeRoomDetailProps) {
+  const activeStationId = useStationStore((store) => store.activeStationId);
+  const resolvedStationId = stationId ?? activeStationId;
+  const activeStation = useStationStore((store) => store.stations[resolvedStationId]);
+  const { context } = useShinraStatusContext(resolvedStationId);
 
   return (
     <div className={styles.panel}>
@@ -31,7 +34,7 @@ export function BridgeRoomDetail({ assistantState }: BridgeRoomDetailProps) {
 
       <div className={styles.layout}>
         <section className={styles.chatStage}>
-          <ChatPanel />
+          <ChatPanel stationId={resolvedStationId} />
         </section>
 
         <aside className={styles.visualColumn}>

@@ -20,13 +20,24 @@ export const SPIRA_UI_ROOT_VIEWS = [
   "settings",
 ] as const;
 export type SpiraUiRootView = (typeof SPIRA_UI_ROOT_VIEWS)[number];
-export type SpiraUiView = SpiraUiRootView | `mcp:${string}` | `agent:${string}`;
+export const MISSION_UI_ROOMS = ["bridge", "details", "changes", "actions", "processes"] as const;
+export type MissionUiRoom = (typeof MISSION_UI_ROOMS)[number];
+export type SpiraMissionView = `mission:${string}`;
+export type SpiraUiView = SpiraUiRootView | `mcp:${string}` | `agent:${string}` | SpiraMissionView;
+
+export const isMissionView = (view: string): view is SpiraMissionView => view.startsWith("mission:");
+
+export const createMissionView = (runId: string): SpiraMissionView => `mission:${runId}`;
+
+export const getMissionRunIdFromView = (view: string): string | null =>
+  isMissionView(view) ? view.slice("mission:".length) : null;
 
 export const SPIRA_UI_ACTION_TYPES = [
   "navigate",
   "back",
   "open-mcp-server",
   "open-agent-room",
+  "open-mission",
   "set-draft",
   "focus-composer",
   "send-chat",
@@ -131,6 +142,7 @@ export interface SpiraUiSnapshot {
   bridgeVersion: number;
   protocolVersion: number;
   activeView: SpiraUiView;
+  activeMissionRoom?: MissionUiRoom;
   rootViews: SpiraUiRootView[];
   window: SpiraUiWindowSummary;
   assistantState: AssistantState;
@@ -160,6 +172,7 @@ export type SpiraUiAction =
   | { type: "back" }
   | { type: "open-mcp-server"; serverId: string }
   | { type: "open-agent-room"; roomId: `agent:${string}` }
+  | { type: "open-mission"; runId: string; room?: MissionUiRoom }
   | { type: "set-draft"; draft: string; append?: boolean }
   | { type: "focus-composer" }
   | { type: "send-chat"; text?: string }

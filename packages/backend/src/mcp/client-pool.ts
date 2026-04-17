@@ -8,6 +8,7 @@ import type { Logger } from "pino";
 import { appRootDir } from "../util/app-paths.js";
 import { McpError } from "../util/errors.js";
 import type { SpiraEventBus } from "../util/event-bus.js";
+import { installSystemCertificateAuthorities } from "../util/tls.js";
 
 type SupportedTransport = StdioClientTransport | StreamableHTTPClientTransport;
 
@@ -94,6 +95,7 @@ export class McpClientPool {
     }
 
     if (config.transport === "streamable-http") {
+      installSystemCertificateAuthorities();
       return {
         transport: new StreamableHTTPClientTransport(new URL(config.url), {
           requestInit: {

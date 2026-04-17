@@ -1,22 +1,31 @@
-import type {
-  ProjectRepoMappingsSnapshot,
-  TicketRunGitState,
-  TicketRunSnapshot,
-  TicketRunSummary,
-  YouTrackProjectSummary,
-  YouTrackStatusSummary,
-  YouTrackTicketSummary,
+import {
+  DEFAULT_YOUTRACK_STATE_MAPPING,
+  type MissionServiceProcessSummary,
+  type MissionServiceProfileSummary,
+  type MissionServiceSnapshot,
+  type MissionUiRoom,
+  type ProjectRepoMappingsSnapshot,
+  type TicketRunGitState,
+  type TicketRunSummary,
+  type YouTrackProjectSummary,
+  type YouTrackStateMapping,
+  type YouTrackStatusSummary,
+  type YouTrackTicketSummary,
+  normalizeYouTrackStateMapping,
 } from "@spira/shared";
 import { type KeyboardEvent as ReactKeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigationStore } from "../../stores/navigation-store.js";
+import { useMissionRunsStore } from "../../stores/mission-runs-store.js";
 import { useSettingsStore } from "../../stores/settings-store.js";
 import { useStationStore } from "../../stores/station-store.js";
 import { ProjectTypeahead } from "./ProjectTypeahead.js";
 import { ProjectsMappingsList } from "./ProjectsMappingsList.js";
 import styles from "./ProjectsPanel.module.css";
 import { ProjectsRepoChecklist } from "./ProjectsRepoChecklist.js";
+import { YouTrackStateListEditor } from "./YouTrackStateListEditor.js";
 import { type MissionLaneTabId, buildRunByTicketId, resolveRunTab, splitMissionCollections } from "./mission-utils.js";
 import { normalizeProjectKey } from "./project-utils.js";
+import { assessYouTrackStateMappingDraft, haveYouTrackStateMappingsChanged } from "./youtrack-state-mapping-utils.js";
 
 const EMPTY_SNAPSHOT: ProjectRepoMappingsSnapshot = {
   workspaceRoot: null,
@@ -24,14 +33,15 @@ const EMPTY_SNAPSHOT: ProjectRepoMappingsSnapshot = {
   mappings: [],
 };
 
-const EMPTY_RUN_SNAPSHOT: TicketRunSnapshot = {
-  runs: [],
-};
-
 const NEW_MAPPING_SENTINEL = "__new__";
 type MissionsTabId = "quarterdeck" | MissionLaneTabId;
 type MissionSelection = { kind: "ticket"; ticketId: string } | { kind: "run"; runId: string };
 const MISSIONS_TAB_ORDER: MissionsTabId[] = ["quarterdeck", "launch-bay", "flight-deck", "dry-dock"];
+const ACTIVE_MISSION_SERVICE_STATES = new Set<MissionServiceProcessSummary["state"]>([
+  "starting",
+  "running",
+  "stopping",
+]);
 
 const describeStatusTone = (status: YouTrackStatusSummary | null): string => {
   if (!status || status.state === "missing-config" || status.state === "disabled") {
@@ -68,6 +78,10 @@ const formatTicketUpdatedAt = (updatedAt: number | null): string =>
 const formatStateList = (states: string[] | undefined): string =>
   states && states.length > 0 ? states.join(", ") : "None";
 
+const cloneYouTrackStateMapping = (
+  mapping: YouTrackStateMapping | null | undefined = DEFAULT_YOUTRACK_STATE_MAPPING,
+): YouTrackStateMapping => normalizeYouTrackStateMapping(mapping);
+
 const formatDiffDelta = (additions: number | null, deletions: number | null): string => {
   if (additions === null && deletions === null) {
     return "Binary or metadata change";
@@ -101,6 +115,52 @@ const getDiffLineTone = (line: string): string => {
   }
   return "";
 };
+
+const isMissionServiceProcessActive = (process: MissionServiceProcessSummary): boolean =>
+  ACTIVE_MISSION_SERVICE_STATES.has(process.state);
+
+const describeMissionServiceLauncher = (
+  profile: MissionServiceProfileSummary | MissionServiceProcessSummary,
+): string => {
+  switch (profile.launcher) {
+    case "translated-iisexpress":
+      return "IIS Express profile (translated)";
+    default:
+      return "Project profile";
+  }
+};
+
+const describeMissionServiceState = (state: MissionServiceProcessSummary["state"]): string => {
+  switch (state) {
+    case "starting":
+      return "Starting";
+    case "running":
+      return "Running";
+    case "stopping":
+      return "Stopping";
+    case "stopped":
+      return "Stopped";
+    case "error":
+      return "Error";
+  }
+};
+
+const getMissionServiceStateTone = (state: MissionServiceProcessSummary["state"]): string => {
+  switch (state) {
+    case "starting":
+      return styles.serviceStateStarting;
+    case "running":
+      return styles.serviceStateRunning;
+    case "stopping":
+      return styles.serviceStateStopping;
+    case "error":
+      return styles.serviceStateError;
+    default:
+      return styles.serviceStateStopped;
+  }
+};
+
+const formatMissionServiceUrls = (urls: string[]): string => (urls.length > 0 ? urls.join(" • ") : "No URL declared");
 
 const describeRunStatus = (run: TicketRunSummary): string => {
   switch (run.status) {
@@ -158,8 +218,8 @@ const getTicketStartBlocker = (
     return "Map a repo first";
   }
 
-  if (repoCount !== 1) {
-    return "Single-repo only";
+  if (repoCount === 0) {
+    return "Map a repo first";
   }
 
   return null;
@@ -168,13 +228,19 @@ const getTicketStartBlocker = (
 export function ProjectsPanel() {
   const youTrackEnabled = useSettingsStore((store) => store.youTrackEnabled);
   const setYouTrackEnabled = useSettingsStore((store) => store.setYouTrackEnabled);
+  const openMission = useNavigationStore((store) => store.openMission);
+  const setMissionFlash = useNavigationStore((store) => store.setMissionFlash);
   const setView = useNavigationStore((store) => store.setView);
+  const runSnapshot = useMissionRunsStore((store) => store.snapshot);
+  const setRunSnapshot = useMissionRunsStore((store) => store.setSnapshot);
   const setActiveStation = useStationStore((store) => store.setActiveStation);
   const stationMap = useStationStore((store) => store.stations);
   const [snapshot, setSnapshot] = useState<ProjectRepoMappingsSnapshot>(EMPTY_SNAPSHOT);
   const [youTrackStatus, setYouTrackStatus] = useState<YouTrackStatusSummary | null>(null);
   const [youTrackTickets, setYouTrackTickets] = useState<YouTrackTicketSummary[]>([]);
-  const [runSnapshot, setRunSnapshot] = useState<TicketRunSnapshot>(EMPTY_RUN_SNAPSHOT);
+  const [youTrackStateMappingDraft, setYouTrackStateMappingDraft] = useState<YouTrackStateMapping>(
+    cloneYouTrackStateMapping(),
+  );
   const [workspaceRootDraft, setWorkspaceRootDraft] = useState("");
   const [projectKeyDraft, setProjectKeyDraft] = useState("");
   const [verifiedProject, setVerifiedProject] = useState<YouTrackProjectSummary | null>(null);
@@ -186,11 +252,16 @@ export function ProjectsPanel() {
   const [isBrowsingWorkspace, setIsBrowsingWorkspace] = useState(false);
   const [workspaceNotice, setWorkspaceNotice] = useState<string | null>(null);
   const [workspaceError, setWorkspaceError] = useState<string | null>(null);
+  const [workflowNotice, setWorkflowNotice] = useState<string | null>(null);
+  const [workflowError, setWorkflowError] = useState<string | null>(null);
+  const [isSavingWorkflow, setIsSavingWorkflow] = useState(false);
   const [mappingNotice, setMappingNotice] = useState<string | null>(null);
   const [mappingError, setMappingError] = useState<string | null>(null);
   const [ticketError, setTicketError] = useState<string | null>(null);
   const [runNotice, setRunNotice] = useState<string | null>(null);
   const [runError, setRunError] = useState<string | null>(null);
+  const [serviceNotice, setServiceNotice] = useState<string | null>(null);
+  const [serviceError, setServiceError] = useState<string | null>(null);
   const [gitNotice, setGitNotice] = useState<string | null>(null);
   const [gitError, setGitError] = useState<string | null>(null);
   const [startingTicketId, setStartingTicketId] = useState<string | null>(null);
@@ -200,21 +271,28 @@ export function ProjectsPanel() {
   const [cancellingRunId, setCancellingRunId] = useState<string | null>(null);
   const [completingRunId, setCompletingRunId] = useState<string | null>(null);
   const [loadingGitRunId, setLoadingGitRunId] = useState<string | null>(null);
+  const [loadingServicesRunId, setLoadingServicesRunId] = useState<string | null>(null);
   const [generatingCommitDraftRunId, setGeneratingCommitDraftRunId] = useState<string | null>(null);
   const [savingCommitDraftRunId, setSavingCommitDraftRunId] = useState<string | null>(null);
   const [committingGitRunId, setCommittingGitRunId] = useState<string | null>(null);
   const [syncingRemoteRunId, setSyncingRemoteRunId] = useState<string | null>(null);
   const [creatingPullRequestRunId, setCreatingPullRequestRunId] = useState<string | null>(null);
+  const [startingServiceProfileId, setStartingServiceProfileId] = useState<string | null>(null);
+  const [stoppingServiceId, setStoppingServiceId] = useState<string | null>(null);
   const [selectedMission, setSelectedMission] = useState<MissionSelection | null>(null);
+  const [selectedMissionServices, setSelectedMissionServices] = useState<MissionServiceSnapshot | null>(null);
   const [continueDrafts, setContinueDrafts] = useState<Record<string, string>>({});
   const [commitDraft, setCommitDraft] = useState("");
   const [commitDraftDirty, setCommitDraftDirty] = useState(false);
+  const [selectedRepoRelativePath, setSelectedRepoRelativePath] = useState<string | null>(null);
   const [selectedGitState, setSelectedGitState] = useState<TicketRunGitState | null>(null);
   const [expandedDiffPaths, setExpandedDiffPaths] = useState<Record<string, boolean>>({});
   const [activeTab, setActiveTab] = useState<MissionsTabId>("quarterdeck");
   const editorRef = useRef<HTMLElement | null>(null);
   const tabButtonRefs = useRef(new Map<MissionsTabId, HTMLButtonElement>());
   const autoDraftedRunIdsRef = useRef(new Set<string>());
+  const selectedMissionRunIdRef = useRef<string | null>(null);
+  const selectedRepoRelativePathRef = useRef<string | null>(null);
 
   const refreshData = useCallback(async () => {
     setIsRefreshing(true);
@@ -272,6 +350,24 @@ export function ProjectsPanel() {
     setWorkspaceRootDraft(snapshot.workspaceRoot ?? "");
   }, [snapshot.workspaceRoot]);
 
+  const persistedTodoKey =
+    youTrackStatus?.stateMapping?.todo?.join("\u0000") ?? DEFAULT_YOUTRACK_STATE_MAPPING.todo.join("\u0000");
+  const persistedInProgressKey =
+    youTrackStatus?.stateMapping?.inProgress?.join("\u0000") ??
+    DEFAULT_YOUTRACK_STATE_MAPPING.inProgress.join("\u0000");
+  const persistedYouTrackStateMapping = useMemo(
+    () =>
+      cloneYouTrackStateMapping({
+        todo: persistedTodoKey.split("\u0000"),
+        inProgress: persistedInProgressKey.split("\u0000"),
+      }),
+    [persistedInProgressKey, persistedTodoKey],
+  );
+
+  useEffect(() => {
+    setYouTrackStateMappingDraft(persistedYouTrackStateMapping);
+  }, [persistedYouTrackStateMapping]);
+
   useEffect(() => {
     setSelectedRepoPaths((current) =>
       current.filter((repoPath) => snapshot.repos.some((repo) => repo.relativePath === repoPath)),
@@ -279,14 +375,38 @@ export function ProjectsPanel() {
   }, [snapshot.repos]);
 
   useEffect(() => {
-    return window.electronAPI.onMessage((message) => {
-      if (message.type === "missions:runs:updated") {
-        setRunSnapshot(message.snapshot);
+    return window.electronAPI.onTicketRunServicesUpdated((services) => {
+      if (selectedMissionRunIdRef.current === services.runId) {
+        setSelectedMissionServices(services);
       }
     });
   }, []);
 
   const canSearchProjects = youTrackStatus?.state === "connected";
+  const workflowBlocker = useMemo(() => {
+    if (!youTrackStatus) {
+      return "Checking YouTrack status...";
+    }
+
+    if (youTrackStatus.state !== "connected") {
+      return `${youTrackStatus.message} Missions needs an active YouTrack connection before workflow states can be edited.`;
+    }
+
+    if (youTrackStatus.availableStates.length === 0) {
+      return "YouTrack did not expose any live workflow states for this account.";
+    }
+
+    return null;
+  }, [youTrackStatus]);
+  const workflowValidation = useMemo(
+    () => assessYouTrackStateMappingDraft(youTrackStateMappingDraft, youTrackStatus?.availableStates ?? []),
+    [youTrackStateMappingDraft, youTrackStatus?.availableStates],
+  );
+  const hasWorkflowChanges = useMemo(
+    () => haveYouTrackStateMappingsChanged(youTrackStateMappingDraft, persistedYouTrackStateMapping),
+    [persistedYouTrackStateMapping, youTrackStateMappingDraft],
+  );
+  const canSaveWorkflow = workflowBlocker === null && hasWorkflowChanges && workflowValidation.errors.length === 0;
   const mappingBlocker = useMemo(() => {
     if (!youTrackStatus) {
       return "Checking YouTrack status...";
@@ -404,11 +524,45 @@ export function ProjectsPanel() {
   );
   const selectedMissionRunId = selectedMissionRun?.runId ?? null;
   const selectedMissionRunStatus = selectedMissionRun?.status ?? null;
-  const selectedMissionRunCommitDraft = selectedMissionRun?.commitMessageDraft ?? null;
+  const selectedMissionWorktree =
+    selectedMissionRun?.worktrees.find((worktree) => worktree.repoRelativePath === selectedRepoRelativePath) ??
+    selectedMissionRun?.worktrees[0] ??
+    null;
+  const selectedMissionRunCommitDraft =
+    selectedMissionWorktree?.commitMessageDraft ?? selectedMissionRun?.commitMessageDraft ?? null;
   const selectedMissionRunWorktreeCount = selectedMissionRun?.worktrees.length ?? 0;
   const selectedMissionLatestAttempt = selectedMissionRun?.attempts[selectedMissionRun.attempts.length - 1] ?? null;
   const selectedMissionStation = selectedMissionRun?.stationId ? stationMap[selectedMissionRun.stationId] : null;
   const selectedMissionUrl = selectedMissionTicket?.url ?? selectedMissionRun?.ticketUrl ?? null;
+  const selectedMissionGitRepoLabel =
+    selectedGitState?.repoRelativePath ?? selectedMissionWorktree?.repoRelativePath ?? null;
+  const selectedMissionServicesSnapshot =
+    selectedMissionServices?.runId === selectedMissionRunId ? selectedMissionServices : null;
+  const selectedMissionServiceProfiles = selectedMissionServicesSnapshot?.profiles ?? [];
+  const selectedMissionServiceProcesses = selectedMissionServicesSnapshot?.processes ?? [];
+  const visibleMissionServiceProfiles = selectedMissionWorktree
+    ? selectedMissionServiceProfiles.filter(
+        (profile) => profile.repoRelativePath === selectedMissionWorktree.repoRelativePath,
+      )
+    : selectedMissionServiceProfiles;
+  const missionServiceProfilesByRepo = useMemo(() => {
+    const groups = new Map<string, MissionServiceProfileSummary[]>();
+    for (const profile of visibleMissionServiceProfiles) {
+      const current = groups.get(profile.repoRelativePath) ?? [];
+      current.push(profile);
+      groups.set(profile.repoRelativePath, current);
+    }
+    return [...groups.entries()].sort(([left], [right]) => left.localeCompare(right));
+  }, [visibleMissionServiceProfiles]);
+  const activeMissionServiceProfileIds = useMemo(
+    () =>
+      new Set(
+        selectedMissionServiceProcesses
+          .filter((process) => isMissionServiceProcessActive(process))
+          .map((process) => process.profileId),
+      ),
+    [selectedMissionServiceProcesses],
+  );
   const showPullRequestActions =
     selectedMissionRun?.status === "done" &&
     selectedGitState !== null &&
@@ -416,6 +570,18 @@ export function ProjectsPanel() {
     selectedGitState.pushAction === "none" &&
     selectedGitState.pullRequestUrls.open !== null &&
     selectedGitState.pullRequestUrls.draft !== null;
+  useEffect(() => {
+    selectedMissionRunIdRef.current = selectedMissionRunId;
+  }, [selectedMissionRunId]);
+
+  useEffect(() => {
+    selectedRepoRelativePathRef.current = selectedRepoRelativePath;
+  }, [selectedRepoRelativePath]);
+
+  const isSelectedMissionRepo = useCallback((runId: string, repoRelativePath: string) => {
+    return selectedMissionRunIdRef.current === runId && selectedRepoRelativePathRef.current === repoRelativePath;
+  }, []);
+
   const missionDetailBackLabel =
     activeTab === "quarterdeck" ? "Missions" : describeMissionTab(activeTab as MissionLaneTabId);
   const activeProjectKey =
@@ -456,6 +622,21 @@ export function ProjectsPanel() {
         : [...current, repoRelativePath].sort((left, right) => left.localeCompare(right)),
     );
   };
+
+  const updateWorkflowStateList = useCallback((lane: keyof YouTrackStateMapping, nextStates: string[]) => {
+    setYouTrackStateMappingDraft((current) => ({
+      ...current,
+      [lane]: nextStates,
+    }));
+    setWorkflowNotice(null);
+    setWorkflowError(null);
+  }, []);
+
+  const resetWorkflowMappingDraft = useCallback(() => {
+    setYouTrackStateMappingDraft(persistedYouTrackStateMapping);
+    setWorkflowNotice(null);
+    setWorkflowError(null);
+  }, [persistedYouTrackStateMapping]);
 
   const openNewMapping = () => {
     if (!canManageMappings) {
@@ -553,6 +734,50 @@ export function ProjectsPanel() {
     }
   };
 
+  const saveWorkflowMapping = async () => {
+    if (workflowBlocker) {
+      setWorkflowError(workflowBlocker);
+      return;
+    }
+
+    if (!hasWorkflowChanges) {
+      setWorkflowError("No workflow state changes to save.");
+      return;
+    }
+
+    if (workflowValidation.errors.length > 0) {
+      setWorkflowError(workflowValidation.errors[0] ?? "Fix the workflow state mapping before saving.");
+      return;
+    }
+
+    setIsSavingWorkflow(true);
+    setWorkflowNotice(null);
+    setWorkflowError(null);
+    try {
+      const nextStatus = await window.electronAPI.setYouTrackStateMapping(workflowValidation.mapping);
+      setYouTrackStatus(nextStatus);
+      setYouTrackStateMappingDraft(cloneYouTrackStateMapping(nextStatus.stateMapping));
+      if (nextStatus.state === "connected") {
+        try {
+          setYouTrackTickets(await window.electronAPI.listYouTrackTickets(20));
+          setTicketError(null);
+        } catch (ticketsLoadError) {
+          console.error("Failed to refresh assigned YouTrack tickets", ticketsLoadError);
+          setYouTrackTickets([]);
+          setTicketError("Workflow states were saved, but assigned tickets could not be refreshed.");
+        }
+      } else {
+        setYouTrackTickets([]);
+      }
+      setWorkflowNotice("Mission workflow states updated.");
+    } catch (saveError) {
+      console.error("Failed to update YouTrack workflow states", saveError);
+      setWorkflowError(saveError instanceof Error ? saveError.message : "Failed to update YouTrack workflow states.");
+    } finally {
+      setIsSavingWorkflow(false);
+    }
+  };
+
   const toggleYouTrackIntegration = () => {
     const nextEnabled = !youTrackEnabled;
     setYouTrackEnabled(nextEnabled);
@@ -579,12 +804,15 @@ export function ProjectsPanel() {
   }, []);
 
   const openRunMissionDetail = useCallback(
-    (runId: string, tabId?: MissionLaneTabId) => {
+    (runId: string, room?: MissionUiRoom) => {
       const run = runSnapshot.runs.find((candidate) => candidate.runId === runId) ?? null;
-      setActiveTab(tabId ?? (run ? resolveRunTab(run) : "flight-deck"));
-      setSelectedMission({ kind: "run", runId });
+      if (run?.stationId) {
+        setActiveStation(run.stationId);
+      }
+      setSelectedMission(null);
+      openMission(runId, room);
     },
-    [runSnapshot.runs],
+    [openMission, runSnapshot.runs, setActiveStation],
   );
 
   const handleTabKeyDown = useCallback(
@@ -630,10 +858,60 @@ export function ProjectsPanel() {
         return;
       }
       setActiveStation(run.stationId);
-      setView("operations");
+      openMission(run.runId, "bridge");
     },
-    [setActiveStation, setView],
+    [openMission, setActiveStation],
   );
+
+  const refreshMissionServices = useCallback(async (runId: string) => {
+    setLoadingServicesRunId(runId);
+    setServiceError(null);
+    try {
+      const services = await window.electronAPI.getTicketRunServices(runId);
+      if (selectedMissionRunIdRef.current === runId) {
+        setSelectedMissionServices(services);
+      }
+    } catch (error) {
+      console.error("Failed to load mission services", error);
+      if (selectedMissionRunIdRef.current === runId) {
+        setServiceError(error instanceof Error ? error.message : "Failed to load mission services.");
+      }
+    } finally {
+      setLoadingServicesRunId((current) => (current === runId ? null : current));
+    }
+  }, []);
+
+  const startMissionService = useCallback(async (runId: string, profile: MissionServiceProfileSummary) => {
+    setStartingServiceProfileId(profile.profileId);
+    setServiceNotice(null);
+    setServiceError(null);
+    try {
+      const services = await window.electronAPI.startTicketRunService(runId, profile.profileId);
+      setSelectedMissionServices(services);
+      setServiceNotice(`${profile.profileName} is launching for ${profile.repoRelativePath}.`);
+    } catch (error) {
+      console.error("Failed to start mission service", error);
+      setServiceError(error instanceof Error ? error.message : "Failed to start the mission service.");
+    } finally {
+      setStartingServiceProfileId(null);
+    }
+  }, []);
+
+  const stopMissionService = useCallback(async (runId: string, service: MissionServiceProcessSummary) => {
+    setStoppingServiceId(service.serviceId);
+    setServiceNotice(null);
+    setServiceError(null);
+    try {
+      const services = await window.electronAPI.stopTicketRunService(runId, service.serviceId);
+      setSelectedMissionServices(services);
+      setServiceNotice(`${service.profileName} is stopping for ${service.repoRelativePath}.`);
+    } catch (error) {
+      console.error("Failed to stop mission service", error);
+      setServiceError(error instanceof Error ? error.message : "Failed to stop the mission service.");
+    } finally {
+      setStoppingServiceId(null);
+    }
+  }, []);
 
   useEffect(() => {
     if (!selectedMission) {
@@ -665,10 +943,28 @@ export function ProjectsPanel() {
   }, [runByTicketId, selectedMission, sortedRuns, sortedTickets]);
 
   useEffect(() => {
+    if (!selectedMissionRun) {
+      setSelectedRepoRelativePath(null);
+      return;
+    }
+
+    setSelectedRepoRelativePath((current) =>
+      selectedMissionRun.worktrees.some((worktree) => worktree.repoRelativePath === current)
+        ? current
+        : (selectedMissionRun.worktrees[0]?.repoRelativePath ?? null),
+    );
+  }, [selectedMissionRun]);
+
+  useEffect(() => {
     if (!selectedMissionRunId) {
+      setSelectedMissionServices(null);
+      setLoadingServicesRunId(null);
+      setServiceNotice(null);
+      setServiceError(null);
       setSelectedGitState(null);
       setCommitDraft("");
       setCommitDraftDirty(false);
+      setSelectedRepoRelativePath(null);
       setExpandedDiffPaths({});
       setGitNotice(null);
       setGitError(null);
@@ -686,22 +982,42 @@ export function ProjectsPanel() {
       return;
     }
 
+    void refreshMissionServices(selectedMissionRunId);
+  }, [refreshMissionServices, selectedMissionRunId]);
+
+  useEffect(() => {
+    if (!selectedMissionRunId || !selectedRepoRelativePath) {
+      return;
+    }
+
+    setSelectedGitState(null);
+    setExpandedDiffPaths({});
+    setGitNotice(null);
+    setGitError(null);
+  }, [selectedMissionRunId, selectedRepoRelativePath]);
+
+  useEffect(() => {
+    if (!selectedMissionRunId) {
+      return;
+    }
+
     setCommitDraft(selectedMissionRunCommitDraft ?? "");
     setCommitDraftDirty(false);
   }, [selectedMissionRunCommitDraft, selectedMissionRunId]);
 
   useEffect(() => {
-    if (!selectedMissionRunId || selectedMissionRunWorktreeCount === 0) {
+    if (!selectedMissionRunId || selectedMissionRunWorktreeCount === 0 || !selectedRepoRelativePath) {
       return;
     }
 
     const runId = selectedMissionRunId;
+    const repoRelativePath = selectedRepoRelativePath;
     let cancelled = false;
     const loadGitState = async () => {
       setLoadingGitRunId(runId);
       setGitError(null);
       try {
-        const result = await window.electronAPI.getTicketRunGitState(runId);
+        const result = await window.electronAPI.getTicketRunGitState(runId, repoRelativePath);
         if (cancelled) {
           return;
         }
@@ -724,15 +1040,21 @@ export function ProjectsPanel() {
     return () => {
       cancelled = true;
     };
-  }, [selectedMissionRunId, selectedMissionRunWorktreeCount]);
+  }, [selectedMissionRunId, selectedMissionRunWorktreeCount, selectedRepoRelativePath]);
 
-  const refreshMissionGitState = async (runId: string) => {
+  const refreshMissionGitState = async (runId: string, repoRelativePath = selectedRepoRelativePath) => {
+    if (!repoRelativePath) {
+      return;
+    }
+
     setLoadingGitRunId(runId);
     setGitError(null);
     try {
-      const result = await window.electronAPI.getTicketRunGitState(runId);
+      const result = await window.electronAPI.getTicketRunGitState(runId, repoRelativePath);
       setRunSnapshot(result.snapshot);
-      setSelectedGitState(result.gitState);
+      if (isSelectedMissionRepo(runId, repoRelativePath)) {
+        setSelectedGitState(result.gitState);
+      }
     } catch (error) {
       console.error("Failed to refresh mission git state", error);
       setGitError(error instanceof Error ? error.message : "Failed to refresh mission git state.");
@@ -741,46 +1063,73 @@ export function ProjectsPanel() {
     }
   };
 
-  const generateCommitDraft = useCallback(async (runId: string) => {
-    setGeneratingCommitDraftRunId(runId);
-    setGitNotice(null);
-    setGitError(null);
-    try {
-      const result = await window.electronAPI.generateTicketRunCommitDraft(runId);
-      setRunSnapshot(result.snapshot);
-      setSelectedGitState(result.gitState);
-      setCommitDraft(result.run.commitMessageDraft ?? "");
-      setCommitDraftDirty(false);
-      setGitNotice(`${result.run.ticketId} commit draft refreshed.`);
-    } catch (error) {
-      console.error("Failed to generate mission commit draft", error);
-      setGitError(error instanceof Error ? error.message : "Failed to generate the mission commit draft.");
-    } finally {
-      setGeneratingCommitDraftRunId(null);
-    }
-  }, []);
+  const generateCommitDraft = useCallback(
+    async (runId: string, repoRelativePath = selectedRepoRelativePath) => {
+      if (!repoRelativePath) {
+        return;
+      }
+
+      setGeneratingCommitDraftRunId(runId);
+      setGitNotice(null);
+      setGitError(null);
+      try {
+        const result = await window.electronAPI.generateTicketRunCommitDraft(runId, repoRelativePath);
+        setRunSnapshot(result.snapshot);
+        if (isSelectedMissionRepo(runId, repoRelativePath)) {
+          setSelectedGitState(result.gitState);
+          setCommitDraft(result.gitState.commitMessageDraft ?? "");
+          setCommitDraftDirty(false);
+        }
+        setGitNotice(`${result.run.ticketId} commit draft refreshed for ${result.gitState.repoRelativePath}.`);
+      } catch (error) {
+        console.error("Failed to generate mission commit draft", error);
+        setGitError(error instanceof Error ? error.message : "Failed to generate the mission commit draft.");
+      } finally {
+        setGeneratingCommitDraftRunId(null);
+      }
+    },
+    [isSelectedMissionRepo, selectedRepoRelativePath],
+  );
 
   useEffect(() => {
-    if (!selectedMissionRunId || selectedMissionRunStatus !== "done" || selectedMissionRunCommitDraft) {
+    if (
+      !selectedMissionRunId ||
+      !selectedRepoRelativePath ||
+      selectedMissionRunStatus !== "done" ||
+      selectedMissionRunCommitDraft
+    ) {
       return;
     }
-    if (autoDraftedRunIdsRef.current.has(selectedMissionRunId)) {
+    const autoDraftKey = `${selectedMissionRunId}:${selectedRepoRelativePath}`;
+    if (autoDraftedRunIdsRef.current.has(autoDraftKey)) {
       return;
     }
-    autoDraftedRunIdsRef.current.add(selectedMissionRunId);
-    void generateCommitDraft(selectedMissionRunId);
-  }, [generateCommitDraft, selectedMissionRunCommitDraft, selectedMissionRunId, selectedMissionRunStatus]);
+    autoDraftedRunIdsRef.current.add(autoDraftKey);
+    void generateCommitDraft(selectedMissionRunId, selectedRepoRelativePath);
+  }, [
+    generateCommitDraft,
+    selectedMissionRunCommitDraft,
+    selectedMissionRunId,
+    selectedMissionRunStatus,
+    selectedRepoRelativePath,
+  ]);
 
-  const persistCommitDraft = async (runId: string) => {
+  const persistCommitDraft = async (runId: string, repoRelativePath = selectedRepoRelativePath) => {
+    if (!repoRelativePath) {
+      return;
+    }
+
     setSavingCommitDraftRunId(runId);
     setGitNotice(null);
     setGitError(null);
     try {
-      const result = await window.electronAPI.setTicketRunCommitDraft(runId, commitDraft);
+      const result = await window.electronAPI.setTicketRunCommitDraft(runId, commitDraft, repoRelativePath);
       setRunSnapshot(result.snapshot);
-      setSelectedGitState(result.gitState);
-      setCommitDraft(result.run.commitMessageDraft ?? "");
-      setCommitDraftDirty(false);
+      if (isSelectedMissionRepo(runId, repoRelativePath)) {
+        setSelectedGitState(result.gitState);
+        setCommitDraft(result.gitState.commitMessageDraft ?? "");
+        setCommitDraftDirty(false);
+      }
     } catch (error) {
       console.error("Failed to save mission commit draft", error);
       setGitError(error instanceof Error ? error.message : "Failed to save the mission commit draft.");
@@ -789,17 +1138,25 @@ export function ProjectsPanel() {
     }
   };
 
-  const commitMissionRun = async (runId: string) => {
+  const commitMissionRun = async (runId: string, repoRelativePath = selectedRepoRelativePath) => {
+    if (!repoRelativePath) {
+      return;
+    }
+
     setCommittingGitRunId(runId);
     setGitNotice(null);
     setGitError(null);
     try {
-      const result = await window.electronAPI.commitTicketRun(runId, commitDraft);
+      const result = await window.electronAPI.commitTicketRun(runId, commitDraft, repoRelativePath);
       setRunSnapshot(result.snapshot);
-      setSelectedGitState(result.gitState);
-      setCommitDraft("");
-      setCommitDraftDirty(false);
-      setGitNotice(`${result.run.ticketId} committed on ${result.gitState.branchName}.`);
+      if (isSelectedMissionRepo(runId, repoRelativePath)) {
+        setSelectedGitState(result.gitState);
+        setCommitDraft("");
+        setCommitDraftDirty(false);
+      }
+      setGitNotice(
+        `${result.run.ticketId} committed in ${result.gitState.repoRelativePath} on ${result.gitState.branchName}.`,
+      );
     } catch (error) {
       console.error("Failed to commit mission run", error);
       setGitError(error instanceof Error ? error.message : "Failed to commit the mission worktree.");
@@ -808,21 +1165,31 @@ export function ProjectsPanel() {
     }
   };
 
-  const syncMissionRemote = async (runId: string, action: "publish" | "push") => {
+  const syncMissionRemote = async (
+    runId: string,
+    action: "publish" | "push",
+    repoRelativePath = selectedRepoRelativePath,
+  ) => {
+    if (!repoRelativePath) {
+      return;
+    }
+
     setSyncingRemoteRunId(runId);
     setGitNotice(null);
     setGitError(null);
     try {
       const result =
         action === "publish"
-          ? await window.electronAPI.publishTicketRun(runId)
-          : await window.electronAPI.pushTicketRun(runId);
+          ? await window.electronAPI.publishTicketRun(runId, repoRelativePath)
+          : await window.electronAPI.pushTicketRun(runId, repoRelativePath);
       setRunSnapshot(result.snapshot);
-      setSelectedGitState(result.gitState);
+      if (isSelectedMissionRepo(runId, repoRelativePath)) {
+        setSelectedGitState(result.gitState);
+      }
       setGitNotice(
         result.action === "publish"
-          ? `${result.run.ticketId} published to origin/${result.gitState.branchName}.`
-          : `${result.run.ticketId} pushed to origin/${result.gitState.branchName}.`,
+          ? `${result.run.ticketId} published ${result.gitState.repoRelativePath} to origin/${result.gitState.branchName}.`
+          : `${result.run.ticketId} pushed ${result.gitState.repoRelativePath} to origin/${result.gitState.branchName}.`,
       );
     } catch (error) {
       console.error("Failed to sync mission remote", error);
@@ -832,16 +1199,22 @@ export function ProjectsPanel() {
     }
   };
 
-  const openMissionPullRequest = async (runId: string) => {
+  const openMissionPullRequest = async (runId: string, repoRelativePath = selectedRepoRelativePath) => {
+    if (!repoRelativePath) {
+      return;
+    }
+
     setCreatingPullRequestRunId(runId);
     setGitNotice(null);
     setGitError(null);
     try {
-      const result = await window.electronAPI.createTicketRunPullRequest(runId);
+      const result = await window.electronAPI.createTicketRunPullRequest(runId, repoRelativePath);
       setRunSnapshot(result.snapshot);
-      setSelectedGitState(result.gitState);
+      if (isSelectedMissionRepo(runId, repoRelativePath)) {
+        setSelectedGitState(result.gitState);
+      }
       await window.electronAPI.openExternal(result.pullRequestUrl);
-      setGitNotice(`${result.run.ticketId} pull request opened.`);
+      setGitNotice(`${result.run.ticketId} pull request opened for ${result.gitState.repoRelativePath}.`);
     } catch (error) {
       console.error("Failed to open mission pull request", error);
       setGitError(error instanceof Error ? error.message : "Failed to open the mission pull request.");
@@ -862,16 +1235,22 @@ export function ProjectsPanel() {
         projectKey: ticket.projectKey,
       });
       setRunSnapshot(result.snapshot);
-      openRunMissionDetail(result.run.runId, resolveRunTab(result.run));
       if (result.run.status === "error" || result.run.status === "blocked") {
-        setRunError(result.run.statusMessage ?? `Missions could not fully start ${ticket.id}.`);
+        setMissionFlash(result.run.runId, {
+          tone: "error",
+          message: result.run.statusMessage ?? `Missions could not fully start ${ticket.id}.`,
+        });
       } else {
-        setRunNotice(
-          result.reusedExistingRun
+        setMissionFlash(result.run.runId, {
+          tone: "notice",
+          message: result.reusedExistingRun
             ? `${ticket.id} already had a managed run, so Missions reused it.`
-            : `${ticket.id} is now active in a managed worktree.`,
-        );
+            : `${ticket.id} is now active across ${result.run.worktrees.length} managed worktree${
+                result.run.worktrees.length === 1 ? "" : "s"
+              }.`,
+        });
       }
+      openRunMissionDetail(result.run.runId, "details");
     } catch (startError) {
       console.error("Failed to start ticket run", startError);
       setRunError(startError instanceof Error ? startError.message : "Failed to start the ticket run.");
@@ -887,12 +1266,18 @@ export function ProjectsPanel() {
     try {
       const result = await window.electronAPI.retryTicketRunSync(runId);
       setRunSnapshot(result.snapshot);
-      openRunMissionDetail(result.run.runId, resolveRunTab(result.run));
       if (result.run.status === "blocked") {
-        setRunError(result.run.statusMessage ?? `Missions still could not sync ${result.run.ticketId}.`);
+        setMissionFlash(result.run.runId, {
+          tone: "error",
+          message: result.run.statusMessage ?? `Missions still could not sync ${result.run.ticketId}.`,
+        });
       } else {
-        setRunNotice(`${result.run.ticketId} is now synced with YouTrack.`);
+        setMissionFlash(result.run.runId, {
+          tone: "notice",
+          message: `${result.run.ticketId} is now synced with YouTrack.`,
+        });
       }
+      openRunMissionDetail(result.run.runId, "details");
     } catch (syncError) {
       console.error("Failed to retry ticket run sync", syncError);
       setRunError(syncError instanceof Error ? syncError.message : "Failed to retry the ticket state sync.");
@@ -908,8 +1293,11 @@ export function ProjectsPanel() {
     try {
       const result = await window.electronAPI.startTicketRunWork(runId);
       setRunSnapshot(result.snapshot);
-      openRunMissionDetail(result.run.runId, resolveRunTab(result.run));
-      setRunNotice(`${result.run.ticketId} is now actively working.`);
+      setMissionFlash(result.run.runId, {
+        tone: "notice",
+        message: `${result.run.ticketId} is now actively working.`,
+      });
+      openRunMissionDetail(result.run.runId, "bridge");
     } catch (startError) {
       console.error("Failed to start mission work", startError);
       setRunError(startError instanceof Error ? startError.message : "Failed to start mission work.");
@@ -925,13 +1313,14 @@ export function ProjectsPanel() {
     try {
       const result = await window.electronAPI.continueTicketRunWork(runId, continueDrafts[runId]?.trim() || undefined);
       setRunSnapshot(result.snapshot);
-      openRunMissionDetail(result.run.runId, resolveRunTab(result.run));
       setContinueDrafts((current) => ({ ...current, [runId]: "" }));
-      setRunNotice(
-        result.reusedLiveAttempt
+      setMissionFlash(result.run.runId, {
+        tone: "notice",
+        message: result.reusedLiveAttempt
           ? `${result.run.ticketId} resumed in its existing mission station.`
           : `${result.run.ticketId} started a fresh follow-up pass.`,
-      );
+      });
+      openRunMissionDetail(result.run.runId, "bridge");
     } catch (continueError) {
       console.error("Failed to continue mission work", continueError);
       setRunError(continueError instanceof Error ? continueError.message : "Failed to continue mission work.");
@@ -947,8 +1336,11 @@ export function ProjectsPanel() {
     try {
       const result = await window.electronAPI.cancelTicketRunWork(runId);
       setRunSnapshot(result.snapshot);
-      openRunMissionDetail(result.run.runId, resolveRunTab(result.run));
-      setRunNotice(`${result.run.ticketId} stopped its active pass and is ready for review.`);
+      setMissionFlash(result.run.runId, {
+        tone: "notice",
+        message: `${result.run.ticketId} stopped its active pass and is ready for review.`,
+      });
+      openRunMissionDetail(result.run.runId, "details");
     } catch (cancelError) {
       console.error("Failed to cancel mission work", cancelError);
       setRunError(cancelError instanceof Error ? cancelError.message : "Failed to cancel mission work.");
@@ -964,9 +1356,11 @@ export function ProjectsPanel() {
     try {
       const result = await window.electronAPI.completeTicketRun(runId);
       setRunSnapshot(result.snapshot);
-      setActiveTab("dry-dock");
-      setSelectedMission({ kind: "run", runId: result.run.runId });
-      setRunNotice(`${result.run.ticketId} was marked complete.`);
+      setMissionFlash(result.run.runId, {
+        tone: "notice",
+        message: `${result.run.ticketId} was marked complete.`,
+      });
+      openRunMissionDetail(result.run.runId, "actions");
     } catch (completeError) {
       console.error("Failed to complete mission", completeError);
       setRunError(completeError instanceof Error ? completeError.message : "Failed to complete the mission.");
@@ -1180,7 +1574,9 @@ export function ProjectsPanel() {
 
               {selectedMissionRun?.status === "ready" ? (
                 <div className={styles.workActions}>
-                  <span className={styles.workMeta}>The worktree is prepared. Spira has not started coding yet.</span>
+                  <span className={styles.workMeta}>
+                    The mission workspace is prepared. Spira has not started coding yet.
+                  </span>
                   <button
                     type="button"
                     className={styles.actionButton}
@@ -1248,6 +1644,9 @@ export function ProjectsPanel() {
                 <div className={styles.reviewPanel}>
                   {gitNotice ? <div className={styles.notice}>{gitNotice}</div> : null}
                   {gitError ? <div className={styles.error}>{gitError}</div> : null}
+                  {selectedMissionGitRepoLabel ? (
+                    <div className={styles.workHint}>Active repo: {selectedMissionGitRepoLabel}</div>
+                  ) : null}
                   {showPullRequestActions ? (
                     <>
                       <div className={styles.sectionLabel}>Pull request</div>
@@ -1277,7 +1676,11 @@ export function ProjectsPanel() {
                   ) : (
                     <>
                       <label className={styles.field}>
-                        <span>Commit draft</span>
+                        <span>
+                          {selectedMissionGitRepoLabel
+                            ? `Commit draft - ${selectedMissionGitRepoLabel}`
+                            : "Commit draft"}
+                        </span>
                         <textarea
                           className={`${styles.input} ${styles.textarea}`}
                           value={commitDraft}
@@ -1392,12 +1795,245 @@ export function ProjectsPanel() {
               </article>
             ) : null}
 
+            {selectedMissionRun && selectedMissionRun.worktrees.length > 1 ? (
+              <article className={styles.detailCard}>
+                <div className={styles.sectionLabel}>Repo tabs</div>
+                <div className={styles.repoTabBar} role="tablist" aria-label="Mission repositories">
+                  {selectedMissionRun.worktrees.map((worktree) => {
+                    const isActive = selectedMissionWorktree?.repoRelativePath === worktree.repoRelativePath;
+                    return (
+                      <button
+                        key={`${selectedMissionRun.runId}-${worktree.repoRelativePath}-tab`}
+                        type="button"
+                        role="tab"
+                        aria-selected={isActive}
+                        className={`${styles.repoTabButton} ${isActive ? styles.repoTabButtonActive : ""}`}
+                        onClick={() => {
+                          setSelectedRepoRelativePath(worktree.repoRelativePath);
+                          setSelectedGitState(null);
+                        }}
+                      >
+                        <span>{worktree.repoRelativePath}</span>
+                        <span className={styles.repoTabMeta}>{worktree.branchName}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </article>
+            ) : null}
+
+            {selectedMissionRun ? (
+              <article className={styles.detailCard}>
+                <div className={styles.sectionHeader}>
+                  <div>
+                    <div className={styles.sectionLabel}>Services</div>
+                    <div className={styles.sectionCaption}>
+                      {selectedMissionWorktree && selectedMissionRunWorktreeCount > 1
+                        ? `Launch profiles are filtered to ${selectedMissionWorktree.repoRelativePath}. `
+                        : ""}
+                      Active processes remain mission-wide, no matter which repo tab you are staring at.
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    className={styles.secondaryButton}
+                    onClick={() => void refreshMissionServices(selectedMissionRun.runId)}
+                    disabled={loadingServicesRunId === selectedMissionRun.runId}
+                  >
+                    {loadingServicesRunId === selectedMissionRun.runId ? "Refreshing..." : "Refresh services"}
+                  </button>
+                </div>
+
+                {serviceNotice ? <div className={styles.notice}>{serviceNotice}</div> : null}
+                {serviceError ? <div className={styles.error}>{serviceError}</div> : null}
+
+                <div className={styles.serviceSection}>
+                  <div className={styles.sectionLabel}>Launch profiles</div>
+                  {selectedMissionServicesSnapshot ? (
+                    missionServiceProfilesByRepo.length > 0 ? (
+                      <div className={styles.serviceGroupList}>
+                        {missionServiceProfilesByRepo.map(([repoRelativePath, profiles]) => (
+                          <div key={`${selectedMissionRun.runId}:${repoRelativePath}`} className={styles.serviceGroup}>
+                            <div className={styles.serviceGroupHeader}>
+                              <span className={styles.pathBadge}>{repoRelativePath}</span>
+                              <span className={styles.repoTabMeta}>
+                                {profiles.length} profile{profiles.length === 1 ? "" : "s"}
+                              </span>
+                            </div>
+                            <div className={styles.serviceCardList}>
+                              {profiles.map((profile) => {
+                                const profileUrl = profile.launchUrl ?? profile.urls[0] ?? null;
+                                const isRunning = activeMissionServiceProfileIds.has(profile.profileId);
+                                return (
+                                  <div
+                                    key={profile.profileId}
+                                    className={`${styles.serviceCard} ${
+                                      profile.isLaunchable ? "" : styles.serviceCardUnavailable
+                                    }`}
+                                  >
+                                    <div className={styles.workHeader}>
+                                      <div className={styles.workHeaderCopy}>
+                                        <strong>{profile.profileName}</strong>
+                                        <span className={styles.repoTabMeta}>
+                                          {describeMissionServiceLauncher(profile)}
+                                        </span>
+                                      </div>
+                                      <div className={styles.inlineActions}>
+                                        {profileUrl ? (
+                                          <button
+                                            type="button"
+                                            className={styles.secondaryButton}
+                                            onClick={() => void window.electronAPI.openExternal(profileUrl)}
+                                          >
+                                            Open URL
+                                          </button>
+                                        ) : null}
+                                        <button
+                                          type="button"
+                                          className={
+                                            profile.isLaunchable ? styles.actionButton : styles.secondaryButton
+                                          }
+                                          onClick={() => void startMissionService(selectedMissionRun.runId, profile)}
+                                          disabled={
+                                            !profile.isLaunchable ||
+                                            isRunning ||
+                                            startingServiceProfileId === profile.profileId
+                                          }
+                                        >
+                                          {startingServiceProfileId === profile.profileId
+                                            ? "Starting..."
+                                            : isRunning
+                                              ? "Running"
+                                              : "Start"}
+                                        </button>
+                                      </div>
+                                    </div>
+                                    <div className={styles.inlineRunFacts}>
+                                      <div className={styles.inlineRunFact}>
+                                        <strong>Project</strong>
+                                        {profile.projectRelativePath}
+                                      </div>
+                                      <div className={styles.inlineRunFact}>
+                                        <strong>URLs</strong>
+                                        {formatMissionServiceUrls(profile.urls)}
+                                      </div>
+                                      <div className={styles.inlineRunFact}>
+                                        <strong>Environment</strong>
+                                        {profile.environmentName ?? "Default"}
+                                      </div>
+                                      <div className={styles.inlineRunFact}>
+                                        <strong>Launch settings</strong>
+                                        {profile.launchSettingsRelativePath}
+                                      </div>
+                                    </div>
+                                    {!profile.isLaunchable && profile.unavailableReason ? (
+                                      <div className={styles.blockedState}>{profile.unavailableReason}</div>
+                                    ) : null}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className={styles.emptyState}>
+                        {selectedMissionWorktree && selectedMissionRunWorktreeCount > 1
+                          ? `No runnable service profiles found in ${selectedMissionWorktree.repoRelativePath}.`
+                          : "No runnable service profiles found."}
+                      </div>
+                    )
+                  ) : loadingServicesRunId === selectedMissionRun.runId ? (
+                    <div className={styles.emptyState}>Loading mission services...</div>
+                  ) : (
+                    <div className={styles.emptyState}>Mission services are waiting to load.</div>
+                  )}
+                </div>
+
+                <div className={styles.serviceSection}>
+                  <div className={styles.sectionLabel}>Tracked processes</div>
+                  <div className={styles.sectionCaption}>Started services remain visible across all repo tabs.</div>
+                  {selectedMissionServiceProcesses.length > 0 ? (
+                    <div className={styles.serviceCardList}>
+                      {selectedMissionServiceProcesses.map((process) => {
+                        const processTone = getMissionServiceStateTone(process.state);
+                        const processUrl = process.launchUrl ?? process.urls[0] ?? null;
+                        const stdoutLogLines = process.recentLogLines.filter((line) => line.source === "stdout");
+                        return (
+                          <div key={process.serviceId} className={`${styles.serviceCard} ${processTone}`}>
+                            <div className={styles.workHeader}>
+                              <div className={styles.workHeaderCopy}>
+                                <strong>{process.profileName}</strong>
+                                <span className={styles.repoTabMeta}>
+                                  {process.repoRelativePath} • {describeMissionServiceLauncher(process)}
+                                </span>
+                              </div>
+                              <div className={styles.inlineActions}>
+                                <span className={`${styles.statusBadge} ${processTone}`}>
+                                  {describeMissionServiceState(process.state)}
+                                </span>
+                                {processUrl ? (
+                                  <button
+                                    type="button"
+                                    className={styles.secondaryButton}
+                                    onClick={() => void window.electronAPI.openExternal(processUrl)}
+                                  >
+                                    Open URL
+                                  </button>
+                                ) : null}
+                                <button
+                                  type="button"
+                                  className={
+                                    isMissionServiceProcessActive(process)
+                                      ? styles.secondaryButton
+                                      : styles.actionButton
+                                  }
+                                  onClick={() => void stopMissionService(selectedMissionRun.runId, process)}
+                                  disabled={
+                                    !isMissionServiceProcessActive(process) || stoppingServiceId === process.serviceId
+                                  }
+                                >
+                                  {stoppingServiceId === process.serviceId
+                                    ? "Stopping..."
+                                    : isMissionServiceProcessActive(process)
+                                      ? "Stop"
+                                      : "Stopped"}
+                                </button>
+                              </div>
+                            </div>
+                            {process.errorMessage ? <div className={styles.error}>{process.errorMessage}</div> : null}
+                            {stdoutLogLines.length > 0 ? (
+                              <div className={styles.serviceLogTail}>
+                                {stdoutLogLines.map((line, index) => (
+                                  <div
+                                    key={`${process.serviceId}:${line.timestamp}:${index}`}
+                                    className={styles.serviceLogLine}
+                                  >
+                                    {line.line}
+                                  </div>
+                                ))}
+                              </div>
+                            ) : (
+                              <div className={styles.workHint}>No stdout yet.</div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className={styles.emptyState}>No mission services have been started yet.</div>
+                  )}
+                </div>
+              </article>
+            ) : null}
+
             {selectedMissionRun?.worktrees.length ? (
               <article className={styles.detailCard}>
                 <div className={styles.sectionHeader}>
                   <div>
                     <div className={styles.sectionLabel}>Worktree diff</div>
                     <div className={styles.sectionCaption}>
+                      {selectedMissionGitRepoLabel ? `Active repo: ${selectedMissionGitRepoLabel}. ` : ""}
                       Tracked worktree changes only. Untracked files stay out of the theatre.
                     </div>
                   </div>
@@ -1414,18 +2050,19 @@ export function ProjectsPanel() {
                   selectedGitState.files.length > 0 ? (
                     <div className={styles.diffList}>
                       {selectedGitState.files.map((file) => {
-                        const expanded = expandedDiffPaths[file.path] ?? false;
+                        const expandedKey = `${selectedGitState.repoRelativePath}:${file.path}`;
+                        const expanded = expandedDiffPaths[expandedKey] ?? false;
                         const diffStatusTone = getDiffStatusTone(file.status);
                         return (
                           <div
-                            key={`${file.path}-${file.status}`}
+                            key={`${selectedGitState.repoRelativePath}:${file.path}-${file.status}`}
                             className={`${styles.diffFileCard} ${diffStatusTone}`}
                           >
                             <button
                               type="button"
                               className={`${styles.diffFileButton} ${diffStatusTone}`}
                               onClick={() =>
-                                setExpandedDiffPaths((current) => ({ ...current, [file.path]: !expanded }))
+                                setExpandedDiffPaths((current) => ({ ...current, [expandedKey]: !expanded }))
                               }
                             >
                               <span className={`${styles.statusBadge} ${diffStatusTone}`}>{file.status}</span>
@@ -1453,7 +2090,7 @@ export function ProjectsPanel() {
                       })}
                     </div>
                   ) : (
-                    <div className={styles.emptyState}>No tracked diff remains in this managed worktree.</div>
+                    <div className={styles.emptyState}>No tracked diff remains in the selected managed repo.</div>
                   )
                 ) : loadingGitRunId === selectedMissionRun.runId ? (
                   <div className={styles.emptyState}>Loading mission diff…</div>
@@ -1496,38 +2133,108 @@ export function ProjectsPanel() {
                 </button>
               </div>
             </div>
-            <article className={`${styles.statusCard} ${describeStatusTone(youTrackStatus)}`}>
-              <div className={styles.statusTopline}>
-                <span className={styles.sectionLabel}>YouTrack</span>
-                <span className={styles.statusBadge}>{describeStatusLabel(youTrackStatus)}</span>
-              </div>
-              <strong className={styles.statusTitle}>
-                {youTrackStatus?.account
-                  ? (youTrackStatus.account.fullName ?? youTrackStatus.account.login)
-                  : "Mission intake"}
-              </strong>
-              <p className={styles.sectionCaption}>{youTrackStatus?.message ?? "Loading YouTrack status..."}</p>
-              <div className={styles.statusFacts}>
-                <div className={styles.statusFact}>
-                  <span className={styles.sectionLabel}>Native intake</span>
-                  <span className={styles.statusFactValue}>{youTrackEnabled ? "Enabled" : "Disabled"}</span>
+            <div className={styles.setupGrid}>
+              <article className={`${styles.statusCard} ${describeStatusTone(youTrackStatus)}`}>
+                <div className={styles.statusTopline}>
+                  <span className={styles.sectionLabel}>YouTrack</span>
+                  <span className={styles.statusBadge}>{describeStatusLabel(youTrackStatus)}</span>
                 </div>
-                <div className={styles.statusFact}>
-                  <span className={styles.sectionLabel}>Instance</span>
-                  <span className={styles.statusFactValue}>{youTrackStatus?.baseUrl ?? "Not configured"}</span>
+                <strong className={styles.statusTitle}>
+                  {youTrackStatus?.account
+                    ? (youTrackStatus.account.fullName ?? youTrackStatus.account.login)
+                    : "Mission intake"}
+                </strong>
+                <p className={styles.sectionCaption}>{youTrackStatus?.message ?? "Loading YouTrack status..."}</p>
+                <div className={styles.statusFacts}>
+                  <div className={styles.statusFact}>
+                    <span className={styles.sectionLabel}>Native intake</span>
+                    <span className={styles.statusFactValue}>{youTrackEnabled ? "Enabled" : "Disabled"}</span>
+                  </div>
+                  <div className={styles.statusFact}>
+                    <span className={styles.sectionLabel}>Instance</span>
+                    <span className={styles.statusFactValue}>{youTrackStatus?.baseUrl ?? "Not configured"}</span>
+                  </div>
+                  <div className={styles.statusFact}>
+                    <span className={styles.sectionLabel}>To-do states</span>
+                    <span className={styles.statusFactValue}>{formatStateList(youTrackStatus?.stateMapping.todo)}</span>
+                  </div>
+                  <div className={styles.statusFact}>
+                    <span className={styles.sectionLabel}>In-progress states</span>
+                    <span className={styles.statusFactValue}>
+                      {formatStateList(youTrackStatus?.stateMapping.inProgress)}
+                    </span>
+                  </div>
                 </div>
-                <div className={styles.statusFact}>
-                  <span className={styles.sectionLabel}>To-do states</span>
-                  <span className={styles.statusFactValue}>{formatStateList(youTrackStatus?.stateMapping.todo)}</span>
+              </article>
+              <article className={styles.workspaceCard}>
+                <div className={styles.statusTopline}>
+                  <span className={styles.sectionLabel}>Workflow states</span>
+                  <span className={styles.statusBadge}>{hasWorkflowChanges ? "Unsaved" : "Synced"}</span>
                 </div>
-                <div className={styles.statusFact}>
-                  <span className={styles.sectionLabel}>In-progress states</span>
-                  <span className={styles.statusFactValue}>
-                    {formatStateList(youTrackStatus?.stateMapping.inProgress)}
-                  </span>
-                </div>
-              </div>
-            </article>
+                <strong className={styles.statusTitle}>Quarterdeck mapping</strong>
+                <p className={styles.sectionCaption}>
+                  Add or remove the live YouTrack states Missions should treat as To-do and In-progress.
+                </p>
+                {workflowBlocker ? (
+                  <div className={styles.blockedState}>{workflowBlocker}</div>
+                ) : (
+                  <>
+                    <div className={styles.setupGrid}>
+                      <YouTrackStateListEditor
+                        label="To-do"
+                        description="Tickets in these states stay in Launch bay."
+                        placeholder="Add a To-do state"
+                        values={youTrackStateMappingDraft.todo}
+                        availableStates={youTrackStatus?.availableStates ?? []}
+                        invalidStates={workflowValidation.invalidTodoStates}
+                        disabled={isSavingWorkflow}
+                        onChange={(nextStates) => updateWorkflowStateList("todo", nextStates)}
+                      />
+                      <YouTrackStateListEditor
+                        label="In-progress"
+                        description="The first state in this list becomes the mission launch target."
+                        placeholder="Add an In-progress state"
+                        values={youTrackStateMappingDraft.inProgress}
+                        availableStates={youTrackStatus?.availableStates ?? []}
+                        invalidStates={workflowValidation.invalidInProgressStates}
+                        disabled={isSavingWorkflow}
+                        onChange={(nextStates) => updateWorkflowStateList("inProgress", nextStates)}
+                      />
+                    </div>
+                    {workflowValidation.errors.map((error) => (
+                      <div key={error} className={styles.error}>
+                        {error}
+                      </div>
+                    ))}
+                    {workflowNotice ? <div className={styles.notice}>{workflowNotice}</div> : null}
+                    {workflowError ? <div className={styles.error}>{workflowError}</div> : null}
+                    <div className={styles.editorFooter}>
+                      <div className={styles.selectionSummary}>
+                        {youTrackStatus?.availableStates.length ?? 0} live states available from the connected instance
+                      </div>
+                      <div className={styles.inlineActions}>
+                        <button
+                          type="button"
+                          className={styles.secondaryButton}
+                          onClick={resetWorkflowMappingDraft}
+                          disabled={isSavingWorkflow || !hasWorkflowChanges}
+                        >
+                          Reset states
+                        </button>
+                        <button
+                          type="button"
+                          className={styles.actionButton}
+                          onClick={() => void saveWorkflowMapping()}
+                          disabled={isSavingWorkflow || !canSaveWorkflow}
+                        >
+                          {isSavingWorkflow ? "Saving..." : "Save states"}
+                        </button>
+                      </div>
+                    </div>
+                  </>
+                )}
+              </article>
+            </div>
           </section>
 
           <section className={styles.section}>
@@ -1713,7 +2420,8 @@ export function ProjectsPanel() {
                 const repoCount = mappedRepoCountByProject.get(normalizeProjectKey(ticket.projectKey)) ?? 0;
                 const existingRun = runByTicketId.get(ticket.id) ?? null;
                 const startBlockedReason = getTicketStartBlocker(isMapped, repoCount, existingRun);
-                const primaryWorktree = existingRun?.worktrees[0] ?? null;
+                const firstWorktree = existingRun?.worktrees[0] ?? null;
+                const existingRunRepoCount = existingRun?.worktrees.length ?? 0;
                 return (
                   <article key={ticket.id} className={styles.workCard}>
                     <div className={styles.workHeader}>
@@ -1754,12 +2462,10 @@ export function ProjectsPanel() {
                           type="button"
                           className={styles.secondaryButton}
                           onClick={() =>
-                            existingRun
-                              ? openRunMissionDetail(existingRun.runId, "launch-bay")
-                              : openTicketMissionDetail(ticket.id, "launch-bay")
+                            existingRun ? openRunMissionDetail(existingRun.runId) : openTicketMissionDetail(ticket.id, "launch-bay")
                           }
                         >
-                          Mission details
+                          {existingRun ? "Open mission" : "Mission details"}
                         </button>
                         <button
                           type="button"
@@ -1778,14 +2484,25 @@ export function ProjectsPanel() {
                     {existingRun?.statusMessage ? (
                       <div className={styles.workHint}>{existingRun.statusMessage}</div>
                     ) : null}
-                    {primaryWorktree ? (
+                    {firstWorktree ? (
                       <div className={styles.inlineRunFacts}>
                         <span className={styles.inlineRunFact}>
-                          <strong>Branch</strong> {primaryWorktree.branchName}
+                          <strong>Repos</strong> {existingRunRepoCount}
                         </span>
-                        <span className={styles.inlineRunFact}>
-                          <strong>Worktree</strong> {primaryWorktree.worktreePath}
-                        </span>
+                        {existingRunRepoCount === 1 ? (
+                          <>
+                            <span className={styles.inlineRunFact}>
+                              <strong>Branch</strong> {firstWorktree.branchName}
+                            </span>
+                            <span className={styles.inlineRunFact}>
+                              <strong>Worktree</strong> {firstWorktree.worktreePath}
+                            </span>
+                          </>
+                        ) : (
+                          <span className={styles.inlineRunFact}>
+                            <strong>Example worktree</strong> {firstWorktree.worktreePath}
+                          </span>
+                        )}
                       </div>
                     ) : null}
                     {startBlockedReason ? <div className={styles.workHint}>{startBlockedReason}</div> : null}
@@ -1820,12 +2537,7 @@ export function ProjectsPanel() {
               {activeRuns.map((run) => {
                 const latestAttempt = run.attempts[run.attempts.length - 1] ?? null;
                 const boundStation = run.stationId ? stationMap[run.stationId] : null;
-                const detailLabel =
-                  run.status === "awaiting-review"
-                    ? "Review mission"
-                    : run.status === "starting"
-                      ? "View starting run"
-                      : "Mission details";
+                const detailLabel = run.status === "awaiting-review" ? "Review mission" : "Open mission";
                 return (
                   <article key={run.runId} className={styles.runCard}>
                     <div className={styles.workHeader}>
@@ -1848,7 +2560,7 @@ export function ProjectsPanel() {
                           ? `Attempt ${latestAttempt.sequence} is active.`
                           : "Mission pass is active."
                         : run.status === "ready"
-                          ? "The worktree is prepared and waiting for launch."
+                          ? "The mission workspace is prepared and waiting for launch."
                           : run.status === "blocked"
                             ? "YouTrack state sync needs attention."
                             : run.status === "awaiting-review"
@@ -1868,7 +2580,7 @@ export function ProjectsPanel() {
                         <button
                           type="button"
                           className={run.status === "awaiting-review" ? styles.actionButton : styles.secondaryButton}
-                          onClick={() => openRunMissionDetail(run.runId, "flight-deck")}
+                          onClick={() => openRunMissionDetail(run.runId)}
                         >
                           {detailLabel}
                         </button>
@@ -1964,9 +2676,9 @@ export function ProjectsPanel() {
                       <button
                         type="button"
                         className={styles.secondaryButton}
-                        onClick={() => openRunMissionDetail(run.runId, "dry-dock")}
+                        onClick={() => openRunMissionDetail(run.runId)}
                       >
-                        Mission details
+                        Open mission
                       </button>
                     </div>
                   </article>

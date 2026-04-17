@@ -135,6 +135,10 @@ export const deriveRemediationHint = (message: string, recentStderr: string[]): 
     return "Check this server's API key or other authentication environment variables.";
   }
 
+  if (haystack.includes("self-signed certificate") || haystack.includes("unable to verify the first certificate")) {
+    return "Trust the server certificate or issuing CA in this machine's certificate store, then reconnect the MCP server.";
+  }
+
   if (haystack.includes("schema") || haystack.includes("invalid") || haystack.includes("config")) {
     return "Review the MCP server configuration and environment values for invalid settings.";
   }

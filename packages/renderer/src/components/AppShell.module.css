@@ -35,6 +35,19 @@
   opacity: 0.7;
 }
 
+.missionApp::before {
+  background: radial-gradient(circle at 12% 18%, rgba(115, 141, 220, 0.16), transparent 30%),
+    radial-gradient(circle at 82% 84%, rgba(84, 106, 184, 0.12), transparent 28%),
+    radial-gradient(circle at 48% 52%, rgba(184, 132, 92, 0.08), transparent 26%);
+}
+
+.missionApp::after {
+  background: radial-gradient(circle at 18% 18%, rgba(227, 191, 119, 0.07) 0 1px, transparent 2px),
+    radial-gradient(circle at 72% 26%, rgba(141, 214, 234, 0.06) 0 1px, transparent 2px),
+    radial-gradient(circle at 86% 68%, rgba(104, 198, 180, 0.06) 0 1px, transparent 2px);
+  opacity: 0.24;
+}
+
 .titleBarSlot {
   grid-column: 1 / -1;
   z-index: 2;

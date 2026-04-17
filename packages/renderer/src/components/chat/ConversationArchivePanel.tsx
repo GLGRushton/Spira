@@ -1,10 +1,11 @@
-import type { ConversationSearchMatch, StoredConversationSummary } from "@spira/shared";
+import type { ConversationSearchMatch, StationId, StoredConversationSummary } from "@spira/shared";
 import { useEffect, useMemo, useState } from "react";
 import { getChatSession, useChatStore } from "../../stores/chat-store.js";
 import { useStationStore } from "../../stores/station-store.js";
 import styles from "./ConversationArchivePanel.module.css";
 
 interface ConversationArchivePanelProps {
+  stationId?: StationId;
   open: boolean;
   disabled?: boolean;
   canStartNewChat?: boolean;
@@ -26,6 +27,7 @@ const formatTimestamp = (timestamp: number | null): string => {
 };
 
 export function ConversationArchivePanel({
+  stationId,
   open,
   disabled = false,
   canStartNewChat = true,
@@ -33,8 +35,9 @@ export function ConversationArchivePanel({
   onStartNewChat,
 }: ConversationArchivePanelProps) {
   const activeStationId = useStationStore((store) => store.activeStationId);
+  const resolvedStationId = stationId ?? activeStationId;
   const setStationConversation = useStationStore((store) => store.setStationConversation);
-  const activeConversationId = useChatStore((store) => getChatSession(store, activeStationId).activeConversationId);
+  const activeConversationId = useChatStore((store) => getChatSession(store, resolvedStationId).activeConversationId);
   const hydrateConversation = useChatStore((store) => store.hydrateConversation);
   const setSessionNotice = useChatStore((store) => store.setSessionNotice);
   const [query, setQuery] = useState("");
@@ -132,8 +135,8 @@ export function ConversationArchivePanel({
         return;
       }
 
-      hydrateConversation(conversation, activeStationId);
-      setStationConversation(activeStationId, conversation.id, conversation.title);
+      hydrateConversation(conversation, resolvedStationId);
+      setStationConversation(resolvedStationId, conversation.id, conversation.title);
       await window.electronAPI.markConversationViewed(conversationId);
       if (conversationId !== activeConversationId) {
         setSessionNotice(
@@ -142,7 +145,7 @@ export function ConversationArchivePanel({
             message:
               "Loaded an archived conversation. The visible transcript is restored from the database; Shinra may need a fresh live turn to regain backend context.",
           },
-          activeStationId,
+          resolvedStationId,
         );
       }
       onClose();

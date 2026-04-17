@@ -156,9 +156,7 @@ export function Sidebar({ activeView, onViewChange }: SidebarProps) {
                 className={`${styles.stationItem} ${isFocused ? styles.stationActive : ""}`}
                 onClick={() => {
                   setActiveStation(station.stationId);
-                  if (activeView !== "operations") {
-                    onViewChange("bridge");
-                  }
+                  onViewChange("bridge");
                 }}
               >
                 <span className={`${styles.stationPulse} ${styles[station.state]}`} />

@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdir } from "node:fs/promises";
+import { access, mkdir } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import type { SpiraMemoryDatabase } from "@spira/memory-db";
@@ -38,7 +38,6 @@ const execFileAsync = promisify(execFile);
 const WORKTREE_DIRECTORY_NAME = ".spira-worktrees";
 const MAX_BRANCH_NAME_LENGTH = 63;
 const MAX_SLUG_LENGTH = 40;
-const MAX_WORKTREE_SUFFIX_LENGTH = 48;
 
 export interface GitCommandResult {
   stdout: string;
@@ -125,6 +124,7 @@ export interface TicketRunServiceOptions {
   launchMissionPass?: (input: LaunchMissionPassInput) => Promise<MissionPassHandle>;
   cancelMissionPass?: (stationId: string) => Promise<void>;
   closeMissionStation?: (stationId: string) => Promise<void>;
+  stopRunServices?: (runId: string) => Promise<void>;
   generateCommitDraft?: (input: GenerateCommitDraftInput) => Promise<string>;
   resolveMissionGitIdentity?: () => Promise<MissionGitIdentity>;
   getMissionGitToken?: () => string | null;
@@ -346,12 +346,52 @@ export const buildTicketRunBranchName = (ticketId: string, summary: string): str
   return branchName.slice(0, MAX_BRANCH_NAME_LENGTH).replace(/-+$/g, "");
 };
 
-export const buildTicketRunWorktreePath = (workspaceRoot: string, ticketId: string, repoName: string): string => {
+const buildTicketRunMissionDirectory = (workspaceRoot: string, ticketId: string): string => {
   const ticketSlug = slugify(ticketId, 24) || "ticket";
-  const repoSlug = slugify(repoName, 20) || "repo";
-  const suffix = `${ticketSlug}-${repoSlug}`.slice(0, MAX_WORKTREE_SUFFIX_LENGTH).replace(/-+$/g, "");
-  return path.join(workspaceRoot, WORKTREE_DIRECTORY_NAME, suffix);
+  return path.join(workspaceRoot, WORKTREE_DIRECTORY_NAME, ticketSlug);
 };
+
+export const buildTicketRunWorktreePath = (workspaceRoot: string, ticketId: string, repoName: string): string => {
+  const repoSlug = slugify(repoName, 20) || "repo";
+  return path.join(buildTicketRunMissionDirectory(workspaceRoot, ticketId), repoSlug);
+};
+
+const resolveTicketRunWorkspacePath = (
+  worktrees: ReadonlyArray<Pick<TicketRunSummary["worktrees"][number], "worktreePath">>,
+): string => {
+  const firstWorktree = worktrees[0];
+  if (!firstWorktree) {
+    return "the managed worktree";
+  }
+
+  const parents = [...new Set(worktrees.map((worktree) => path.dirname(worktree.worktreePath)))];
+  if (parents.length === 1 && path.basename(parents[0] ?? "") !== WORKTREE_DIRECTORY_NAME) {
+    return parents[0] ?? firstWorktree.worktreePath;
+  }
+
+  return firstWorktree.worktreePath;
+};
+
+const describeTicketRunWorkspace = (worktrees: ReadonlyArray<TicketRunSummary["worktrees"][number]>) => {
+  const workspacePath = resolveTicketRunWorkspacePath(worktrees);
+  if (workspacePath === worktrees[0]?.worktreePath) {
+    return {
+      path: workspacePath,
+      noun: "worktree",
+      phrase: `managed worktree at ${workspacePath}`,
+    };
+  }
+
+  const repoCount = worktrees.length;
+  return {
+    path: workspacePath,
+    noun: "mission directory",
+    phrase: `mission directory at ${workspacePath} for ${repoCount} repo${repoCount === 1 ? "" : "s"}`,
+  };
+};
+
+const formatTicketRunWorktreeList = (worktrees: ReadonlyArray<TicketRunSummary["worktrees"][number]>): string =>
+  worktrees.map((worktree) => `- ${worktree.repoRelativePath}: ${worktree.worktreePath}`).join("\n");
 
 export class TicketRunService {
   private readonly now: () => number;
@@ -379,6 +419,10 @@ export class TicketRunService {
     return memoryDb.getTicketRunSnapshot();
   }
 
+  getRun(runId: string): TicketRunSummary {
+    return this.getFreshRun(runId);
+  }
+
   async startRun(ticket: StartTicketRunRequest): Promise<StartTicketRunResult> {
     const memoryDb = this.requireMemoryDb();
 
@@ -403,52 +447,71 @@ export class TicketRunService {
       };
     }
 
-    const recoveredWorktree = recoverableRun?.worktrees[0] ?? null;
-    let repoRelativePath = recoveredWorktree?.repoRelativePath ?? null;
-    let repoAbsolutePath = recoveredWorktree?.repoAbsolutePath ?? null;
-    let worktreePath = recoveredWorktree?.worktreePath ?? null;
-    let branchName = recoveredWorktree?.branchName ?? null;
+    const recoverableWorktrees =
+      recoverableRun?.worktrees.map((worktree) => ({
+        ...worktree,
+        commitMessageDraft: worktree.commitMessageDraft ?? null,
+      })) ?? [];
+    const recoverableWorktreeByRepo = new Map(
+      recoverableWorktrees.map((worktree) => [worktree.repoRelativePath, worktree] as const),
+    );
+    let targetWorktrees = [...recoverableWorktrees];
 
-    if (!repoRelativePath || !repoAbsolutePath || !worktreePath || !branchName) {
-      const snapshot = await this.options.projectRegistry.getSnapshot();
-      if (!snapshot.workspaceRoot) {
-        throw new ConfigError("Set a workspace root before starting ticket runs.");
-      }
-
-      const mappedRepos = snapshot.repos.filter((repo) => repo.mappedProjectKeys.includes(projectKey));
-      if (mappedRepos.length === 0) {
-        throw new ConfigError(`Map exactly one repository to ${projectKey} before starting work on ${ticketId}.`);
-      }
-      if (mappedRepos.length > 1) {
-        throw new ConfigError(
-          `Single-repo runs currently require exactly one mapped repository for ${projectKey}. Found ${mappedRepos.length}.`,
-        );
-      }
-
-      const repo = mappedRepos[0];
-      repoRelativePath = repo.relativePath;
-      repoAbsolutePath = repo.absolutePath;
-      branchName = buildTicketRunBranchName(ticketId, ticketSummary);
-      worktreePath = buildTicketRunWorktreePath(snapshot.workspaceRoot, ticketId, repo.name);
+    const snapshot = await this.options.projectRegistry.getSnapshot();
+    if (!snapshot.workspaceRoot && recoverableWorktrees.length === 0) {
+      throw new ConfigError("Set a workspace root before starting ticket runs.");
     }
 
-    if (!repoRelativePath || !repoAbsolutePath || !worktreePath || !branchName) {
-      throw new ConfigError("Missions could not resolve the repository worktree target.");
+    const repoHasSubmodulesByRelativePath = new Map(
+      snapshot.repos.map((repo) => [repo.relativePath, repo.hasSubmodules] as const),
+    );
+
+    if (snapshot.workspaceRoot) {
+      const mappedRepos = snapshot.repos
+        .filter((repo) => repo.mappedProjectKeys.includes(projectKey))
+        .sort((left, right) => left.relativePath.localeCompare(right.relativePath));
+      if (mappedRepos.length === 0 && recoverableWorktrees.length === 0) {
+        throw new ConfigError(`Map at least one repository to ${projectKey} before starting work on ${ticketId}.`);
+      }
+
+      const branchName = buildTicketRunBranchName(ticketId, ticketSummary);
+      for (const repo of mappedRepos) {
+        if (recoverableWorktreeByRepo.has(repo.relativePath)) {
+          continue;
+        }
+
+        targetWorktrees.push({
+          repoRelativePath: repo.relativePath,
+          repoAbsolutePath: repo.absolutePath,
+          worktreePath: buildTicketRunWorktreePath(snapshot.workspaceRoot, ticketId, repo.name),
+          branchName,
+          commitMessageDraft: null,
+          cleanupState: "retained",
+          createdAt: recoverableRun?.createdAt ?? this.now(),
+          updatedAt: recoverableRun?.createdAt ?? this.now(),
+        });
+      }
+    }
+
+    targetWorktrees = [...targetWorktrees].sort((left, right) =>
+      left.repoRelativePath.localeCompare(right.repoRelativePath),
+    );
+    if (targetWorktrees.length === 0) {
+      throw new ConfigError("Missions could not resolve any repository worktree targets.");
     }
 
     const runId = recoverableRun?.runId ?? this.runIdFactory();
     const createdAt = recoverableRun?.createdAt ?? this.now();
-    const startingWorktrees = [
-      {
-        repoRelativePath,
-        repoAbsolutePath,
-        worktreePath,
-        branchName,
-        cleanupState: "retained" as const,
-        createdAt,
-        updatedAt: createdAt,
-      },
-    ];
+    const startingWorktrees = targetWorktrees.map((worktree) => ({
+      repoRelativePath: worktree.repoRelativePath,
+      repoAbsolutePath: worktree.repoAbsolutePath,
+      worktreePath: worktree.worktreePath,
+      branchName: worktree.branchName,
+      commitMessageDraft: worktree.commitMessageDraft ?? null,
+      cleanupState: "retained" as const,
+      createdAt: worktree.createdAt ?? createdAt,
+      updatedAt: createdAt,
+    }));
 
     memoryDb.upsertTicketRun({
       runId,
@@ -458,8 +521,8 @@ export class TicketRunService {
       projectKey,
       status: "starting",
       statusMessage: recoverableRun?.worktrees.length
-        ? "Resuming a managed worktree after an interrupted start."
-        : "Preparing a managed worktree.",
+        ? "Resuming managed worktrees after an interrupted start."
+        : "Preparing managed worktrees.",
       startedAt: createdAt,
       createdAt,
       worktrees: startingWorktrees,
@@ -467,55 +530,89 @@ export class TicketRunService {
     });
     this.emitSnapshot();
 
-    if (!recoverableRun?.worktrees.length) {
-      try {
-        await mkdir(path.dirname(worktreePath), { recursive: true });
-        await this.runGitCommand(repoAbsolutePath, [
+    const worktreesToCreate = startingWorktrees.filter(
+      (worktree) => !recoverableWorktreeByRepo.has(worktree.repoRelativePath),
+    );
+
+    const createdWorktrees: typeof startingWorktrees = [];
+    try {
+      for (const worktree of worktreesToCreate) {
+        await mkdir(path.dirname(worktree.worktreePath), { recursive: true });
+        await this.runGitCommand(worktree.repoAbsolutePath, [
           "worktree",
           "add",
           recoverableRun ? "-B" : "-b",
-          branchName,
-          worktreePath,
+          worktree.branchName,
+          worktree.worktreePath,
         ]);
-      } catch (error) {
-        this.options.logger.warn({ err: error, ticketId, runId }, "Failed to create managed worktree");
-        const failedRun = memoryDb.upsertTicketRun({
-          runId,
-          ticketId,
-          ticketSummary,
-          ticketUrl,
-          projectKey,
-          status: "error",
-          statusMessage: error instanceof Error ? error.message : "Failed to create the managed worktree.",
-          startedAt: createdAt,
-          createdAt,
-          worktrees: [],
-          attempts: recoverableRun?.attempts ?? [],
-        });
-        const failedSnapshot = memoryDb.getTicketRunSnapshot();
-        this.emitSnapshot(failedSnapshot);
-        return {
-          run: failedRun,
-          snapshot: failedSnapshot,
-          reusedExistingRun: false,
-        };
+        createdWorktrees.push(worktree);
       }
 
-      memoryDb.upsertTicketRun({
+      for (const worktree of startingWorktrees) {
+        await this.maybeHydrateWorktreeSubmodules(
+          worktree,
+          repoHasSubmodulesByRelativePath.get(worktree.repoRelativePath),
+        );
+      }
+    } catch (error) {
+      this.options.logger.warn({ err: error, ticketId, runId }, "Failed to prepare managed worktrees");
+      const retainedWorktrees: typeof startingWorktrees = [];
+      for (const createdWorktree of [...createdWorktrees].reverse()) {
+        try {
+          await this.runGitCommand(createdWorktree.repoAbsolutePath, [
+            "worktree",
+            "remove",
+            "--force",
+            createdWorktree.worktreePath,
+          ]);
+        } catch (cleanupError) {
+          retainedWorktrees.push(createdWorktree);
+          this.options.logger.warn(
+            { err: cleanupError, ticketId, runId, worktreePath: createdWorktree.worktreePath },
+            "Failed to roll back a partially created managed worktree",
+          );
+        }
+      }
+
+      const failedWorktrees = [...recoverableWorktrees, ...retainedWorktrees].sort((left, right) =>
+        left.repoRelativePath.localeCompare(right.repoRelativePath),
+      );
+      const failedRun = memoryDb.upsertTicketRun({
         runId,
         ticketId,
         ticketSummary,
         ticketUrl,
         projectKey,
-        status: "starting",
-        statusMessage: "Worktree created. Transitioning the ticket into active work.",
+        status: "error",
+        statusMessage: error instanceof Error ? error.message : "Failed to prepare the managed worktrees.",
         startedAt: createdAt,
         createdAt,
-        worktrees: startingWorktrees,
+        worktrees: failedWorktrees,
         attempts: recoverableRun?.attempts ?? [],
       });
-      this.emitSnapshot();
+      const failedSnapshot = memoryDb.getTicketRunSnapshot();
+      this.emitSnapshot(failedSnapshot);
+      return {
+        run: failedRun,
+        snapshot: failedSnapshot,
+        reusedExistingRun: false,
+      };
     }
+
+    memoryDb.upsertTicketRun({
+      runId,
+      ticketId,
+      ticketSummary,
+      ticketUrl,
+      projectKey,
+      status: "starting",
+      statusMessage: "Managed worktrees created. Transitioning the ticket into active work.",
+      startedAt: createdAt,
+      createdAt,
+      worktrees: startingWorktrees,
+      attempts: recoverableRun?.attempts ?? [],
+    });
+    this.emitSnapshot();
 
     const run = await this.syncRunState({
       runId,
@@ -526,17 +623,16 @@ export class TicketRunService {
       projectKey,
       startedAt: createdAt,
       createdAt,
-      worktrees: [
-        {
-          repoRelativePath,
-          repoAbsolutePath,
-          worktreePath,
-          branchName,
-          cleanupState: "retained",
-          createdAt,
-          updatedAt: this.now(),
-        },
-      ],
+      worktrees: startingWorktrees.map((worktree) => ({
+        repoRelativePath: worktree.repoRelativePath,
+        repoAbsolutePath: worktree.repoAbsolutePath,
+        worktreePath: worktree.worktreePath,
+        branchName: worktree.branchName,
+        commitMessageDraft: worktree.commitMessageDraft ?? null,
+        cleanupState: "retained",
+        createdAt: worktree.createdAt,
+        updatedAt: this.now(),
+      })),
     });
     const nextSnapshot = memoryDb.getTicketRunSnapshot();
 
@@ -653,6 +749,10 @@ export class TicketRunService {
         throw new ConfigError(`Ticket ${run.ticketId} must be ready for review before it can be marked complete.`);
       }
 
+      if (this.options.stopRunServices) {
+        await this.options.stopRunServices(run.runId);
+      }
+
       let completedRun = this.persistRun(run, {
         status: "done",
         statusMessage: "Mission marked complete.",
@@ -674,46 +774,58 @@ export class TicketRunService {
     });
   }
 
-  async getGitState(runId: string): Promise<TicketRunGitStateResult> {
+  async getGitState(runId: string, repoRelativePath?: string): Promise<TicketRunGitStateResult> {
     const run = this.getFreshRun(runId);
     return {
       run,
       snapshot: this.requireMemoryDb().getTicketRunSnapshot(),
-      gitState: await this.readGitState(run),
+      gitState: await this.readGitState(run, repoRelativePath),
     };
   }
 
-  async generateCommitDraft(runId: string): Promise<GenerateTicketRunCommitDraftResult> {
+  async generateCommitDraft(runId: string, repoRelativePath?: string): Promise<GenerateTicketRunCommitDraftResult> {
     return this.withRunLock(runId, async () => {
       const run = this.getFreshRun(runId);
-      const updatedRun = await this.generateAndPersistCommitDraft(run);
+      const updatedRun = await this.generateAndPersistCommitDraft(run, repoRelativePath);
       const snapshot = this.requireMemoryDb().getTicketRunSnapshot();
       this.emitSnapshot(snapshot);
       return {
         run: updatedRun,
         snapshot,
-        gitState: await this.readGitState(updatedRun),
+        gitState: await this.readGitState(updatedRun, repoRelativePath),
       };
     });
   }
 
-  async setCommitDraft(runId: string, message: string): Promise<SetTicketRunCommitDraftResult> {
+  async setCommitDraft(
+    runId: string,
+    message: string,
+    repoRelativePath?: string,
+  ): Promise<SetTicketRunCommitDraftResult> {
     return this.withRunLock(runId, async () => {
       const run = this.getFreshRun(runId);
+      const worktree = this.resolveTargetWorktree(run, repoRelativePath);
       const nextRun = this.persistRun(run, {
-        commitMessageDraft: message,
+        worktrees: run.worktrees.map((candidate) =>
+          candidate.repoRelativePath === worktree.repoRelativePath
+            ? {
+                ...candidate,
+                commitMessageDraft: message,
+              }
+            : candidate,
+        ),
       });
       const snapshot = this.requireMemoryDb().getTicketRunSnapshot();
       this.emitSnapshot(snapshot);
       return {
         run: nextRun,
         snapshot,
-        gitState: await this.readGitState(nextRun),
+        gitState: await this.readGitState(nextRun, worktree.repoRelativePath),
       };
     });
   }
 
-  async commitRun(runId: string, message: string): Promise<CommitTicketRunResult> {
+  async commitRun(runId: string, message: string, repoRelativePath?: string): Promise<CommitTicketRunResult> {
     return this.withRunLock(runId, async () => {
       const run = this.getFreshRun(runId);
       if (run.status !== "done") {
@@ -724,8 +836,8 @@ export class TicketRunService {
         throw new ConfigError("Enter a commit message before committing this mission.");
       }
 
-      const worktree = this.getPrimaryWorktree(run);
-      const gitState = await this.readGitState(run);
+      const worktree = this.resolveTargetWorktree(run, repoRelativePath);
+      const gitState = await this.readGitState(run, worktree.repoRelativePath);
       if (!gitState.hasDiff) {
         throw new ConfigError(`Ticket ${run.ticketId} does not have any tracked changes to commit.`);
       }
@@ -757,35 +869,42 @@ export class TicketRunService {
 
       const commitSha = (await this.runGitCommand(worktree.worktreePath, ["rev-parse", "HEAD"])).stdout.trim();
       const nextRun = this.persistRun(run, {
-        commitMessageDraft: null,
+        worktrees: run.worktrees.map((candidate) =>
+          candidate.repoRelativePath === worktree.repoRelativePath
+            ? {
+                ...candidate,
+                commitMessageDraft: null,
+              }
+            : candidate,
+        ),
       });
       const snapshot = this.requireMemoryDb().getTicketRunSnapshot();
       this.emitSnapshot(snapshot);
       return {
         run: nextRun,
         snapshot,
-        gitState: await this.readGitState(nextRun),
+        gitState: await this.readGitState(nextRun, worktree.repoRelativePath),
         commitSha,
       };
     });
   }
 
-  async publishRun(runId: string): Promise<SyncTicketRunRemoteResult> {
-    return this.syncRemote(runId, "publish");
+  async publishRun(runId: string, repoRelativePath?: string): Promise<SyncTicketRunRemoteResult> {
+    return this.syncRemote(runId, "publish", repoRelativePath);
   }
 
-  async pushRun(runId: string): Promise<SyncTicketRunRemoteResult> {
-    return this.syncRemote(runId, "push");
+  async pushRun(runId: string, repoRelativePath?: string): Promise<SyncTicketRunRemoteResult> {
+    return this.syncRemote(runId, "push", repoRelativePath);
   }
 
-  async createPullRequest(runId: string): Promise<CreateTicketRunPullRequestResult> {
+  async createPullRequest(runId: string, repoRelativePath?: string): Promise<CreateTicketRunPullRequestResult> {
     return this.withRunLock(runId, async () => {
       const run = this.getFreshRun(runId);
       if (run.status !== "done") {
         throw new ConfigError(`Ticket ${run.ticketId} must be completed before a pull request can be opened.`);
       }
 
-      const gitState = await this.readGitState(run);
+      const gitState = await this.readGitState(run, repoRelativePath);
       if (gitState.hasDiff) {
         throw new ConfigError(`Commit the tracked changes for ${run.ticketId} before opening a pull request.`);
       }
@@ -828,6 +947,42 @@ export class TicketRunService {
     return run.attempts.at(-1) ?? null;
   }
 
+  private async maybeHydrateWorktreeSubmodules(
+    worktree: Pick<TicketRunSummary["worktrees"][number], "repoRelativePath" | "worktreePath">,
+    hasSubmodulesHint?: boolean,
+  ): Promise<void> {
+    if (hasSubmodulesHint === false) {
+      return;
+    }
+
+    if (hasSubmodulesHint !== true && !(await this.worktreeHasGitmodules(worktree.worktreePath))) {
+      return;
+    }
+
+    try {
+      await this.runGitCommand(worktree.worktreePath, ["submodule", "update", "--init", "--recursive"]);
+    } catch (error) {
+      throw new SpiraError(
+        "MISSIONS_SUBMODULE_UPDATE_FAILED",
+        `Failed to hydrate submodules for ${worktree.repoRelativePath}.`,
+        error,
+      );
+    }
+  }
+
+  private async worktreeHasGitmodules(worktreePath: string): Promise<boolean> {
+    try {
+      await access(path.join(worktreePath, ".gitmodules"));
+      return true;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "ENOENT" || code === "ENOTDIR") {
+        return false;
+      }
+      throw error;
+    }
+  }
+
   private async launchMissionPass(run: TicketRunSummary, prompt: string): Promise<MissionPassHandle> {
     if (!this.options.launchMissionPass) {
       throw new ConfigError("Mission work execution is unavailable.");
@@ -853,6 +1008,7 @@ export class TicketRunService {
   private beginAttempt(run: TicketRunSummary, handle: MissionPassHandle, prompt: string | null): TicketRunSummary {
     const now = this.now();
     const nextSequence = (this.getLatestAttempt(run)?.sequence ?? 0) + 1;
+    const workspace = describeTicketRunWorkspace(run.worktrees);
     const attempt: TicketRunAttemptSummary = {
       attemptId: this.attemptIdFactory(),
       runId: run.runId,
@@ -870,7 +1026,10 @@ export class TicketRunService {
     const nextRun = this.persistRun(run, {
       stationId: handle.stationId,
       status: "working",
-      statusMessage: `Attempt ${nextSequence} is working in ${run.worktrees[0]?.worktreePath ?? "the managed worktree"}.`,
+      statusMessage:
+        workspace.noun === "worktree"
+          ? `Attempt ${nextSequence} is working in ${workspace.path}.`
+          : `Attempt ${nextSequence} is working from ${workspace.path} across ${run.worktrees.length} repos.`,
       attempts: [...run.attempts, attempt],
     });
     this.emitSnapshot(this.requireMemoryDb().getTicketRunSnapshot());
@@ -991,11 +1150,12 @@ export class TicketRunService {
   }
 
   private buildInitialPrompt(run: TicketRunSummary): string {
-    const worktree = run.worktrees[0];
+    const workspace = describeTicketRunWorkspace(run.worktrees);
     return [
       `Work on ticket ${run.ticketId}: ${run.ticketSummary}.`,
-      `Repository: ${worktree?.repoRelativePath ?? "unknown"}.`,
-      `Working directory is already set to the managed worktree at ${worktree?.worktreePath ?? "unknown"}.`,
+      `Mission workspace: ${workspace.phrase}.`,
+      `Repositories in scope:\n${formatTicketRunWorktreeList(run.worktrees)}`,
+      "The working directory is already set to the mission workspace. Move between repo directories as needed.",
       "Inspect the codebase, implement the ticket, and leave the worktree in a reviewable state.",
       "Use the existing station context as your scratchpad; do not restart from first principles unless the evidence demands it.",
       "If you stop with open questions or partial work, say so plainly in your final summary.",
@@ -1004,11 +1164,12 @@ export class TicketRunService {
 
   private buildContinuationPrompt(run: TicketRunSummary, prompt: string | null): string {
     const latestAttempt = this.getLatestAttempt(run);
-    const worktree = run.worktrees[0];
+    const workspace = describeTicketRunWorkspace(run.worktrees);
     return [
       `Continue work on ticket ${run.ticketId}: ${run.ticketSummary}.`,
-      `Repository: ${worktree?.repoRelativePath ?? "unknown"}.`,
-      `Stay inside the managed worktree at ${worktree?.worktreePath ?? "unknown"}.`,
+      `Mission workspace: ${workspace.phrase}.`,
+      `Repositories in scope:\n${formatTicketRunWorktreeList(run.worktrees)}`,
+      "Stay inside the mission workspace and preserve the existing repo layout.",
       "Continue inside the same mission station and preserve context from the prior pass.",
       latestAttempt?.summary ? `Last pass summary: ${latestAttempt.summary}` : "No prior pass summary is available.",
       prompt
@@ -1017,16 +1178,26 @@ export class TicketRunService {
     ].join("\n");
   }
 
-  private getPrimaryWorktree(run: TicketRunSummary): TicketRunSummary["worktrees"][number] {
-    const worktree = run.worktrees[0];
+  private resolveTargetWorktree(
+    run: TicketRunSummary,
+    repoRelativePath?: string,
+  ): TicketRunSummary["worktrees"][number] {
+    const normalizedRepoRelativePath = repoRelativePath?.trim();
+    const worktree = normalizedRepoRelativePath
+      ? run.worktrees.find((candidate) => candidate.repoRelativePath === normalizedRepoRelativePath)
+      : run.worktrees[0];
     if (!worktree) {
-      throw new ConfigError(`Ticket ${run.ticketId} does not have a managed worktree yet.`);
+      throw new ConfigError(
+        normalizedRepoRelativePath
+          ? `Ticket ${run.ticketId} does not have a managed worktree for ${normalizedRepoRelativePath}.`
+          : `Ticket ${run.ticketId} does not have a managed worktree yet.`,
+      );
     }
     return worktree;
   }
 
-  private async readGitState(run: TicketRunSummary): Promise<TicketRunGitState> {
-    const worktree = this.getPrimaryWorktree(run);
+  private async readGitState(run: TicketRunSummary, repoRelativePath?: string): Promise<TicketRunGitState> {
+    const worktree = this.resolveTargetWorktree(run, repoRelativePath);
     const gitHubOrigin = await this.readGitHubOrigin(worktree.worktreePath);
     let upstreamBranch: string | null = null;
     try {
@@ -1124,6 +1295,7 @@ export class TicketRunService {
 
     return {
       runId: run.runId,
+      repoRelativePath: worktree.repoRelativePath,
       worktreePath: worktree.worktreePath,
       branchName: worktree.branchName,
       upstreamBranch,
@@ -1131,14 +1303,18 @@ export class TicketRunService {
       behindCount,
       hasDiff,
       pushAction,
-      commitMessageDraft: run.commitMessageDraft,
+      commitMessageDraft: worktree.commitMessageDraft ?? null,
       pullRequestUrls,
       files,
     };
   }
 
-  private async generateAndPersistCommitDraft(run: TicketRunSummary): Promise<TicketRunSummary> {
-    const gitState = await this.readGitState(run);
+  private async generateAndPersistCommitDraft(
+    run: TicketRunSummary,
+    repoRelativePath?: string,
+  ): Promise<TicketRunSummary> {
+    const worktree = this.resolveTargetWorktree(run, repoRelativePath);
+    const gitState = await this.readGitState(run, worktree.repoRelativePath);
     const fallbackBullets = buildFallbackCommitBullets(gitState.files);
     const fallbackDraft = normalizeCommitDraft(run.ticketId, run.ticketSummary, fallbackBullets);
     let draft = fallbackDraft;
@@ -1159,7 +1335,14 @@ export class TicketRunService {
     }
 
     return this.persistRun(run, {
-      commitMessageDraft: draft,
+      worktrees: run.worktrees.map((candidate) =>
+        candidate.repoRelativePath === worktree.repoRelativePath
+          ? {
+              ...candidate,
+              commitMessageDraft: draft,
+            }
+          : candidate,
+      ),
     });
   }
 
@@ -1320,14 +1503,15 @@ export class TicketRunService {
   private async syncRemote(
     runId: string,
     requestedAction: Exclude<TicketRunPushAction, "none">,
+    repoRelativePath?: string,
   ): Promise<SyncTicketRunRemoteResult> {
     return this.withRunLock(runId, async () => {
       const run = this.getFreshRun(runId);
       if (run.status !== "done") {
         throw new ConfigError(`Ticket ${run.ticketId} must be completed before it can be ${requestedAction}ed.`);
       }
-      const worktree = this.getPrimaryWorktree(run);
-      const gitState = await this.readGitState(run);
+      const worktree = this.resolveTargetWorktree(run, repoRelativePath);
+      const gitState = await this.readGitState(run, worktree.repoRelativePath);
       if (gitState.hasDiff) {
         throw new ConfigError(`Commit the tracked changes for ${run.ticketId} before trying to ${requestedAction}.`);
       }
@@ -1364,7 +1548,7 @@ export class TicketRunService {
       return {
         run,
         snapshot: this.requireMemoryDb().getTicketRunSnapshot(),
-        gitState: await this.readGitState(run),
+        gitState: await this.readGitState(run, worktree.repoRelativePath),
         action: requestedAction,
       };
     });
@@ -1373,10 +1557,11 @@ export class TicketRunService {
   private persistRun(
     run: TicketRunSummary,
     overrides: Partial<
-      Pick<TicketRunSummary, "stationId" | "status" | "statusMessage" | "commitMessageDraft" | "attempts">
+      Pick<TicketRunSummary, "stationId" | "status" | "statusMessage" | "commitMessageDraft" | "attempts" | "worktrees">
     >,
   ): TicketRunSummary {
     const memoryDb = this.requireMemoryDb();
+    const worktrees = overrides.worktrees ?? run.worktrees;
     return memoryDb.upsertTicketRun({
       runId: run.runId,
       stationId: overrides.stationId !== undefined ? overrides.stationId : run.stationId,
@@ -1387,14 +1572,17 @@ export class TicketRunService {
       status: overrides.status ?? run.status,
       statusMessage: overrides.statusMessage !== undefined ? overrides.statusMessage : run.statusMessage,
       commitMessageDraft:
-        overrides.commitMessageDraft !== undefined ? overrides.commitMessageDraft : run.commitMessageDraft,
+        overrides.commitMessageDraft !== undefined
+          ? overrides.commitMessageDraft
+          : (worktrees[0]?.commitMessageDraft ?? null),
       startedAt: run.startedAt,
       createdAt: run.createdAt,
-      worktrees: run.worktrees.map((worktree) => ({
+      worktrees: worktrees.map((worktree) => ({
         repoRelativePath: worktree.repoRelativePath,
         repoAbsolutePath: worktree.repoAbsolutePath,
         worktreePath: worktree.worktreePath,
         branchName: worktree.branchName,
+        commitMessageDraft: worktree.commitMessageDraft ?? null,
         cleanupState: worktree.cleanupState,
         createdAt: worktree.createdAt,
         updatedAt: this.now(),
@@ -1439,15 +1627,24 @@ export class TicketRunService {
     const memoryDb = this.requireMemoryDb();
 
     let status: TicketRunStatus = "ready";
-    const primaryWorktree = run.worktrees[0];
-    const worktreePath = primaryWorktree?.worktreePath ?? "the managed worktree";
-    let statusMessage = `Worktree ready at ${worktreePath}.`;
+    const workspace = describeTicketRunWorkspace(run.worktrees);
+    let statusMessage =
+      workspace.noun === "worktree"
+        ? `Worktree ready at ${workspace.path}.`
+        : `Mission directory ready at ${workspace.path} for ${run.worktrees.length} repos.`;
     try {
       await this.options.youTrackService?.transitionTicketToInProgress(run.ticketId);
-      statusMessage = `Worktree ready at ${worktreePath}. Ticket moved to In Progress.`;
+      statusMessage =
+        workspace.noun === "worktree"
+          ? `Worktree ready at ${workspace.path}. Ticket moved to In Progress.`
+          : `Mission directory ready at ${workspace.path} for ${run.worktrees.length} repos. Ticket moved to In Progress.`;
     } catch (error) {
       status = "blocked";
-      statusMessage = `Worktree ready at ${worktreePath}, but the ticket state could not be updated: ${
+      statusMessage = `${
+        workspace.noun === "worktree"
+          ? `Worktree ready at ${workspace.path}`
+          : `Mission directory ready at ${workspace.path} for ${run.worktrees.length} repos`
+      }, but the ticket state could not be updated: ${
         error instanceof Error ? error.message : "Unknown YouTrack error."
       }`;
       this.options.logger.warn(
@@ -1473,6 +1670,7 @@ export class TicketRunService {
         repoAbsolutePath: worktree.repoAbsolutePath,
         worktreePath: worktree.worktreePath,
         branchName: worktree.branchName,
+        commitMessageDraft: worktree.commitMessageDraft ?? null,
         cleanupState: worktree.cleanupState,
         createdAt: worktree.createdAt,
         updatedAt: this.now(),

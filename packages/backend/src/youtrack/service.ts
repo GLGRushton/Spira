@@ -6,10 +6,13 @@ import {
   type YouTrackStateMapping,
   type YouTrackStatusSummary,
   type YouTrackTicketSummary,
+  normalizeYouTrackStateMapping,
+  validateYouTrackStateMapping,
 } from "@spira/shared";
 import fetch from "node-fetch";
 import type { Logger } from "pino";
 import { YouTrackError } from "../util/errors.js";
+import { installSystemCertificateAuthorities } from "../util/tls.js";
 
 interface YouTrackIssueFieldValue {
   name?: string;
@@ -45,6 +48,27 @@ interface YouTrackApiProject {
   name?: string;
 }
 
+interface YouTrackCustomFieldDefinition {
+  name?: string;
+}
+
+interface YouTrackCustomFieldBundleValue {
+  name?: string;
+}
+
+interface YouTrackCustomFieldBundle {
+  values?: YouTrackCustomFieldBundleValue[] | null;
+}
+
+interface YouTrackProjectCustomField {
+  field?: YouTrackCustomFieldDefinition | null;
+  bundle?: YouTrackCustomFieldBundle | null;
+}
+
+interface YouTrackProjectWithCustomFields extends YouTrackApiProject {
+  customFields?: YouTrackProjectCustomField[];
+}
+
 interface YouTrackCommandPayload {
   query: string;
   issues: Array<{ idReadable: string }>;
@@ -52,10 +76,9 @@ interface YouTrackCommandPayload {
 
 const YOUTRACK_REQUEST_TIMEOUT_MS = 10_000;
 
-const cloneStateMapping = (): YouTrackStateMapping => ({
-  todo: [...DEFAULT_YOUTRACK_STATE_MAPPING.todo],
-  inProgress: [...DEFAULT_YOUTRACK_STATE_MAPPING.inProgress],
-});
+const cloneStateMapping = (stateMapping: YouTrackStateMapping = DEFAULT_YOUTRACK_STATE_MAPPING): YouTrackStateMapping =>
+  normalizeYouTrackStateMapping(stateMapping);
+type YouTrackStateMappingInspection = ReturnType<typeof validateYouTrackStateMapping>;
 
 const normalizeBaseUrl = (baseUrl: string): string => baseUrl.trim().replace(/\/+$/, "");
 
@@ -153,12 +176,29 @@ export const getPreferredInProgressState = (stateMapping: YouTrackStateMapping):
   return preferred.trim();
 };
 
+const buildInvalidStateMappingMessage = (
+  stateMapping: Pick<YouTrackStateMappingInspection, "invalidTodoStates" | "invalidInProgressStates">,
+): string | null => {
+  const messages: string[] = [];
+  if (stateMapping.invalidTodoStates.length > 0) {
+    messages.push(`To-do states not found in YouTrack: ${stateMapping.invalidTodoStates.join(", ")}.`);
+  }
+  if (stateMapping.invalidInProgressStates.length > 0) {
+    messages.push(`In-progress states not found in YouTrack: ${stateMapping.invalidInProgressStates.join(", ")}.`);
+  }
+  return messages.length > 0 ? messages.join(" ") : null;
+};
+
 export class YouTrackService {
+  private stateMapping: YouTrackStateMapping;
+
   constructor(
     private readonly env: Env,
     private readonly logger: Logger,
-    private readonly stateMapping: YouTrackStateMapping = cloneStateMapping(),
-  ) {}
+    stateMapping: YouTrackStateMapping = cloneStateMapping(),
+  ) {
+    this.stateMapping = cloneStateMapping(stateMapping);
+  }
 
   getStateMapping(): YouTrackStateMapping {
     return {
@@ -171,8 +211,71 @@ export class YouTrackService {
     return this.env.YOUTRACK_BASE_URL?.trim() ? normalizeBaseUrl(this.env.YOUTRACK_BASE_URL) : null;
   }
 
+  setStateMapping(stateMapping: YouTrackStateMapping): YouTrackStateMapping {
+    this.stateMapping = cloneStateMapping(stateMapping);
+    return this.getStateMapping();
+  }
+
   isConfigured(): boolean {
     return Boolean(this.getBaseUrl() && this.env.YOUTRACK_TOKEN?.trim());
+  }
+
+  async listAvailableStates(): Promise<string[]> {
+    const baseUrl = this.getBaseUrl();
+    const token = this.env.YOUTRACK_TOKEN?.trim();
+    if (!baseUrl || !token) {
+      throw new YouTrackError("YouTrack is not fully configured.");
+    }
+
+    const apiBaseUrl = validateApiBaseUrl(baseUrl);
+    const fields = encodeURIComponent("id,customFields(field(name),bundle(values(name)))");
+    const pageSize = 50;
+    const discoveredStates = new Map<string, string>();
+
+    for (let skip = 0; ; skip += pageSize) {
+      const projects = await this.fetchJson<YouTrackProjectWithCustomFields[]>(
+        `${apiBaseUrl}/api/admin/projects?$top=${pageSize}&$skip=${skip}&fields=${fields}`,
+        token,
+        "state discovery",
+      );
+
+      if (projects.length === 0) {
+        break;
+      }
+
+      for (const project of projects) {
+        for (const customField of project.customFields ?? []) {
+          if (customField.field?.name !== "State") {
+            continue;
+          }
+
+          for (const value of customField.bundle?.values ?? []) {
+            const trimmedName = value.name?.trim();
+            const normalizedName = normalizeStateName(trimmedName);
+            if (!trimmedName || !normalizedName || discoveredStates.has(normalizedName)) {
+              continue;
+            }
+
+            discoveredStates.set(normalizedName, trimmedName);
+          }
+        }
+      }
+
+      if (projects.length < pageSize) {
+        break;
+      }
+    }
+
+    const availableStates = [...discoveredStates.values()].sort((left, right) => left.localeCompare(right));
+    if (availableStates.length === 0) {
+      throw new YouTrackError("YouTrack did not return any State values for accessible projects.");
+    }
+
+    return availableStates;
+  }
+
+  async validateStateMapping(stateMapping: YouTrackStateMapping): Promise<YouTrackStateMapping> {
+    return this.resolveStateMapping(stateMapping, await this.listAvailableStates());
   }
 
   async getStatus(enabled: boolean): Promise<YouTrackStatusSummary> {
@@ -188,6 +291,7 @@ export class YouTrackService {
         baseUrl,
         account: null,
         stateMapping,
+        availableStates: [],
         message: configured
           ? "YouTrack integration is configured but currently disabled."
           : "Enable YouTrack after adding an instance URL and permanent token.",
@@ -202,20 +306,33 @@ export class YouTrackService {
         baseUrl,
         account: null,
         stateMapping,
+        availableStates: [],
         message: "Add a YouTrack base URL and permanent token to connect Spira natively.",
       };
     }
 
     try {
-      const account = await this.fetchCurrentUser();
+      const [account, availableStates] = await Promise.all([this.fetchCurrentUser(), this.listAvailableStates()]);
+      const assessedStateMapping = this.inspectStateMapping(this.stateMapping, availableStates);
+      this.stateMapping = assessedStateMapping.mapping;
+      const authenticatedAs = account.fullName ?? account.login;
+      const hasWorkflowMappingIssue =
+        assessedStateMapping.mapping.todo.length === 0 ||
+        assessedStateMapping.mapping.inProgress.length === 0 ||
+        assessedStateMapping.invalidTodoStates.length > 0 ||
+        assessedStateMapping.invalidInProgressStates.length > 0 ||
+        assessedStateMapping.overlappingStates.length > 0;
       return {
         enabled,
         configured,
         state: "connected",
         baseUrl,
         account,
-        stateMapping,
-        message: `Authenticated as ${account.fullName ?? account.login}.`,
+        stateMapping: this.getStateMapping(),
+        availableStates,
+        message: hasWorkflowMappingIssue
+          ? `Authenticated as ${authenticatedAs}. Review the quarterdeck workflow state mapping.`
+          : `Authenticated as ${authenticatedAs}.`,
       };
     } catch (error) {
       this.logger.warn({ err: error }, "Failed to authenticate with YouTrack");
@@ -226,6 +343,7 @@ export class YouTrackService {
         baseUrl,
         account: null,
         stateMapping,
+        availableStates: [],
         message: error instanceof Error ? error.message : "Failed to authenticate with YouTrack.",
       };
     }
@@ -329,7 +447,7 @@ export class YouTrackService {
     }
 
     const apiBaseUrl = validateApiBaseUrl(baseUrl);
-    const targetState = getPreferredInProgressState(this.stateMapping);
+    const targetState = this.resolveTransitionState(this.stateMapping, await this.listAvailableStates());
     await this.sendJson(
       `${apiBaseUrl}/api/commands`,
       token,
@@ -382,6 +500,7 @@ export class YouTrackService {
   }
 
   private async request(url: string, token: string, operation: string, init?: Parameters<typeof fetch>[1]) {
+    installSystemCertificateAuthorities();
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), YOUTRACK_REQUEST_TIMEOUT_MS);
 
@@ -407,5 +526,71 @@ export class YouTrackService {
     } finally {
       clearTimeout(timeoutId);
     }
+  }
+
+  private inspectStateMapping(
+    stateMapping: YouTrackStateMapping,
+    availableStates: readonly string[],
+  ): YouTrackStateMappingInspection {
+    return validateYouTrackStateMapping(stateMapping, availableStates);
+  }
+
+  private resolveTransitionState(stateMapping: YouTrackStateMapping, availableStates: readonly string[]): string {
+    const resolvedStateMapping = this.inspectStateMapping(stateMapping, availableStates);
+    const invalidInProgressStateNames = new Set(
+      resolvedStateMapping.invalidInProgressStates
+        .map((state) => normalizeStateName(state))
+        .filter((state): state is string => Boolean(state)),
+    );
+    const supportedInProgressStates = resolvedStateMapping.mapping.inProgress.filter((state) => {
+      const normalizedState = normalizeStateName(state);
+      return normalizedState !== null && !invalidInProgressStateNames.has(normalizedState);
+    });
+
+    if (supportedInProgressStates.length > 0) {
+      return getPreferredInProgressState({
+        todo: resolvedStateMapping.mapping.todo,
+        inProgress: supportedInProgressStates,
+      });
+    }
+
+    if (resolvedStateMapping.mapping.inProgress.length === 0) {
+      throw new YouTrackError("Select at least one In-progress YouTrack state.");
+    }
+
+    const invalidStateMessage = buildInvalidStateMappingMessage(resolvedStateMapping);
+    if (invalidStateMessage) {
+      throw new YouTrackError(invalidStateMessage);
+    }
+
+    throw new YouTrackError("Select at least one In-progress YouTrack state.");
+  }
+
+  private resolveStateMapping(
+    stateMapping: YouTrackStateMapping,
+    availableStates: readonly string[],
+  ): YouTrackStateMapping {
+    const resolvedMapping = this.inspectStateMapping(stateMapping, availableStates);
+    if (resolvedMapping.mapping.todo.length === 0) {
+      throw new YouTrackError("Select at least one To-do YouTrack state.");
+    }
+
+    if (resolvedMapping.mapping.inProgress.length === 0) {
+      throw new YouTrackError("Select at least one In-progress YouTrack state.");
+    }
+
+    const invalidStateMessage = buildInvalidStateMappingMessage(resolvedMapping);
+    if (invalidStateMessage) {
+      throw new YouTrackError(invalidStateMessage);
+    }
+
+    if (resolvedMapping.overlappingStates.length > 0) {
+      throw new YouTrackError(
+        `State mapping cannot place the same state in both To-do and In-progress: ${resolvedMapping.overlappingStates.join(", ")}.`,
+      );
+    }
+
+    this.stateMapping = resolvedMapping.mapping;
+    return this.getStateMapping();
   }
 }

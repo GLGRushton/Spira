@@ -1,0 +1,184 @@
+.shell {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.statusBar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 18px;
+  border: 1px solid rgba(115, 141, 220, 0.18);
+  border-radius: 18px;
+  background: linear-gradient(180deg, rgba(17, 24, 52, 0.94), rgba(8, 12, 28, 0.98));
+  box-shadow: 0 14px 30px rgba(0, 0, 0, 0.24);
+}
+
+.statusCopy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.eyebrow {
+  color: rgba(191, 207, 244, 0.72);
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.titleRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.ticketId {
+  color: #dbe6ff;
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.title {
+  color: var(--text-primary);
+  font-size: 18px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.statusBadge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 12px;
+  border: 1px solid rgba(151, 173, 241, 0.3);
+  border-radius: 999px;
+  background: rgba(36, 52, 104, 0.38);
+  color: #dfe8ff;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.metaChip {
+  padding: 4px 10px;
+  border: 1px solid rgba(115, 141, 220, 0.14);
+  border-radius: 999px;
+  background: rgba(10, 15, 32, 0.56);
+}
+
+.contentPanel {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  isolation: isolate;
+}
+
+.roomViewport {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 6px;
+  scrollbar-gutter: stable;
+  overscroll-behavior: contain;
+  contain: paint;
+  will-change: scroll-position;
+}
+
+.roomSection,
+.emptyState {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.sectionCard {
+  padding: 18px;
+  border: 1px solid rgba(115, 141, 220, 0.14);
+  border-radius: 18px;
+  background: rgba(8, 12, 28, 0.56);
+}
+
+.sectionTitle {
+  margin: 0 0 10px;
+  color: var(--text-primary);
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.sectionCopy {
+  margin: 0;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.factsGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 14px;
+}
+
+.factLabel {
+  display: block;
+  margin-bottom: 6px;
+  color: rgba(191, 207, 244, 0.72);
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.factValue {
+  color: var(--text-primary);
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.worktreeList {
+  display: grid;
+  gap: 12px;
+}
+
+.worktreeCard {
+  padding: 14px 16px;
+  border: 1px solid rgba(115, 141, 220, 0.14);
+  border-radius: 16px;
+  background: rgba(12, 18, 40, 0.62);
+}
+
+.worktreeTitle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+  color: var(--text-primary);
+  font-weight: 700;
+}
+
+.worktreeMeta {
+  display: grid;
+  gap: 4px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}

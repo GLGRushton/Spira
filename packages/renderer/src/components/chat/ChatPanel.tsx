@@ -1,3 +1,4 @@
+import type { StationId } from "@spira/shared";
 import { AnimatePresence, motion } from "framer-motion";
 import { useLayoutEffect, useRef, useState } from "react";
 import { getAwaitingAssistantQuestion, getChatSession, useChatStore } from "../../stores/chat-store.js";
@@ -14,19 +15,24 @@ const EXAMPLE_PROMPTS = [
   "Find the slowest part of the renderer path and tighten it.",
 ];
 
-export function ChatPanel() {
+interface ChatPanelProps {
+  stationId?: StationId;
+}
+
+export function ChatPanel({ stationId }: ChatPanelProps) {
   const activeStationId = useStationStore((store) => store.activeStationId);
+  const resolvedStationId = stationId ?? activeStationId;
   const setStationConversation = useStationStore((store) => store.setStationConversation);
-  const messages = useChatStore((store) => getChatSession(store, activeStationId).messages);
-  const activeConversationId = useChatStore((store) => getChatSession(store, activeStationId).activeConversationId);
+  const messages = useChatStore((store) => getChatSession(store, resolvedStationId).messages);
+  const activeConversationId = useChatStore((store) => getChatSession(store, resolvedStationId).activeConversationId);
   const activeConversationTitle = useChatStore(
-    (store) => getChatSession(store, activeStationId).activeConversationTitle,
+    (store) => getChatSession(store, resolvedStationId).activeConversationTitle,
   );
-  const isStreaming = useChatStore((store) => getChatSession(store, activeStationId).isStreaming);
-  const isResetting = useChatStore((store) => getChatSession(store, activeStationId).isResetting);
+  const isStreaming = useChatStore((store) => getChatSession(store, resolvedStationId).isStreaming);
+  const isResetting = useChatStore((store) => getChatSession(store, resolvedStationId).isResetting);
   const setActiveConversation = useChatStore((store) => store.setActiveConversation);
   const requestComposerFocus = useChatStore((store) => store.requestComposerFocus);
-  const sessionNotice = useChatStore((store) => getChatSession(store, activeStationId).sessionNotice);
+  const sessionNotice = useChatStore((store) => getChatSession(store, resolvedStationId).sessionNotice);
   const setSessionNotice = useChatStore((store) => store.setSessionNotice);
   const setDraft = useChatStore((store) => store.setDraft);
   const setResetting = useChatStore((store) => store.setResetting);
@@ -79,11 +85,11 @@ export function ChatPanel() {
     }
 
     setSessionNotice(null);
-    setResetting(true, activeStationId);
-    clearClientSessionUi(activeStationId);
-    setActiveConversation(null, null, activeStationId);
-    setStationConversation(activeStationId, null, null);
-    window.electronAPI.startNewChat(activeConversationId ?? undefined, activeStationId);
+    setResetting(true, resolvedStationId);
+    clearClientSessionUi(resolvedStationId);
+    setActiveConversation(null, null, resolvedStationId);
+    setStationConversation(resolvedStationId, null, null);
+    window.electronAPI.startNewChat(activeConversationId ?? undefined, resolvedStationId);
     setArchiveOpen(false);
   };
 
@@ -103,11 +109,7 @@ export function ChatPanel() {
       {sessionNotice ? (
         <div className={`${styles.notice} ${styles[sessionNotice.kind]}`} role="alert" aria-live="polite">
           <span>{sessionNotice.message}</span>
-          <button
-            type="button"
-            className={styles.noticeDismiss}
-            onClick={() => setSessionNotice(null, activeStationId)}
-          >
+          <button type="button" className={styles.noticeDismiss} onClick={() => setSessionNotice(null, resolvedStationId)}>
             Dismiss
           </button>
         </div>
@@ -127,8 +129,8 @@ export function ChatPanel() {
                   type="button"
                   className={styles.exampleChip}
                   onClick={() => {
-                    setDraft(prompt, activeStationId);
-                    requestComposerFocus(activeStationId);
+                    setDraft(prompt, resolvedStationId);
+                    requestComposerFocus(resolvedStationId);
                   }}
                 >
                   {prompt}
@@ -153,8 +155,8 @@ export function ChatPanel() {
                   onRetry={
                     message.id === latestAssistantMessage?.id && retryPrompt && !isStreaming && !isResetting
                       ? () => {
-                          setDraft(retryPrompt, activeStationId);
-                          requestComposerFocus(activeStationId);
+                          setDraft(retryPrompt, resolvedStationId);
+                          requestComposerFocus(resolvedStationId);
                         }
                       : undefined
                   }
@@ -164,8 +166,9 @@ export function ChatPanel() {
           })}
         </AnimatePresence>
       </div>
-      <InputBar />
+      <InputBar stationId={resolvedStationId} />
       <ConversationArchivePanel
+        stationId={resolvedStationId}
         open={archiveOpen}
         disabled={isStreaming || isResetting}
         canStartNewChat={messages.length > 0 || activeConversationId !== null}

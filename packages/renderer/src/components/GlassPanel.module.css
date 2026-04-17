@@ -38,6 +38,16 @@
   box-shadow: var(--shadow-panel), var(--shadow-glow);
 }
 
+.quiet {
+  background: linear-gradient(180deg, rgba(16, 22, 48, 0.96), rgba(8, 12, 28, 0.98));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04), 0 18px 34px rgba(0, 0, 0, 0.22);
+}
+
+.quiet::before,
+.quiet::after {
+  display: none;
+}
+
 .sm {
   padding: 8px;
 }

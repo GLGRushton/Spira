@@ -1,6 +1,7 @@
 import { type SpiraUiAction, type SpiraUiSnapshot, normalizeMcpToolAccessPolicy } from "@spira/shared";
 import { PENDING_ASSISTANT_ID, createChatEntityId, getChatSession, useChatStore } from "../stores/chat-store.js";
 import { useMcpStore } from "../stores/mcp-store.js";
+import { getMissionRunById, useMissionRunsStore } from "../stores/mission-runs-store.js";
 import { useNavigationStore } from "../stores/navigation-store.js";
 import { usePermissionStore } from "../stores/permission-store.js";
 import { useRoomStore } from "../stores/room-store.js";
@@ -160,6 +161,14 @@ export const performSpiraUiAction = async (action: SpiraUiAction): Promise<Spira
         throw new Error(`Unknown agent room "${action.roomId}".`);
       }
       useNavigationStore.getState().openAgentRoom(action.roomId);
+      return buildSpiraUiSnapshot();
+    }
+    case "open-mission": {
+      const run = getMissionRunById(useMissionRunsStore.getState().snapshot, action.runId);
+      if (!run) {
+        throw new Error(`Unknown mission run "${action.runId}".`);
+      }
+      useNavigationStore.getState().openMission(run.runId, action.room);
       return buildSpiraUiSnapshot();
     }
     case "set-draft": {

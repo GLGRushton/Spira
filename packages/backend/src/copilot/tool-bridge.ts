@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { type Tool, type ToolResultObject, defineTool } from "@github/copilot-sdk";
 import {
   type McpTool,
+  type MissionServiceSnapshot,
   type SubagentDelegationArgs,
   type SubagentDomain,
   type SubagentEnvelope,
@@ -34,6 +35,9 @@ export interface ToolBridgeOptions {
   listSubagents?: (options?: { includeCompleted?: boolean }) => Promise<SubagentRunSnapshot[]> | SubagentRunSnapshot[];
   writeSubagent?: (agentId: string, input: string) => Promise<SubagentRunSnapshot | null>;
   stopSubagent?: (agentId: string) => Promise<SubagentRunSnapshot | null>;
+  listMissionServices?: (runId: string) => Promise<MissionServiceSnapshot>;
+  startMissionService?: (runId: string, profileId: string) => Promise<MissionServiceSnapshot>;
+  stopMissionService?: (runId: string, serviceId: string) => Promise<MissionServiceSnapshot>;
   wrapToolExecution?: (tool: McpTool, args: unknown, execute: () => Promise<unknown>) => Promise<unknown>;
 }
 
@@ -354,6 +358,107 @@ const buildStopSubagentTool = (stopSubagent: NonNullable<ToolBridgeOptions["stop
     },
   });
 
+const buildListMissionServicesTool = (listMissionServices: NonNullable<ToolBridgeOptions["listMissionServices"]>) =>
+  defineTool("spira_list_mission_services", {
+    description: "List launchable and active mission services for a mission run by run_id.",
+    parameters: {
+      type: "object",
+      properties: {
+        run_id: {
+          type: "string",
+          description: "The mission run ID, such as the runId from the current mission station.",
+        },
+      },
+      required: ["run_id"],
+      additionalProperties: false,
+    },
+    skipPermission: true,
+    handler: async (args) => {
+      try {
+        const payload = isRecord(args) ? args : {};
+        const runId = typeof payload.run_id === "string" ? payload.run_id.trim() : "";
+        if (!runId) {
+          throw new Error("spira_list_mission_services requires a non-empty run_id");
+        }
+
+        return toSuccessResult(await listMissionServices(runId));
+      } catch (error) {
+        logger.error({ error }, "Failed to list mission services");
+        return toFailureResult("spira_list_mission_services", error);
+      }
+    },
+  });
+
+const buildStartMissionServiceTool = (startMissionService: NonNullable<ToolBridgeOptions["startMissionService"]>) =>
+  defineTool("spira_start_mission_service", {
+    description: "Start a tracked mission service profile by run_id and profile_id.",
+    parameters: {
+      type: "object",
+      properties: {
+        run_id: {
+          type: "string",
+          description: "The mission run ID that owns the worktrees and launch profile.",
+        },
+        profile_id: {
+          type: "string",
+          description: "The mission service profile ID returned by spira_list_mission_services.",
+        },
+      },
+      required: ["run_id", "profile_id"],
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      try {
+        const payload = isRecord(args) ? args : {};
+        const runId = typeof payload.run_id === "string" ? payload.run_id.trim() : "";
+        const profileId = typeof payload.profile_id === "string" ? payload.profile_id.trim() : "";
+        if (!runId || !profileId) {
+          throw new Error("spira_start_mission_service requires non-empty run_id and profile_id");
+        }
+
+        return toSuccessResult(await startMissionService(runId, profileId));
+      } catch (error) {
+        logger.error({ error }, "Failed to start mission service");
+        return toFailureResult("spira_start_mission_service", error);
+      }
+    },
+  });
+
+const buildStopMissionServiceTool = (stopMissionService: NonNullable<ToolBridgeOptions["stopMissionService"]>) =>
+  defineTool("spira_stop_mission_service", {
+    description: "Stop a tracked mission service process by run_id and service_id.",
+    parameters: {
+      type: "object",
+      properties: {
+        run_id: {
+          type: "string",
+          description: "The mission run ID that owns the tracked service process.",
+        },
+        service_id: {
+          type: "string",
+          description: "The running mission service ID returned by spira_list_mission_services.",
+        },
+      },
+      required: ["run_id", "service_id"],
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      try {
+        const payload = isRecord(args) ? args : {};
+        const runId = typeof payload.run_id === "string" ? payload.run_id.trim() : "";
+        const serviceId = typeof payload.service_id === "string" ? payload.service_id.trim() : "";
+        if (!runId || !serviceId) {
+          throw new Error("spira_stop_mission_service requires non-empty run_id and service_id");
+        }
+
+        return toSuccessResult(await stopMissionService(runId, serviceId));
+      } catch (error) {
+        logger.error({ error }, "Failed to stop mission service");
+        return toFailureResult("spira_stop_mission_service", error);
+      }
+    },
+  });
+
 export function getCopilotTools(aggregator: McpToolAggregator, options: ToolBridgeOptions = {}): Tool[] {
   let mcpTools = options.includeServerIds?.length
     ? aggregator.getToolsForServerIds(options.includeServerIds)
@@ -382,6 +487,15 @@ export function getCopilotTools(aggregator: McpToolAggregator, options: ToolBrid
   }
   if (options.stopSubagent) {
     tools.push(buildStopSubagentTool(options.stopSubagent));
+  }
+  if (options.listMissionServices) {
+    tools.push(buildListMissionServicesTool(options.listMissionServices));
+  }
+  if (options.startMissionService) {
+    tools.push(buildStartMissionServiceTool(options.startMissionService));
+  }
+  if (options.stopMissionService) {
+    tools.push(buildStopMissionServiceTool(options.stopMissionService));
   }
   logger.info({ toolCount: tools.length }, "Registered MCP tools with Copilot session");
   return tools;

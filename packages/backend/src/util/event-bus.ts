@@ -3,6 +3,7 @@ import type {
   AssistantState,
   ClientMessage,
   McpServerStatus,
+  MissionServiceSnapshot,
   PermissionRequestPayload,
   SubagentCompletedEvent,
   SubagentDeltaEvent,
@@ -43,6 +44,7 @@ export interface EventMap {
   "mcp:server-stderr": [serverId: string, line: string];
   "mcp:servers-changed": [statuses: McpServerStatus[]];
   "missions:runs-changed": [snapshot: TicketRunSnapshot];
+  "missions:ticket-run:services-changed": [snapshot: MissionServiceSnapshot];
   "subagent:catalog-changed": [agents: SubagentDomain[]];
   "subagent:started": [event: SubagentStartedEvent];
   "subagent:tool-call": [event: SubagentToolCallEvent];

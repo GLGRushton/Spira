@@ -14,6 +14,7 @@ const CONVERSATION_ARCHIVE_CHANNEL = "conversation:archive";
 const YOUTRACK_STATUS_GET_CHANNEL = "youtrack:status:get";
 const YOUTRACK_TICKETS_LIST_CHANNEL = "youtrack:tickets:list";
 const YOUTRACK_PROJECTS_SEARCH_CHANNEL = "youtrack:projects:search";
+const YOUTRACK_STATE_MAPPING_SET_CHANNEL = "youtrack:state-mapping:set";
 const PROJECT_REPO_MAPPINGS_GET_CHANNEL = "projects:mappings:get";
 const PROJECT_WORKSPACE_ROOT_SET_CHANNEL = "projects:workspace-root:set";
 const PROJECT_REPO_MAPPING_SET_CHANNEL = "projects:mapping:set";
@@ -31,6 +32,9 @@ const TICKET_RUN_COMMIT_CHANNEL = "missions:ticket-run:commit";
 const TICKET_RUN_PUBLISH_CHANNEL = "missions:ticket-run:publish";
 const TICKET_RUN_PUSH_CHANNEL = "missions:ticket-run:push";
 const TICKET_RUN_PULL_REQUEST_CREATE_CHANNEL = "missions:ticket-run:pull-request:create";
+const TICKET_RUN_SERVICES_GET_CHANNEL = "missions:ticket-run:services:get";
+const TICKET_RUN_SERVICE_START_CHANNEL = "missions:ticket-run:service:start";
+const TICKET_RUN_SERVICE_STOP_CHANNEL = "missions:ticket-run:service:stop";
 const DIRECTORY_PICK_CHANNEL = "dialog:pick-directory";
 const OPEN_EXTERNAL_CHANNEL = "shell:open-external";
 const RUNTIME_CONFIG_GET_CHANNEL = "runtime-config:get";
@@ -49,6 +53,7 @@ const NON_REPLAYABLE_SERVER_MESSAGES = new Set([
   "chat:abort-complete",
   "chat:reset-complete",
   "chat:new-session-complete",
+  "missions:ticket-run:services:updated",
 ]);
 
 ipcRenderer.on("spira:from-backend", (_event, message) => {
@@ -169,6 +174,9 @@ const electronAPI = {
   searchYouTrackProjects(query, limit) {
     return ipcRenderer.invoke(YOUTRACK_PROJECTS_SEARCH_CHANNEL, { query, limit });
   },
+  setYouTrackStateMapping(mapping) {
+    return ipcRenderer.invoke(YOUTRACK_STATE_MAPPING_SET_CHANNEL, { mapping });
+  },
   getProjectRepoMappings() {
     return ipcRenderer.invoke(PROJECT_REPO_MAPPINGS_GET_CHANNEL);
   },
@@ -199,26 +207,35 @@ const electronAPI = {
   completeTicketRun(runId) {
     return ipcRenderer.invoke(TICKET_RUN_COMPLETE_CHANNEL, { runId });
   },
-  getTicketRunGitState(runId) {
-    return ipcRenderer.invoke(TICKET_RUN_GIT_STATE_CHANNEL, { runId });
+  getTicketRunGitState(runId, repoRelativePath) {
+    return ipcRenderer.invoke(TICKET_RUN_GIT_STATE_CHANNEL, { runId, repoRelativePath });
   },
-  generateTicketRunCommitDraft(runId) {
-    return ipcRenderer.invoke(TICKET_RUN_COMMIT_DRAFT_GENERATE_CHANNEL, { runId });
+  generateTicketRunCommitDraft(runId, repoRelativePath) {
+    return ipcRenderer.invoke(TICKET_RUN_COMMIT_DRAFT_GENERATE_CHANNEL, { runId, repoRelativePath });
   },
-  setTicketRunCommitDraft(runId, message) {
-    return ipcRenderer.invoke(TICKET_RUN_COMMIT_DRAFT_SET_CHANNEL, { runId, message });
+  setTicketRunCommitDraft(runId, message, repoRelativePath) {
+    return ipcRenderer.invoke(TICKET_RUN_COMMIT_DRAFT_SET_CHANNEL, { runId, message, repoRelativePath });
   },
-  commitTicketRun(runId, message) {
-    return ipcRenderer.invoke(TICKET_RUN_COMMIT_CHANNEL, { runId, message });
+  commitTicketRun(runId, message, repoRelativePath) {
+    return ipcRenderer.invoke(TICKET_RUN_COMMIT_CHANNEL, { runId, message, repoRelativePath });
   },
-  publishTicketRun(runId) {
-    return ipcRenderer.invoke(TICKET_RUN_PUBLISH_CHANNEL, { runId });
+  publishTicketRun(runId, repoRelativePath) {
+    return ipcRenderer.invoke(TICKET_RUN_PUBLISH_CHANNEL, { runId, repoRelativePath });
   },
-  pushTicketRun(runId) {
-    return ipcRenderer.invoke(TICKET_RUN_PUSH_CHANNEL, { runId });
+  pushTicketRun(runId, repoRelativePath) {
+    return ipcRenderer.invoke(TICKET_RUN_PUSH_CHANNEL, { runId, repoRelativePath });
   },
-  createTicketRunPullRequest(runId) {
-    return ipcRenderer.invoke(TICKET_RUN_PULL_REQUEST_CREATE_CHANNEL, { runId });
+  createTicketRunPullRequest(runId, repoRelativePath) {
+    return ipcRenderer.invoke(TICKET_RUN_PULL_REQUEST_CREATE_CHANNEL, { runId, repoRelativePath });
+  },
+  getTicketRunServices(runId) {
+    return ipcRenderer.invoke(TICKET_RUN_SERVICES_GET_CHANNEL, { runId });
+  },
+  startTicketRunService(runId, profileId) {
+    return ipcRenderer.invoke(TICKET_RUN_SERVICE_START_CHANNEL, { runId, profileId });
+  },
+  stopTicketRunService(runId, serviceId) {
+    return ipcRenderer.invoke(TICKET_RUN_SERVICE_STOP_CHANNEL, { runId, serviceId });
   },
   pickDirectory(title) {
     return ipcRenderer.invoke(DIRECTORY_PICK_CHANNEL, { title });
@@ -311,6 +328,13 @@ const electronAPI = {
   onPermissionComplete(handler) {
     return onServerMessage("permission:complete", (message) => {
       handler({ requestId: message.requestId, result: message.result, stationId: message.stationId });
+    });
+  },
+  onTicketRunServicesUpdated(handler) {
+    return electronAPI.onMessage((message) => {
+      if (message.type === "missions:ticket-run:services:updated") {
+        handler(message.services);
+      }
     });
   },
   onMcpStatus(handler) {

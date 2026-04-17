@@ -1,3 +1,4 @@
+import type { StationId } from "@spira/shared";
 import { summarizeConversationTitle } from "@spira/shared";
 import { useEffect, useRef } from "react";
 import {
@@ -13,23 +14,28 @@ import { clearClientSessionUi } from "./session-ui.js";
 
 const RESET_TIMEOUT_MS = 5_000;
 
-export function InputBar() {
+interface InputBarProps {
+  stationId?: StationId;
+}
+
+export function InputBar({ stationId }: InputBarProps) {
   const activeStationId = useStationStore((store) => store.activeStationId);
+  const resolvedStationId = stationId ?? activeStationId;
   const addUserMessage = useChatStore((store) => store.addUserMessage);
   const awaitingQuestion = useChatStore((store) =>
-    getAwaitingAssistantQuestion(getChatSession(store, activeStationId).messages),
+    getAwaitingAssistantQuestion(getChatSession(store, resolvedStationId).messages),
   );
-  const composerFocusToken = useChatStore((store) => getChatSession(store, activeStationId).composerFocusToken);
-  const draft = useChatStore((store) => getChatSession(store, activeStationId).draft);
-  const activeConversationId = useChatStore((store) => getChatSession(store, activeStationId).activeConversationId);
-  const hasMessages = useChatStore((store) => getChatSession(store, activeStationId).messages.length > 0);
+  const composerFocusToken = useChatStore((store) => getChatSession(store, resolvedStationId).composerFocusToken);
+  const draft = useChatStore((store) => getChatSession(store, resolvedStationId).draft);
+  const activeConversationId = useChatStore((store) => getChatSession(store, resolvedStationId).activeConversationId);
+  const hasMessages = useChatStore((store) => getChatSession(store, resolvedStationId).messages.length > 0);
   const setDraft = useChatStore((store) => store.setDraft);
   const setActiveConversation = useChatStore((store) => store.setActiveConversation);
   const startAssistantMessage = useChatStore((store) => store.startAssistantMessage);
-  const isAborting = useChatStore((store) => getChatSession(store, activeStationId).isAborting);
-  const isResetConfirming = useChatStore((store) => getChatSession(store, activeStationId).isResetConfirming);
-  const isResetting = useChatStore((store) => getChatSession(store, activeStationId).isResetting);
-  const isStreaming = useChatStore((store) => getChatSession(store, activeStationId).isStreaming);
+  const isAborting = useChatStore((store) => getChatSession(store, resolvedStationId).isAborting);
+  const isResetConfirming = useChatStore((store) => getChatSession(store, resolvedStationId).isResetConfirming);
+  const isResetting = useChatStore((store) => getChatSession(store, resolvedStationId).isResetting);
+  const isStreaming = useChatStore((store) => getChatSession(store, resolvedStationId).isStreaming);
   const setAborting = useChatStore((store) => store.setAborting);
   const setResetConfirming = useChatStore((store) => store.setResetConfirming);
   const setResetting = useChatStore((store) => store.setResetting);
@@ -45,13 +51,13 @@ export function InputBar() {
 
     // Defense against a lost reset acknowledgement after the UI has already entered reset mode.
     const timeoutId = window.setTimeout(() => {
-      setResetting(false, activeStationId);
+      setResetting(false, resolvedStationId);
     }, RESET_TIMEOUT_MS);
 
     return () => {
       window.clearTimeout(timeoutId);
     };
-  }, [activeStationId, isResetting, setResetting]);
+  }, [isResetting, resolvedStationId, setResetting]);
 
   useEffect(() => {
     const awaitingQuestionId = awaitingQuestion?.id ?? null;
@@ -73,29 +79,29 @@ export function InputBar() {
   }, [composerFocusToken, isResetting, isStreaming]);
 
   const clearUi = () => {
-    clearClientSessionUi(activeStationId);
+    clearClientSessionUi(resolvedStationId);
   };
 
   const promptResetSession = () => {
-    if (getChatSession(useChatStore.getState(), activeStationId).isStreaming) {
+    if (getChatSession(useChatStore.getState(), resolvedStationId).isStreaming) {
       return;
     }
 
-    setResetConfirming(true, activeStationId);
+    setResetConfirming(true, resolvedStationId);
   };
 
   const confirmResetSession = () => {
-    if (getChatSession(useChatStore.getState(), activeStationId).isStreaming) {
+    if (getChatSession(useChatStore.getState(), resolvedStationId).isStreaming) {
       return;
     }
 
-    setResetConfirming(false, activeStationId);
-    setSessionNotice(null, activeStationId);
-    setResetting(true, activeStationId);
+    setResetConfirming(false, resolvedStationId);
+    setSessionNotice(null, resolvedStationId);
+    setResetting(true, resolvedStationId);
     clearUi();
-    setActiveConversation(null, null, activeStationId);
-    setStationConversation(activeStationId, null, null);
-    window.electronAPI.resetChat(activeStationId);
+    setActiveConversation(null, null, resolvedStationId);
+    setStationConversation(resolvedStationId, null, null);
+    window.electronAPI.resetChat(resolvedStationId);
   };
 
   const submit = () => {
@@ -104,17 +110,17 @@ export function InputBar() {
       return;
     }
 
-    addUserMessage(trimmed, activeStationId);
-    setSessionNotice(null, activeStationId);
-    startAssistantMessage(PENDING_ASSISTANT_ID, activeStationId);
+    addUserMessage(trimmed, resolvedStationId);
+    setSessionNotice(null, resolvedStationId);
+    startAssistantMessage(PENDING_ASSISTANT_ID, resolvedStationId);
     const conversationId = activeConversationId ?? createChatEntityId();
     if (!activeConversationId) {
       const title = summarizeConversationTitle(trimmed);
-      setActiveConversation(conversationId, title, activeStationId);
-      setStationConversation(activeStationId, conversationId, title);
+      setActiveConversation(conversationId, title, resolvedStationId);
+      setStationConversation(resolvedStationId, conversationId, title);
     }
-    window.electronAPI.sendMessage(trimmed, conversationId, activeStationId);
-    setDraft("", activeStationId);
+    window.electronAPI.sendMessage(trimmed, conversationId, resolvedStationId);
+    setDraft("", resolvedStationId);
   };
 
   return (
@@ -123,7 +129,7 @@ export function InputBar() {
       onKeyDown={(event) => {
         if (event.key === "Escape" && isResetConfirming && !isResetting) {
           event.preventDefault();
-          setResetConfirming(false, activeStationId);
+          setResetConfirming(false, resolvedStationId);
         }
       }}
     >
@@ -137,7 +143,7 @@ export function InputBar() {
         placeholder="Transmit to Shinra…"
         value={draft}
         disabled={isStreaming || isResetting}
-        onChange={(event) => setDraft(event.target.value, activeStationId)}
+        onChange={(event) => setDraft(event.target.value, resolvedStationId)}
         onKeyDown={(event) => {
           if (event.key === "Enter" && !event.shiftKey) {
             event.preventDefault();
@@ -153,7 +159,7 @@ export function InputBar() {
                 type="button"
                 className={styles.secondary}
                 disabled={isStreaming || isResetting}
-                onClick={() => setResetConfirming(false, activeStationId)}
+                onClick={() => setResetConfirming(false, resolvedStationId)}
               >
                 Cancel
               </button>
@@ -182,7 +188,7 @@ export function InputBar() {
                             "Transcript cleared locally. Shinra still retains the current backend context until you reset.",
                         }
                       : null,
-                    activeStationId,
+                    resolvedStationId,
                   );
                 }}
               >
@@ -206,8 +212,8 @@ export function InputBar() {
           onClick={
             isStreaming
               ? () => {
-                  setAborting(true, activeStationId);
-                  window.electronAPI.abortChat(activeStationId);
+                  setAborting(true, resolvedStationId);
+                  window.electronAPI.abortChat(resolvedStationId);
                 }
               : submit
           }

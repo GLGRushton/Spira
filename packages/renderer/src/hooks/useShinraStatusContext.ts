@@ -1,3 +1,4 @@
+import type { StationId } from "@spira/shared";
 import { useMemo } from "react";
 import { getShinraStatusContext } from "../shinra-status.js";
 import { getChatSession, useChatStore } from "../stores/chat-store.js";
@@ -8,11 +9,12 @@ import { getStation, useStationStore } from "../stores/station-store.js";
 import { useUpgradeStore } from "../stores/upgrade-store.js";
 import { useVisionStore } from "../stores/vision-store.js";
 
-export function useShinraStatusContext() {
+export function useShinraStatusContext(stationId?: StationId) {
   const activeStationId = useStationStore((store) => store.activeStationId);
-  const assistantState = useStationStore((store) => getStation(store, activeStationId).state);
+  const resolvedStationId = stationId ?? activeStationId;
+  const assistantState = useStationStore((store) => getStation(store, resolvedStationId).state);
   const { isStreaming, messages, isAborting, isResetting } = useChatStore((store) =>
-    getChatSession(store, activeStationId),
+    getChatSession(store, resolvedStationId),
   );
   const connectionStatus = useConnectionStore((store) => store.status);
   const allPermissionRequests = usePermissionStore((store) => store.requests);
@@ -21,16 +23,16 @@ export function useShinraStatusContext() {
   const visibleBanner = useUpgradeStore((store) => store.banner ?? store.protocolBanner);
 
   const permissionRequests = useMemo(
-    () => allPermissionRequests.filter((request) => (request.stationId ?? activeStationId) === activeStationId),
-    [activeStationId, allPermissionRequests],
+    () => allPermissionRequests.filter((request) => (request.stationId ?? resolvedStationId) === resolvedStationId),
+    [allPermissionRequests, resolvedStationId],
   );
   const activeCaptures = useMemo(
-    () => allActiveCaptures.filter((capture) => capture.stationId === activeStationId),
-    [activeStationId, allActiveCaptures],
+    () => allActiveCaptures.filter((capture) => capture.stationId === resolvedStationId),
+    [allActiveCaptures, resolvedStationId],
   );
   const agentRooms = useMemo(
-    () => allAgentRooms.filter((room) => room.stationId === activeStationId),
-    [activeStationId, allAgentRooms],
+    () => allAgentRooms.filter((room) => room.stationId === resolvedStationId),
+    [allAgentRooms, resolvedStationId],
   );
 
   const context = useMemo(

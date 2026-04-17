@@ -5,6 +5,7 @@ import type {
   Env,
   ITransport,
   McpServerStatus,
+  MissionServiceSnapshot,
   StationId,
   StationSummary,
   SubagentDelegationArgs,
@@ -70,6 +71,9 @@ interface StationRegistryOptions {
   transport: ITransport;
   memoryDb: SpiraMemoryDatabase | null;
   subagentRegistry?: SubagentRegistry | null;
+  listMissionServices?: (runId: string) => Promise<MissionServiceSnapshot>;
+  startMissionService?: (runId: string, profileId: string) => Promise<MissionServiceSnapshot>;
+  stopMissionService?: (runId: string, serviceId: string) => Promise<MissionServiceSnapshot>;
   requestUpgradeProposal?: (proposal: UpgradeProposal) => Promise<void> | void;
   applyHotCapabilityUpgrade?: () => Promise<void> | void;
   createSessionManager?: (
@@ -82,6 +86,9 @@ interface StationRegistryOptions {
       additionalInstructions?: string | null;
       workingDirectory?: string | null;
       allowUpgradeTools?: boolean;
+      listMissionServices?: (runId: string) => Promise<MissionServiceSnapshot>;
+      startMissionService?: (runId: string, profileId: string) => Promise<MissionServiceSnapshot>;
+      stopMissionService?: (runId: string, serviceId: string) => Promise<MissionServiceSnapshot>;
     },
   ) => CopilotSessionManager;
 }
@@ -152,6 +159,9 @@ export class StationRegistry {
           additionalInstructions: createOptions.additionalInstructions ?? null,
           workingDirectory: createOptions.workingDirectory ?? null,
           allowUpgradeTools: createOptions.allowUpgradeTools,
+          listMissionServices: this.options.listMissionServices,
+          startMissionService: this.options.startMissionService,
+          stopMissionService: this.options.stopMissionService,
         })
       : new CopilotSessionManager(
           bus,
@@ -166,6 +176,9 @@ export class StationRegistry {
             additionalInstructions: createOptions.additionalInstructions ?? null,
             workingDirectory: createOptions.workingDirectory ?? null,
             allowUpgradeTools: createOptions.allowUpgradeTools,
+            listMissionServices: this.options.listMissionServices,
+            startMissionService: this.options.startMissionService,
+            stopMissionService: this.options.stopMissionService,
           },
         );
     const station: StationContext = {

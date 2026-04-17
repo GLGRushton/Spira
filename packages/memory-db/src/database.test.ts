@@ -351,6 +351,27 @@ describe("SpiraMemoryDatabase", () => {
     ]);
   });
 
+  it("stores and normalizes the YouTrack workflow state mapping", () => {
+    const database = createTestDatabase();
+
+    expect(database.getYouTrackStateMapping()).toBeNull();
+
+    expect(
+      database.setYouTrackStateMapping({
+        todo: [" Submitted ", "submitted", "Open"],
+        inProgress: ["In Progress", "Review", "review"],
+      }),
+    ).toEqual({
+      todo: ["Submitted", "Open"],
+      inProgress: ["In Progress", "Review"],
+    });
+
+    expect(database.getYouTrackStateMapping()).toEqual({
+      todo: ["Submitted", "Open"],
+      inProgress: ["In Progress", "Review"],
+    });
+  });
+
   it("persists ticket runs with worktree details", () => {
     const database = createTestDatabase();
 
@@ -371,6 +392,7 @@ describe("SpiraMemoryDatabase", () => {
           repoAbsolutePath: "C:\\Repos\\service-api",
           worktreePath: "C:\\Repos\\.spira-worktrees\\spi-101-service-api",
           branchName: "feat/spi-101-start-missions-pickup",
+          commitMessageDraft: "feat(SPI-101): start missions pickup",
           cleanupState: "retained",
           createdAt: 1_000,
           updatedAt: 1_100,
@@ -408,6 +430,7 @@ describe("SpiraMemoryDatabase", () => {
         {
           repoRelativePath: "service-api",
           branchName: "feat/spi-101-start-missions-pickup",
+          commitMessageDraft: "feat(SPI-101): start missions pickup",
         },
       ],
     });

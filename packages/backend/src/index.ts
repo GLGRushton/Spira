@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
+import path from "node:path";
 import {
   type ConversationMessageRecord,
   type ConversationRecord,
@@ -25,6 +26,7 @@ import { McpClientPool } from "./mcp/client-pool.js";
 import { McpRegistry } from "./mcp/registry.js";
 import { McpToolAggregator } from "./mcp/tool-aggregator.js";
 import { fetchGitHubIdentity } from "./missions/github-identity.js";
+import { MissionServiceRegistry } from "./missions/service-registry.js";
 import { type GenerateCommitDraftInput, TicketRunService } from "./missions/ticket-runs.js";
 import { ProjectRegistry } from "./projects/registry.js";
 import { WsServer } from "./server.js";
@@ -69,6 +71,7 @@ let memoryDb: SpiraMemoryDatabase | null = null;
 let youTrackService: YouTrackService | null = null;
 let projectRegistry: ProjectRegistry | null = null;
 let ticketRunService: TicketRunService | null = null;
+let missionServiceRegistry: MissionServiceRegistry | null = null;
 
 const BACKEND_BUILD_ID = process.env.SPIRA_BUILD_ID?.trim() || "dev";
 const BACKEND_GENERATION = Number(process.env.SPIRA_GENERATION ?? "0");
@@ -174,12 +177,42 @@ const sameVoiceConfiguration = (left: VoiceConfiguration, right: VoiceConfigurat
 
 const buildMissionStationId = (runId: string): string => `mission:${runId}`;
 
-const buildMissionStationInstructions = (ticketId: string, worktreePath: string): string =>
-  [
+const MISSION_WORKTREE_DIRECTORY_NAME = ".spira-worktrees";
+
+const resolveMissionStationWorkingDirectory = (
+  worktrees: ReadonlyArray<GenerateCommitDraftInput["run"]["worktrees"][number]>,
+): string | null => {
+  const firstWorktree = worktrees[0];
+  if (!firstWorktree) {
+    return null;
+  }
+
+  const parents = [...new Set(worktrees.map((worktree) => path.dirname(worktree.worktreePath)))];
+  if (parents.length === 1 && path.basename(parents[0] ?? "") !== MISSION_WORKTREE_DIRECTORY_NAME) {
+    return parents[0] ?? firstWorktree.worktreePath;
+  }
+
+  return firstWorktree.worktreePath;
+};
+
+const formatMissionStationWorktrees = (
+  worktrees: ReadonlyArray<GenerateCommitDraftInput["run"]["worktrees"][number]>,
+): string => worktrees.map((worktree) => `- ${worktree.repoRelativePath}: ${worktree.worktreePath}`).join("\n");
+
+const buildMissionStationInstructions = (
+  runId: string,
+  ticketId: string,
+  worktrees: ReadonlyArray<GenerateCommitDraftInput["run"]["worktrees"][number]>,
+): string => {
+  const workingDirectory = resolveMissionStationWorkingDirectory(worktrees) ?? "unknown";
+  return [
     `You are operating as the dedicated Missions command station for ticket ${ticketId}.`,
-    `The working directory for this station is the managed worktree at ${worktreePath}. Stay inside it unless the user explicitly asks otherwise.`,
-    "Treat this as an iterative coding mission: preserve context between prompts, keep the worktree reviewable, and report unfinished edges plainly.",
+    `The working directory for this station is the mission workspace at ${workingDirectory}. Stay inside it unless the user explicitly asks otherwise.`,
+    `Repositories in scope:\n${formatMissionStationWorktrees(worktrees)}`,
+    `Mission services are managed through Spira. Use spira_list_mission_services with run_id "${runId}" to inspect profiles, spira_start_mission_service to launch tracked services, and spira_stop_mission_service to stop them.`,
+    "Treat this as an iterative coding mission: preserve context between prompts, keep the mission workspace reviewable, and report unfinished edges plainly.",
   ].join("\n");
+};
 
 const buildCommitDraftPrompt = ({ run, gitState }: GenerateCommitDraftInput): string => {
   const fileSummary = gitState.files
@@ -202,6 +235,7 @@ const buildCommitDraftPrompt = ({ run, gitState }: GenerateCommitDraftInput): st
     "Return plain text only. No code fences. No commentary.",
     `Format exactly as: feat(${run.ticketId}): summary, then a blank line, then up to 6 '- bullet' detail lines.`,
     "Keep the summary concise and the bullets concrete.",
+    `Repository: ${gitState.repoRelativePath}`,
     `Branch: ${gitState.branchName}`,
     latestAttempt ? `Last mission summary: ${latestAttempt}` : "Last mission summary: unavailable.",
     "Changed files:",
@@ -220,16 +254,20 @@ const restoreMissionStations = (registry: StationRegistry, database: SpiraMemory
       continue;
     }
 
-    const worktreePath = run.worktrees[0]?.worktreePath;
-    if (!worktreePath || !existsSync(worktreePath)) {
+    const workingDirectory = resolveMissionStationWorkingDirectory(run.worktrees);
+    if (
+      !workingDirectory ||
+      !existsSync(workingDirectory) ||
+      run.worktrees.some((worktree) => !existsSync(worktree.worktreePath))
+    ) {
       continue;
     }
 
     registry.createStation({
       stationId: run.stationId,
       label: `Mission ${run.ticketId}`,
-      additionalInstructions: buildMissionStationInstructions(run.ticketId, worktreePath),
-      workingDirectory: worktreePath,
+      additionalInstructions: buildMissionStationInstructions(run.runId, run.ticketId, run.worktrees),
+      workingDirectory,
       allowUpgradeTools: false,
     });
   }
@@ -369,6 +407,8 @@ const shutdown = async (signal: NodeJS.Signals | "manual") => {
   clearPendingUpgradeProposalResponses(new Error("Backend is shutting down"));
   ticketRunService?.dispose();
   ticketRunService = null;
+  await missionServiceRegistry?.dispose();
+  missionServiceRegistry = null;
   unsubscribeTransport?.();
   await voicePipeline?.stop();
   ttsPlayback?.dispose();
@@ -601,6 +641,55 @@ const handleClientMessage = async (message: ClientMessage): Promise<void> => {
         type: "youtrack:request-error",
         requestId: message.requestId,
         ...toErrorPayload(error, "YOUTRACK_PROJECT_SEARCH_FAILED", "Failed to search YouTrack projects.", "youtrack"),
+      });
+    }
+    return;
+  }
+
+  if (message.type === "youtrack:state-mapping:set") {
+    if (!youTrackService) {
+      transport?.send({
+        type: "youtrack:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(
+          new Error("YouTrack service is unavailable."),
+          "YOUTRACK_UNAVAILABLE",
+          "YouTrack service is unavailable.",
+          "youtrack",
+        ),
+      });
+      return;
+    }
+
+    if (!memoryDb) {
+      transport?.send({
+        type: "youtrack:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(
+          new Error("YouTrack state mapping persistence is unavailable."),
+          "YOUTRACK_MAPPING_PERSISTENCE_UNAVAILABLE",
+          "YouTrack state mapping persistence is unavailable.",
+          "youtrack",
+        ),
+      });
+      return;
+    }
+
+    try {
+      const validatedMapping = await youTrackService.validateStateMapping(message.mapping);
+      memoryDb.setYouTrackStateMapping(validatedMapping);
+      youTrackService.setStateMapping(validatedMapping);
+      transport?.send({
+        type: "youtrack:state-mapping:set:result",
+        requestId: message.requestId,
+        status: await youTrackService.getStatus(message.enabled),
+      });
+    } catch (error) {
+      logger.error({ err: error, requestId: message.requestId }, "Failed to save YouTrack state mapping");
+      transport?.send({
+        type: "youtrack:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(error, "YOUTRACK_STATE_MAPPING_FAILED", "Failed to save YouTrack state mapping.", "youtrack"),
       });
     }
     return;
@@ -959,7 +1048,7 @@ const handleClientMessage = async (message: ClientMessage): Promise<void> => {
       transport?.send({
         type: "missions:ticket-run:git-state:result",
         requestId: message.requestId,
-        result: await ticketRunService.getGitState(message.runId),
+        result: await ticketRunService.getGitState(message.runId, message.repoRelativePath),
       });
     } catch (error) {
       logger.error(
@@ -994,7 +1083,7 @@ const handleClientMessage = async (message: ClientMessage): Promise<void> => {
       transport?.send({
         type: "missions:ticket-run:commit-draft:generate:result",
         requestId: message.requestId,
-        result: await ticketRunService.generateCommitDraft(message.runId),
+        result: await ticketRunService.generateCommitDraft(message.runId, message.repoRelativePath),
       });
     } catch (error) {
       logger.error(
@@ -1034,7 +1123,7 @@ const handleClientMessage = async (message: ClientMessage): Promise<void> => {
       transport?.send({
         type: "missions:ticket-run:commit-draft:set:result",
         requestId: message.requestId,
-        result: await ticketRunService.setCommitDraft(message.runId, message.message),
+        result: await ticketRunService.setCommitDraft(message.runId, message.message, message.repoRelativePath),
       });
     } catch (error) {
       logger.error({ err: error, requestId: message.requestId, runId: message.runId }, "Failed to save commit draft");
@@ -1071,7 +1160,7 @@ const handleClientMessage = async (message: ClientMessage): Promise<void> => {
       transport?.send({
         type: "missions:ticket-run:commit:result",
         requestId: message.requestId,
-        result: await ticketRunService.commitRun(message.runId, message.message),
+        result: await ticketRunService.commitRun(message.runId, message.message, message.repoRelativePath),
       });
     } catch (error) {
       logger.error(
@@ -1106,7 +1195,7 @@ const handleClientMessage = async (message: ClientMessage): Promise<void> => {
       transport?.send({
         type: "missions:ticket-run:publish:result",
         requestId: message.requestId,
-        result: await ticketRunService.publishRun(message.runId),
+        result: await ticketRunService.publishRun(message.runId, message.repoRelativePath),
       });
     } catch (error) {
       logger.error(
@@ -1141,7 +1230,7 @@ const handleClientMessage = async (message: ClientMessage): Promise<void> => {
       transport?.send({
         type: "missions:ticket-run:push:result",
         requestId: message.requestId,
-        result: await ticketRunService.pushRun(message.runId),
+        result: await ticketRunService.pushRun(message.runId, message.repoRelativePath),
       });
     } catch (error) {
       logger.error({ err: error, requestId: message.requestId, runId: message.runId }, "Failed to push mission branch");
@@ -1173,7 +1262,7 @@ const handleClientMessage = async (message: ClientMessage): Promise<void> => {
       transport?.send({
         type: "missions:ticket-run:pull-request:create:result",
         requestId: message.requestId,
-        result: await ticketRunService.createPullRequest(message.runId),
+        result: await ticketRunService.createPullRequest(message.runId, message.repoRelativePath),
       });
     } catch (error) {
       logger.error(
@@ -1189,6 +1278,111 @@ const handleClientMessage = async (message: ClientMessage): Promise<void> => {
           "Failed to open this mission pull request.",
           "missions",
         ),
+      });
+    }
+    return;
+  }
+
+  if (message.type === "missions:ticket-run:services:get") {
+    if (!missionServiceRegistry) {
+      transport?.send({
+        type: "missions:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(
+          new Error("Mission service registry is unavailable."),
+          "MISSIONS_SERVICES_UNAVAILABLE",
+          "Mission services are unavailable.",
+          "missions",
+        ),
+      });
+      return;
+    }
+
+    try {
+      transport?.send({
+        type: "missions:ticket-run:services:get:result",
+        requestId: message.requestId,
+        services: await missionServiceRegistry.getSnapshot(message.runId),
+      });
+    } catch (error) {
+      logger.error(
+        { err: error, requestId: message.requestId, runId: message.runId },
+        "Failed to get mission services",
+      );
+      transport?.send({
+        type: "missions:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(error, "MISSIONS_SERVICES_GET_FAILED", "Failed to load mission services.", "missions"),
+      });
+    }
+    return;
+  }
+
+  if (message.type === "missions:ticket-run:service:start") {
+    if (!missionServiceRegistry) {
+      transport?.send({
+        type: "missions:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(
+          new Error("Mission service registry is unavailable."),
+          "MISSIONS_SERVICES_UNAVAILABLE",
+          "Mission services are unavailable.",
+          "missions",
+        ),
+      });
+      return;
+    }
+
+    try {
+      transport?.send({
+        type: "missions:ticket-run:service:start:result",
+        requestId: message.requestId,
+        services: await missionServiceRegistry.startService(message.runId, message.profileId),
+      });
+    } catch (error) {
+      logger.error(
+        { err: error, requestId: message.requestId, runId: message.runId, profileId: message.profileId },
+        "Failed to start mission service",
+      );
+      transport?.send({
+        type: "missions:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(error, "MISSIONS_SERVICE_START_FAILED", "Failed to start this mission service.", "missions"),
+      });
+    }
+    return;
+  }
+
+  if (message.type === "missions:ticket-run:service:stop") {
+    if (!missionServiceRegistry) {
+      transport?.send({
+        type: "missions:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(
+          new Error("Mission service registry is unavailable."),
+          "MISSIONS_SERVICES_UNAVAILABLE",
+          "Mission services are unavailable.",
+          "missions",
+        ),
+      });
+      return;
+    }
+
+    try {
+      transport?.send({
+        type: "missions:ticket-run:service:stop:result",
+        requestId: message.requestId,
+        services: await missionServiceRegistry.stopService(message.runId, message.serviceId),
+      });
+    } catch (error) {
+      logger.error(
+        { err: error, requestId: message.requestId, runId: message.runId, serviceId: message.serviceId },
+        "Failed to stop mission service",
+      );
+      transport?.send({
+        type: "missions:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(error, "MISSIONS_SERVICE_STOP_FAILED", "Failed to stop this mission service.", "missions"),
       });
     }
     return;
@@ -1496,7 +1690,6 @@ const handleClientMessage = async (message: ClientMessage): Promise<void> => {
 const bootstrap = async () => {
   const env = createEnv();
   backendEnv = env;
-  youTrackService = new YouTrackService(env, logger);
   voiceConfiguration = getVoiceConfiguration(env);
 
   logger.info({ nodeEnv: process.env.NODE_ENV ?? "development", port: env.SPIRA_PORT }, "Starting Spira backend");
@@ -1510,6 +1703,11 @@ const bootstrap = async () => {
       { envKey: SPIRA_MEMORY_DB_PATH_ENV },
       "Memory database path is unset; conversation persistence disabled",
     );
+  }
+  youTrackService = new YouTrackService(env, logger);
+  const savedYouTrackStateMapping = memoryDb?.getYouTrackStateMapping() ?? null;
+  if (savedYouTrackStateMapping) {
+    youTrackService.setStateMapping(savedYouTrackStateMapping);
   }
   const pool = new McpClientPool(bus, logger);
   const aggregator = new McpToolAggregator(pool);
@@ -1526,21 +1724,29 @@ const bootstrap = async () => {
       if (!stationRegistry) {
         throw new ConfigError("Mission station manager is unavailable.");
       }
-      const worktreePath = run.worktrees[0]?.worktreePath;
-      if (!worktreePath) {
+      const workingDirectory = resolveMissionStationWorkingDirectory(run.worktrees);
+      if (!workingDirectory) {
         throw new ConfigError(`Ticket ${run.ticketId} does not have a managed worktree.`);
       }
-      if (!existsSync(worktreePath)) {
+      const missingWorktrees = run.worktrees.filter((worktree) => !existsSync(worktree.worktreePath));
+      if (missingWorktrees.length > 0) {
         throw new ConfigError(
-          `Ticket ${run.ticketId} worktree is missing at ${worktreePath}. Recreate the run before starting work.`,
+          `Ticket ${run.ticketId} is missing managed worktrees for ${missingWorktrees
+            .map((worktree) => worktree.repoRelativePath)
+            .join(", ")}. Recreate the run before starting work.`,
+        );
+      }
+      if (!existsSync(workingDirectory)) {
+        throw new ConfigError(
+          `Ticket ${run.ticketId} mission workspace is missing at ${workingDirectory}. Recreate the run before starting work.`,
         );
       }
       const stationId = run.stationId ?? buildMissionStationId(run.runId);
       stationRegistry.createStation({
         stationId,
         label: `Mission ${run.ticketId}`,
-        additionalInstructions: buildMissionStationInstructions(run.ticketId, worktreePath),
-        workingDirectory: worktreePath,
+        additionalInstructions: buildMissionStationInstructions(run.runId, run.ticketId, run.worktrees),
+        workingDirectory,
         allowUpgradeTools: false,
       });
 
@@ -1567,6 +1773,9 @@ const bootstrap = async () => {
       if (closed) {
         transport?.send({ type: "station:closed", stationId });
       }
+    },
+    stopRunServices: async (runId) => {
+      await missionServiceRegistry?.stopRunServices(runId);
     },
     generateCommitDraft: async (input) => {
       if (!stationRegistry) {
@@ -1604,6 +1813,11 @@ const bootstrap = async () => {
     resolveMissionGitIdentity: async () => fetchGitHubIdentity(env.MISSION_GITHUB_TOKEN?.trim() ?? "", logger),
     getMissionGitToken: () => env.MISSION_GITHUB_TOKEN?.trim() ?? null,
   });
+  missionServiceRegistry = new MissionServiceRegistry({
+    ticketRunService,
+    logger,
+    bus,
+  });
   mcpRegistry = new McpRegistry(
     bus,
     logger,
@@ -1630,6 +1844,24 @@ const bootstrap = async () => {
     transport,
     memoryDb,
     subagentRegistry,
+    listMissionServices: async (runId) => {
+      if (!missionServiceRegistry) {
+        throw new ConfigError("Mission services are unavailable.");
+      }
+      return missionServiceRegistry.getSnapshot(runId);
+    },
+    startMissionService: async (runId, profileId) => {
+      if (!missionServiceRegistry) {
+        throw new ConfigError("Mission services are unavailable.");
+      }
+      return missionServiceRegistry.startService(runId, profileId);
+    },
+    stopMissionService: async (runId, serviceId) => {
+      if (!missionServiceRegistry) {
+        throw new ConfigError("Mission services are unavailable.");
+      }
+      return missionServiceRegistry.stopService(runId, serviceId);
+    },
     requestUpgradeProposal,
     applyHotCapabilityUpgrade: async () => {
       if (!mcpRegistry) {
@@ -1670,6 +1902,12 @@ const bootstrap = async () => {
     transport?.send({
       type: "missions:runs:updated",
       snapshot,
+    });
+  });
+  bus.on("missions:ticket-run:services-changed", (services) => {
+    transport?.send({
+      type: "missions:ticket-run:services:updated",
+      services,
     });
   });
 

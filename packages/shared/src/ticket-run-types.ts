@@ -27,6 +27,7 @@ export interface TicketRunWorktreeSummary {
   repoAbsolutePath: string;
   worktreePath: string;
   branchName: string;
+  commitMessageDraft?: string | null;
   cleanupState: TicketRunCleanupState;
   createdAt: number;
   updatedAt: number;
@@ -118,6 +119,7 @@ export interface TicketRunPullRequestLinks {
 
 export interface TicketRunGitState {
   runId: string;
+  repoRelativePath: string;
   worktreePath: string;
   branchName: string;
   upstreamBranch: string | null;

@@ -9,6 +9,7 @@ import type {
   ConversationSearchMatch,
   CreateTicketRunPullRequestResult,
   GenerateTicketRunCommitDraftResult,
+  MissionServiceSnapshot,
   ProjectRepoMappingsSnapshot,
   RetryTicketRunSyncResult,
   ServerMessage,
@@ -22,6 +23,7 @@ import type {
   TicketRunGitStateResult,
   TicketRunSnapshot,
   YouTrackProjectSummary,
+  YouTrackStateMapping,
   YouTrackStatusSummary,
   YouTrackTicketSummary,
 } from "@spira/shared";
@@ -44,7 +46,8 @@ const REPLAYABLE_SERVER_MESSAGES = new Set<ServerMessage["type"]>([
   "subagent:catalog",
   "missions:runs:updated",
 ]);
-const CONVERSATION_REQUEST_TIMEOUT_MS = 10_000;
+const DEFAULT_BACKEND_REQUEST_TIMEOUT_MS = 10_000;
+const MISSION_GIT_REQUEST_TIMEOUT_MS = 30_000;
 
 type ConversationRequestMessage = Extract<ClientMessage, { requestId: string }>;
 type ConversationResponseMessage =
@@ -58,11 +61,13 @@ type ConversationResponseMessage =
 type YouTrackRequestMessage =
   | Extract<ClientMessage, { type: "youtrack:status:get" }>
   | Extract<ClientMessage, { type: "youtrack:tickets:list" }>
-  | Extract<ClientMessage, { type: "youtrack:projects:search" }>;
+  | Extract<ClientMessage, { type: "youtrack:projects:search" }>
+  | Extract<ClientMessage, { type: "youtrack:state-mapping:set" }>;
 type YouTrackResponseMessage =
   | Extract<ServerMessage, { type: "youtrack:status:result" }>
   | Extract<ServerMessage, { type: "youtrack:tickets:list:result" }>
   | Extract<ServerMessage, { type: "youtrack:projects:search:result" }>
+  | Extract<ServerMessage, { type: "youtrack:state-mapping:set:result" }>
   | Extract<ServerMessage, { type: "youtrack:request-error" }>;
 type ProjectRequestMessage =
   | Extract<ClientMessage, { type: "projects:snapshot:get" }>
@@ -85,7 +90,10 @@ type MissionsRequestMessage =
   | Extract<ClientMessage, { type: "missions:ticket-run:commit" }>
   | Extract<ClientMessage, { type: "missions:ticket-run:publish" }>
   | Extract<ClientMessage, { type: "missions:ticket-run:push" }>
-  | Extract<ClientMessage, { type: "missions:ticket-run:pull-request:create" }>;
+  | Extract<ClientMessage, { type: "missions:ticket-run:pull-request:create" }>
+  | Extract<ClientMessage, { type: "missions:ticket-run:services:get" }>
+  | Extract<ClientMessage, { type: "missions:ticket-run:service:start" }>
+  | Extract<ClientMessage, { type: "missions:ticket-run:service:stop" }>;
 type MissionsResponseMessage =
   | Extract<ServerMessage, { type: "missions:runs:result" }>
   | Extract<ServerMessage, { type: "missions:ticket-run:start:result" }>
@@ -101,6 +109,9 @@ type MissionsResponseMessage =
   | Extract<ServerMessage, { type: "missions:ticket-run:publish:result" }>
   | Extract<ServerMessage, { type: "missions:ticket-run:push:result" }>
   | Extract<ServerMessage, { type: "missions:ticket-run:pull-request:create:result" }>
+  | Extract<ServerMessage, { type: "missions:ticket-run:services:get:result" }>
+  | Extract<ServerMessage, { type: "missions:ticket-run:service:start:result" }>
+  | Extract<ServerMessage, { type: "missions:ticket-run:service:stop:result" }>
   | Extract<ServerMessage, { type: "missions:request-error" }>;
 type BackendRequestMessage =
   | ConversationRequestMessage
@@ -131,6 +142,7 @@ export interface IpcBridgeHandle {
   getYouTrackStatus(enabled: boolean): Promise<YouTrackStatusSummary>;
   listYouTrackTickets(enabled: boolean, limit?: number): Promise<YouTrackTicketSummary[]>;
   searchYouTrackProjects(enabled: boolean, query: string, limit?: number): Promise<YouTrackProjectSummary[]>;
+  setYouTrackStateMapping(enabled: boolean, mapping: YouTrackStateMapping): Promise<YouTrackStatusSummary>;
   getProjectRepoMappings(): Promise<ProjectRepoMappingsSnapshot>;
   setProjectWorkspaceRoot(workspaceRoot: string | null): Promise<ProjectRepoMappingsSnapshot>;
   setProjectRepoMapping(projectKey: string, repoRelativePaths: string[]): Promise<ProjectRepoMappingsSnapshot>;
@@ -141,13 +153,20 @@ export interface IpcBridgeHandle {
   continueTicketRunWork(runId: string, prompt?: string): Promise<ContinueTicketRunWorkResult>;
   cancelTicketRunWork(runId: string): Promise<CancelTicketRunWorkResult>;
   completeTicketRun(runId: string): Promise<CompleteTicketRunResult>;
-  getTicketRunGitState(runId: string): Promise<TicketRunGitStateResult>;
-  generateTicketRunCommitDraft(runId: string): Promise<GenerateTicketRunCommitDraftResult>;
-  setTicketRunCommitDraft(runId: string, message: string): Promise<SetTicketRunCommitDraftResult>;
-  commitTicketRun(runId: string, message: string): Promise<CommitTicketRunResult>;
-  publishTicketRun(runId: string): Promise<SyncTicketRunRemoteResult>;
-  pushTicketRun(runId: string): Promise<SyncTicketRunRemoteResult>;
-  createTicketRunPullRequest(runId: string): Promise<CreateTicketRunPullRequestResult>;
+  getTicketRunGitState(runId: string, repoRelativePath?: string): Promise<TicketRunGitStateResult>;
+  generateTicketRunCommitDraft(runId: string, repoRelativePath?: string): Promise<GenerateTicketRunCommitDraftResult>;
+  setTicketRunCommitDraft(
+    runId: string,
+    message: string,
+    repoRelativePath?: string,
+  ): Promise<SetTicketRunCommitDraftResult>;
+  commitTicketRun(runId: string, message: string, repoRelativePath?: string): Promise<CommitTicketRunResult>;
+  publishTicketRun(runId: string, repoRelativePath?: string): Promise<SyncTicketRunRemoteResult>;
+  pushTicketRun(runId: string, repoRelativePath?: string): Promise<SyncTicketRunRemoteResult>;
+  createTicketRunPullRequest(runId: string, repoRelativePath?: string): Promise<CreateTicketRunPullRequestResult>;
+  getTicketRunServices(runId: string): Promise<MissionServiceSnapshot>;
+  startTicketRunService(runId: string, profileId: string): Promise<MissionServiceSnapshot>;
+  stopTicketRunService(runId: string, serviceId: string): Promise<MissionServiceSnapshot>;
 }
 
 const isBackendResponseMessage = (message: ServerMessage): message is BackendResponseMessage =>
@@ -162,6 +181,7 @@ const isBackendResponseMessage = (message: ServerMessage): message is BackendRes
     message.type === "youtrack:status:result" ||
     message.type === "youtrack:tickets:list:result" ||
     message.type === "youtrack:projects:search:result" ||
+    message.type === "youtrack:state-mapping:set:result" ||
     message.type === "youtrack:request-error" ||
     message.type === "projects:snapshot:result" ||
     message.type === "projects:request-error" ||
@@ -179,6 +199,9 @@ const isBackendResponseMessage = (message: ServerMessage): message is BackendRes
     message.type === "missions:ticket-run:publish:result" ||
     message.type === "missions:ticket-run:push:result" ||
     message.type === "missions:ticket-run:pull-request:create:result" ||
+    message.type === "missions:ticket-run:services:get:result" ||
+    message.type === "missions:ticket-run:service:start:result" ||
+    message.type === "missions:ticket-run:service:stop:result" ||
     message.type === "missions:request-error");
 
 export function setupIpcBridge(
@@ -244,6 +267,7 @@ export function setupIpcBridge(
   const requestBackend = <TType extends BackendResponseMessage["type"]>(
     message: BackendRequestMessage,
     expectedType: TType,
+    timeoutMs = DEFAULT_BACKEND_REQUEST_TIMEOUT_MS,
   ): Promise<Extract<BackendResponseMessage, { type: TType }>> =>
     new Promise<Extract<BackendResponseMessage, { type: TType }>>((resolve, reject) => {
       if (disposed) {
@@ -254,7 +278,7 @@ export function setupIpcBridge(
       const timer = setTimeout(() => {
         pendingRequests.delete(message.requestId);
         reject(new Error("Timed out waiting for the backend response."));
-      }, CONVERSATION_REQUEST_TIMEOUT_MS);
+      }, timeoutMs);
 
       pendingRequests.set(message.requestId, {
         expectedType,
@@ -506,6 +530,16 @@ export function setupIpcBridge(
         },
         "youtrack:projects:search:result",
       ).then((response) => response.projects),
+    setYouTrackStateMapping: (enabled, mapping) =>
+      requestBackend(
+        {
+          type: "youtrack:state-mapping:set",
+          requestId: randomUUID(),
+          enabled,
+          mapping,
+        },
+        "youtrack:state-mapping:set:result",
+      ).then((response) => response.status),
     getProjectRepoMappings: () =>
       requestBackend(
         {
@@ -596,70 +630,108 @@ export function setupIpcBridge(
         },
         "missions:ticket-run:complete:result",
       ).then((response) => response.result),
-    getTicketRunGitState: (runId) =>
+    getTicketRunGitState: (runId, repoRelativePath) =>
       requestBackend(
         {
           type: "missions:ticket-run:git-state:get",
           requestId: randomUUID(),
           runId,
+          ...(repoRelativePath ? { repoRelativePath } : {}),
         },
         "missions:ticket-run:git-state:result",
+        MISSION_GIT_REQUEST_TIMEOUT_MS,
       ).then((response) => response.result),
-    generateTicketRunCommitDraft: (runId) =>
+    generateTicketRunCommitDraft: (runId, repoRelativePath) =>
       requestBackend(
         {
           type: "missions:ticket-run:commit-draft:generate",
           requestId: randomUUID(),
           runId,
+          ...(repoRelativePath ? { repoRelativePath } : {}),
         },
         "missions:ticket-run:commit-draft:generate:result",
+        MISSION_GIT_REQUEST_TIMEOUT_MS,
       ).then((response) => response.result),
-    setTicketRunCommitDraft: (runId, message) =>
+    setTicketRunCommitDraft: (runId, message, repoRelativePath) =>
       requestBackend(
         {
           type: "missions:ticket-run:commit-draft:set",
           requestId: randomUUID(),
           runId,
           message,
+          ...(repoRelativePath ? { repoRelativePath } : {}),
         },
         "missions:ticket-run:commit-draft:set:result",
       ).then((response) => response.result),
-    commitTicketRun: (runId, message) =>
+    commitTicketRun: (runId, message, repoRelativePath) =>
       requestBackend(
         {
           type: "missions:ticket-run:commit",
           requestId: randomUUID(),
           runId,
           message,
+          ...(repoRelativePath ? { repoRelativePath } : {}),
         },
         "missions:ticket-run:commit:result",
       ).then((response) => response.result),
-    publishTicketRun: (runId) =>
+    publishTicketRun: (runId, repoRelativePath) =>
       requestBackend(
         {
           type: "missions:ticket-run:publish",
           requestId: randomUUID(),
           runId,
+          ...(repoRelativePath ? { repoRelativePath } : {}),
         },
         "missions:ticket-run:publish:result",
       ).then((response) => response.result),
-    pushTicketRun: (runId) =>
+    pushTicketRun: (runId, repoRelativePath) =>
       requestBackend(
         {
           type: "missions:ticket-run:push",
           requestId: randomUUID(),
           runId,
+          ...(repoRelativePath ? { repoRelativePath } : {}),
         },
         "missions:ticket-run:push:result",
       ).then((response) => response.result),
-    createTicketRunPullRequest: (runId) =>
+    createTicketRunPullRequest: (runId, repoRelativePath) =>
       requestBackend(
         {
           type: "missions:ticket-run:pull-request:create",
           requestId: randomUUID(),
           runId,
+          ...(repoRelativePath ? { repoRelativePath } : {}),
         },
         "missions:ticket-run:pull-request:create:result",
       ).then((response) => response.result),
+    getTicketRunServices: (runId) =>
+      requestBackend(
+        {
+          type: "missions:ticket-run:services:get",
+          requestId: randomUUID(),
+          runId,
+        },
+        "missions:ticket-run:services:get:result",
+      ).then((response) => response.services),
+    startTicketRunService: (runId, profileId) =>
+      requestBackend(
+        {
+          type: "missions:ticket-run:service:start",
+          requestId: randomUUID(),
+          runId,
+          profileId,
+        },
+        "missions:ticket-run:service:start:result",
+      ).then((response) => response.services),
+    stopTicketRunService: (runId, serviceId) =>
+      requestBackend(
+        {
+          type: "missions:ticket-run:service:stop",
+          requestId: randomUUID(),
+          runId,
+          serviceId,
+        },
+        "missions:ticket-run:service:stop:result",
+      ).then((response) => response.services),
   };
 }

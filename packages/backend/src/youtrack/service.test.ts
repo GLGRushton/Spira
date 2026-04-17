@@ -93,6 +93,7 @@ describe("YouTrackService.transitionTicketToInProgress", () => {
       } as never,
     );
     const sendJsonMock = vi.spyOn(service as never, "sendJson").mockResolvedValue(undefined);
+    vi.spyOn(service, "listAvailableStates").mockResolvedValue(["Submitted", "Open", "In Progress"]);
 
     await service.transitionTicketToInProgress("SPI-101");
 
@@ -105,5 +106,125 @@ describe("YouTrackService.transitionTicketToInProgress", () => {
       },
       "ticket transition",
     );
+  });
+
+  it("keeps using the first valid in-progress state even when a saved to-do state is stale", async () => {
+    const service = new YouTrackService(
+      {
+        YOUTRACK_BASE_URL: "https://example.youtrack.cloud",
+        YOUTRACK_TOKEN: "token",
+      } as ConstructorParameters<typeof YouTrackService>[0],
+      {
+        warn: vi.fn(),
+      } as never,
+      {
+        todo: ["Submitted", "Open"],
+        inProgress: ["In Progress"],
+      },
+    );
+    const sendJsonMock = vi.spyOn(service as never, "sendJson").mockResolvedValue(undefined);
+    vi.spyOn(service, "listAvailableStates").mockResolvedValue(["Submitted", "In Progress", "Review"]);
+
+    await service.transitionTicketToInProgress("SPI-101");
+
+    expect(sendJsonMock).toHaveBeenCalledWith(
+      "https://example.youtrack.cloud/api/commands",
+      "token",
+      {
+        query: "State In Progress",
+        issues: [{ idReadable: "SPI-101" }],
+      },
+      "ticket transition",
+    );
+  });
+});
+
+describe("YouTrackService.validateStateMapping", () => {
+  it("canonicalizes matching states from the live YouTrack state list", async () => {
+    const service = new YouTrackService(
+      {
+        YOUTRACK_BASE_URL: "https://example.youtrack.cloud",
+        YOUTRACK_TOKEN: "token",
+      } as ConstructorParameters<typeof YouTrackService>[0],
+      {
+        warn: vi.fn(),
+      } as never,
+    );
+    vi.spyOn(service, "listAvailableStates").mockResolvedValue(["Submitted", "Open", "In Progress"]);
+
+    await expect(
+      service.validateStateMapping({
+        todo: ["submitted", "open"],
+        inProgress: ["in progress"],
+      }),
+    ).resolves.toEqual({
+      todo: ["Submitted", "Open"],
+      inProgress: ["In Progress"],
+    });
+  });
+
+  it("rejects states that do not exist in the connected YouTrack instance", async () => {
+    const service = new YouTrackService(
+      {
+        YOUTRACK_BASE_URL: "https://example.youtrack.cloud",
+        YOUTRACK_TOKEN: "token",
+      } as ConstructorParameters<typeof YouTrackService>[0],
+      {
+        warn: vi.fn(),
+      } as never,
+    );
+    vi.spyOn(service, "listAvailableStates").mockResolvedValue(["Submitted", "Open", "In Progress"]);
+
+    await expect(
+      service.validateStateMapping({
+        todo: ["Submitted"],
+        inProgress: ["Review"],
+      }),
+    ).rejects.toMatchObject({
+      name: "YouTrackError",
+      message: "In-progress states not found in YouTrack: Review.",
+    });
+  });
+});
+
+describe("YouTrackService.getStatus", () => {
+  it("stays connected when the saved mapping contains a stale live-state value", async () => {
+    const service = new YouTrackService(
+      {
+        YOUTRACK_BASE_URL: "https://example.youtrack.cloud",
+        YOUTRACK_TOKEN: "token",
+      } as ConstructorParameters<typeof YouTrackService>[0],
+      {
+        warn: vi.fn(),
+      } as never,
+      {
+        todo: ["Submitted", "Open"],
+        inProgress: ["In Progress"],
+      },
+    );
+    vi.spyOn(service as never, "fetchCurrentUser").mockResolvedValue({
+      login: "shinra",
+      name: "Shinra",
+      fullName: "Shinra",
+    });
+    vi.spyOn(service, "listAvailableStates").mockResolvedValue(["Submitted", "In Progress", "Review"]);
+
+    await expect(service.getStatus(true)).resolves.toEqual({
+      enabled: true,
+      configured: true,
+      state: "connected",
+      baseUrl: "https://example.youtrack.cloud",
+      account: {
+        login: "shinra",
+        name: "Shinra",
+        fullName: "Shinra",
+      },
+      stateMapping: {
+        todo: ["Submitted", "Open"],
+        inProgress: ["In Progress"],
+      },
+      availableStates: ["Submitted", "In Progress", "Review"],
+      message: "Authenticated as Shinra. Review the quarterdeck workflow state mapping.",
+    });
   });
 });

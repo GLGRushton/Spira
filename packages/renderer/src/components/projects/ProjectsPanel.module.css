@@ -612,6 +612,42 @@
   gap: 10px;
 }
 
+.repoTabBar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.repoTabButton {
+  display: grid;
+  gap: 4px;
+  min-width: 180px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(141, 214, 234, 0.14);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-primary);
+  text-align: left;
+  cursor: pointer;
+}
+
+.repoTabButton:hover {
+  border-color: rgba(141, 214, 234, 0.28);
+  background: rgba(141, 214, 234, 0.07);
+}
+
+.repoTabButtonActive {
+  border-color: rgba(141, 214, 234, 0.34);
+  background: rgba(141, 214, 234, 0.12);
+  box-shadow: 0 0 0 1px rgba(141, 214, 234, 0.16);
+}
+
+.repoTabMeta {
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
 .attemptCard {
   display: grid;
   gap: 8px;
@@ -633,6 +669,99 @@
   font-size: 12px;
   line-height: 1.5;
   overflow-wrap: break-word;
+}
+
+.serviceSection,
+.serviceGroup,
+.serviceCardList {
+  display: grid;
+  gap: 10px;
+}
+
+.serviceGroupList {
+  display: grid;
+  gap: 14px;
+}
+
+.serviceGroupHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.serviceCard {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid rgba(141, 214, 234, 0.12);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.serviceCardUnavailable {
+  border-color: rgba(228, 180, 83, 0.22);
+}
+
+.serviceStateStarting {
+  border-color: rgba(141, 214, 234, 0.28);
+}
+
+.serviceStateRunning {
+  border-color: rgba(104, 198, 180, 0.3);
+}
+
+.serviceStateStopping {
+  border-color: rgba(228, 180, 83, 0.28);
+}
+
+.serviceStateStopped {
+  border-color: rgba(141, 214, 234, 0.14);
+}
+
+.serviceStateError {
+  border-color: rgba(227, 120, 120, 0.3);
+}
+
+.statusBadge.serviceStateStarting {
+  color: rgba(196, 235, 247, 0.96);
+}
+
+.statusBadge.serviceStateRunning {
+  color: rgba(170, 241, 188, 0.96);
+}
+
+.statusBadge.serviceStateStopping {
+  color: rgba(245, 206, 120, 0.96);
+}
+
+.statusBadge.serviceStateStopped {
+  color: var(--text-primary);
+}
+
+.statusBadge.serviceStateError {
+  color: rgba(247, 171, 171, 0.96);
+}
+
+.serviceLogTail {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: rgba(4, 8, 22, 0.88);
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  max-height: calc((5 * 1.45em) + 20px);
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+
+.serviceLogLine {
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .mappingCard {

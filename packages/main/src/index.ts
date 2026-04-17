@@ -18,6 +18,7 @@ import {
   type CreateTicketRunPullRequestResult,
   DEFAULT_YOUTRACK_STATE_MAPPING,
   type GenerateTicketRunCommitDraftResult,
+  type MissionServiceSnapshot,
   type ProjectRepoMappingsSnapshot,
   RUNTIME_CONFIG_KEYS,
   type RendererFatalPayload,
@@ -37,6 +38,7 @@ import {
   type UpgradeProposal,
   type UserSettings,
   type YouTrackProjectSummary,
+  type YouTrackStateMapping,
   type YouTrackStatusSummary,
   type YouTrackTicketSummary,
   normalizeTtsProvider,
@@ -67,6 +69,7 @@ const CONVERSATION_ARCHIVE_CHANNEL = "conversation:archive";
 const YOUTRACK_STATUS_GET_CHANNEL = "youtrack:status:get";
 const YOUTRACK_TICKETS_LIST_CHANNEL = "youtrack:tickets:list";
 const YOUTRACK_PROJECTS_SEARCH_CHANNEL = "youtrack:projects:search";
+const YOUTRACK_STATE_MAPPING_SET_CHANNEL = "youtrack:state-mapping:set";
 const PROJECT_REPO_MAPPINGS_GET_CHANNEL = "projects:mappings:get";
 const PROJECT_WORKSPACE_ROOT_SET_CHANNEL = "projects:workspace-root:set";
 const PROJECT_REPO_MAPPING_SET_CHANNEL = "projects:mapping:set";
@@ -84,6 +87,9 @@ const TICKET_RUN_COMMIT_CHANNEL = "missions:ticket-run:commit";
 const TICKET_RUN_PUBLISH_CHANNEL = "missions:ticket-run:publish";
 const TICKET_RUN_PUSH_CHANNEL = "missions:ticket-run:push";
 const TICKET_RUN_PULL_REQUEST_CREATE_CHANNEL = "missions:ticket-run:pull-request:create";
+const TICKET_RUN_SERVICES_GET_CHANNEL = "missions:ticket-run:services:get";
+const TICKET_RUN_SERVICE_START_CHANNEL = "missions:ticket-run:service:start";
+const TICKET_RUN_SERVICE_STOP_CHANNEL = "missions:ticket-run:service:stop";
 const DIRECTORY_PICK_CHANNEL = "dialog:pick-directory";
 const OPEN_EXTERNAL_CHANNEL = "shell:open-external";
 const RUNTIME_CONFIG_GET_CHANNEL = "runtime-config:get";
@@ -541,6 +547,7 @@ const buildLocalYouTrackStatus = (enabled = getYouTrackEnabledSetting()): YouTra
       baseUrl,
       account: null,
       stateMapping: structuredClone(DEFAULT_YOUTRACK_STATE_MAPPING),
+      availableStates: [],
       message: configured
         ? "YouTrack integration is configured but currently disabled."
         : "Enable YouTrack after adding an instance URL and permanent token.",
@@ -555,6 +562,7 @@ const buildLocalYouTrackStatus = (enabled = getYouTrackEnabledSetting()): YouTra
       baseUrl,
       account: null,
       stateMapping: structuredClone(DEFAULT_YOUTRACK_STATE_MAPPING),
+      availableStates: [],
       message: "Add a YouTrack base URL and permanent token to connect Spira natively.",
     };
   }
@@ -566,6 +574,7 @@ const buildLocalYouTrackStatus = (enabled = getYouTrackEnabledSetting()): YouTra
     baseUrl,
     account: null,
     stateMapping: structuredClone(DEFAULT_YOUTRACK_STATE_MAPPING),
+    availableStates: [],
     message: "The embedded backend is unavailable, so YouTrack status could not be refreshed.",
   };
 };
@@ -581,6 +590,18 @@ const handleSearchYouTrackProjects = async (
   input?: { query?: string; limit?: number },
 ): Promise<YouTrackProjectSummary[]> =>
   (await bridge?.searchYouTrackProjects(getYouTrackEnabledSetting(), input?.query ?? "", input?.limit)) ?? [];
+const handleSetYouTrackStateMapping = async (
+  _event: IpcMainInvokeEvent,
+  input?: { mapping?: YouTrackStateMapping },
+): Promise<YouTrackStatusSummary> => {
+  if (!input?.mapping) {
+    throw new Error("YouTrack state mapping is required.");
+  }
+
+  return (
+    (await bridge?.setYouTrackStateMapping(getYouTrackEnabledSetting(), input.mapping)) ?? buildLocalYouTrackStatus()
+  );
+};
 const buildLocalProjectRepoMappingsSnapshot = (): ProjectRepoMappingsSnapshot => ({
   workspaceRoot: null,
   repos: [],
@@ -588,6 +609,12 @@ const buildLocalProjectRepoMappingsSnapshot = (): ProjectRepoMappingsSnapshot =>
 });
 const buildLocalTicketRunSnapshot = (): TicketRunSnapshot => ({
   runs: [],
+});
+const buildLocalMissionServiceSnapshot = (runId: string): MissionServiceSnapshot => ({
+  runId,
+  profiles: [],
+  processes: [],
+  updatedAt: Date.now(),
 });
 const handleGetProjectRepoMappings = async (_event: IpcMainInvokeEvent): Promise<ProjectRepoMappingsSnapshot> =>
   (await bridge?.getProjectRepoMappings()) ?? buildLocalProjectRepoMappingsSnapshot();
@@ -611,6 +638,48 @@ const handleSetProjectRepoMapping = async (
 };
 const handleGetTicketRuns = async (_event: IpcMainInvokeEvent): Promise<TicketRunSnapshot> =>
   (await bridge?.getTicketRuns()) ?? buildLocalTicketRunSnapshot();
+const handleGetTicketRunServices = async (
+  _event: IpcMainInvokeEvent,
+  input?: { runId?: string },
+): Promise<MissionServiceSnapshot> => {
+  if (!input?.runId) {
+    throw new Error("Run id is required.");
+  }
+
+  return (await bridge?.getTicketRunServices(input.runId)) ?? buildLocalMissionServiceSnapshot(input.runId);
+};
+const handleStartTicketRunService = async (
+  _event: IpcMainInvokeEvent,
+  input?: { runId?: string; profileId?: string },
+): Promise<MissionServiceSnapshot> => {
+  if (!input?.runId) {
+    throw new Error("Run id is required.");
+  }
+  if (!input.profileId) {
+    throw new Error("Profile id is required.");
+  }
+  if (!bridge) {
+    throw new Error("Backend bridge is unavailable.");
+  }
+
+  return bridge.startTicketRunService(input.runId, input.profileId);
+};
+const handleStopTicketRunService = async (
+  _event: IpcMainInvokeEvent,
+  input?: { runId?: string; serviceId?: string },
+): Promise<MissionServiceSnapshot> => {
+  if (!input?.runId) {
+    throw new Error("Run id is required.");
+  }
+  if (!input.serviceId) {
+    throw new Error("Service id is required.");
+  }
+  if (!bridge) {
+    throw new Error("Backend bridge is unavailable.");
+  }
+
+  return bridge.stopTicketRunService(input.runId, input.serviceId);
+};
 const handleStartTicketRun = async (
   _event: IpcMainInvokeEvent,
   input?: { ticket?: { ticketId?: string; ticketSummary?: string; ticketUrl?: string; projectKey?: string } },
@@ -703,7 +772,7 @@ const handleCompleteTicketRun = async (
 };
 const handleGetTicketRunGitState = async (
   _event: IpcMainInvokeEvent,
-  input?: { runId?: string },
+  input?: { runId?: string; repoRelativePath?: string },
 ): Promise<TicketRunGitStateResult> => {
   if (!input?.runId) {
     throw new Error("Run id is required.");
@@ -713,11 +782,11 @@ const handleGetTicketRunGitState = async (
     throw new Error("Backend bridge is unavailable.");
   }
 
-  return bridge.getTicketRunGitState(input.runId);
+  return bridge.getTicketRunGitState(input.runId, input.repoRelativePath);
 };
 const handleGenerateTicketRunCommitDraft = async (
   _event: IpcMainInvokeEvent,
-  input?: { runId?: string },
+  input?: { runId?: string; repoRelativePath?: string },
 ): Promise<GenerateTicketRunCommitDraftResult> => {
   if (!input?.runId) {
     throw new Error("Run id is required.");
@@ -727,11 +796,11 @@ const handleGenerateTicketRunCommitDraft = async (
     throw new Error("Backend bridge is unavailable.");
   }
 
-  return bridge.generateTicketRunCommitDraft(input.runId);
+  return bridge.generateTicketRunCommitDraft(input.runId, input.repoRelativePath);
 };
 const handleSetTicketRunCommitDraft = async (
   _event: IpcMainInvokeEvent,
-  input?: { runId?: string; message?: string },
+  input?: { runId?: string; message?: string; repoRelativePath?: string },
 ): Promise<SetTicketRunCommitDraftResult> => {
   if (!input?.runId) {
     throw new Error("Run id is required.");
@@ -744,11 +813,11 @@ const handleSetTicketRunCommitDraft = async (
     throw new Error("Backend bridge is unavailable.");
   }
 
-  return bridge.setTicketRunCommitDraft(input.runId, input.message);
+  return bridge.setTicketRunCommitDraft(input.runId, input.message, input.repoRelativePath);
 };
 const handleCommitTicketRun = async (
   _event: IpcMainInvokeEvent,
-  input?: { runId?: string; message?: string },
+  input?: { runId?: string; message?: string; repoRelativePath?: string },
 ): Promise<CommitTicketRunResult> => {
   if (!input?.runId) {
     throw new Error("Run id is required.");
@@ -761,11 +830,11 @@ const handleCommitTicketRun = async (
     throw new Error("Backend bridge is unavailable.");
   }
 
-  return bridge.commitTicketRun(input.runId, input.message);
+  return bridge.commitTicketRun(input.runId, input.message, input.repoRelativePath);
 };
 const handlePublishTicketRun = async (
   _event: IpcMainInvokeEvent,
-  input?: { runId?: string },
+  input?: { runId?: string; repoRelativePath?: string },
 ): Promise<SyncTicketRunRemoteResult> => {
   if (!input?.runId) {
     throw new Error("Run id is required.");
@@ -775,11 +844,11 @@ const handlePublishTicketRun = async (
     throw new Error("Backend bridge is unavailable.");
   }
 
-  return bridge.publishTicketRun(input.runId);
+  return bridge.publishTicketRun(input.runId, input.repoRelativePath);
 };
 const handlePushTicketRun = async (
   _event: IpcMainInvokeEvent,
-  input?: { runId?: string },
+  input?: { runId?: string; repoRelativePath?: string },
 ): Promise<SyncTicketRunRemoteResult> => {
   if (!input?.runId) {
     throw new Error("Run id is required.");
@@ -789,11 +858,11 @@ const handlePushTicketRun = async (
     throw new Error("Backend bridge is unavailable.");
   }
 
-  return bridge.pushTicketRun(input.runId);
+  return bridge.pushTicketRun(input.runId, input.repoRelativePath);
 };
 const handleCreateTicketRunPullRequest = async (
   _event: IpcMainInvokeEvent,
-  input?: { runId?: string },
+  input?: { runId?: string; repoRelativePath?: string },
 ): Promise<CreateTicketRunPullRequestResult> => {
   if (!input?.runId) {
     throw new Error("Run id is required.");
@@ -803,7 +872,7 @@ const handleCreateTicketRunPullRequest = async (
     throw new Error("Backend bridge is unavailable.");
   }
 
-  return bridge.createTicketRunPullRequest(input.runId);
+  return bridge.createTicketRunPullRequest(input.runId, input.repoRelativePath);
 };
 const handlePickDirectory = async (_event: IpcMainInvokeEvent, input?: { title?: string }): Promise<string | null> => {
   const options: OpenDialogOptions = {
@@ -1156,6 +1225,7 @@ const shutdownApp = async (): Promise<void> => {
     ipcMain.removeHandler(YOUTRACK_STATUS_GET_CHANNEL);
     ipcMain.removeHandler(YOUTRACK_TICKETS_LIST_CHANNEL);
     ipcMain.removeHandler(YOUTRACK_PROJECTS_SEARCH_CHANNEL);
+    ipcMain.removeHandler(YOUTRACK_STATE_MAPPING_SET_CHANNEL);
     ipcMain.removeHandler(PROJECT_REPO_MAPPINGS_GET_CHANNEL);
     ipcMain.removeHandler(PROJECT_WORKSPACE_ROOT_SET_CHANNEL);
     ipcMain.removeHandler(PROJECT_REPO_MAPPING_SET_CHANNEL);
@@ -1197,10 +1267,14 @@ void app.whenReady().then(async () => {
   ipcMain.handle(YOUTRACK_STATUS_GET_CHANNEL, handleGetYouTrackStatus);
   ipcMain.handle(YOUTRACK_TICKETS_LIST_CHANNEL, handleListYouTrackTickets);
   ipcMain.handle(YOUTRACK_PROJECTS_SEARCH_CHANNEL, handleSearchYouTrackProjects);
+  ipcMain.handle(YOUTRACK_STATE_MAPPING_SET_CHANNEL, handleSetYouTrackStateMapping);
   ipcMain.handle(PROJECT_REPO_MAPPINGS_GET_CHANNEL, handleGetProjectRepoMappings);
   ipcMain.handle(PROJECT_WORKSPACE_ROOT_SET_CHANNEL, handleSetProjectWorkspaceRoot);
   ipcMain.handle(PROJECT_REPO_MAPPING_SET_CHANNEL, handleSetProjectRepoMapping);
   ipcMain.handle(TICKET_RUNS_GET_CHANNEL, handleGetTicketRuns);
+  ipcMain.handle(TICKET_RUN_SERVICES_GET_CHANNEL, handleGetTicketRunServices);
+  ipcMain.handle(TICKET_RUN_SERVICE_START_CHANNEL, handleStartTicketRunService);
+  ipcMain.handle(TICKET_RUN_SERVICE_STOP_CHANNEL, handleStopTicketRunService);
   ipcMain.handle(TICKET_RUN_START_CHANNEL, handleStartTicketRun);
   ipcMain.handle(TICKET_RUN_SYNC_CHANNEL, handleRetryTicketRunSync);
   ipcMain.handle(TICKET_RUN_WORK_START_CHANNEL, handleStartTicketRunWork);

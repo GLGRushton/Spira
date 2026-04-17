@@ -197,6 +197,69 @@ describe("setupIpcBridge", () => {
     ]);
   });
 
+  it("saves the YouTrack workflow state mapping through the backend bridge", async () => {
+    const { setupIpcBridge } = await loadBridge();
+    const webContents = new FakeWebContents();
+    const window = {
+      isDestroyed: () => false,
+      webContents,
+    } as unknown as BrowserWindow;
+
+    const bridge = setupIpcBridge(window, 9720, { rendererBuildId: "test-renderer" });
+    const socket = FakeWebSocket.instances[0];
+    socket?.open();
+    socket?.receive({
+      type: "backend:hello",
+      generation: 7,
+      protocolVersion: PROTOCOL_VERSION,
+      backendBuildId: "backend-test",
+    });
+
+    const pendingStatus = bridge.setYouTrackStateMapping(true, {
+      todo: ["Submitted", "Open"],
+      inProgress: ["In Progress"],
+    });
+    const request = getLastSentPayload(socket as FakeWebSocket);
+    expect(request).toMatchObject({
+      type: "youtrack:state-mapping:set",
+      enabled: true,
+      mapping: {
+        todo: ["Submitted", "Open"],
+        inProgress: ["In Progress"],
+      },
+    });
+
+    socket?.receive({
+      type: "youtrack:state-mapping:set:result",
+      requestId: String(request.requestId),
+      status: {
+        enabled: true,
+        configured: true,
+        state: "connected",
+        baseUrl: "https://example.youtrack.cloud",
+        account: {
+          login: "shinra",
+          name: "Shinra",
+          fullName: "Shinra",
+        },
+        stateMapping: {
+          todo: ["Submitted", "Open"],
+          inProgress: ["In Progress"],
+        },
+        availableStates: ["Submitted", "Open", "In Progress", "Review"],
+        message: "Authenticated as Shinra.",
+      },
+    });
+
+    await expect(pendingStatus).resolves.toMatchObject({
+      stateMapping: {
+        todo: ["Submitted", "Open"],
+        inProgress: ["In Progress"],
+      },
+      availableStates: ["Submitted", "Open", "In Progress", "Review"],
+    });
+  });
+
   it("starts Missions ticket runs through the backend bridge", async () => {
     const { setupIpcBridge } = await loadBridge();
     const webContents = new FakeWebContents();
@@ -323,6 +386,140 @@ describe("setupIpcBridge", () => {
         runId: "run-1",
         status: "ready",
       },
+    });
+  });
+
+  it("passes repo-targeted mission git requests through the backend bridge", async () => {
+    const { setupIpcBridge } = await loadBridge();
+    const webContents = new FakeWebContents();
+    const window = {
+      isDestroyed: () => false,
+      webContents,
+    } as unknown as BrowserWindow;
+
+    const bridge = setupIpcBridge(window, 9720, { rendererBuildId: "test-renderer" });
+    const socket = FakeWebSocket.instances[0];
+    socket?.open();
+    socket?.receive({
+      type: "backend:hello",
+      generation: 7,
+      protocolVersion: PROTOCOL_VERSION,
+      backendBuildId: "backend-test",
+    });
+
+    const pendingGitState = bridge.getTicketRunGitState("run-1", "web-app");
+    const gitStateRequest = getLastSentPayload(socket as FakeWebSocket);
+    expect(gitStateRequest).toMatchObject({
+      type: "missions:ticket-run:git-state:get",
+      runId: "run-1",
+      repoRelativePath: "web-app",
+    });
+
+    socket?.receive({
+      type: "missions:ticket-run:git-state:result",
+      requestId: String(gitStateRequest.requestId),
+      result: {
+        snapshot: { runs: [] },
+        run: {
+          runId: "run-1",
+          stationId: null,
+          ticketId: "SPI-101",
+          ticketSummary: "Start Missions pickup",
+          ticketUrl: "https://example.youtrack.cloud/issue/SPI-101",
+          projectKey: "SPI",
+          status: "done",
+          statusMessage: "Ready to ship.",
+          commitMessageDraft: null,
+          createdAt: 1,
+          updatedAt: 2,
+          startedAt: 1,
+          worktrees: [],
+          attempts: [],
+        },
+        gitState: {
+          runId: "run-1",
+          repoRelativePath: "web-app",
+          worktreePath: "C:\\Repos\\.spira-worktrees\\spi-101\\web-app",
+          branchName: "feat/spi-101-start-missions-pickup",
+          upstreamBranch: null,
+          aheadCount: 0,
+          behindCount: 0,
+          hasDiff: true,
+          pushAction: "none",
+          commitMessageDraft: "feat(SPI-101): adjust web app",
+          pullRequestUrls: {
+            open: null,
+            draft: null,
+          },
+          files: [],
+        },
+      },
+    });
+
+    await expect(pendingGitState).resolves.toMatchObject({
+      gitState: {
+        repoRelativePath: "web-app",
+        commitMessageDraft: "feat(SPI-101): adjust web app",
+      },
+    });
+
+    const pendingCommit = bridge.commitTicketRun("run-1", "feat(SPI-101): adjust web app", "web-app");
+    const commitRequest = getLastSentPayload(socket as FakeWebSocket);
+    expect(commitRequest).toMatchObject({
+      type: "missions:ticket-run:commit",
+      runId: "run-1",
+      message: "feat(SPI-101): adjust web app",
+      repoRelativePath: "web-app",
+    });
+
+    socket?.receive({
+      type: "missions:ticket-run:commit:result",
+      requestId: String(commitRequest.requestId),
+      result: {
+        snapshot: { runs: [] },
+        run: {
+          runId: "run-1",
+          stationId: null,
+          ticketId: "SPI-101",
+          ticketSummary: "Start Missions pickup",
+          ticketUrl: "https://example.youtrack.cloud/issue/SPI-101",
+          projectKey: "SPI",
+          status: "done",
+          statusMessage: "Ready to ship.",
+          commitMessageDraft: null,
+          createdAt: 1,
+          updatedAt: 2,
+          startedAt: 1,
+          worktrees: [],
+          attempts: [],
+        },
+        gitState: {
+          runId: "run-1",
+          repoRelativePath: "web-app",
+          worktreePath: "C:\\Repos\\.spira-worktrees\\spi-101\\web-app",
+          branchName: "feat/spi-101-start-missions-pickup",
+          upstreamBranch: null,
+          aheadCount: 0,
+          behindCount: 0,
+          hasDiff: false,
+          pushAction: "publish",
+          commitMessageDraft: null,
+          pullRequestUrls: {
+            open: null,
+            draft: null,
+          },
+          files: [],
+        },
+        commitSha: "1234567",
+      },
+    });
+
+    await expect(pendingCommit).resolves.toMatchObject({
+      gitState: {
+        repoRelativePath: "web-app",
+        pushAction: "publish",
+      },
+      commitSha: "1234567",
     });
   });
 });

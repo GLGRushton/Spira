@@ -1,3 +1,4 @@
+import type { PermissionRequestPayload } from "@spira/shared";
 import { AnimatePresence, motion } from "framer-motion";
 import { useMemo } from "react";
 import { usePermissionStore } from "../stores/permission-store.js";
@@ -16,12 +17,28 @@ const formatArgs = (args: Record<string, unknown> | undefined): string => {
   }
 };
 
+const getPermissionCopy = (request: PermissionRequestPayload | undefined): string => {
+  if (!request) {
+    return "";
+  }
+
+  if (
+    request.kind === "custom-tool" &&
+    (request.toolName === "spira_start_mission_service" || request.toolName === "spira_stop_mission_service")
+  ) {
+    return `This tool comes from ${request.serverName} and can start or stop a local mission service inside the current mission workspace. Approve only if you expect Shinra to control a process on this machine.`;
+  }
+
+  return `This tool comes from ${request.serverName} and may inspect your screen or local content. Approve only if you expect Shinra to look at what is currently on screen.`;
+};
+
 export function PermissionPrompt() {
   const activeStationId = useStationStore((store) => store.activeStationId);
   const requests = usePermissionStore((store) => store.requests);
   const removeRequest = usePermissionStore((store) => store.removeRequest);
   const currentRequest = requests.find((request) => request.stationId === activeStationId) ?? requests[0];
   const args = useMemo(() => formatArgs(currentRequest?.args), [currentRequest?.args]);
+  const copy = useMemo(() => getPermissionCopy(currentRequest), [currentRequest]);
 
   const respond = (approved: boolean) => {
     if (!currentRequest) {
@@ -56,10 +73,7 @@ export function PermissionPrompt() {
             <div className={styles.header}>
               <span className={styles.eyebrow}>Permission request</span>
               <h2 className={styles.title}>Allow Shinra to use {currentRequest.toolTitle}?</h2>
-              <p className={styles.copy}>
-                This tool comes from <strong>{currentRequest.serverName}</strong> and may inspect your screen or local
-                content. Approve only if you expect Shinra to look at what is currently on screen.
-              </p>
+              <p className={styles.copy}>{copy}</p>
             </div>
 
             <dl className={styles.meta}>

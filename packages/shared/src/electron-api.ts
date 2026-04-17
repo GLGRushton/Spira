@@ -13,6 +13,7 @@ import type {
   UserSettings,
 } from "./protocol.js";
 import type { RuntimeConfigApplyResult, RuntimeConfigSummary, RuntimeConfigUpdate } from "./runtime-config.js";
+import type { MissionServiceSnapshot } from "./service-profile-types.js";
 import type { SubagentCreateConfig } from "./subagent-types.js";
 import type { SubagentDomain } from "./subagent-types.js";
 import type {
@@ -32,7 +33,12 @@ import type {
   TicketRunSnapshot,
 } from "./ticket-run-types.js";
 import type { UpgradeProposal, UpgradeStatus } from "./upgrade.js";
-import type { YouTrackProjectSummary, YouTrackStatusSummary, YouTrackTicketSummary } from "./youtrack-types.js";
+import type {
+  YouTrackProjectSummary,
+  YouTrackStateMapping,
+  YouTrackStatusSummary,
+  YouTrackTicketSummary,
+} from "./youtrack-types.js";
 
 export type ConnectionStatus = "connecting" | "connected" | "disconnected" | "upgrading";
 
@@ -81,6 +87,7 @@ export interface ElectronApi {
   getYouTrackStatus(): Promise<YouTrackStatusSummary>;
   listYouTrackTickets(limit?: number): Promise<YouTrackTicketSummary[]>;
   searchYouTrackProjects(query: string, limit?: number): Promise<YouTrackProjectSummary[]>;
+  setYouTrackStateMapping(mapping: YouTrackStateMapping): Promise<YouTrackStatusSummary>;
   getProjectRepoMappings(): Promise<ProjectRepoMappingsSnapshot>;
   setProjectWorkspaceRoot(workspaceRoot: string | null): Promise<ProjectRepoMappingsSnapshot>;
   setProjectRepoMapping(projectKey: string, repoRelativePaths: string[]): Promise<ProjectRepoMappingsSnapshot>;
@@ -91,13 +98,20 @@ export interface ElectronApi {
   continueTicketRunWork(runId: string, prompt?: string): Promise<ContinueTicketRunWorkResult>;
   cancelTicketRunWork(runId: string): Promise<CancelTicketRunWorkResult>;
   completeTicketRun(runId: string): Promise<CompleteTicketRunResult>;
-  getTicketRunGitState(runId: string): Promise<TicketRunGitStateResult>;
-  generateTicketRunCommitDraft(runId: string): Promise<GenerateTicketRunCommitDraftResult>;
-  setTicketRunCommitDraft(runId: string, message: string): Promise<SetTicketRunCommitDraftResult>;
-  commitTicketRun(runId: string, message: string): Promise<CommitTicketRunResult>;
-  publishTicketRun(runId: string): Promise<SyncTicketRunRemoteResult>;
-  pushTicketRun(runId: string): Promise<SyncTicketRunRemoteResult>;
-  createTicketRunPullRequest(runId: string): Promise<CreateTicketRunPullRequestResult>;
+  getTicketRunGitState(runId: string, repoRelativePath?: string): Promise<TicketRunGitStateResult>;
+  generateTicketRunCommitDraft(runId: string, repoRelativePath?: string): Promise<GenerateTicketRunCommitDraftResult>;
+  setTicketRunCommitDraft(
+    runId: string,
+    message: string,
+    repoRelativePath?: string,
+  ): Promise<SetTicketRunCommitDraftResult>;
+  commitTicketRun(runId: string, message: string, repoRelativePath?: string): Promise<CommitTicketRunResult>;
+  publishTicketRun(runId: string, repoRelativePath?: string): Promise<SyncTicketRunRemoteResult>;
+  pushTicketRun(runId: string, repoRelativePath?: string): Promise<SyncTicketRunRemoteResult>;
+  createTicketRunPullRequest(runId: string, repoRelativePath?: string): Promise<CreateTicketRunPullRequestResult>;
+  getTicketRunServices(runId: string): Promise<MissionServiceSnapshot>;
+  startTicketRunService(runId: string, profileId: string): Promise<MissionServiceSnapshot>;
+  stopTicketRunService(runId: string, serviceId: string): Promise<MissionServiceSnapshot>;
   pickDirectory(title?: string): Promise<string | null>;
   openExternal(url: string): Promise<void>;
   getRuntimeConfig(): Promise<RuntimeConfigSummary>;
@@ -125,6 +139,7 @@ export interface ElectronApi {
   onPermissionComplete(
     handler: (payload: { requestId: string; result: "approved" | "denied" | "expired"; stationId?: StationId }) => void,
   ): () => void;
+  onTicketRunServicesUpdated(handler: (services: MissionServiceSnapshot) => void): () => void;
   onMcpStatus(handler: (servers: McpServerStatus[]) => void): () => void;
   onSubagentCatalog(handler: (agents: SubagentDomain[]) => void): () => void;
   onAudioLevel(handler: (level: number) => void): () => void;
