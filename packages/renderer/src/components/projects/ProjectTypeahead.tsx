@@ -12,6 +12,8 @@ interface ProjectTypeaheadProps {
   onResolvedProjectChange: (project: YouTrackProjectSummary | null) => void;
 }
 
+const PROJECT_SUGGESTION_LIMIT = 20;
+
 export function ProjectTypeahead({
   inputId,
   value,
@@ -50,7 +52,7 @@ export function ProjectTypeahead({
       setIsSearching(true);
       setSearchError(null);
       void window.electronAPI
-        .searchYouTrackProjects(trimmedValue, 8)
+        .searchYouTrackProjects(trimmedValue, PROJECT_SUGGESTION_LIMIT)
         .then((projects) => {
           if (cancelled) {
             return;

@@ -35,20 +35,46 @@ const statusClassName = (status: ToolCallStatus): string => {
 
 export function FlightLayer({ flights, trackRef, roomNodesRef }: FlightLayerProps) {
   const [positionedFlights, setPositionedFlights] = useState<PositionedFlight[]>([]);
+  const [expiryTick, setExpiryTick] = useState(0);
 
-  const activeFlights = useMemo(
-    () =>
-      flights.filter((flight) => {
-        if (!flight.completedAt) {
-          return true;
-        }
+  const activeFlights = useMemo(() => {
+    const now = Date.now();
+    return flights.filter((flight) => {
+      if (!flight.completedAt) {
+        return true;
+      }
 
-        return Date.now() - flight.completedAt < RECENT_COMPLETION_MS;
-      }),
-    [flights],
-  );
+      return now - flight.completedAt < RECENT_COMPLETION_MS;
+    });
+  }, [flights, expiryTick]);
 
   useEffect(() => {
+    const nextExpiryDelay = flights.reduce<number | null>((nearest, flight) => {
+      if (!flight.completedAt) {
+        return nearest;
+      }
+
+      const remaining = flight.completedAt + RECENT_COMPLETION_MS - Date.now();
+      if (remaining <= 0) {
+        return nearest;
+      }
+
+      return nearest === null ? remaining : Math.min(nearest, remaining);
+    }, null);
+    if (nextExpiryDelay === null) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      setExpiryTick((current) => current + 1);
+    }, nextExpiryDelay);
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [flights, expiryTick]);
+
+  useEffect(() => {
+    let frameId: number | null = null;
     const updatePositions = () => {
       const trackNode = trackRef.current;
       if (!trackNode) {
@@ -80,17 +106,51 @@ export function FlightLayer({ flights, trackRef, roomNodesRef }: FlightLayerProp
       setPositionedFlights(nextFlights);
     };
 
-    updatePositions();
+    const scheduleUpdate = () => {
+      if (frameId !== null) {
+        return;
+      }
+
+      frameId = window.requestAnimationFrame(() => {
+        frameId = null;
+        updatePositions();
+      });
+    };
+
+    scheduleUpdate();
 
     const trackNode = trackRef.current;
-    trackNode?.addEventListener("scroll", updatePositions, { passive: true });
-    window.addEventListener("resize", updatePositions);
-    const intervalId = window.setInterval(updatePositions, 250);
+    trackNode?.addEventListener("scroll", scheduleUpdate, { passive: true });
+    window.addEventListener("resize", scheduleUpdate);
+
+    const resizeObserver = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(() => scheduleUpdate());
+    if (resizeObserver) {
+      if (trackNode) {
+        resizeObserver.observe(trackNode);
+      }
+
+      const observedNodes = new Set<HTMLButtonElement>();
+      for (const flight of activeFlights) {
+        const fromNode = roomNodesRef.current.get(flight.fromRoomId);
+        const toNode = roomNodesRef.current.get(flight.toRoomId);
+        if (fromNode && !observedNodes.has(fromNode)) {
+          resizeObserver.observe(fromNode);
+          observedNodes.add(fromNode);
+        }
+        if (toNode && !observedNodes.has(toNode)) {
+          resizeObserver.observe(toNode);
+          observedNodes.add(toNode);
+        }
+      }
+    }
 
     return () => {
-      trackNode?.removeEventListener("scroll", updatePositions);
-      window.removeEventListener("resize", updatePositions);
-      window.clearInterval(intervalId);
+      if (frameId !== null) {
+        window.cancelAnimationFrame(frameId);
+      }
+      trackNode?.removeEventListener("scroll", scheduleUpdate);
+      window.removeEventListener("resize", scheduleUpdate);
+      resizeObserver?.disconnect();
     };
   }, [activeFlights, roomNodesRef, trackRef]);
 

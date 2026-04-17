@@ -14,15 +14,29 @@ registerWindowTools(server);
 registerUiAutomationTools(server);
 registerChromiumTools(server);
 
-await pruneStaleCaptureFiles();
+const cleanupCaptureDirectoryOnExit = () => {
+  void cleanupCaptureDirectory().catch((error) => {
+    console.warn("[spira-windows-ui] Failed to clean up capture directory during shutdown", error);
+  });
+};
+
+const pruneStaleCaptureFilesOnStartup = async () => {
+  try {
+    await pruneStaleCaptureFiles();
+  } catch (error) {
+    console.warn("[spira-windows-ui] Failed to prune stale capture files during startup", error);
+  }
+};
+
+await pruneStaleCaptureFilesOnStartup();
 process.once("beforeExit", () => {
-  void cleanupCaptureDirectory();
+  cleanupCaptureDirectoryOnExit();
 });
 process.once("SIGINT", () => {
-  void cleanupCaptureDirectory();
+  cleanupCaptureDirectoryOnExit();
 });
 process.once("SIGTERM", () => {
-  void cleanupCaptureDirectory();
+  cleanupCaptureDirectoryOnExit();
 });
 
 const transport = new StdioServerTransport();

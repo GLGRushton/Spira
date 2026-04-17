@@ -19,6 +19,7 @@ export interface ChatSessionState {
   messages: ChatMessage[];
   activeConversationId: string | null;
   activeConversationTitle: string | null;
+  historyWasTrimmed: boolean;
   draft: string;
   composerFocusToken: number;
   sessionNotice: ChatSessionNotice | null;
@@ -65,8 +66,13 @@ const hasMeaningfulAssistantState = (message: ChatMessage): boolean =>
   hasVisibleToolActivity(message) ||
   message.wasAborted === true;
 
-const trimMessages = (messages: ChatMessage[]): ChatMessage[] =>
-  messages.slice(-MAX_MESSAGES).filter(hasMeaningfulAssistantState);
+const trimMessages = (messages: ChatMessage[]): { messages: ChatMessage[]; wasTrimmed: boolean } => {
+  const meaningfulMessages = messages.filter(hasMeaningfulAssistantState);
+  return {
+    messages: meaningfulMessages.slice(-MAX_MESSAGES),
+    wasTrimmed: meaningfulMessages.length > MAX_MESSAGES,
+  };
+};
 
 export const getLatestCompletedAssistantMessage = (messages: ChatMessage[]): ChatMessage | undefined => {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
@@ -109,6 +115,7 @@ export const createEmptyChatSessionState = (): ChatSessionState => ({
   messages: [],
   activeConversationId: null,
   activeConversationTitle: null,
+  historyWasTrimmed: false,
   draft: "",
   composerFocusToken: 0,
   sessionNotice: null,
@@ -135,11 +142,37 @@ const createAssistantMessage = (id: string): ChatMessage => ({
   timestamp: Date.now(),
 });
 
-const normalizeMessages = (messages: ChatMessage[]): ChatMessage[] =>
-  trimMessages(messages).map((message) => ({
-    ...message,
-    isStreaming: false,
-  }));
+const normalizeMessages = (messages: ChatMessage[]): { messages: ChatMessage[]; wasTrimmed: boolean } => {
+  const trimmed = trimMessages(messages);
+  return {
+    messages: trimmed.messages.map((message) => ({
+      ...message,
+      isStreaming: false,
+    })),
+    wasTrimmed: trimmed.wasTrimmed,
+  };
+};
+
+const getTrimmedSessionUpdate = (
+  session: ChatSessionState,
+  messages: ChatMessage[],
+): Pick<ChatSessionState, "messages" | "historyWasTrimmed"> => {
+  const trimmed = trimMessages(messages);
+  return {
+    messages: trimmed.messages,
+    historyWasTrimmed: session.historyWasTrimmed || trimmed.wasTrimmed,
+  };
+};
+
+const getNormalizedSessionUpdate = (
+  messages: ChatMessage[],
+): Pick<ChatSessionState, "messages" | "historyWasTrimmed"> => {
+  const normalized = normalizeMessages(messages);
+  return {
+    messages: normalized.messages,
+    historyWasTrimmed: normalized.wasTrimmed,
+  };
+};
 
 const ensureAssistantMessage = (messages: ChatMessage[], id: string): ChatMessage[] => {
   if (messages.some((message) => message.id === id)) {
@@ -222,7 +255,7 @@ export const useChatStore = create<ChatStore>((set) => ({
     set((state) =>
       updateSessionState(state, resolvedStationId, (session) => ({
         ...session,
-        messages: normalizeMessages(messages),
+        ...getNormalizedSessionUpdate(messages),
       })),
     );
   },
@@ -233,7 +266,7 @@ export const useChatStore = create<ChatStore>((set) => ({
         ...session,
         activeConversationId: conversation?.id ?? null,
         activeConversationTitle: conversation?.title ?? null,
-        messages: normalizeMessages(conversation?.messages ?? []),
+        ...getNormalizedSessionUpdate(conversation?.messages ?? []),
         isStreaming: false,
         isAborting: false,
         isResetConfirming: false,
@@ -271,7 +304,7 @@ export const useChatStore = create<ChatStore>((set) => ({
         ];
         return {
           ...session,
-          messages: trimMessages(next),
+          ...getTrimmedSessionUpdate(session, next),
         };
       }),
     );
@@ -310,7 +343,8 @@ export const useChatStore = create<ChatStore>((set) => ({
         const ensuredMessages = ensureAssistantMessage(session.messages, id);
         return {
           ...session,
-          messages: trimMessages(
+          ...getTrimmedSessionUpdate(
+            session,
             updateMessage(ensuredMessages, id, (message) => ({
               ...message,
               content,
@@ -329,7 +363,8 @@ export const useChatStore = create<ChatStore>((set) => ({
     set((state) =>
       updateSessionState(state, resolvedStationId, (session) => ({
         ...session,
-        messages: trimMessages(
+        ...getTrimmedSessionUpdate(
+          session,
           updateMessage(session.messages, id, (message) => ({
             ...message,
             isStreaming: false,
@@ -345,7 +380,8 @@ export const useChatStore = create<ChatStore>((set) => ({
     set((state) =>
       updateSessionState(state, resolvedStationId, (session) => ({
         ...session,
-        messages: trimMessages(
+        ...getTrimmedSessionUpdate(
+          session,
           session.messages.map((message) => {
             if (message.role !== "assistant" || !message.isStreaming) {
               return message;
@@ -367,7 +403,7 @@ export const useChatStore = create<ChatStore>((set) => ({
     set((state) =>
       updateSessionState(state, resolvedStationId, (session) => ({
         ...session,
-        messages: normalizeMessages(session.messages),
+        ...getTrimmedSessionUpdate(session, normalizeMessages(session.messages).messages),
         isStreaming: false,
       })),
     );
@@ -413,7 +449,8 @@ export const useChatStore = create<ChatStore>((set) => ({
     set((state) =>
       updateSessionState(state, resolvedStationId, (session) => ({
         ...session,
-        messages: trimMessages(
+        ...getTrimmedSessionUpdate(
+          session,
           updateMessage(session.messages, messageId, (message) => {
             const toolCalls = message.toolCalls ?? [];
             const resultPayload =
@@ -509,6 +546,7 @@ export const useChatStore = create<ChatStore>((set) => ({
       updateSessionState(state, resolvedStationId, (session) => ({
         ...session,
         messages: [],
+        historyWasTrimmed: false,
         draft: "",
         isStreaming: false,
         isAborting: false,

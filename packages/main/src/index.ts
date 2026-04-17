@@ -48,7 +48,7 @@ import type { IpcMainEvent, IpcMainInvokeEvent, OpenDialogOptions, Tray } from "
 import { BrowserWindow, app, dialog, ipcMain, safeStorage, shell } from "electron";
 import WebSocket from "ws";
 import { setupAutoUpdater } from "./auto-update.js";
-import { BackendLifecycle } from "./backend-lifecycle.js";
+import { BackendLifecycle, type BackendExitInfo } from "./backend-lifecycle.js";
 import { type IpcBridgeHandle, setupIpcBridge } from "./ipc-bridge.js";
 import { SpiraUiControlBridge } from "./spira-ui-control-bridge.js";
 import { createTray } from "./tray.js";
@@ -56,6 +56,7 @@ import { UpgradeOrchestrator } from "./upgrade-orchestrator.js";
 import { createWindow } from "./window.js";
 
 const BACKEND_PORT = 9720;
+const FATAL_SHUTDOWN_TIMEOUT_MS = 10_000;
 const WINDOW_CONTROL_CHANNEL = "spira:window-control";
 const CONNECTION_STATUS_GET_CHANNEL = "connection-status:get";
 const SETTINGS_GET_CHANNEL = "settings:get";
@@ -133,6 +134,7 @@ let upgradeOrchestrator: UpgradeOrchestrator | null = null;
 let uiControlBridge: SpiraUiControlBridge | null = null;
 let isQuitting = false;
 let shutdownPromise: Promise<void> | null = null;
+let fatalShutdownTriggered = false;
 let currentConnectionStatus: ConnectionStatus = "connecting";
 let rendererReadySequence = 0;
 const rendererReadyWaiters = new Set<{
@@ -454,6 +456,20 @@ const emitUpgradeProposal = (proposal: UpgradeProposal) => {
     accepted: decision.accepted,
     reason: decision.reason,
   });
+};
+
+const formatBackendExitDetails = (info: BackendExitInfo): string => {
+  const parts: string[] = [];
+  if (info.signal) {
+    parts.push(`signal ${info.signal}`);
+  }
+  if (info.code !== null) {
+    parts.push(`exit code ${info.code}`);
+  }
+  if (info.retryDelayMs !== null) {
+    parts.push(`retry in ${info.retryDelayMs}ms`);
+  }
+  return parts.length > 0 ? parts.join(", ") : "no exit details available";
 };
 
 type WindowControlAction = "minimize" | "maximize" | "close";
@@ -1244,6 +1260,37 @@ const shutdownApp = async (): Promise<void> => {
   await shutdownPromise;
 };
 
+const handleFatalMainProcessError = (scope: "exception" | "rejection", error: unknown): void => {
+  if (fatalShutdownTriggered) {
+    return;
+  }
+
+  fatalShutdownTriggered = true;
+  console.error(`Unhandled ${scope} in Spira main process. Shutting down.`, error);
+  if (!app.isReady()) {
+    process.exit(1);
+    return;
+  }
+
+  isQuitting = true;
+  const forceExitTimer = setTimeout(() => {
+    app.exit(1);
+  }, FATAL_SHUTDOWN_TIMEOUT_MS);
+  forceExitTimer.unref?.();
+  void shutdownApp().finally(() => {
+    clearTimeout(forceExitTimer);
+    app.exit(1);
+  });
+};
+
+process.on("uncaughtException", (error) => {
+  handleFatalMainProcessError("exception", error);
+});
+
+process.on("unhandledRejection", (reason) => {
+  handleFatalMainProcessError("rejection", reason);
+});
+
 ipcMain.on(WINDOW_CONTROL_CHANNEL, handleWindowControl);
 
 void app.whenReady().then(async () => {
@@ -1308,12 +1355,14 @@ void app.whenReady().then(async () => {
   }
 
   lifecycle = new BackendLifecycle(BACKEND_PORT, {
-    onFatal: () => {
+    onFatal: (info) => {
+      emitConnectionStatus("disconnected");
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send("spira:from-backend", {
           type: "error",
           code: "BACKEND_FATAL",
           message: "Backend failed to restart. Please restart Spira.",
+          details: formatBackendExitDetails(info),
         });
         mainWindow.webContents.send("spira:from-backend", { type: "state:change", state: "error" });
       }
@@ -1341,15 +1390,18 @@ void app.whenReady().then(async () => {
   lifecycle.onReady(() => {
     ensureWindow();
   });
-  lifecycle.onCrash(() => {
+  lifecycle.onCrash((info) => {
+    if (!info.willRetry) {
+      return;
+    }
+    emitConnectionStatus("disconnected");
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send("spira:from-backend", {
         type: "error",
         code: "BACKEND_CRASHED",
-        message: "The backend process crashed.",
+        message: "The backend process crashed and is restarting.",
+        details: formatBackendExitDetails(info),
       });
-      mainWindow.webContents.send("spira:from-backend", { type: "state:change", state: "error" });
-      emitConnectionStatus("disconnected");
     }
   });
   lifecycle.start();

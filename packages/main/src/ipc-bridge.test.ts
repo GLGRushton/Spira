@@ -149,6 +149,77 @@ describe("setupIpcBridge", () => {
     expect(forwardedMessages).not.toContain("conversation:recent:result");
   });
 
+  it("caps queued renderer messages while the backend handshake is pending", async () => {
+    const { setupIpcBridge } = await loadBridge();
+    const webContents = new FakeWebContents();
+    const window = {
+      isDestroyed: () => false,
+      webContents,
+    } as unknown as BrowserWindow;
+
+    setupIpcBridge(window, 9720, { rendererBuildId: "test-renderer" });
+    const socket = FakeWebSocket.instances[0];
+    socket?.open();
+    expect(getLastSentPayload(socket as FakeWebSocket)).toEqual({
+      type: "handshake",
+      protocolVersion: PROTOCOL_VERSION,
+      rendererBuildId: "test-renderer",
+    });
+
+    for (let index = 0; index < 205; index += 1) {
+      ipcMain.emit("spira:to-backend", {}, { type: "ping" });
+    }
+
+    socket?.receive({
+      type: "backend:hello",
+      generation: 7,
+      protocolVersion: PROTOCOL_VERSION,
+      backendBuildId: "backend-test",
+    });
+
+    expect((socket as FakeWebSocket).send).toHaveBeenCalledTimes(201);
+  });
+
+  it("rejects queued requests when the backend generation changes before replay", async () => {
+    vi.useFakeTimers();
+    try {
+      const { setupIpcBridge } = await loadBridge();
+      const webContents = new FakeWebContents();
+      const window = {
+        isDestroyed: () => false,
+        webContents,
+      } as unknown as BrowserWindow;
+
+      const bridge = setupIpcBridge(window, 9720, { rendererBuildId: "test-renderer" });
+      const firstSocket = FakeWebSocket.instances[0];
+      firstSocket?.open();
+      firstSocket?.receive({
+        type: "backend:hello",
+        generation: 7,
+        protocolVersion: PROTOCOL_VERSION,
+        backendBuildId: "backend-test",
+      });
+
+      firstSocket?.close();
+
+      const pendingConversation = bridge.getRecentConversation();
+      await vi.advanceTimersByTimeAsync(250);
+
+      const secondSocket = FakeWebSocket.instances[1];
+      secondSocket?.open();
+      secondSocket?.receive({
+        type: "backend:hello",
+        generation: 8,
+        protocolVersion: PROTOCOL_VERSION,
+        backendBuildId: "backend-test",
+      });
+
+      await expect(pendingConversation).rejects.toThrow("Backend restarted before the queued request could be sent.");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("requests YouTrack project suggestions through the backend bridge", async () => {
     const { setupIpcBridge } = await loadBridge();
     const webContents = new FakeWebContents();

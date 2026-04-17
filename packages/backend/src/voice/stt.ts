@@ -102,7 +102,7 @@ export class WhisperSttProvider implements ISttProvider {
     } catch (error) {
       throw new VoiceError("Whisper transcription failed", error);
     } finally {
-      await rm(wavPath, { force: true }).catch(() => undefined);
+      await this.cleanupWavFile(wavPath, "transcription");
     }
   }
 
@@ -110,6 +110,14 @@ export class WhisperSttProvider implements ISttProvider {
     this.initError = null;
     this.initialized = false;
     this.initializing = null;
+  }
+
+  private async cleanupWavFile(wavPath: string, stage: "warmup" | "transcription"): Promise<void> {
+    try {
+      await rm(wavPath, { force: true });
+    } catch (error) {
+      this.logger.warn({ error, stage, wavPath }, "Failed to remove temporary Whisper audio file");
+    }
   }
 
   private async prewarmModel(): Promise<void> {
@@ -134,7 +142,7 @@ export class WhisperSttProvider implements ISttProvider {
     } catch (error) {
       throw new VoiceError(`Failed to initialize Whisper model "${this.modelName}"`, error);
     } finally {
-      await rm(wavPath, { force: true }).catch(() => undefined);
+      await this.cleanupWavFile(wavPath, "warmup");
     }
   }
 

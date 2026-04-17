@@ -47,9 +47,7 @@ const RENDERER_FATAL_CHANNEL = "renderer:fatal";
 type WindowControlAction = "minimize" | "maximize" | "close";
 
 const serverMessageListeners = new Set<(message: ServerMessage) => void>();
-// TODO(multi-session): replay cache is currently keyed only by message type.
-// Before enabling concurrent station streaming, make this cache station-aware.
-const latestServerMessages = new Map<ServerMessage["type"], ServerMessage>();
+const latestServerMessages = new Map<string, ServerMessage>();
 const NON_REPLAYABLE_SERVER_MESSAGES = new Set<ServerMessage["type"]>([
   "station:created",
   "station:closed",
@@ -59,10 +57,37 @@ const NON_REPLAYABLE_SERVER_MESSAGES = new Set<ServerMessage["type"]>([
   "chat:new-session-complete",
   "missions:ticket-run:services:updated",
 ]);
+const getReplayStationId = (message: ServerMessage): string | undefined => {
+  const topLevelStationId = (message as { stationId?: unknown }).stationId;
+  if (typeof topLevelStationId === "string" && topLevelStationId.length > 0) {
+    return topLevelStationId;
+  }
+
+  if (message.type === "permission:request" && typeof message.request.stationId === "string") {
+    return message.request.stationId;
+  }
+
+  return undefined;
+};
+const getReplayCacheKey = (message: ServerMessage): string => {
+  const stationId = getReplayStationId(message);
+  return stationId ? `${message.type}:${stationId}` : message.type;
+};
+const dropStationReplayMessages = (stationId: string): void => {
+  const stationSuffix = `:${stationId}`;
+  for (const key of latestServerMessages.keys()) {
+    if (key.endsWith(stationSuffix)) {
+      latestServerMessages.delete(key);
+    }
+  }
+};
 
 ipcRenderer.on("spira:from-backend", (_event: IpcRendererEvent, message: ServerMessage) => {
+  if (message.type === "station:closed" && typeof message.stationId === "string") {
+    dropStationReplayMessages(message.stationId);
+  }
   if (!NON_REPLAYABLE_SERVER_MESSAGES.has(message.type)) {
-    latestServerMessages.set(message.type, message);
+    latestServerMessages.set(getReplayCacheKey(message), message);
   }
   for (const listener of serverMessageListeners) {
     listener(message);
@@ -79,8 +104,10 @@ const onServerMessage = <T extends ServerMessage["type"]>(
     }
   });
 
-  const cached = latestServerMessages.get(type);
-  if (cached) {
+  for (const cached of latestServerMessages.values()) {
+    if (cached.type !== type) {
+      continue;
+    }
     handler(cached as Extract<ServerMessage, { type: T }>);
   }
 

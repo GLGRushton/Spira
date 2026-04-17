@@ -136,6 +136,32 @@ describe("VoicePipeline", () => {
     expect(pipeline.isMuted()).toBe(true);
   });
 
+  it("throttles audio level events while listening", async () => {
+    const capture = new FakeAudioCapture();
+    const wakeWord = new FakeWakeWordProvider();
+    const stt = new FakeSttProvider();
+    const bus = new SpiraEventBus();
+    const levels: number[] = [];
+
+    bus.on("audio:level", ({ level }) => {
+      levels.push(level);
+    });
+
+    const pipeline = new VoicePipeline(capture as never, wakeWord as never, stt as never, bus, createLogger());
+    await pipeline.start();
+
+    pipeline.activatePushToTalk();
+    capture.emitFrame(new Int16Array([2_000, 2_000, 2_000, 2_000]));
+    advanceTime(50);
+    capture.emitFrame(new Int16Array([2_500, 2_500, 2_500, 2_500]));
+    advanceTime(49);
+    capture.emitFrame(new Int16Array([3_000, 3_000, 3_000, 3_000]));
+    advanceTime(1);
+    capture.emitFrame(new Int16Array([3_500, 3_500, 3_500, 3_500]));
+
+    expect(levels).toHaveLength(2);
+  });
+
   it("returns to idle after Copilot finishes responding", async () => {
     const capture = new FakeAudioCapture();
     const wakeWord = new FakeWakeWordProvider();

@@ -13,7 +13,7 @@ import { ConfigError } from "../util/errors.js";
 
 const execFileAsync = promisify(execFile);
 const MAX_LOG_LINES = 80;
-const PROCESS_TREE_POLL_INTERVAL_MS = 2_000;
+const PROCESS_TREE_POLL_INTERVAL_MS = 5_000;
 const START_SETTLE_DELAY_MS = 250;
 const STOP_TIMEOUT_MS = 8_000;
 

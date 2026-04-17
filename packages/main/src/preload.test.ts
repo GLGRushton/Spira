@@ -106,6 +106,76 @@ describe("preload electron API", () => {
     expect(received).toEqual([firstStatuses, secondStatuses]);
   });
 
+  it("replays cached station state independently for each station", async () => {
+    const api = await loadPreloadApi();
+    const received: Array<{ state: string; stationId?: string }> = [];
+
+    emitIpc("spira:from-backend", { type: "state:change", state: "thinking", stationId: "station-alpha" });
+    emitIpc("spira:from-backend", { type: "state:change", state: "idle", stationId: "station-bravo" });
+
+    api.onStateChange((payload) => {
+      received.push(payload);
+    });
+
+    expect(received).toEqual([
+      { state: "thinking", stationId: "station-alpha" },
+      { state: "idle", stationId: "station-bravo" },
+    ]);
+  });
+
+  it("drops cached station messages after a station closes", async () => {
+    const api = await loadPreloadApi();
+    const received: Array<{ state: string; stationId?: string }> = [];
+
+    emitIpc("spira:from-backend", { type: "state:change", state: "thinking", stationId: "station-alpha" });
+    emitIpc("spira:from-backend", { type: "station:closed", stationId: "station-alpha" });
+
+    api.onStateChange((payload) => {
+      received.push(payload);
+    });
+
+    expect(received).toEqual([]);
+  });
+
+  it("replays cached permission requests using nested station ids", async () => {
+    const api = await loadPreloadApi();
+    const received: Array<{ requestId: string; stationId?: string }> = [];
+
+    emitIpc("spira:from-backend", {
+      type: "permission:request",
+      request: {
+        requestId: "request-alpha",
+        stationId: "station-alpha",
+        kind: "mcp",
+        serverName: "Spira Vision",
+        toolName: "vision_capture_screen",
+        toolTitle: "Capture screen",
+        readOnly: true,
+      },
+    });
+    emitIpc("spira:from-backend", {
+      type: "permission:request",
+      request: {
+        requestId: "request-bravo",
+        stationId: "station-bravo",
+        kind: "mcp",
+        serverName: "Spira Vision",
+        toolName: "vision_read_screen",
+        toolTitle: "Read screen",
+        readOnly: true,
+      },
+    });
+
+    api.onPermissionRequest((payload) => {
+      received.push({ requestId: payload.requestId, stationId: payload.stationId });
+    });
+
+    expect(received).toEqual([
+      { requestId: "request-alpha", stationId: "station-alpha" },
+      { requestId: "request-bravo", stationId: "station-bravo" },
+    ]);
+  });
+
   it("does not replay non-replayable chat completion events", async () => {
     const api = await loadPreloadApi();
     const seen: Array<{ stationId?: string }> = [];

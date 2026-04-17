@@ -34,6 +34,7 @@ const EMPTY_SNAPSHOT: ProjectRepoMappingsSnapshot = {
 };
 
 const NEW_MAPPING_SENTINEL = "__new__";
+const YOUTRACK_TICKET_LIST_LIMIT = 50;
 type MissionsTabId = "quarterdeck" | MissionLaneTabId;
 type MissionSelection = { kind: "ticket"; ticketId: string } | { kind: "run"; runId: string };
 const MISSIONS_TAB_ORDER: MissionsTabId[] = ["quarterdeck", "launch-bay", "flight-deck", "dry-dock"];
@@ -317,7 +318,7 @@ export function ProjectsPanel() {
       setYouTrackStatus(statusResult.value);
       if (statusResult.value.state === "connected") {
         try {
-          setYouTrackTickets(await window.electronAPI.listYouTrackTickets(20));
+          setYouTrackTickets(await window.electronAPI.listYouTrackTickets(YOUTRACK_TICKET_LIST_LIMIT));
         } catch (ticketsLoadError) {
           console.error("Failed to load assigned YouTrack tickets", ticketsLoadError);
           setYouTrackTickets([]);
@@ -759,7 +760,7 @@ export function ProjectsPanel() {
       setYouTrackStateMappingDraft(cloneYouTrackStateMapping(nextStatus.stateMapping));
       if (nextStatus.state === "connected") {
         try {
-          setYouTrackTickets(await window.electronAPI.listYouTrackTickets(20));
+          setYouTrackTickets(await window.electronAPI.listYouTrackTickets(YOUTRACK_TICKET_LIST_LIMIT));
           setTicketError(null);
         } catch (ticketsLoadError) {
           console.error("Failed to refresh assigned YouTrack tickets", ticketsLoadError);
@@ -2462,7 +2463,9 @@ export function ProjectsPanel() {
                           type="button"
                           className={styles.secondaryButton}
                           onClick={() =>
-                            existingRun ? openRunMissionDetail(existingRun.runId) : openTicketMissionDetail(ticket.id, "launch-bay")
+                            existingRun
+                              ? openRunMissionDetail(existingRun.runId)
+                              : openTicketMissionDetail(ticket.id, "launch-bay")
                           }
                         >
                           {existingRun ? "Open mission" : "Mission details"}
@@ -2537,7 +2540,12 @@ export function ProjectsPanel() {
               {activeRuns.map((run) => {
                 const latestAttempt = run.attempts[run.attempts.length - 1] ?? null;
                 const boundStation = run.stationId ? stationMap[run.stationId] : null;
-                const detailLabel = run.status === "awaiting-review" ? "Review mission" : "Open mission";
+                const detailLabel =
+                  run.status === "awaiting-review"
+                    ? "Review mission"
+                    : run.status === "error"
+                      ? "Recover mission"
+                      : "Open mission";
                 return (
                   <article key={run.runId} className={styles.runCard}>
                     <div className={styles.workHeader}>
@@ -2563,9 +2571,11 @@ export function ProjectsPanel() {
                           ? "The mission workspace is prepared and waiting for launch."
                           : run.status === "blocked"
                             ? "YouTrack state sync needs attention."
-                            : run.status === "awaiting-review"
-                              ? "This mission is waiting on your review."
-                              : "Mission startup is still underway."}
+                            : run.status === "error"
+                              ? "This mission needs recovery attention."
+                              : run.status === "awaiting-review"
+                                ? "This mission is waiting on your review."
+                                : "Mission startup is still underway."}
                     </div>
                     {run.statusMessage ? <div className={styles.workHint}>{run.statusMessage}</div> : null}
                     <div className={styles.workActions}>

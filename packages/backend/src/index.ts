@@ -75,7 +75,9 @@ let missionServiceRegistry: MissionServiceRegistry | null = null;
 
 const BACKEND_BUILD_ID = process.env.SPIRA_BUILD_ID?.trim() || "dev";
 const BACKEND_GENERATION = Number(process.env.SPIRA_GENERATION ?? "0");
+const FATAL_SHUTDOWN_TIMEOUT_MS = 10_000;
 let shuttingDown = false;
+let exitScheduled = false;
 const pendingUpgradeProposalResponses = new Map<
   string,
   {
@@ -85,6 +87,7 @@ const pendingUpgradeProposalResponses = new Map<
   }
 >();
 const VOICE_ACKNOWLEDGEMENTS = ["On it.", "Understood.", "Right away.", "Heard you."] as const;
+type ShutdownReason = NodeJS.Signals | "manual" | "uncaughtException" | "unhandledRejection";
 
 const pickVoiceAcknowledgement = (text: string): string => {
   const normalizedLength = text.trim().length;
@@ -396,7 +399,7 @@ const clearPendingUpgradeProposalResponses = (reason: Error): void => {
   }
 };
 
-const shutdown = async (signal: NodeJS.Signals | "manual") => {
+const shutdown = async (signal: ShutdownReason) => {
   if (shuttingDown) {
     return;
   }
@@ -432,6 +435,21 @@ const shutdown = async (signal: NodeJS.Signals | "manual") => {
   youTrackService = null;
   server = null;
   bus = null;
+};
+
+const scheduleProcessExit = (reason: ShutdownReason, exitCode: number): void => {
+  if (exitScheduled) {
+    return;
+  }
+
+  exitScheduled = true;
+  const forceExitTimer = setUnrefTimeout(() => {
+    process.exit(exitCode);
+  }, FATAL_SHUTDOWN_TIMEOUT_MS);
+  void shutdown(reason).finally(() => {
+    clearTimeout(forceExitTimer);
+    process.exit(exitCode);
+  });
 };
 
 const handleClientMessage = async (message: ClientMessage): Promise<void> => {
@@ -1940,16 +1958,12 @@ try {
 } catch (error) {
   const wrapped = error instanceof ConfigError ? error : new ConfigError("Failed to start backend", error);
   logger.error({ error: wrapped }, wrapped.message);
-  void shutdown("manual").finally(() => {
-    process.exit(1);
-  });
+  scheduleProcessExit("manual", 1);
 }
 
 process.on("message", (message: unknown) => {
   if (message && typeof message === "object" && (message as { type?: string }).type === "shutdown") {
-    void shutdown("manual").finally(() => {
-      process.exit(0);
-    });
+    scheduleProcessExit("manual", 0);
     return;
   }
 
@@ -1980,14 +1994,20 @@ process.on("message", (message: unknown) => {
   }
 });
 
+process.on("uncaughtException", (error) => {
+  logger.fatal({ error }, "Unhandled exception in backend process");
+  scheduleProcessExit("uncaughtException", 1);
+});
+
+process.on("unhandledRejection", (reason) => {
+  logger.fatal({ reason }, "Unhandled promise rejection in backend process");
+  scheduleProcessExit("unhandledRejection", 1);
+});
+
 process.on("SIGINT", () => {
-  void shutdown("SIGINT").finally(() => {
-    process.exit(0);
-  });
+  scheduleProcessExit("SIGINT", 0);
 });
 
 process.on("SIGTERM", () => {
-  void shutdown("SIGTERM").finally(() => {
-    process.exit(0);
-  });
+  scheduleProcessExit("SIGTERM", 0);
 });

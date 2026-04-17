@@ -8,6 +8,7 @@ import {
   type VoicePipelineState,
 } from "@spira/shared";
 import WebSocket, { WebSocketServer } from "ws";
+import { parseClientMessagePayload } from "./client-message-validation.js";
 import type { EventMap, SpiraEventBus } from "./util/event-bus.js";
 import { createLogger } from "./util/logger.js";
 
@@ -151,19 +152,20 @@ export class WsServer {
   }
 
   private parseClientMessage(raw: string): ClientMessage | null {
-    try {
-      return JSON.parse(raw) as ClientMessage;
-    } catch (error) {
-      logger.warn({ error, raw }, "Ignoring invalid client payload");
-      this.send({
-        type: "error",
-        code: "INVALID_MESSAGE",
-        message: "Invalid client message payload",
-        details: String(error),
-        source: "transport",
-      });
-      return null;
+    const parsed = parseClientMessagePayload(raw);
+    if (parsed.message) {
+      return parsed.message;
     }
+
+    logger.warn({ details: parsed.errorDetails, raw }, "Ignoring invalid client payload");
+    this.send({
+      type: "error",
+      code: "INVALID_MESSAGE",
+      message: "Invalid client message payload",
+      details: parsed.errorDetails,
+      source: "transport",
+    });
+    return null;
   }
 
   private registerBusHandler<K extends keyof EventMap>(event: K, listener: (...args: EventMap[K]) => void): () => void {

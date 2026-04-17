@@ -509,9 +509,13 @@ export function useMissionRunController(run: TicketRunSummary): MissionRunContro
       setRunSnapshot(result.snapshot);
       setContinueDraft("");
       setRunNotice(
-        result.reusedLiveAttempt
-          ? `${result.run.ticketId} resumed in its existing mission station.`
-          : `${result.run.ticketId} started a fresh follow-up pass.`,
+        run.status === "error"
+          ? result.reusedLiveAttempt
+            ? `${result.run.ticketId} resumed after the failed launch without leaving its mission station.`
+            : `${result.run.ticketId} started a fresh recovery pass.`
+          : result.reusedLiveAttempt
+            ? `${result.run.ticketId} resumed in its existing mission station.`
+            : `${result.run.ticketId} started a fresh follow-up pass.`,
       );
     } catch (error) {
       console.error("Failed to continue mission work", error);
@@ -519,7 +523,7 @@ export function useMissionRunController(run: TicketRunSummary): MissionRunContro
     } finally {
       setIsContinuingWork(false);
     }
-  }, [continueDraft, run.runId, setRunSnapshot]);
+  }, [continueDraft, run.runId, run.status, setRunSnapshot]);
 
   const cancelRunWork = useCallback(async () => {
     setIsCancellingWork(true);

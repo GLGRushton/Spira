@@ -48,6 +48,14 @@ export interface WindowCaptureResult extends WindowInfo {
   capturedAt: string;
 }
 
+const pruneStaleCaptureFilesSafely = async (): Promise<void> => {
+  try {
+    await pruneStaleCaptureFiles();
+  } catch (error) {
+    console.warn("[spira-windows-ui] Failed to prune stale capture files before window capture", error);
+  }
+};
+
 export interface VirtualListResult {
   window: WindowInfo;
   targetPath: number[];
@@ -832,7 +840,7 @@ export async function listWindows(): Promise<WindowInfo[]> {
 }
 
 export async function captureWindow(target: WindowTarget, preferPrintWindow: boolean): Promise<WindowCaptureResult> {
-  await pruneStaleCaptureFiles();
+  await pruneStaleCaptureFilesSafely();
   const imagePath = await createCapturePath("window");
 
   const result = await runAutomationScript<Omit<WindowCaptureResult, "capturedAt">>(

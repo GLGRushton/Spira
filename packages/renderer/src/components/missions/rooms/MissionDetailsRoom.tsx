@@ -13,8 +13,11 @@ interface MissionDetailsRoomProps {
 
 export function MissionDetailsRoom({ run, controller }: MissionDetailsRoomProps) {
   const setMissionRoom = useNavigationStore((store) => store.setMissionRoom);
-  const stationLabel = useStationStore((store) => (run.stationId ? store.stations[run.stationId]?.label ?? run.stationId : null));
+  const stationLabel = useStationStore((store) =>
+    run.stationId ? (store.stations[run.stationId]?.label ?? run.stationId) : null,
+  );
   const latestAttempt = run.attempts[run.attempts.length - 1] ?? null;
+  const canRecoverErroredRun = run.status === "error" && run.attempts.length > 0;
 
   return (
     <section className={shellStyles.roomSection}>
@@ -54,7 +57,8 @@ export function MissionDetailsRoom({ run, controller }: MissionDetailsRoomProps)
           <div>
             <div className={projectStyles.sectionLabel}>Mission actions</div>
             <div className={projectStyles.sectionCaption}>
-              Command flow lives here. Git workflow and launch profiles have their own rooms now; cleaner decks, fewer collisions.
+              Command flow lives here. Git workflow and launch profiles have their own rooms now; cleaner decks, fewer
+              collisions.
             </div>
           </div>
           {run.stationId ? (
@@ -147,6 +151,43 @@ export function MissionDetailsRoom({ run, controller }: MissionDetailsRoomProps)
               </button>
             </div>
           </div>
+        ) : null}
+
+        {run.status === "error" ? (
+          canRecoverErroredRun ? (
+            <div className={projectStyles.reviewPanel}>
+              <div className={projectStyles.workMeta}>
+                The last launch failed before the next pass could settle. Add a corrective prompt or retry the pass
+                as-is.
+              </div>
+              <label className={projectStyles.field}>
+                <span>Recovery prompt</span>
+                <textarea
+                  className={`${projectStyles.input} ${projectStyles.textarea}`}
+                  value={controller.continueDraft}
+                  onChange={(event) => controller.setContinueDraft(event.target.value)}
+                  placeholder="Optional: tell Shinra what to correct before retrying the pass."
+                />
+              </label>
+              <div className={projectStyles.inlineActions}>
+                <button
+                  type="button"
+                  className={projectStyles.actionButton}
+                  onClick={() => void controller.continueRunWork()}
+                  disabled={controller.isContinuingWork}
+                >
+                  {controller.isContinuingWork ? "Retrying..." : "Retry failed pass"}
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className={projectStyles.workActions}>
+              <span className={projectStyles.workMeta}>
+                This mission failed before a fresh pass could recover itself. Review the worktrees below, then relaunch
+                from the ticket lane once the underlying issue is resolved.
+              </span>
+            </div>
+          )
         ) : null}
       </article>
 

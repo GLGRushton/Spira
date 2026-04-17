@@ -2,12 +2,18 @@
   word-break: break-word;
 }
 
-.text > :last-child::after {
+.text::after {
   content: "▋";
   display: inline-block;
   margin-left: 3px;
   color: var(--accent-cyan);
   animation: blink 0.9s steps(1) infinite;
+}
+
+.plain {
+  margin: 0;
+  white-space: pre-wrap;
+  font: inherit;
 }
 
 @keyframes blink {

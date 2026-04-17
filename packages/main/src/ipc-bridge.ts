@@ -48,6 +48,7 @@ const REPLAYABLE_SERVER_MESSAGES = new Set<ServerMessage["type"]>([
 ]);
 const DEFAULT_BACKEND_REQUEST_TIMEOUT_MS = 10_000;
 const MISSION_GIT_REQUEST_TIMEOUT_MS = 30_000;
+const MAX_PENDING_MESSAGES = 200;
 
 type ConversationRequestMessage = Extract<ClientMessage, { requestId: string }>;
 type ConversationResponseMessage =
@@ -131,6 +132,11 @@ interface IpcBridgeRequest {
   timer: NodeJS.Timeout;
 }
 
+interface PendingOutboundMessage {
+  serialized: string;
+  onDropped?: (reason: "overflow" | "generation-change") => void;
+}
+
 export interface IpcBridgeHandle {
   dispose(): void;
   getRecentConversation(): Promise<StoredConversation | null>;
@@ -209,7 +215,7 @@ export function setupIpcBridge(
   backendPort: number,
   options: IpcBridgeOptions = {},
 ): IpcBridgeHandle {
-  const pending: string[] = [];
+  const pending: PendingOutboundMessage[] = [];
   const rendererBuildId = options.rendererBuildId ?? "dev";
   const handshakeMessage = JSON.stringify({
     type: "handshake",
@@ -243,7 +249,7 @@ export function setupIpcBridge(
       socket.send(serialized);
       return;
     }
-    pending.push(serialized);
+    enqueuePendingMessage({ serialized });
   };
 
   const clearPendingRequest = (requestId: string) => {
@@ -254,6 +260,14 @@ export function setupIpcBridge(
 
     clearTimeout(request.timer);
     pendingRequests.delete(requestId);
+  };
+
+  const enqueuePendingMessage = (entry: PendingOutboundMessage) => {
+    if (pending.length >= MAX_PENDING_MESSAGES) {
+      pending.shift()?.onDropped?.("overflow");
+    }
+
+    pending.push(entry);
   };
 
   const rejectPendingRequests = (error: Error) => {
@@ -293,7 +307,19 @@ export function setupIpcBridge(
         return;
       }
 
-      pending.push(serialized);
+      enqueuePendingMessage({
+        serialized,
+        onDropped: (reason) => {
+          clearPendingRequest(message.requestId);
+          reject(
+            new Error(
+              reason === "generation-change"
+                ? "Backend restarted before the queued request could be sent."
+                : "Backend request queue filled while disconnected.",
+            ),
+          );
+        },
+      });
     });
 
   const forwardToRenderer = (message: ServerMessage) => {
@@ -393,6 +419,9 @@ export function setupIpcBridge(
 
       if (parsed.type === "backend:hello") {
         if (lastBackendGeneration !== null && parsed.generation !== lastBackendGeneration) {
+          for (const message of pending) {
+            message.onDropped?.("generation-change");
+          }
           pending.length = 0;
         }
         lastBackendGeneration = parsed.generation;
@@ -400,7 +429,7 @@ export function setupIpcBridge(
         reconnectAttempt = 0;
         emitConnectionStatus("connected");
         for (const message of pending) {
-          socket?.send(message);
+          socket?.send(message.serialized);
         }
         pending.length = 0;
       }

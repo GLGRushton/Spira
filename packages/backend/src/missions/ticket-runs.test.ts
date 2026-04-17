@@ -854,6 +854,66 @@ describe("TicketRunService", () => {
     });
   });
 
+  it("retries an errored continuation when earlier review attempts already exist", async () => {
+    const database = createTestDatabase();
+    database.upsertTicketRun({
+      runId: "run-1",
+      ticketId: "SPI-108",
+      ticketSummary: "Recover failed continuation",
+      ticketUrl: "https://example.youtrack.cloud/issue/SPI-108",
+      projectKey: "SPI",
+      status: "error",
+      statusMessage: "Failed to start mission work.",
+      createdAt: 100,
+      startedAt: 100,
+      worktrees: [
+        {
+          repoRelativePath: "service-api",
+          repoAbsolutePath: "C:\\Repos\\service-api",
+          worktreePath: "C:\\Repos\\.spira-worktrees\\spi-108-service-api",
+          branchName: "feat/spi-108-recover-failed-continuation",
+        },
+      ],
+      attempts: [
+        {
+          attemptId: "attempt-1",
+          subagentRunId: "subagent-1",
+          sequence: 1,
+          status: "completed",
+          summary: "Initial pass landed.",
+          followupNeeded: true,
+          startedAt: 100,
+          createdAt: 100,
+          updatedAt: 150,
+          completedAt: 150,
+        },
+      ],
+    });
+    const service = new TicketRunService({
+      memoryDb: database,
+      logger: createLogger(),
+      projectRegistry: { getSnapshot: async () => ({ workspaceRoot: null, repos: [], mappings: [] }) },
+      youTrackService: null,
+      launchMissionPass: vi.fn().mockResolvedValue({
+        stationId: "mission:run-1",
+        reusedLiveAttempt: false,
+        completion: Promise.resolve({ status: "completed", summary: "Recovery pass landed." }),
+      }),
+      attemptIdFactory: () => "attempt-2",
+      now: () => 200,
+    });
+
+    const result = await service.continueWork("run-1", "Retry the follow-up pass with more diagnostics.");
+    expect(result.reusedLiveAttempt).toBe(false);
+    expect(result.run.status).toBe("working");
+    expect(result.run.attempts[1]).toMatchObject({
+      attemptId: "attempt-2",
+      sequence: 2,
+      prompt: "Retry the follow-up pass with more diagnostics.",
+      status: "running",
+    });
+  });
+
   it("marks stranded working runs as awaiting review during explicit recovery", () => {
     const database = createTestDatabase();
     database.upsertTicketRun({

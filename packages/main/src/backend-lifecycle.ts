@@ -7,6 +7,12 @@ import { app } from "electron";
 import WebSocket from "ws";
 
 type Callback = () => void;
+export interface BackendExitInfo {
+  code: number | null;
+  signal: NodeJS.Signals | null;
+  willRetry: boolean;
+  retryDelayMs: number | null;
+}
 type BackendLifecycleMessage = { type: "upgrade:propose"; proposal: UpgradeProposal };
 type BackendLifecycleResponse = {
   type: "upgrade:proposal-response";
@@ -15,7 +21,7 @@ type BackendLifecycleResponse = {
   reason?: string;
 };
 interface BackendLifecycleOptions {
-  onFatal?: Callback;
+  onFatal?: (info: BackendExitInfo) => void;
   onMessage?: (message: BackendLifecycleMessage) => void;
 }
 
@@ -29,13 +35,13 @@ export class BackendLifecycle {
   private readonly MAX_RETRIES = 3;
   private readonly BASE_DELAY = 1000;
   private readonly readyCallbacks = new Set<Callback>();
-  private readonly crashCallbacks = new Set<Callback>();
+  private readonly crashCallbacks = new Set<(info: BackendExitInfo) => void>();
   private readonly backendPort: number;
   private stopping = false;
   private ready = false;
   private generation = 0;
   private stopPromise: Promise<void> | null = null;
-  private readonly onFatal?: Callback;
+  private readonly onFatal?: (info: BackendExitInfo) => void;
   private readonly onMessage?: (message: BackendLifecycleMessage) => void;
   private envOverrides: Record<string, string> = {};
 
@@ -101,7 +107,7 @@ export class BackendLifecycle {
     };
   }
 
-  onCrash(cb: Callback): () => void {
+  onCrash(cb: (info: BackendExitInfo) => void): () => void {
     this.crashCallbacks.add(cb);
     return () => {
       this.crashCallbacks.delete(cb);
@@ -202,32 +208,42 @@ export class BackendLifecycle {
 
     void this.waitForReady(myGeneration);
 
-    childEvents.once("exit", (_code: number | null, signal: NodeJS.Signals | null) => {
+    childEvents.once("exit", (code: number | null, signal: NodeJS.Signals | null) => {
       this.child = null;
       this.ready = false;
       if (this.stopping) {
         return;
       }
 
+      const willRetry = this.restartCount < this.MAX_RETRIES;
+      const retryDelayMs = willRetry ? Math.min(this.BASE_DELAY * 2 ** this.restartCount, 8000) : null;
+      const exitInfo: BackendExitInfo = {
+        code,
+        signal,
+        willRetry,
+        retryDelayMs,
+      };
+
       for (const callback of this.crashCallbacks) {
-        callback();
+        callback(exitInfo);
       }
 
-      if (this.restartCount >= this.MAX_RETRIES) {
+      if (!willRetry) {
         process.stderr.write("[backend] failed to restart after maximum retries; manual restart required\n");
-        this.onFatal?.();
+        this.onFatal?.(exitInfo);
         return;
       }
 
-      const delay = Math.min(this.BASE_DELAY * 2 ** this.restartCount, 8000);
       this.restartCount += 1;
       setTimeout(() => {
         if (!this.stopping) {
           this.spawnChild();
         }
-      }, delay);
+      }, retryDelayMs ?? 0);
 
-      process.stderr.write(`[backend] exited unexpectedly (${signal ?? "no signal"}); restarting in ${delay}ms\n`);
+      process.stderr.write(
+        `[backend] exited unexpectedly (${signal ?? `code ${code ?? "unknown"}`}); restarting in ${retryDelayMs}ms\n`,
+      );
     });
   }
 

@@ -156,6 +156,7 @@ describe("chat-store", () => {
     expect(getChatSession(useChatStore.getState(), PRIMARY_STATION_ID)).toMatchObject({
       activeConversationId: "conversation-1",
       activeConversationTitle: "Recovered thread",
+      historyWasTrimmed: false,
       messages: [
         {
           id: "assistant-1",
@@ -181,5 +182,21 @@ describe("chat-store", () => {
       draft: "Bravo draft",
       messages: [{ content: "Bravo thread" }],
     });
+  });
+
+  it("flags when older transcript entries are trimmed from the live view", () => {
+    useChatStore.getState().hydrateMessages(
+      Array.from({ length: 501 }, (_, index) => ({
+        id: `user-${index}`,
+        role: "user" as const,
+        content: `Message ${index}`,
+        timestamp: index,
+      })),
+    );
+
+    const session = getChatSession(useChatStore.getState(), PRIMARY_STATION_ID);
+    expect(session.messages).toHaveLength(500);
+    expect(session.messages[0]?.content).toBe("Message 1");
+    expect(session.historyWasTrimmed).toBe(true);
   });
 });

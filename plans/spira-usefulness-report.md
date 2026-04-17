@@ -1,29 +1,27 @@
 # Spira usefulness report
 
-_Collated from Shinra, Claude Sonnet 4.6, and Claude Opus 4.6._
+_Collated from Shinra, Claude Sonnet 4.6, and Claude Opus 4.6. Updated after implementation audit._
 
 ## Executive summary
 
-Spira already does a great deal. The next usefulness jump comes from making its strongest features easier to recover, easier to trust, and easier to search across longer-running work. Right now conversation continuity is visibly imperfect after reconnects, mission failures do not always explain themselves clearly, key diagnostics sit deeper in the UI than they should, and voice still lacks a few crucial pieces of desktop-grade feedback.
+Useful recovery work has landed, but it is still uneven. Trimmed live history is now visible instead of silent, errored mission runs can be retried from the mission detail room, and YouTrack discovery is less cramped than before. The remaining usefulness work is to turn those isolated wins into a broader continuity, recovery, and diagnostics experience that feels dependable instead of merely promising.
 
-## Highest-priority improvements
+## Remaining improvements
 
-| Priority | Improvement | Evidence in repo | Why it matters | Support |
+| Status | Improvement | Current state | What still needs doing | Support |
 |---|---|---|---|---|
-| 1 | Make continuity and retrieval first-class: trim notices, global archive search, deeper recovery context, and better "restore live context" behavior | `chat-store.ts` silently trims at 500 messages; `ConversationArchivePanel.tsx` warns that backend context may not match the visible transcript; `copilot\continuity.ts` uses only 8 messages and 3000 characters | Long-running work is exactly where users need Spira most. Continuity should feel dependable, not politely approximate | Shinra / Sonnet / Opus |
-| 2 | Add explicit mission recovery UX for error states | `MissionDetailsRoom.tsx` handles blocked, ready, working, and awaiting-review states, but there is no equally clear recovery section for generic `error` runs; mission controllers and `ProjectsPanel.tsx` still fall back to many console-only errors | When automation fails, the product should immediately answer "what broke, what can I retry, and where are the logs?" | Shinra / Sonnet / Opus |
-| 3 | Surface operator diagnostics where users actually look | `McpRoomDetail.tsx` already has remediation hints, but they are buried one room deep; `McpClusterDetail.tsx` overview does not foreground failure guidance; subagent rooms track live text and tool history but little structured progress | Spira already computes useful diagnostics. The next step is surfacing them before operators have to hunt | Shinra / Opus |
-| 4 | Improve voice feedback so it feels trustworthy in real desktop use | `backend\src\index.ts` uses a short fixed acknowledgement pool; `voice\pipeline.ts` has no user-facing listen-timeout signal; the UI does not show a partial transcript before processing starts | Voice is only as useful as the user's confidence that Spira heard the right thing | Shinra / Sonnet / Opus |
-| 5 | Expand the YouTrack/project surface beyond a narrow "assigned to me" slice | `ProjectsPanel.tsx` loads only `listYouTrackTickets(20)`; `ProjectTypeahead.tsx` searches just 8 projects at a time; configuration and workflow editing are split across multiple concepts | Mission setup becomes much more useful once Spira can browse, filter, and recover project context more flexibly | Shinra / Opus |
+| Partial | Finish continuity and retrieval first-class | `chat-store.ts` and `ChatPanel.tsx` now preserve and surface `historyWasTrimmed` instead of trimming silently. | Stronger archive discoverability, broader retrieval flows, deeper recovery context than the current narrow continuity preamble, and better "restore live context" behavior are still open. | Shinra / Sonnet / Opus |
+| Partial | Finish explicit mission recovery UX for error states | `MissionDetailsRoom.tsx`, `useMissionRunController.ts`, and `ticket-runs.ts` now support retrying errored continuation runs, and `ProjectsPanel.tsx` labels them as recovery work. | The UI still needs clearer error diagnostics, log/recovery affordances, and better treatment for runs that fail before a recoverable attempt exists. | Shinra / Sonnet / Opus |
+| Not started | Surface operator diagnostics where users actually look | The report's targeted MCP cluster/subagent diagnostic surfaces are untouched in this branch. | Expose failure guidance, live summaries, and remediation hints before users have to drill into deep detail rooms. | Shinra / Opus |
+| Not started | Improve voice feedback so it feels trustworthy in real desktop use | No user-facing partial transcript, listen-timeout cue, or richer acknowledgement/voice-confidence feedback landed. | Add visible listening/timeout state and earlier transcript feedback so voice feels dependable rather than optimistic. | Shinra / Sonnet / Opus |
+| Partial | Expand the YouTrack/project surface beyond a narrow assigned-to-me slice | `ProjectTypeahead.tsx` now returns up to 20 suggestions and `ProjectsPanel.tsx` loads 50 tickets instead of 20. | The surface is still bound to the same assigned-ticket slice, and the configuration/workflow model is still split across multiple concepts. | Shinra / Opus |
 
-## Recommended sequence
+## Updated sequence
 
-1. **Immediate:** add trim notices, stronger archive search/discoverability, and clearer mission error recovery.
-2. **Next:** expose cluster-level diagnostics, add voice timeout/transcript feedback, and expand project/ticket discovery.
-3. **Strategic:** improve restore-live-context behavior and deepen recovered context without bloating prompts.
+1. **Immediate:** finish continuity/retrieval and the rest of mission error recovery.
+2. **Next:** surface diagnostics where the user already is, not one room deeper.
+3. **Then:** make voice feedback trustworthy and widen project/ticket discovery beyond the current narrow slice.
 
 ## Notes
 
-- Several of the best usefulness wins do not require new backend capability; most are presentation, continuity, and recovery improvements.
-- The conversation archive is close to being a true knowledge surface. It mainly needs prominence and better continuity semantics.
-- A handful of continuity, diagnostics, and voice changes would make Spira feel much more like a dependable desktop operator and less like an impressive internal prototype.
+- No usefulness recommendation is fully closed yet; this report now names the remaining work directly.

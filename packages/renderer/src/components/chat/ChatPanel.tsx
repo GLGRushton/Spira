@@ -33,6 +33,7 @@ export function ChatPanel({ stationId }: ChatPanelProps) {
   const setActiveConversation = useChatStore((store) => store.setActiveConversation);
   const requestComposerFocus = useChatStore((store) => store.requestComposerFocus);
   const sessionNotice = useChatStore((store) => getChatSession(store, resolvedStationId).sessionNotice);
+  const historyWasTrimmed = useChatStore((store) => getChatSession(store, resolvedStationId).historyWasTrimmed);
   const setSessionNotice = useChatStore((store) => store.setSessionNotice);
   const setDraft = useChatStore((store) => store.setDraft);
   const setResetting = useChatStore((store) => store.setResetting);
@@ -109,12 +110,22 @@ export function ChatPanel({ stationId }: ChatPanelProps) {
       {sessionNotice ? (
         <div className={`${styles.notice} ${styles[sessionNotice.kind]}`} role="alert" aria-live="polite">
           <span>{sessionNotice.message}</span>
-          <button type="button" className={styles.noticeDismiss} onClick={() => setSessionNotice(null, resolvedStationId)}>
+          <button
+            type="button"
+            className={styles.noticeDismiss}
+            onClick={() => setSessionNotice(null, resolvedStationId)}
+          >
             Dismiss
           </button>
         </div>
       ) : null}
       <div ref={scrollRef} className={styles.messages}>
+        {historyWasTrimmed ? (
+          <div className={`${styles.notice} ${styles.info} ${styles.historyNotice}`} role="status" aria-live="polite">
+            Older transcript entries were trimmed from this live view to keep the session responsive. Restored and
+            stored conversations still come from the archive.
+          </div>
+        ) : null}
         {messages.length === 0 ? (
           <section className={styles.emptyState}>
             <div className={styles.emptyEyebrow}>Bridge / Mission log</div>

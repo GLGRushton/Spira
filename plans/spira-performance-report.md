@@ -1,31 +1,29 @@
 # Spira performance report
 
-_Collated from Shinra, Claude Sonnet 4.6, and Claude Opus 4.6._
+_Collated from Shinra, Claude Sonnet 4.6, and Claude Opus 4.6. Updated after implementation audit; completed items have been removed._
 
 ## Executive summary
 
-Spira's biggest speed losses are in live interaction paths, not in one-off startup work. The worst offenders are token-by-token chat updates, high-frequency voice telemetry crossing backend/WebSocket/Electron/renderer boundaries, and renderer layout polling that forces repeated measurement work. The next tier is heavyweight UI that mounts too much at once and backend refresh logic that tears down more session state than it needs to.
+The worst renderer hot path is healthier than when this report was first written: chat deltas are now batched, streaming markdown work is deferred, disconnected IPC requests are capped instead of growing forever, `audio:level` is throttled, `FlightLayer` no longer polls layout on an interval, and mission-service polling is less aggressive. The remaining work is narrower now: finish the chat path all the way through long histories, complete the voice/backpressure story, and tackle the heavyweight renderer surfaces that still mount too much at once.
 
-## Highest-priority improvements
+## Remaining improvements
 
-| Priority | Improvement | Evidence in repo | Why it matters | Support |
+| Status | Improvement | Current state | What still needs doing | Support |
 |---|---|---|---|---|
-| 1 | Rebuild the streaming chat path so deltas are batched, markdown is deferred, and long histories are virtualized | `packages\renderer\src\hooks\ipc\register-chat-handlers.ts` appends every token; `packages\renderer\src\stores\chat-store.ts` rescans session state on updates; `packages\renderer\src\components\chat\StreamingText.tsx` renders `ReactMarkdown` while streaming; `packages\renderer\src\components\chat\ChatPanel.tsx` renders up to 500 messages directly | This is the hottest user-facing loop. Today it does too much work too often and turns long responses into renderer churn | Shinra / Sonnet / Opus |
-| 2 | Throttle non-critical voice telemetry and add transport backpressure | `packages\backend\src\voice\pipeline.ts` emits `audio:level` about every 33ms; `packages\backend\src\server.ts` forwards `audio:level` and `tts:amplitude` immediately; `packages\main\src\ipc-bridge.ts` stores disconnected outbound messages in an unbounded `pending` array | Voice interaction currently sends far more messages than the UI needs, with no pressure relief when the renderer is slow or disconnected | Shinra / Sonnet / Opus |
-| 3 | Replace `FlightLayer` layout polling with a render-synced strategy | `packages\renderer\src\components\base\FlightLayer.tsx` calls `getBoundingClientRect()` for the track and room nodes, listens to scroll and resize, and also runs `setInterval(updatePositions, 250)` | This forces repeated layout measurement even when nothing meaningful changed, which is exactly how a deck animation becomes a tax on the whole renderer | Shinra / Opus |
-| 4 | Reduce mission-service polling and workspace rescans | `packages\backend\src\missions\service-pool.ts` polls process trees every 2 seconds; `packages\backend\src\projects\registry.ts` rescans the workspace recursively when mappings change; `packages\renderer\src\components\projects\ProjectsPanel.tsx` recomputes large derived collections inside one giant component | These are expensive system-facing operations that should be event-driven, cached, or at least less frequent | Shinra / Opus |
-| 5 | Lazy-load and isolate heavyweight mission/project UI | `packages\renderer\src\components\projects\ProjectsPanel.tsx` is 2693 lines; `packages\renderer\src\components\missions\useMissionRunController.ts` is 655 lines; `packages\renderer\src\components\SettingsPanel.tsx` is 405 lines | Large surfaces currently mount and re-evaluate more than they should. Splitting by tab and room reduces both startup work and incidental rerenders | Shinra / Sonnet / Opus |
-| 6 | Stop tearing down the Copilot session on every MCP inventory change | `packages\backend\src\copilot\session-manager.ts` refreshes on `mcp:servers-changed`; `getCurrentToolSignature()` rebuilds the tool inventory; idle refreshes disconnect the session instead of applying a cheaper migration path | Changing tool topology should not create a dead zone before the next prompt, especially during active operator setup | Shinra / Sonnet |
-| 7 | Pool voice buffers instead of allocating per captured frame | `packages\backend\src\voice\pipeline.ts` stores copied `Int16Array` frames and later concatenates them into a final PCM buffer | This is classic GC bait in an audio hot path and is avoidable with a ring buffer | Shinra / Sonnet / Opus |
+| Partial | Finish the streaming chat path | `register-chat-handlers.ts` now batches deltas, `StreamingText.tsx` renders plain text while streaming, and `ChatPanel.tsx` surfaces trim notices. | Long histories are still rendered directly in `ChatPanel.tsx`; there is no virtualization/windowing yet, and final render work still scales with the full visible message list. | Shinra / Sonnet / Opus |
+| Partial | Finish voice telemetry shaping and transport backpressure | `voice/pipeline.ts` now throttles `audio:level` to 100 ms, and `ipc-bridge.ts` caps disconnected pending messages at 200 with explicit overflow / generation-change failures. | `tts:amplitude` and other non-critical telemetry still flow immediately, and there is still no explicit end-to-end backpressure policy across backend, WebSocket, Electron, and renderer. | Shinra / Sonnet / Opus |
+| Partial | Reduce mission-service polling and workspace rescans | `service-pool.ts` now polls process trees every 5 seconds instead of every 2. | Workspace rescans and expensive project/mission derivations are still in place; this slice is only started, not solved. | Shinra / Opus |
+| Not started | Lazy-load and isolate heavyweight mission/project UI | No meaningful split or lazy-loading landed for `ProjectsPanel.tsx`, `useMissionRunController.ts`, or other heavyweight renderer surfaces. | Break the big project/mission surfaces into room/tab-level chunks so startup and incidental rerenders stop paying for the whole deck. | Shinra / Sonnet / Opus |
+| Not started | Stop tearing down the Copilot session on every MCP inventory change | No relevant changes landed in `copilot/session-manager.ts`. | Replace the current "disconnect and refresh" behavior with a cheaper migration or incremental tool refresh path. | Shinra / Sonnet |
+| Not started | Pool voice buffers instead of allocating per captured frame | `voice/pipeline.ts` still appends copied `Int16Array` frames and later concatenates them. | Move to a ring buffer or pooled-frame strategy to cut GC churn in the capture path. | Shinra / Sonnet / Opus |
 
-## Recommended sequence
+## Updated sequence
 
-1. **Immediate:** batch chat deltas, stop markdown parsing while the message is still streaming, and throttle voice telemetry.
-2. **Next:** add WebSocket/IPC backpressure, remove `FlightLayer` interval polling, and make mission-service refreshes more event-driven.
-3. **After that:** split and lazy-load the largest renderer surfaces, then make MCP tool-inventory refreshes cheap and non-disruptive.
+1. **Immediate:** finish long-history chat virtualization/windowing and complete the rest of the voice/backpressure shaping.
+2. **Next:** take the cheap system-facing wins by making mission/workspace refresh paths more event-driven.
+3. **Then:** split and lazy-load the heavyweight renderer surfaces and make Copilot tool refresh non-disruptive.
 
 ## Notes
 
-- The single most concentrated performance hotspot is the current chat streaming loop.
-- The cleanest near-term win is reducing high-frequency message traffic before it reaches React at all.
-- Performance and codebase structure are linked here: the giant project and mission surfaces are both slower and harder to reason about.
+- This report now tracks only unfinished performance work.
+- Completed items were intentionally removed during this audit.

@@ -15,6 +15,7 @@ const STT_TIMEOUT_MS = 30_000;
 const THINKING_TIMEOUT_MS = 30_000;
 const ERROR_RECOVERY_MS = 2_000;
 const DEFAULT_SAMPLE_RATE = 16_000;
+const AUDIO_LEVEL_EMIT_INTERVAL_MS = 100;
 
 export class VoicePipeline {
   private state: VoicePipelineState = "idle";
@@ -212,7 +213,7 @@ export class VoicePipeline {
     const now = Date.now();
     this.audioFrames.push(new Int16Array(frame));
 
-    if (now - this.lastLevelAt >= 33) {
+    if (now - this.lastLevelAt >= AUDIO_LEVEL_EMIT_INTERVAL_MS) {
       this.lastLevelAt = now;
       this.bus.emit("audio:level", { level: VoicePipeline.calculateLevel(frame) });
     }

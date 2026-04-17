@@ -36,6 +36,14 @@ type RawFullscreenCapture = {
   bounds: { x: number; y: number; width: number; height: number };
 };
 
+const pruneStaleCaptureFilesSafely = async (captureTarget: "active window" | "fullscreen"): Promise<void> => {
+  try {
+    await pruneStaleCaptureFiles();
+  } catch (error) {
+    console.warn(`[spira-vision] Failed to prune stale capture files before ${captureTarget} capture`, error);
+  }
+};
+
 const ACTIVE_WINDOW_CAPTURE_SCRIPT = (destinationPath: string): string => `
 Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName System.Windows.Forms
@@ -154,7 +162,7 @@ $bitmap.Dispose()
 `;
 
 export async function captureActiveWindow(): Promise<ActiveWindowCaptureResult> {
-  await pruneStaleCaptureFiles();
+  await pruneStaleCaptureFilesSafely("active window");
   const imagePath = await createCapturePath("active-window");
   const { stdout } = await runPs(ACTIVE_WINDOW_CAPTURE_SCRIPT(imagePath), 15_000);
   const result = JSON.parse(stdout) as RawActiveWindowCapture;
@@ -166,7 +174,7 @@ export async function captureActiveWindow(): Promise<ActiveWindowCaptureResult> 
 }
 
 export async function captureFullscreen(monitorIndex = 0): Promise<FullscreenCaptureResult> {
-  await pruneStaleCaptureFiles();
+  await pruneStaleCaptureFilesSafely("fullscreen");
   const imagePath = await createCapturePath(`screen-${monitorIndex}`);
   const { stdout } = await runPs(FULLSCREEN_CAPTURE_SCRIPT(imagePath, monitorIndex), 15_000);
   const result = JSON.parse(stdout) as RawFullscreenCapture;

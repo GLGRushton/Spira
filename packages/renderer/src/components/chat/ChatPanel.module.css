@@ -103,6 +103,11 @@
   line-height: 1.5;
 }
 
+.historyNotice {
+  justify-content: flex-start;
+  font-size: 0.84rem;
+}
+
 .warning {
   border-color: rgba(255, 204, 102, 0.28);
 }

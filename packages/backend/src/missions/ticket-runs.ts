@@ -682,7 +682,8 @@ export class TicketRunService {
   async continueWork(runId: string, prompt?: string): Promise<ContinueTicketRunWorkResult> {
     return this.withRunLock(runId, async () => {
       const run = this.getFreshRun(runId);
-      if (run.status !== "awaiting-review") {
+      const isRecoveringErroredContinuation = run.status === "error" && run.attempts.length > 0;
+      if (run.status !== "awaiting-review" && !isRecoveringErroredContinuation) {
         throw new ConfigError(`Ticket ${run.ticketId} is ${run.status} and is not ready for another pass.`);
       }
 
