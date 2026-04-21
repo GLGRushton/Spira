@@ -6,6 +6,7 @@
     { "path": "packages/backend" },
     { "path": "packages/main" },
     { "path": "packages/mcp-util" },
+    { "path": "packages/mcp-sql-server" },
     { "path": "packages/mcp-memories" },
     { "path": "packages/mcp-spira-ui" },
     { "path": "packages/mcp-spira-data-entry" },

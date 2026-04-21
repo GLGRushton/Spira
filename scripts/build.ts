@@ -12,6 +12,7 @@ const pathsToClean = [
   "packages/backend/dist",
   "packages/main/dist",
   "packages/mcp-util/dist",
+  "packages/mcp-sql-server/dist",
   "packages/mcp-memories/dist",
   "packages/mcp-spira-data-entry/dist",
   "packages/mcp-nexus-mods/dist",

@@ -56,7 +56,10 @@ const sanitizeBuiltinServerConfigForPersistence = (config: McpServerConfig): Mcp
         ...config,
         headers: undefined,
       }
-    : config;
+    : {
+        ...config,
+        env: undefined,
+      };
 
 export const toRuntimeConfig = (config: McpServerConfig): McpServerConfig => {
   if (process.env.NODE_ENV !== "development" || config.transport !== "stdio" || config.command !== "node") {

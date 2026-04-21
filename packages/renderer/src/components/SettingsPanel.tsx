@@ -14,10 +14,25 @@ import styles from "./SettingsPanel.module.css";
 
 const YOUTRACK_RUNTIME_CONFIG_KEYS: RuntimeConfigKey[] = ["youTrackBaseUrl", "youTrackToken"];
 const YOUTRACK_RUNTIME_CONFIG_KEY_SET = new Set<RuntimeConfigKey>(YOUTRACK_RUNTIME_CONFIG_KEYS);
+const SQL_SERVER_RUNTIME_CONFIG_KEYS: RuntimeConfigKey[] = [
+  "sqlServerServer",
+  "sqlServerPort",
+  "sqlServerUsername",
+  "sqlServerPassword",
+  "sqlServerEncrypt",
+  "sqlServerTrustServerCertificate",
+  "sqlServerAllowedDatabases",
+  "sqlServerRowLimit",
+  "sqlServerTimeoutMs",
+];
+const SQL_SERVER_RUNTIME_CONFIG_KEY_SET = new Set<RuntimeConfigKey>(SQL_SERVER_RUNTIME_CONFIG_KEYS);
 const MISSION_GIT_RUNTIME_CONFIG_KEYS: RuntimeConfigKey[] = ["missionGitHubToken"];
 const MISSION_GIT_RUNTIME_CONFIG_KEY_SET = new Set<RuntimeConfigKey>(MISSION_GIT_RUNTIME_CONFIG_KEYS);
 const OTHER_RUNTIME_CONFIG_KEYS = RUNTIME_CONFIG_KEYS.filter(
-  (key) => !YOUTRACK_RUNTIME_CONFIG_KEY_SET.has(key) && !MISSION_GIT_RUNTIME_CONFIG_KEY_SET.has(key),
+  (key) =>
+    !YOUTRACK_RUNTIME_CONFIG_KEY_SET.has(key) &&
+    !SQL_SERVER_RUNTIME_CONFIG_KEY_SET.has(key) &&
+    !MISSION_GIT_RUNTIME_CONFIG_KEY_SET.has(key),
 );
 
 export function SettingsPanel() {
@@ -165,7 +180,7 @@ export function SettingsPanel() {
           <div className={styles.secretControls}>
             <input
               className={styles.textInput}
-              type="password"
+              type={entry.secret ? "password" : "text"}
               value={draft}
               autoComplete="off"
               spellCheck={false}
@@ -376,6 +391,15 @@ export function SettingsPanel() {
                 <span className={styles.caption}>This is the only YouTrack setup that stays in Settings.</span>
               </div>
               <div className={styles.keyGrid}>{renderRuntimeConfigCards(YOUTRACK_RUNTIME_CONFIG_KEYS)}</div>
+            </div>
+            <div className={styles.configGroup}>
+              <div className={styles.groupHeader}>
+                <span className={styles.label}>SQL Server read-only MCP</span>
+                <span className={styles.caption}>
+                  Configure the dedicated SQL login, allowlist, and query caps for the built-in SQL Server tools.
+                </span>
+              </div>
+              <div className={styles.keyGrid}>{renderRuntimeConfigCards(SQL_SERVER_RUNTIME_CONFIG_KEYS)}</div>
             </div>
             <div className={styles.configGroup}>
               <div className={styles.groupHeader}>

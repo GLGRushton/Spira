@@ -30,6 +30,7 @@ import { MissionServiceRegistry } from "./missions/service-registry.js";
 import { type GenerateCommitDraftInput, TicketRunService } from "./missions/ticket-runs.js";
 import { ProjectRegistry } from "./projects/registry.js";
 import { WsServer } from "./server.js";
+import { MANAGED_SQL_SERVER_BUILTIN_SERVER_IDS, buildSqlServerBuiltinMcpServers } from "./sqlserver/builtin.js";
 import { SubagentRegistry } from "./subagent/registry.js";
 import { resolveAppPath } from "./util/app-paths.js";
 import { ConfigError, SpiraError, toErrorPayload } from "./util/errors.js";
@@ -2088,6 +2089,7 @@ const bootstrap = async () => {
   }
   const pool = new McpClientPool(bus, logger);
   const aggregator = new McpToolAggregator(pool);
+  const builtInSqlServerServers = buildSqlServerBuiltinMcpServers(env);
   const builtInYouTrackServers = buildYouTrackBuiltinMcpServers(env);
   const builtInYouTrackSubagents = buildYouTrackBuiltinSubagents(env);
   projectRegistry = new ProjectRegistry(memoryDb);
@@ -2200,8 +2202,8 @@ const bootstrap = async () => {
     logger,
     pool,
     memoryDb,
-    builtInYouTrackServers,
-    MANAGED_YOUTRACK_BUILTIN_SERVER_IDS,
+    [...builtInYouTrackServers, ...builtInSqlServerServers],
+    [...MANAGED_YOUTRACK_BUILTIN_SERVER_IDS, ...MANAGED_SQL_SERVER_BUILTIN_SERVER_IDS],
   );
   subagentRegistry = new SubagentRegistry(bus, memoryDb, builtInYouTrackSubagents, MANAGED_YOUTRACK_BUILTIN_DOMAIN_IDS);
   server = new WsServer(

@@ -6,6 +6,15 @@ export const RUNTIME_CONFIG_KEYS = [
   "nexusModsApiKey",
   "youTrackBaseUrl",
   "youTrackToken",
+  "sqlServerServer",
+  "sqlServerPort",
+  "sqlServerUsername",
+  "sqlServerPassword",
+  "sqlServerEncrypt",
+  "sqlServerTrustServerCertificate",
+  "sqlServerAllowedDatabases",
+  "sqlServerRowLimit",
+  "sqlServerTimeoutMs",
 ] as const;
 
 export type RuntimeConfigKey = (typeof RUNTIME_CONFIG_KEYS)[number];
@@ -18,7 +27,7 @@ export interface RuntimeConfigEntrySummary {
   description: string;
   configured: boolean;
   source: RuntimeConfigSource;
-  secret: true;
+  secret: boolean;
 }
 
 export type RuntimeConfigSummary = Record<RuntimeConfigKey, RuntimeConfigEntrySummary>;

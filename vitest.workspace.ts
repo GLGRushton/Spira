@@ -5,6 +5,7 @@ export default defineWorkspace([
   "packages/memory-db",
   "packages/backend",
   "packages/main",
+  "packages/mcp-sql-server",
   "packages/mcp-memories",
   "packages/mcp-util",
   "packages/mcp-nexus-mods",

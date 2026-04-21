@@ -9,6 +9,7 @@ directories:
 files:
   - packages/main/dist/**/*
   - packages/mcp-util/dist/**/*
+  - packages/mcp-sql-server/dist/**/*
   - packages/renderer/dist/**/*
   - packages/shared/dist/**/*
   - packages/memory-db/dist/**/*
@@ -30,6 +31,7 @@ files:
 asarUnpack:
   - packages/backend/dist/**/*
   - packages/mcp-util/dist/**/*
+  - packages/mcp-sql-server/dist/**/*
   - packages/memory-db/dist/**/*
   - packages/mcp-nexus-mods/dist/**/*
   - packages/mcp-vision/dist/**/*

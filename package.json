@@ -7,6 +7,7 @@
     "dev:backend": "pnpm -F @spira/backend dev",
     "dev:main": "pnpm -F @spira/main dev",
     "dev:renderer": "pnpm -F @spira/renderer dev",
+    "dev:mcp-sql-server": "pnpm -F @spira/mcp-sql-server dev",
     "dev:mcp-nexus": "pnpm -F @spira/mcp-nexus-mods dev",
     "dev:mcp-memories": "pnpm -F @spira/mcp-memories dev",
     "dev:mcp-spira-data-entry": "pnpm -F @spira/mcp-spira-data-entry dev",

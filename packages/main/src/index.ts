@@ -266,42 +266,106 @@ const normalizeThreshold = (value: unknown): number | undefined => {
   return Math.min(1, Math.max(0, value));
 };
 
-const RUNTIME_CONFIG_METADATA: Record<RuntimeConfigKey, { envKey: string; label: string; description: string }> = {
+const RUNTIME_CONFIG_METADATA: Record<
+  RuntimeConfigKey,
+  { envKey: string; label: string; description: string; secret: boolean }
+> = {
   githubToken: {
     envKey: "GITHUB_TOKEN",
     label: "GitHub token",
     description: "Used for GitHub-authenticated Copilot flows when available.",
+    secret: true,
   },
   missionGitHubToken: {
     envKey: "MISSION_GITHUB_TOKEN",
     label: "Mission GitHub PAT",
     description:
       "Used for mission submodule hydration, commits, publish, push, and deriving the GitHub author identity.",
+    secret: true,
   },
   elevenLabsApiKey: {
     envKey: "ELEVENLABS_API_KEY",
     label: "ElevenLabs API key",
     description: "Required for ElevenLabs cloud speech synthesis.",
+    secret: true,
   },
   picovoiceAccessKey: {
     envKey: "PICOVOICE_ACCESS_KEY",
     label: "Picovoice access key",
     description: "Required when Porcupine wake-word detection is selected.",
+    secret: true,
   },
   nexusModsApiKey: {
     envKey: "NEXUS_MODS_API_KEY",
     label: "Nexus Mods API key",
     description: "Enables authenticated Nexus Mods downloads in the MCP toolset.",
+    secret: true,
   },
   youTrackBaseUrl: {
     envKey: "YOUTRACK_BASE_URL",
     label: "YouTrack base URL",
     description: "Base URL for your YouTrack instance, such as https://example.youtrack.cloud.",
+    secret: false,
   },
   youTrackToken: {
     envKey: "YOUTRACK_TOKEN",
     label: "YouTrack permanent token",
     description: "Used for native YouTrack authentication and assigned-ticket intake.",
+    secret: true,
+  },
+  sqlServerServer: {
+    envKey: "SQL_SERVER_SERVER",
+    label: "SQL Server host",
+    description: 'SQL Server host or local alias. "." is accepted and normalized to a driver-safe local host.',
+    secret: false,
+  },
+  sqlServerPort: {
+    envKey: "SQL_SERVER_PORT",
+    label: "SQL Server port",
+    description: "Optional TCP port for SQL Server. Leave blank for the driver default.",
+    secret: false,
+  },
+  sqlServerUsername: {
+    envKey: "SQL_SERVER_USERNAME",
+    label: "SQL Server username",
+    description: "Dedicated SQL login for read-only MCP access.",
+    secret: true,
+  },
+  sqlServerPassword: {
+    envKey: "SQL_SERVER_PASSWORD",
+    label: "SQL Server password",
+    description: "Password for the dedicated SQL read-only login.",
+    secret: true,
+  },
+  sqlServerEncrypt: {
+    envKey: "SQL_SERVER_ENCRYPT",
+    label: "Encrypt connection",
+    description: "Set true or false to control SQL Server TLS encryption. Default: true.",
+    secret: false,
+  },
+  sqlServerTrustServerCertificate: {
+    envKey: "SQL_SERVER_TRUST_SERVER_CERTIFICATE",
+    label: "Trust server certificate",
+    description: "Set true or false when using self-signed SQL Server certificates. Default: false.",
+    secret: false,
+  },
+  sqlServerAllowedDatabases: {
+    envKey: "SQL_SERVER_ALLOWED_DATABASES",
+    label: "Allowed databases",
+    description: "Optional comma-separated database allowlist for the SQL Server MCP server.",
+    secret: false,
+  },
+  sqlServerRowLimit: {
+    envKey: "SQL_SERVER_ROW_LIMIT",
+    label: "Row cap",
+    description: "Maximum rows returned by SQL Server query calls. Default: 200.",
+    secret: false,
+  },
+  sqlServerTimeoutMs: {
+    envKey: "SQL_SERVER_TIMEOUT_MS",
+    label: "Timeout cap (ms)",
+    description: "Maximum SQL Server request time in milliseconds. Default: 10000.",
+    secret: false,
   },
 };
 
@@ -314,8 +378,7 @@ const normalizeRuntimeConfigValue = (value: unknown): string | null | undefined 
     return undefined;
   }
 
-  const trimmed = value.trim();
-  return trimmed ? trimmed : null;
+  return value.trim() ? value : null;
 };
 
 const encryptRuntimeConfigValue = (value: string | null): string | null => {
@@ -366,11 +429,11 @@ const getEffectiveRuntimeValue = (key: RuntimeConfigKey): string | undefined => 
   }
 
   if (typeof storedValue === "string" && storedValue.trim()) {
-    return storedValue.trim();
+    return storedValue;
   }
 
   const envValue = process.env[RUNTIME_CONFIG_METADATA[key].envKey];
-  return typeof envValue === "string" && envValue.trim() ? envValue.trim() : undefined;
+  return typeof envValue === "string" && envValue.trim() ? envValue : undefined;
 };
 
 const getBackendEnvOverrides = (): Record<string, string> => {
@@ -386,7 +449,7 @@ const getBackendEnvOverrides = (): Record<string, string> => {
     }
 
     if (typeof storedValue === "string" && storedValue.trim()) {
-      overrides[envKey] = storedValue.trim();
+      overrides[envKey] = storedValue;
     }
   }
 
@@ -396,8 +459,9 @@ const getBackendEnvOverrides = (): Record<string, string> => {
 const getRuntimeConfigSummary = (): RuntimeConfigSummary =>
   Object.fromEntries(
     RUNTIME_CONFIG_KEYS.map((key) => {
+      const metadata = RUNTIME_CONFIG_METADATA[key];
       const storedValue = getStoredRuntimeConfig()[key];
-      const envValue = process.env[RUNTIME_CONFIG_METADATA[key].envKey];
+      const envValue = process.env[metadata.envKey];
       const source =
         storedValue === null
           ? "cleared"
@@ -411,11 +475,11 @@ const getRuntimeConfigSummary = (): RuntimeConfigSummary =>
         key,
         {
           key,
-          label: RUNTIME_CONFIG_METADATA[key].label,
-          description: RUNTIME_CONFIG_METADATA[key].description,
+          label: metadata.label,
+          description: metadata.description,
           configured: source === "stored" || source === "environment",
           source,
-          secret: true,
+          secret: metadata.secret,
         },
       ];
     }),
