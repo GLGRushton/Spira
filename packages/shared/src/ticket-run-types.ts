@@ -33,6 +33,22 @@ export interface TicketRunWorktreeSummary {
   updatedAt: number;
 }
 
+export interface TicketRunSubmoduleParentRef {
+  parentRepoRelativePath: string;
+  submodulePath: string;
+  submoduleWorktreePath: string;
+}
+
+export interface TicketRunSubmoduleSummary {
+  canonicalUrl: string;
+  name: string;
+  branchName: string;
+  commitMessageDraft: string | null;
+  parentRefs: TicketRunSubmoduleParentRef[];
+  createdAt: number;
+  updatedAt: number;
+}
+
 export interface TicketRunAttemptSummary {
   attemptId: string;
   runId: string;
@@ -62,6 +78,7 @@ export interface TicketRunSummary {
   updatedAt: number;
   startedAt: number;
   worktrees: TicketRunWorktreeSummary[];
+  submodules: TicketRunSubmoduleSummary[];
   attempts: TicketRunAttemptSummary[];
 }
 
@@ -101,6 +118,12 @@ export interface CompleteTicketRunResult {
   snapshot: TicketRunSnapshot;
 }
 
+export interface DeleteTicketRunResult {
+  runId: string;
+  ticketId: string;
+  snapshot: TicketRunSnapshot;
+}
+
 export interface TicketRunDiffFileSummary {
   path: string;
   previousPath: string | null;
@@ -129,7 +152,76 @@ export interface TicketRunGitState {
   pushAction: TicketRunPushAction;
   commitMessageDraft: string | null;
   pullRequestUrls: TicketRunPullRequestLinks;
+  blockedBySubmoduleCanonicalUrls: string[];
   files: TicketRunDiffFileSummary[];
+}
+
+export interface TicketRunSubmoduleParentGitState {
+  parentRepoRelativePath: string;
+  submodulePath: string;
+  submoduleWorktreePath: string;
+  headSha: string | null;
+  hasDiff: boolean;
+  isPrimary: boolean;
+  isAligned: boolean;
+}
+
+export interface TicketRunSubmoduleGitState {
+  runId: string;
+  canonicalUrl: string;
+  name: string;
+  branchName: string;
+  worktreePath: string;
+  upstreamBranch: string | null;
+  aheadCount: number;
+  behindCount: number;
+  hasDiff: boolean;
+  pushAction: TicketRunPushAction;
+  commitMessageDraft: string | null;
+  pullRequestUrls: TicketRunPullRequestLinks;
+  files: TicketRunDiffFileSummary[];
+  parents: TicketRunSubmoduleParentGitState[];
+  primaryParentRepoRelativePath: string | null;
+  committedSha: string | null;
+  reconcileRequired: boolean;
+  reconcileReason: string | null;
+}
+
+export type TicketRunReviewRepoState = Omit<TicketRunGitState, "files">;
+export type TicketRunReviewSubmoduleState = Omit<TicketRunSubmoduleGitState, "files">;
+
+export interface TicketRunDeleteBlocker {
+  label: string;
+  reason: string;
+}
+
+export interface TicketRunReviewRepoEntry {
+  repoRelativePath: string;
+  gitState: TicketRunReviewRepoState | null;
+  error: string | null;
+}
+
+export interface TicketRunReviewSubmoduleEntry {
+  canonicalUrl: string;
+  gitState: TicketRunReviewSubmoduleState | null;
+  error: string | null;
+}
+
+export interface TicketRunReviewSnapshot {
+  runId: string;
+  repoEntries: TicketRunReviewRepoEntry[];
+  submoduleEntries: TicketRunReviewSubmoduleEntry[];
+  visibleRepoPaths: string[];
+  visibleSubmoduleUrls: string[];
+  canClose: boolean;
+  canDelete: boolean;
+  deleteBlockers: TicketRunDeleteBlocker[];
+}
+
+export interface TicketRunReviewSnapshotResult {
+  run: TicketRunSummary;
+  snapshot: TicketRunSnapshot;
+  reviewSnapshot: TicketRunReviewSnapshot;
 }
 
 export interface TicketRunGitStateResult {
@@ -138,10 +230,22 @@ export interface TicketRunGitStateResult {
   gitState: TicketRunGitState;
 }
 
+export interface TicketRunSubmoduleGitStateResult {
+  run: TicketRunSummary;
+  snapshot: TicketRunSnapshot;
+  gitState: TicketRunSubmoduleGitState;
+}
+
 export interface GenerateTicketRunCommitDraftResult {
   run: TicketRunSummary;
   snapshot: TicketRunSnapshot;
   gitState: TicketRunGitState;
+}
+
+export interface GenerateTicketRunSubmoduleCommitDraftResult {
+  run: TicketRunSummary;
+  snapshot: TicketRunSnapshot;
+  gitState: TicketRunSubmoduleGitState;
 }
 
 export interface SetTicketRunCommitDraftResult {
@@ -150,10 +254,23 @@ export interface SetTicketRunCommitDraftResult {
   gitState: TicketRunGitState;
 }
 
+export interface SetTicketRunSubmoduleCommitDraftResult {
+  run: TicketRunSummary;
+  snapshot: TicketRunSnapshot;
+  gitState: TicketRunSubmoduleGitState;
+}
+
 export interface CommitTicketRunResult {
   run: TicketRunSummary;
   snapshot: TicketRunSnapshot;
   gitState: TicketRunGitState;
+  commitSha: string;
+}
+
+export interface CommitTicketRunSubmoduleResult {
+  run: TicketRunSummary;
+  snapshot: TicketRunSnapshot;
+  gitState: TicketRunSubmoduleGitState;
   commitSha: string;
 }
 
@@ -164,9 +281,23 @@ export interface SyncTicketRunRemoteResult {
   action: Exclude<TicketRunPushAction, "none">;
 }
 
+export interface SyncTicketRunSubmoduleRemoteResult {
+  run: TicketRunSummary;
+  snapshot: TicketRunSnapshot;
+  gitState: TicketRunSubmoduleGitState;
+  action: Exclude<TicketRunPushAction, "none">;
+}
+
 export interface CreateTicketRunPullRequestResult {
   run: TicketRunSummary;
   snapshot: TicketRunSnapshot;
   gitState: TicketRunGitState;
+  pullRequestUrl: string;
+}
+
+export interface CreateTicketRunSubmodulePullRequestResult {
+  run: TicketRunSummary;
+  snapshot: TicketRunSnapshot;
+  gitState: TicketRunSubmoduleGitState;
   pullRequestUrl: string;
 }

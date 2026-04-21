@@ -388,6 +388,7 @@ describe("setupIpcBridge", () => {
           updatedAt: 2,
           startedAt: 1,
           worktrees: [],
+          submodules: [],
           attempts: [],
         },
       },
@@ -401,6 +402,143 @@ describe("setupIpcBridge", () => {
       },
       reusedExistingRun: false,
     });
+  });
+
+  it("gives Missions ticket startup a five-minute backend timeout budget", async () => {
+    vi.useFakeTimers();
+    try {
+      const { setupIpcBridge } = await loadBridge();
+      const webContents = new FakeWebContents();
+      const window = {
+        isDestroyed: () => false,
+        webContents,
+      } as unknown as BrowserWindow;
+
+      const bridge = setupIpcBridge(window, 9720, { rendererBuildId: "test-renderer" });
+      const socket = FakeWebSocket.instances[0];
+      socket?.open();
+      socket?.receive({
+        type: "backend:hello",
+        generation: 7,
+        protocolVersion: PROTOCOL_VERSION,
+        backendBuildId: "backend-test",
+      });
+
+      const pendingStart = bridge.startTicketRun({
+        ticketId: "SPI-101",
+        ticketSummary: "Start Missions pickup",
+        ticketUrl: "https://example.youtrack.cloud/issue/SPI-101",
+        projectKey: "SPI",
+      });
+      const rejection = vi.fn<(error: unknown) => void>();
+      void pendingStart.catch(rejection);
+
+      await vi.advanceTimersByTimeAsync(299_999);
+      expect(rejection).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(rejection).toHaveBeenCalledTimes(1);
+      expect(rejection.mock.calls[0]?.[0]).toBeInstanceOf(Error);
+      expect((rejection.mock.calls[0]?.[0] as Error).message).toBe(
+        "Timed out waiting for the backend response to missions:ticket-run:start after 300000ms.",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("gives mission repo commit draft updates a five-minute backend timeout budget", async () => {
+    vi.useFakeTimers();
+    try {
+      const { setupIpcBridge } = await loadBridge();
+      const webContents = new FakeWebContents();
+      const window = {
+        isDestroyed: () => false,
+        webContents,
+      } as unknown as BrowserWindow;
+
+      const bridge = setupIpcBridge(window, 9720, { rendererBuildId: "test-renderer" });
+      const socket = FakeWebSocket.instances[0];
+      socket?.open();
+      socket?.receive({
+        type: "backend:hello",
+        generation: 7,
+        protocolVersion: PROTOCOL_VERSION,
+        backendBuildId: "backend-test",
+      });
+
+      const pendingDraft = bridge.setTicketRunCommitDraft("run-1", "feat: stage mission changes", "service-api");
+      const draftRequest = getLastSentPayload(socket as FakeWebSocket);
+      expect(draftRequest).toMatchObject({
+        type: "missions:ticket-run:commit-draft:set",
+        runId: "run-1",
+        message: "feat: stage mission changes",
+        repoRelativePath: "service-api",
+      });
+      const rejection = vi.fn<(error: unknown) => void>();
+      void pendingDraft.catch(rejection);
+
+      await vi.advanceTimersByTimeAsync(299_999);
+      expect(rejection).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(rejection).toHaveBeenCalledTimes(1);
+      expect(rejection.mock.calls[0]?.[0]).toBeInstanceOf(Error);
+      expect((rejection.mock.calls[0]?.[0] as Error).message).toBe(
+        "Timed out waiting for the backend response to missions:ticket-run:commit-draft:set after 300000ms.",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("gives mission submodule commit draft updates a five-minute backend timeout budget", async () => {
+    vi.useFakeTimers();
+    try {
+      const { setupIpcBridge } = await loadBridge();
+      const webContents = new FakeWebContents();
+      const window = {
+        isDestroyed: () => false,
+        webContents,
+      } as unknown as BrowserWindow;
+
+      const bridge = setupIpcBridge(window, 9720, { rendererBuildId: "test-renderer" });
+      const socket = FakeWebSocket.instances[0];
+      socket?.open();
+      socket?.receive({
+        type: "backend:hello",
+        generation: 7,
+        protocolVersion: PROTOCOL_VERSION,
+        backendBuildId: "backend-test",
+      });
+
+      const pendingDraft = bridge.setTicketRunSubmoduleCommitDraft(
+        "run-1",
+        "github.com/example/legapp-common",
+        "feat: align shared submodule",
+      );
+      const draftRequest = getLastSentPayload(socket as FakeWebSocket);
+      expect(draftRequest).toMatchObject({
+        type: "missions:ticket-run:submodule:commit-draft:set",
+        runId: "run-1",
+        canonicalUrl: "github.com/example/legapp-common",
+        message: "feat: align shared submodule",
+      });
+      const rejection = vi.fn<(error: unknown) => void>();
+      void pendingDraft.catch(rejection);
+
+      await vi.advanceTimersByTimeAsync(299_999);
+      expect(rejection).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(rejection).toHaveBeenCalledTimes(1);
+      expect(rejection.mock.calls[0]?.[0]).toBeInstanceOf(Error);
+      expect((rejection.mock.calls[0]?.[0] as Error).message).toBe(
+        "Timed out waiting for the backend response to missions:ticket-run:submodule:commit-draft:set after 300000ms.",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("retries Missions ticket sync through the backend bridge", async () => {
@@ -447,6 +585,7 @@ describe("setupIpcBridge", () => {
           updatedAt: 2,
           startedAt: 1,
           worktrees: [],
+          submodules: [],
           attempts: [],
         },
       },
@@ -505,6 +644,7 @@ describe("setupIpcBridge", () => {
           updatedAt: 2,
           startedAt: 1,
           worktrees: [],
+          submodules: [],
           attempts: [],
         },
         gitState: {
@@ -522,6 +662,7 @@ describe("setupIpcBridge", () => {
             open: null,
             draft: null,
           },
+          blockedBySubmoduleCanonicalUrls: [],
           files: [],
         },
       },
@@ -562,6 +703,7 @@ describe("setupIpcBridge", () => {
           updatedAt: 2,
           startedAt: 1,
           worktrees: [],
+          submodules: [],
           attempts: [],
         },
         gitState: {
@@ -579,6 +721,7 @@ describe("setupIpcBridge", () => {
             open: null,
             draft: null,
           },
+          blockedBySubmoduleCanonicalUrls: [],
           files: [],
         },
         commitSha: "1234567",
@@ -588,6 +731,249 @@ describe("setupIpcBridge", () => {
     await expect(pendingCommit).resolves.toMatchObject({
       gitState: {
         repoRelativePath: "web-app",
+        pushAction: "publish",
+      },
+      commitSha: "1234567",
+    });
+  });
+
+  it("passes mission review snapshot requests through the backend bridge", async () => {
+    const { setupIpcBridge } = await loadBridge();
+    const webContents = new FakeWebContents();
+    const window = {
+      isDestroyed: () => false,
+      webContents,
+    } as unknown as BrowserWindow;
+
+    const bridge = setupIpcBridge(window, 9720, { rendererBuildId: "test-renderer" });
+    const socket = FakeWebSocket.instances[0];
+    socket?.open();
+    socket?.receive({
+      type: "backend:hello",
+      generation: 7,
+      protocolVersion: PROTOCOL_VERSION,
+      backendBuildId: "backend-test",
+    });
+
+    const pendingReviewSnapshot = bridge.getTicketRunReviewSnapshot("run-1");
+    const reviewRequest = getLastSentPayload(socket as FakeWebSocket);
+    expect(reviewRequest).toMatchObject({
+      type: "missions:ticket-run:review-snapshot:get",
+      runId: "run-1",
+    });
+
+    socket?.receive({
+      type: "missions:ticket-run:review-snapshot:result",
+      requestId: String(reviewRequest.requestId),
+      result: {
+        snapshot: { runs: [] },
+        run: {
+          runId: "run-1",
+          stationId: null,
+          ticketId: "SPI-101",
+          ticketSummary: "Start Missions pickup",
+          ticketUrl: "https://example.youtrack.cloud/issue/SPI-101",
+          projectKey: "SPI",
+          status: "awaiting-review",
+          statusMessage: "Ready for review.",
+          commitMessageDraft: null,
+          createdAt: 1,
+          updatedAt: 2,
+          startedAt: 1,
+          worktrees: [],
+          submodules: [],
+          attempts: [],
+        },
+        reviewSnapshot: {
+          runId: "run-1",
+          repoEntries: [
+            {
+              repoRelativePath: "web-app",
+              error: null,
+              gitState: {
+                runId: "run-1",
+                repoRelativePath: "web-app",
+                worktreePath: "C:\\Repos\\.spira-worktrees\\spi-101\\web-app",
+                branchName: "feat/spi-101-start-missions-pickup",
+                upstreamBranch: "origin/feat/spi-101-start-missions-pickup",
+                aheadCount: 0,
+                behindCount: 0,
+                hasDiff: false,
+                pushAction: "none",
+                commitMessageDraft: null,
+                pullRequestUrls: {
+                  open: "https://github.com/example/web-app/pull/new/main...feat%2Fspi-101-start-missions-pickup",
+                  draft:
+                    "https://github.com/example/web-app/pull/new/main...feat%2Fspi-101-start-missions-pickup?draft=1",
+                },
+                blockedBySubmoduleCanonicalUrls: [],
+              },
+            },
+          ],
+          submoduleEntries: [],
+          visibleRepoPaths: ["web-app"],
+          visibleSubmoduleUrls: [],
+          canClose: true,
+          canDelete: true,
+          deleteBlockers: [],
+        },
+      },
+    });
+
+    await expect(pendingReviewSnapshot).resolves.toMatchObject({
+      reviewSnapshot: {
+        visibleRepoPaths: ["web-app"],
+        visibleSubmoduleUrls: [],
+        canClose: true,
+        canDelete: true,
+        deleteBlockers: [],
+      },
+    });
+  });
+
+  it("passes managed submodule git requests through the backend bridge", async () => {
+    const { setupIpcBridge } = await loadBridge();
+    const webContents = new FakeWebContents();
+    const window = {
+      isDestroyed: () => false,
+      webContents,
+    } as unknown as BrowserWindow;
+
+    const bridge = setupIpcBridge(window, 9720, { rendererBuildId: "test-renderer" });
+    const socket = FakeWebSocket.instances[0];
+    socket?.open();
+    socket?.receive({
+      type: "backend:hello",
+      generation: 7,
+      protocolVersion: PROTOCOL_VERSION,
+      backendBuildId: "backend-test",
+    });
+
+    const canonicalUrl = "github.com/example/legapp-common";
+    const pendingGitState = bridge.getTicketRunSubmoduleGitState("run-1", canonicalUrl);
+    const gitStateRequest = getLastSentPayload(socket as FakeWebSocket);
+    expect(gitStateRequest).toMatchObject({
+      type: "missions:ticket-run:submodule-git-state:get",
+      runId: "run-1",
+      canonicalUrl,
+    });
+
+    socket?.receive({
+      type: "missions:ticket-run:submodule-git-state:result",
+      requestId: String(gitStateRequest.requestId),
+      result: {
+        snapshot: { runs: [] },
+        run: {
+          runId: "run-1",
+          stationId: null,
+          ticketId: "SPI-101",
+          ticketSummary: "Start Missions pickup",
+          ticketUrl: "https://example.youtrack.cloud/issue/SPI-101",
+          projectKey: "SPI",
+          status: "done",
+          statusMessage: "Ready to ship.",
+          commitMessageDraft: null,
+          createdAt: 1,
+          updatedAt: 2,
+          startedAt: 1,
+          worktrees: [],
+          submodules: [],
+          attempts: [],
+        },
+        gitState: {
+          runId: "run-1",
+          canonicalUrl,
+          name: "LegAppCommon",
+          branchName: "feat/spi-101-start-missions-pickup",
+          worktreePath: "C:\\Repos\\.spira-worktrees\\spi-101\\service-api\\Submodules\\LegAppCommon",
+          upstreamBranch: null,
+          aheadCount: 0,
+          behindCount: 0,
+          hasDiff: true,
+          pushAction: "none",
+          commitMessageDraft: "feat(SPI-101): adjust shared common",
+          pullRequestUrls: {
+            open: null,
+            draft: null,
+          },
+          files: [],
+          parents: [],
+          primaryParentRepoRelativePath: "service-api",
+          committedSha: "1234567890abcdef",
+          reconcileRequired: false,
+          reconcileReason: null,
+        },
+      },
+    });
+
+    await expect(pendingGitState).resolves.toMatchObject({
+      gitState: {
+        canonicalUrl,
+        commitMessageDraft: "feat(SPI-101): adjust shared common",
+      },
+    });
+
+    const pendingCommit = bridge.commitTicketRunSubmodule("run-1", canonicalUrl, "feat(SPI-101): adjust shared common");
+    const commitRequest = getLastSentPayload(socket as FakeWebSocket);
+    expect(commitRequest).toMatchObject({
+      type: "missions:ticket-run:submodule:commit",
+      runId: "run-1",
+      canonicalUrl,
+      message: "feat(SPI-101): adjust shared common",
+    });
+
+    socket?.receive({
+      type: "missions:ticket-run:submodule:commit:result",
+      requestId: String(commitRequest.requestId),
+      result: {
+        snapshot: { runs: [] },
+        run: {
+          runId: "run-1",
+          stationId: null,
+          ticketId: "SPI-101",
+          ticketSummary: "Start Missions pickup",
+          ticketUrl: "https://example.youtrack.cloud/issue/SPI-101",
+          projectKey: "SPI",
+          status: "done",
+          statusMessage: "Ready to ship.",
+          commitMessageDraft: null,
+          createdAt: 1,
+          updatedAt: 2,
+          startedAt: 1,
+          worktrees: [],
+          submodules: [],
+          attempts: [],
+        },
+        gitState: {
+          runId: "run-1",
+          canonicalUrl,
+          name: "LegAppCommon",
+          branchName: "feat/spi-101-start-missions-pickup",
+          worktreePath: "C:\\Repos\\.spira-worktrees\\spi-101\\service-api\\Submodules\\LegAppCommon",
+          upstreamBranch: null,
+          aheadCount: 0,
+          behindCount: 0,
+          hasDiff: false,
+          pushAction: "publish",
+          commitMessageDraft: null,
+          pullRequestUrls: {
+            open: null,
+            draft: null,
+          },
+          files: [],
+          parents: [],
+          primaryParentRepoRelativePath: "service-api",
+          committedSha: "1234567890abcdef",
+          reconcileRequired: false,
+          reconcileReason: null,
+        },
+        commitSha: "1234567",
+      },
+    });
+
+    await expect(pendingCommit).resolves.toMatchObject({
+      gitState: {
+        canonicalUrl,
         pushAction: "publish",
       },
       commitSha: "1234567",

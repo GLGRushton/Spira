@@ -1,30 +1,48 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { access, mkdir } from "node:fs/promises";
+import { access, mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import type { SpiraMemoryDatabase } from "@spira/memory-db";
 import type {
   CancelTicketRunWorkResult,
   CommitTicketRunResult,
+  CommitTicketRunSubmoduleResult,
   CompleteTicketRunResult,
   ContinueTicketRunWorkResult,
   CreateTicketRunPullRequestResult,
+  CreateTicketRunSubmodulePullRequestResult,
+  DeleteTicketRunResult,
   GenerateTicketRunCommitDraftResult,
+  GenerateTicketRunSubmoduleCommitDraftResult,
   RetryTicketRunSyncResult,
   SetTicketRunCommitDraftResult,
+  SetTicketRunSubmoduleCommitDraftResult,
   StartTicketRunRequest,
   StartTicketRunResult,
   StartTicketRunWorkResult,
   SyncTicketRunRemoteResult,
+  SyncTicketRunSubmoduleRemoteResult,
   TicketRunAttemptStatus,
   TicketRunAttemptSummary,
+  TicketRunDeleteBlocker,
   TicketRunDiffFileSummary,
   TicketRunGitState,
   TicketRunGitStateResult,
+  TicketRunPullRequestLinks,
   TicketRunPushAction,
+  TicketRunReviewRepoEntry,
+  TicketRunReviewRepoState,
+  TicketRunReviewSnapshot,
+  TicketRunReviewSnapshotResult,
+  TicketRunReviewSubmoduleEntry,
+  TicketRunReviewSubmoduleState,
   TicketRunSnapshot,
   TicketRunStatus,
+  TicketRunSubmoduleGitState,
+  TicketRunSubmoduleGitStateResult,
+  TicketRunSubmoduleParentRef,
+  TicketRunSubmoduleSummary,
   TicketRunSummary,
 } from "@spira/shared";
 import { normalizeProjectKey } from "@spira/shared";
@@ -38,6 +56,13 @@ const execFileAsync = promisify(execFile);
 const WORKTREE_DIRECTORY_NAME = ".spira-worktrees";
 const MAX_BRANCH_NAME_LENGTH = 63;
 const MAX_SLUG_LENGTH = 40;
+const MINUTE_MS = 60_000;
+const DEFAULT_GIT_COMMAND_TIMEOUT_MS = MINUTE_MS;
+const LONG_RUNNING_GIT_COMMAND_TIMEOUT_MS = 10 * MINUTE_MS;
+const DEFAULT_GIT_COMMAND_MAX_BUFFER_BYTES = 20 * 1024 * 1024;
+const GITHUB_HTTP_EXTRAHEADER_CONFIG_KEY = "http.https://github.com/.extraheader";
+const GITHUB_CREDENTIAL_PROMPT_DISABLED_PATTERN =
+  /Cannot prompt because user interactivity has been disabled|terminal prompts disabled|could not read Username for 'https:\/\/github\.com'/iu;
 
 export interface GitCommandResult {
   stdout: string;
@@ -65,6 +90,7 @@ type SyncableRun = Pick<
   | "startedAt"
   | "createdAt"
   | "worktrees"
+  | "submodules"
 >;
 
 export interface MissionPassResult {
@@ -85,7 +111,7 @@ export interface LaunchMissionPassInput {
 
 export interface GenerateCommitDraftInput {
   run: TicketRunSummary;
-  gitState: TicketRunGitState;
+  gitState: TicketRunGitState | TicketRunSubmoduleGitState;
 }
 
 export interface MissionGitIdentity {
@@ -111,6 +137,41 @@ interface GitHubPullRequestErrorResponse {
   errors?: GitHubPullRequestValidationError[];
 }
 
+interface GitRepoStateSnapshot {
+  worktreePath: string;
+  branchName: string;
+  upstreamBranch: string | null;
+  aheadCount: number;
+  behindCount: number;
+  hasDiff: boolean;
+  pushAction: TicketRunPushAction;
+  pullRequestUrls: TicketRunPullRequestLinks;
+  files: TicketRunDiffFileSummary[];
+  diffFingerprint: string | null;
+}
+
+interface ManagedSubmoduleRuntimeState {
+  summary: TicketRunSubmoduleSummary;
+  gitState: TicketRunSubmoduleGitState;
+}
+
+interface ManagedSubmoduleParentRuntimeState {
+  parentRef: TicketRunSubmoduleParentRef;
+  gitState: GitRepoStateSnapshot;
+  headSha: string | null;
+  diffFingerprint: string | null;
+}
+
+interface GitReadOptions {
+  includeFiles?: boolean;
+  allowHistoryFetch?: boolean;
+}
+
+interface GitmodulesEntry {
+  path: string;
+  url: string;
+}
+
 export interface TicketRunServiceOptions {
   memoryDb: SpiraMemoryDatabase | null;
   projectRegistry: ProjectRegistryLike;
@@ -130,10 +191,55 @@ export interface TicketRunServiceOptions {
   getMissionGitToken?: () => string | null;
 }
 
+const buildGitHubHttpAuthArgs = (token: string): string[] => {
+  const authHeader = Buffer.from(`x-access-token:${token}`).toString("base64");
+  return ["-c", `${GITHUB_HTTP_EXTRAHEADER_CONFIG_KEY}=AUTHORIZATION: basic ${authHeader}`];
+};
+
+const isGitHubCredentialPromptFailure = (error: unknown): boolean => {
+  const text =
+    error instanceof Error ? `${error.message}\n${error.stack ?? ""}` : typeof error === "string" ? error : "";
+  return text.length > 0 && GITHUB_CREDENTIAL_PROMPT_DISABLED_PATTERN.test(text);
+};
+
+const stripInlineGitConfigs = (args: readonly string[]): string[] => {
+  const normalized: string[] = [];
+  for (let index = 0; index < args.length; index += 1) {
+    if (args[index] === "-c") {
+      index += 1;
+      continue;
+    }
+    normalized.push(args[index] ?? "");
+  }
+  return normalized;
+};
+
+const resolveGitCommandTimeoutMs = (args: readonly string[]): number => {
+  const normalizedArgs = stripInlineGitConfigs(args);
+  const command = normalizedArgs[0];
+  const subcommand = normalizedArgs[1];
+  if (
+    (command === "submodule" && subcommand === "update") ||
+    (command === "worktree" && (subcommand === "add" || subcommand === "remove" || subcommand === "prune")) ||
+    command === "fetch" ||
+    command === "push"
+  ) {
+    return LONG_RUNNING_GIT_COMMAND_TIMEOUT_MS;
+  }
+  return DEFAULT_GIT_COMMAND_TIMEOUT_MS;
+};
+
 const defaultGitCommandRunner: GitCommandRunner = async (cwd, args) => {
   try {
     const result = await execFileAsync("git", args, {
       cwd,
+      env: {
+        ...process.env,
+        GCM_INTERACTIVE: "Never",
+        GIT_TERMINAL_PROMPT: "0",
+      },
+      maxBuffer: DEFAULT_GIT_COMMAND_MAX_BUFFER_BYTES,
+      timeout: resolveGitCommandTimeoutMs(args),
       windowsHide: true,
     });
     return {
@@ -142,9 +248,20 @@ const defaultGitCommandRunner: GitCommandRunner = async (cwd, args) => {
     };
   } catch (error) {
     const sanitizedArgs = args.map((arg) =>
-      /^http\.extraheader=AUTHORIZATION:\s+/iu.test(arg) ? "http.extraheader=AUTHORIZATION: [REDACTED]" : arg,
+      /^http(?:\..+)?\.extraheader=AUTHORIZATION:\s+/iu.test(arg)
+        ? `${arg.slice(0, arg.indexOf("AUTHORIZATION:"))}AUTHORIZATION: [REDACTED]`
+        : arg,
     );
-    throw new SpiraError("TICKET_RUN_GIT_ERROR", `Git command failed in ${cwd}: git ${sanitizedArgs.join(" ")}`, error);
+    const timedOut =
+      typeof error === "object" &&
+      error !== null &&
+      "killed" in error &&
+      (error as { killed?: unknown }).killed === true;
+    throw new SpiraError(
+      "TICKET_RUN_GIT_ERROR",
+      `${timedOut ? "Git command timed out" : "Git command failed"} in ${cwd}: git ${sanitizedArgs.join(" ")}`,
+      error,
+    );
   }
 };
 
@@ -216,6 +333,49 @@ const buildFallbackCommitBullets = (files: readonly TicketRunDiffFileSummary[]):
   });
   return bullets.length > 0 ? bullets : ["Review the completed ticket changes and prepare them for publish."];
 };
+
+const isRepoBlockingClose = (gitState: Pick<TicketRunGitState, "hasDiff" | "pushAction">): boolean =>
+  gitState.hasDiff || gitState.pushAction !== "none";
+
+const isRepoVisibleInReview = (gitState: Pick<TicketRunGitState, "hasDiff" | "pushAction">): boolean =>
+  isRepoBlockingClose(gitState);
+
+const isSubmoduleBlockingClose = (
+  gitState: Pick<TicketRunSubmoduleGitState, "hasDiff" | "reconcileRequired" | "pushAction" | "parents">,
+): boolean =>
+  gitState.hasDiff ||
+  gitState.reconcileRequired ||
+  gitState.pushAction !== "none" ||
+  gitState.parents.some((parentState) => !parentState.isAligned);
+
+const isSubmoduleVisibleInReview = (
+  gitState: Pick<TicketRunSubmoduleGitState, "hasDiff" | "reconcileRequired" | "pushAction" | "parents">,
+): boolean => isSubmoduleBlockingClose(gitState);
+
+const toReviewRepoState = ({ files: _files, ...gitState }: TicketRunGitState): TicketRunReviewRepoState => gitState;
+
+const toReviewSubmoduleState = ({
+  files: _files,
+  ...gitState
+}: TicketRunSubmoduleGitState): TicketRunReviewSubmoduleState => gitState;
+
+const describeReviewLoadError = (error: unknown, fallbackMessage: string): string =>
+  error instanceof Error && error.message.trim().length > 0 ? error.message : fallbackMessage;
+
+const describeReviewBlockers = (run: TicketRunSummary, reviewSnapshot: TicketRunReviewSnapshot): string => {
+  const blockerNames = [
+    ...reviewSnapshot.visibleSubmoduleUrls.map(
+      (canonicalUrl) =>
+        run.submodules.find((submodule) => submodule.canonicalUrl === canonicalUrl)?.name ?? canonicalUrl,
+    ),
+    ...reviewSnapshot.visibleRepoPaths,
+  ];
+
+  return blockerNames.length > 0 ? blockerNames.join(", ") : "remaining mission review work";
+};
+
+const describeDeleteBlockers = (deleteBlockers: readonly TicketRunDeleteBlocker[]): string =>
+  deleteBlockers.map((blocker) => `${blocker.label} (${blocker.reason})`).join(", ");
 
 const parseGitHubRepositoryUrl = (remoteUrl: string): string | null => {
   let parsed: URL;
@@ -305,6 +465,16 @@ const parseNumstatMap = (stdout: string): Map<string, { additions: number | null
   return entries;
 };
 
+const parseNullSeparatedEntries = (stdout: string): string[] => {
+  if (stdout.includes("\u0000")) {
+    return stdout.split("\u0000").filter((entry) => entry.length > 0);
+  }
+  return stdout
+    .split(/\r?\n/u)
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+};
+
 const parseDiffFiles = (
   rawDiff: string,
   nameStatusMap: ReadonlyMap<string, { status: string; previousPath: string | null }>,
@@ -335,6 +505,146 @@ const parseDiffFiles = (
       };
     });
 };
+
+const mergeUntrackedFiles = (
+  files: readonly TicketRunDiffFileSummary[],
+  untrackedPaths: readonly string[],
+): TicketRunDiffFileSummary[] => {
+  if (untrackedPaths.length === 0) {
+    return [...files];
+  }
+
+  const merged = new Map(files.map((file) => [file.path, file] as const));
+  for (const untrackedPath of [...untrackedPaths].sort((left, right) => left.localeCompare(right))) {
+    if (merged.has(untrackedPath)) {
+      continue;
+    }
+    merged.set(untrackedPath, {
+      path: untrackedPath,
+      previousPath: null,
+      status: "A",
+      additions: null,
+      deletions: null,
+      patch: "",
+    });
+  }
+
+  return [...merged.values()];
+};
+
+const normalizeSubmoduleCanonicalUrl = (rawUrl: string): string => {
+  const trimmed = rawUrl.trim();
+  if (!trimmed) {
+    return "";
+  }
+
+  if (!trimmed.includes("://")) {
+    const scpLikeMatch = /^(?:[^@]+@)?([^:]+):(.+)$/u.exec(trimmed);
+    if (scpLikeMatch) {
+      return `${scpLikeMatch[1]}/${scpLikeMatch[2]}`
+        .replace(/\\/gu, "/")
+        .replace(/\.git$/iu, "")
+        .replace(/\/+$/u, "")
+        .toLowerCase();
+    }
+  }
+
+  try {
+    const parsed = new URL(trimmed);
+    const pathname = parsed.pathname.replace(/\.git$/iu, "").replace(/\/+$/u, "");
+    return `${parsed.host}${pathname}`.replace(/\\/gu, "/").toLowerCase();
+  } catch {
+    return trimmed
+      .replace(/\\/gu, "/")
+      .replace(/\.git$/iu, "")
+      .replace(/\/+$/u, "")
+      .toLowerCase();
+  }
+};
+
+const parseGitmodulesEntries = (stdout: string): GitmodulesEntry[] => {
+  const entriesByName = new Map<string, Partial<GitmodulesEntry>>();
+  for (const rawLine of stdout.split(/\r?\n/u)) {
+    const line = rawLine.trim();
+    if (!line) {
+      continue;
+    }
+
+    const separatorIndex = line.indexOf(" ");
+    if (separatorIndex <= 0) {
+      continue;
+    }
+    const key = line.slice(0, separatorIndex);
+    const value = line.slice(separatorIndex + 1).trim();
+    const match = /^submodule\.(.+)\.(path|url)$/u.exec(key);
+    if (!match || !value) {
+      continue;
+    }
+
+    const [, name, property] = match;
+    const current = entriesByName.get(name) ?? {};
+    if (property === "path") {
+      current.path = value;
+    } else {
+      current.url = value;
+    }
+    entriesByName.set(name, current);
+  }
+
+  return [...entriesByName.values()]
+    .filter((entry): entry is GitmodulesEntry => typeof entry.path === "string" && typeof entry.url === "string")
+    .map((entry) => ({ path: entry.path.trim(), url: entry.url.trim() }))
+    .filter((entry) => entry.path.length > 0 && entry.url.length > 0);
+};
+
+const buildSubmoduleDiffFingerprint = (files: readonly TicketRunDiffFileSummary[]): string | null => {
+  if (files.length === 0) {
+    return null;
+  }
+
+  return JSON.stringify(
+    files.map((file) => ({
+      path: file.path,
+      previousPath: file.previousPath,
+      status: file.status,
+      patch: file.patch,
+    })),
+  );
+};
+
+const sortSubmoduleParentRefs = (parentRefs: readonly TicketRunSubmoduleParentRef[]): TicketRunSubmoduleParentRef[] =>
+  [...parentRefs].sort(
+    (left, right) =>
+      left.parentRepoRelativePath.localeCompare(right.parentRepoRelativePath) ||
+      left.submodulePath.localeCompare(right.submodulePath),
+  );
+
+const areSubmoduleSummariesEqual = (
+  left: readonly TicketRunSubmoduleSummary[],
+  right: readonly TicketRunSubmoduleSummary[],
+): boolean =>
+  JSON.stringify(
+    [...left]
+      .map((submodule) => ({
+        canonicalUrl: submodule.canonicalUrl,
+        name: submodule.name,
+        branchName: submodule.branchName,
+        commitMessageDraft: submodule.commitMessageDraft ?? null,
+        parentRefs: sortSubmoduleParentRefs(submodule.parentRefs),
+      }))
+      .sort((a, b) => a.canonicalUrl.localeCompare(b.canonicalUrl)),
+  ) ===
+  JSON.stringify(
+    [...right]
+      .map((submodule) => ({
+        canonicalUrl: submodule.canonicalUrl,
+        name: submodule.name,
+        branchName: submodule.branchName,
+        commitMessageDraft: submodule.commitMessageDraft ?? null,
+        parentRefs: sortSubmoduleParentRefs(submodule.parentRefs),
+      }))
+      .sort((a, b) => a.canonicalUrl.localeCompare(b.canonicalUrl)),
+  );
 
 export const buildTicketRunBranchName = (ticketId: string, summary: string): string => {
   const normalizedTicketId = slugify(ticketId, MAX_BRANCH_NAME_LENGTH).replace(/^-+|-+$/g, "") || "ticket";
@@ -372,6 +682,17 @@ const resolveTicketRunWorkspacePath = (
   return firstWorktree.worktreePath;
 };
 
+const resolveTicketRunMissionDirectory = (
+  worktrees: ReadonlyArray<Pick<TicketRunSummary["worktrees"][number], "worktreePath">>,
+): string | null => {
+  if (worktrees.length === 0) {
+    return null;
+  }
+
+  const parents = [...new Set(worktrees.map((worktree) => path.dirname(worktree.worktreePath)))];
+  return parents.length === 1 ? (parents[0] ?? null) : null;
+};
+
 const describeTicketRunWorkspace = (worktrees: ReadonlyArray<TicketRunSummary["worktrees"][number]>) => {
   const workspacePath = resolveTicketRunWorkspacePath(worktrees);
   if (workspacePath === worktrees[0]?.worktreePath) {
@@ -400,6 +721,7 @@ export class TicketRunService {
   private readonly runGitCommand: GitCommandRunner;
   private interruptedWorkRecovered = false;
   private readonly runLocks = new Map<string, Promise<void>>();
+  private readonly reviewSnapshotRequests = new Map<string, Promise<TicketRunReviewSnapshotResult>>();
   private disposed = false;
 
   constructor(private readonly options: TicketRunServiceOptions) {
@@ -421,6 +743,99 @@ export class TicketRunService {
 
   getRun(runId: string): TicketRunSummary {
     return this.getFreshRun(runId);
+  }
+
+  private async readGitmodulesEntries(worktreePath: string): Promise<GitmodulesEntry[]> {
+    if (!(await this.worktreeHasGitmodules(worktreePath))) {
+      return [];
+    }
+
+    try {
+      const result = await this.runGitCommand(worktreePath, [
+        "config",
+        "--file",
+        ".gitmodules",
+        "--get-regexp",
+        "^submodule\\..*\\.(path|url)$",
+      ]);
+      return parseGitmodulesEntries(result.stdout);
+    } catch {
+      return [];
+    }
+  }
+
+  private async discoverManagedSubmodules(run: TicketRunSummary): Promise<TicketRunSubmoduleSummary[]> {
+    const branchName = buildTicketRunBranchName(run.ticketId, run.ticketSummary);
+    const existingByCanonicalUrl = new Map(
+      run.submodules.map((submodule) => [submodule.canonicalUrl, submodule] as const),
+    );
+    const submodulesByCanonicalUrl = new Map<
+      string,
+      {
+        name: string;
+        branchName: string;
+        parentRefs: TicketRunSubmoduleParentRef[];
+      }
+    >();
+
+    for (const worktree of run.worktrees) {
+      const entries = await this.readGitmodulesEntries(worktree.worktreePath);
+      for (const entry of entries) {
+        const canonicalUrl = normalizeSubmoduleCanonicalUrl(entry.url);
+        if (!canonicalUrl) {
+          continue;
+        }
+
+        const current = submodulesByCanonicalUrl.get(canonicalUrl) ?? {
+          name: path.basename(entry.path.replace(/[\\/]+/gu, "/")) || entry.path,
+          branchName,
+          parentRefs: [],
+        };
+        current.parentRefs.push({
+          parentRepoRelativePath: worktree.repoRelativePath,
+          submodulePath: entry.path,
+          submoduleWorktreePath: path.join(worktree.worktreePath, entry.path),
+        });
+        submodulesByCanonicalUrl.set(canonicalUrl, current);
+      }
+    }
+
+    return [...submodulesByCanonicalUrl.entries()]
+      .map(([canonicalUrl, submodule], index) => {
+        const existing = existingByCanonicalUrl.get(canonicalUrl);
+        const dedupedParentRefs = [
+          ...new Map(
+            submodule.parentRefs.map((parentRef) => [
+              `${parentRef.parentRepoRelativePath}\u0000${parentRef.submodulePath}`,
+              parentRef,
+            ]),
+          ).values(),
+        ];
+        const createdAt = existing?.createdAt ?? this.now() + index;
+        return {
+          canonicalUrl,
+          name: existing?.name ?? submodule.name,
+          branchName: existing?.branchName ?? submodule.branchName,
+          commitMessageDraft: existing?.commitMessageDraft ?? null,
+          parentRefs: sortSubmoduleParentRefs(dedupedParentRefs),
+          createdAt,
+          updatedAt: this.now(),
+        };
+      })
+      .sort(
+        (left, right) => left.name.localeCompare(right.name) || left.canonicalUrl.localeCompare(right.canonicalUrl),
+      );
+  }
+
+  private async ensureRunSubmodules(run: TicketRunSummary): Promise<TicketRunSummary> {
+    const discovered = await this.discoverManagedSubmodules(run);
+    if (areSubmoduleSummariesEqual(run.submodules, discovered)) {
+      return run;
+    }
+
+    return this.persistRun(run, {
+      submodules: discovered,
+    });
   }
 
   async startRun(ticket: StartTicketRunRequest): Promise<StartTicketRunResult> {
@@ -447,11 +862,14 @@ export class TicketRunService {
       };
     }
 
-    const recoverableWorktrees =
+    const recoverableWorktrees = await this.normalizeRecoverableWorktrees(
+      ticketId,
+      recoverableRun?.runId ?? null,
       recoverableRun?.worktrees.map((worktree) => ({
         ...worktree,
         commitMessageDraft: worktree.commitMessageDraft ?? null,
-      })) ?? [];
+      })) ?? [],
+    );
     const recoverableWorktreeByRepo = new Map(
       recoverableWorktrees.map((worktree) => [worktree.repoRelativePath, worktree] as const),
     );
@@ -526,6 +944,7 @@ export class TicketRunService {
       startedAt: createdAt,
       createdAt,
       worktrees: startingWorktrees,
+      submodules: recoverableRun?.submodules ?? [],
       attempts: recoverableRun?.attempts ?? [],
     });
     this.emitSnapshot();
@@ -534,18 +953,28 @@ export class TicketRunService {
       (worktree) => !recoverableWorktreeByRepo.has(worktree.repoRelativePath),
     );
 
-    const createdWorktrees: typeof startingWorktrees = [];
+    const createdWorktrees: Array<{
+      worktree: (typeof startingWorktrees)[number];
+      branchExistedBeforeCreate: boolean;
+    }> = [];
     try {
       for (const worktree of worktreesToCreate) {
+        if (await this.pathExists(worktree.worktreePath)) {
+          await this.removeManagedWorktree(worktree);
+        }
         await mkdir(path.dirname(worktree.worktreePath), { recursive: true });
+        const branchExistedBeforeCreate = await this.hasLocalBranch(worktree.repoAbsolutePath, worktree.branchName);
         await this.runGitCommand(worktree.repoAbsolutePath, [
           "worktree",
           "add",
-          recoverableRun ? "-B" : "-b",
-          worktree.branchName,
-          worktree.worktreePath,
+          ...(branchExistedBeforeCreate
+            ? [worktree.worktreePath, worktree.branchName]
+            : [recoverableRun ? "-B" : "-b", worktree.branchName, worktree.worktreePath]),
         ]);
-        createdWorktrees.push(worktree);
+        createdWorktrees.push({
+          worktree,
+          branchExistedBeforeCreate,
+        });
       }
 
       for (const worktree of startingWorktrees) {
@@ -559,16 +988,35 @@ export class TicketRunService {
       const retainedWorktrees: typeof startingWorktrees = [];
       for (const createdWorktree of [...createdWorktrees].reverse()) {
         try {
-          await this.runGitCommand(createdWorktree.repoAbsolutePath, [
+          await this.runGitCommand(createdWorktree.worktree.repoAbsolutePath, [
             "worktree",
             "remove",
             "--force",
-            createdWorktree.worktreePath,
+            createdWorktree.worktree.worktreePath,
           ]);
+          if (!createdWorktree.branchExistedBeforeCreate) {
+            try {
+              await this.deleteLocalMissionBranch(
+                createdWorktree.worktree.repoAbsolutePath,
+                createdWorktree.worktree.branchName,
+              );
+            } catch (branchCleanupError) {
+              this.options.logger.warn(
+                {
+                  err: branchCleanupError,
+                  ticketId,
+                  runId,
+                  repoRelativePath: createdWorktree.worktree.repoRelativePath,
+                  branchName: createdWorktree.worktree.branchName,
+                },
+                "Failed to roll back a partially created mission branch",
+              );
+            }
+          }
         } catch (cleanupError) {
-          retainedWorktrees.push(createdWorktree);
+          retainedWorktrees.push(createdWorktree.worktree);
           this.options.logger.warn(
-            { err: cleanupError, ticketId, runId, worktreePath: createdWorktree.worktreePath },
+            { err: cleanupError, ticketId, runId, worktreePath: createdWorktree.worktree.worktreePath },
             "Failed to roll back a partially created managed worktree",
           );
         }
@@ -588,6 +1036,7 @@ export class TicketRunService {
         startedAt: createdAt,
         createdAt,
         worktrees: failedWorktrees,
+        submodules: recoverableRun?.submodules ?? [],
         attempts: recoverableRun?.attempts ?? [],
       });
       const failedSnapshot = memoryDb.getTicketRunSnapshot();
@@ -610,11 +1059,12 @@ export class TicketRunService {
       startedAt: createdAt,
       createdAt,
       worktrees: startingWorktrees,
+      submodules: recoverableRun?.submodules ?? [],
       attempts: recoverableRun?.attempts ?? [],
     });
     this.emitSnapshot();
 
-    const run = await this.syncRunState({
+    let run = await this.syncRunState({
       runId,
       stationId: recoverableRun?.stationId ?? null,
       ticketId,
@@ -633,7 +1083,9 @@ export class TicketRunService {
         createdAt: worktree.createdAt,
         updatedAt: this.now(),
       })),
+      submodules: recoverableRun?.submodules ?? [],
     });
+    run = await this.ensureRunSubmodules(run);
     const nextSnapshot = memoryDb.getTicketRunSnapshot();
 
     return {
@@ -745,9 +1197,16 @@ export class TicketRunService {
   async completeRun(runId: string): Promise<CompleteTicketRunResult> {
     return this.withRunLock(runId, async () => {
       const memoryDb = this.requireMemoryDb();
-      const run = this.getFreshRun(runId);
-      if (run.status !== "awaiting-review" && run.status !== "ready") {
-        throw new ConfigError(`Ticket ${run.ticketId} must be ready for review before it can be marked complete.`);
+      const run = await this.ensureRunSubmodules(this.getFreshRun(runId));
+      if (run.status !== "awaiting-review") {
+        throw new ConfigError(`Ticket ${run.ticketId} must be awaiting review before it can be closed.`);
+      }
+
+      const reviewSnapshot = await this.buildReviewSnapshot(run);
+      if (!reviewSnapshot.canClose) {
+        throw new ConfigError(
+          `Finish the remaining mission review work before closing ${run.ticketId}: ${describeReviewBlockers(run, reviewSnapshot)}.`,
+        );
       }
 
       if (this.options.stopRunServices) {
@@ -756,9 +1215,8 @@ export class TicketRunService {
 
       let completedRun = this.persistRun(run, {
         status: "done",
-        statusMessage: "Mission marked complete.",
+        statusMessage: "Mission closed.",
       });
-      completedRun = await this.generateAndPersistCommitDraft(completedRun);
       const stationId = completedRun.stationId;
       if (stationId && this.options.closeMissionStation) {
         await this.options.closeMissionStation(stationId);
@@ -775,6 +1233,161 @@ export class TicketRunService {
     });
   }
 
+  async deleteRun(runId: string): Promise<DeleteTicketRunResult> {
+    return this.withRunLock(runId, async () => {
+      const memoryDb = this.requireMemoryDb();
+      const run = this.getFreshRun(runId);
+      const deleteBlockers = await this.buildDeleteBlockers(run);
+      if (deleteBlockers.length > 0) {
+        throw new ConfigError(
+          `Mission ${run.ticketId} cannot be deleted because published branches were found: ${describeDeleteBlockers(deleteBlockers)}.`,
+        );
+      }
+
+      if (run.status === "working" && run.stationId && this.options.cancelMissionPass) {
+        await this.options.cancelMissionPass(run.stationId);
+      }
+      if (this.options.stopRunServices) {
+        await this.options.stopRunServices(run.runId);
+      }
+      if (run.stationId && this.options.closeMissionStation) {
+        await this.options.closeMissionStation(run.stationId);
+      }
+
+      for (const worktree of run.worktrees) {
+        await this.removeManagedWorktree(worktree);
+      }
+
+      const missionDirectory = resolveTicketRunMissionDirectory(run.worktrees);
+      if (missionDirectory) {
+        await rm(missionDirectory, { force: true, recursive: true });
+      }
+
+      for (const worktree of run.worktrees) {
+        await this.deleteLocalMissionBranch(worktree.repoAbsolutePath, worktree.branchName);
+      }
+
+      if (!memoryDb.deleteTicketRun(run.runId)) {
+        throw new ConfigError(
+          `Mission ${run.ticketId} could not be deleted because its local record no longer exists.`,
+        );
+      }
+
+      this.reviewSnapshotRequests.delete(runId);
+      const snapshot = memoryDb.getTicketRunSnapshot();
+      this.emitSnapshot(snapshot);
+      return {
+        runId: run.runId,
+        ticketId: run.ticketId,
+        snapshot,
+      };
+    });
+  }
+
+  async getReviewSnapshot(runId: string): Promise<TicketRunReviewSnapshotResult> {
+    const existing = this.reviewSnapshotRequests.get(runId);
+    if (existing) {
+      return existing;
+    }
+
+    const request = this.withRunLock(runId, async () => {
+      const memoryDb = this.requireMemoryDb();
+      const run = await this.ensureRunSubmodules(this.getFreshRun(runId));
+      const reviewSnapshot = await this.buildReviewSnapshot(run);
+
+      return {
+        run,
+        snapshot: memoryDb.getTicketRunSnapshot(),
+        reviewSnapshot,
+      };
+    });
+    this.reviewSnapshotRequests.set(runId, request);
+
+    try {
+      return await request;
+    } finally {
+      if (this.reviewSnapshotRequests.get(runId) === request) {
+        this.reviewSnapshotRequests.delete(runId);
+      }
+    }
+  }
+
+  private async buildReviewSnapshot(run: TicketRunSummary): Promise<TicketRunReviewSnapshot> {
+    const submoduleEntries = await Promise.all(
+      run.submodules.map(async (submodule): Promise<TicketRunReviewSubmoduleEntry> => {
+        try {
+          const managedState = await this.readSubmoduleState(run, submodule.canonicalUrl, {
+            includeFiles: false,
+            allowHistoryFetch: false,
+          });
+          return {
+            canonicalUrl: submodule.canonicalUrl,
+            gitState: toReviewSubmoduleState(managedState.gitState),
+            error: null,
+          };
+        } catch (error) {
+          return {
+            canonicalUrl: submodule.canonicalUrl,
+            gitState: null,
+            error: describeReviewLoadError(error, `Failed to load managed submodule state for ${submodule.name}.`),
+          };
+        }
+      }),
+    );
+
+    const submoduleGitStatesByUrl = new Map(
+      submoduleEntries.flatMap((entry) => (entry.gitState ? ([[entry.canonicalUrl, entry.gitState]] as const) : [])),
+    );
+
+    const repoEntries = await Promise.all(
+      run.worktrees.map(async (worktree): Promise<TicketRunReviewRepoEntry> => {
+        try {
+          const gitState = await this.readGitState(run, worktree.repoRelativePath, submoduleGitStatesByUrl, {
+            includeFiles: false,
+            allowHistoryFetch: false,
+          });
+          return {
+            repoRelativePath: worktree.repoRelativePath,
+            gitState: toReviewRepoState(gitState),
+            error: null,
+          };
+        } catch (error) {
+          return {
+            repoRelativePath: worktree.repoRelativePath,
+            gitState: null,
+            error: describeReviewLoadError(error, `Failed to load mission git state for ${worktree.repoRelativePath}.`),
+          };
+        }
+      }),
+    );
+
+    const reviewSnapshot: TicketRunReviewSnapshot = {
+      runId: run.runId,
+      repoEntries,
+      submoduleEntries,
+      visibleRepoPaths: repoEntries
+        .filter((entry) => entry.error !== null || (entry.gitState !== null && isRepoVisibleInReview(entry.gitState)))
+        .map((entry) => entry.repoRelativePath),
+      visibleSubmoduleUrls: submoduleEntries
+        .filter(
+          (entry) => entry.error !== null || (entry.gitState !== null && isSubmoduleVisibleInReview(entry.gitState)),
+        )
+        .map((entry) => entry.canonicalUrl),
+      canClose:
+        repoEntries.every(
+          (entry) => entry.error === null && entry.gitState !== null && !isRepoBlockingClose(entry.gitState),
+        ) &&
+        submoduleEntries.every(
+          (entry) => entry.error === null && entry.gitState !== null && !isSubmoduleBlockingClose(entry.gitState),
+        ),
+      canDelete: false,
+      deleteBlockers: await this.buildDeleteBlockers(run),
+    };
+    reviewSnapshot.canDelete = reviewSnapshot.deleteBlockers.length === 0;
+
+    return reviewSnapshot;
+  }
+
   async getGitState(runId: string, repoRelativePath?: string): Promise<TicketRunGitStateResult> {
     const run = this.getFreshRun(runId);
     return {
@@ -784,9 +1397,18 @@ export class TicketRunService {
     };
   }
 
+  async getSubmoduleGitState(runId: string, canonicalUrl: string): Promise<TicketRunSubmoduleGitStateResult> {
+    const run = this.getFreshRun(runId);
+    return {
+      run,
+      snapshot: this.requireMemoryDb().getTicketRunSnapshot(),
+      gitState: (await this.readSubmoduleState(run, canonicalUrl)).gitState,
+    };
+  }
+
   async generateCommitDraft(runId: string, repoRelativePath?: string): Promise<GenerateTicketRunCommitDraftResult> {
     return this.withRunLock(runId, async () => {
-      const run = this.getFreshRun(runId);
+      const run = await this.ensureRunSubmodules(this.getFreshRun(runId));
       const updatedRun = await this.generateAndPersistCommitDraft(run, repoRelativePath);
       const snapshot = this.requireMemoryDb().getTicketRunSnapshot();
       this.emitSnapshot(snapshot);
@@ -798,13 +1420,30 @@ export class TicketRunService {
     });
   }
 
+  async generateSubmoduleCommitDraft(
+    runId: string,
+    canonicalUrl: string,
+  ): Promise<GenerateTicketRunSubmoduleCommitDraftResult> {
+    return this.withRunLock(runId, async () => {
+      const run = await this.ensureRunSubmodules(this.getFreshRun(runId));
+      const updatedRun = await this.generateAndPersistSubmoduleCommitDraft(run, canonicalUrl);
+      const snapshot = this.requireMemoryDb().getTicketRunSnapshot();
+      this.emitSnapshot(snapshot);
+      return {
+        run: updatedRun,
+        snapshot,
+        gitState: (await this.readSubmoduleState(updatedRun, canonicalUrl)).gitState,
+      };
+    });
+  }
+
   async setCommitDraft(
     runId: string,
     message: string,
     repoRelativePath?: string,
   ): Promise<SetTicketRunCommitDraftResult> {
     return this.withRunLock(runId, async () => {
-      const run = this.getFreshRun(runId);
+      const run = await this.ensureRunSubmodules(this.getFreshRun(runId));
       const worktree = this.resolveTargetWorktree(run, repoRelativePath);
       const nextRun = this.persistRun(run, {
         worktrees: run.worktrees.map((candidate) =>
@@ -826,11 +1465,39 @@ export class TicketRunService {
     });
   }
 
+  async setSubmoduleCommitDraft(
+    runId: string,
+    canonicalUrl: string,
+    message: string,
+  ): Promise<SetTicketRunSubmoduleCommitDraftResult> {
+    return this.withRunLock(runId, async () => {
+      const run = await this.ensureRunSubmodules(this.getFreshRun(runId));
+      this.requireManagedSubmodule(run, canonicalUrl);
+      const nextRun = this.persistRun(run, {
+        submodules: run.submodules.map((candidate) =>
+          candidate.canonicalUrl === canonicalUrl
+            ? {
+                ...candidate,
+                commitMessageDraft: message,
+              }
+            : candidate,
+        ),
+      });
+      const snapshot = this.requireMemoryDb().getTicketRunSnapshot();
+      this.emitSnapshot(snapshot);
+      return {
+        run: nextRun,
+        snapshot,
+        gitState: (await this.readSubmoduleState(nextRun, canonicalUrl)).gitState,
+      };
+    });
+  }
+
   async commitRun(runId: string, message: string, repoRelativePath?: string): Promise<CommitTicketRunResult> {
     return this.withRunLock(runId, async () => {
-      const run = this.getFreshRun(runId);
-      if (run.status !== "done") {
-        throw new ConfigError(`Ticket ${run.ticketId} must be completed before it can be committed.`);
+      const run = await this.ensureRunSubmodules(this.getFreshRun(runId));
+      if (run.status !== "awaiting-review") {
+        throw new ConfigError(`Ticket ${run.ticketId} must be awaiting review before it can be committed.`);
       }
       const trimmedMessage = message.trim();
       if (!trimmedMessage) {
@@ -839,13 +1506,14 @@ export class TicketRunService {
 
       const worktree = this.resolveTargetWorktree(run, repoRelativePath);
       const gitState = await this.readGitState(run, worktree.repoRelativePath);
+      this.assertParentRepoSubmodulesReady(run, gitState, "commit");
       if (!gitState.hasDiff) {
-        throw new ConfigError(`Ticket ${run.ticketId} does not have any tracked changes to commit.`);
+        throw new ConfigError(`Ticket ${run.ticketId} does not have any changes to commit.`);
       }
 
       const identity = await this.resolveMissionGitIdentity();
       try {
-        await this.runGitCommand(worktree.worktreePath, ["add", "-u"]);
+        await this.runGitCommand(worktree.worktreePath, ["add", "-A"]);
         await this.runGitCommand(worktree.worktreePath, [
           "-c",
           `user.name=${identity.name}`,
@@ -890,6 +1558,84 @@ export class TicketRunService {
     });
   }
 
+  async commitSubmodule(runId: string, canonicalUrl: string, message: string): Promise<CommitTicketRunSubmoduleResult> {
+    return this.withRunLock(runId, async () => {
+      const run = await this.ensureRunSubmodules(this.getFreshRun(runId));
+      if (run.status !== "awaiting-review") {
+        throw new ConfigError(
+          `Ticket ${run.ticketId} must be awaiting review before a managed submodule can be committed.`,
+        );
+      }
+
+      const trimmedMessage = message.trim();
+      if (!trimmedMessage) {
+        throw new ConfigError("Enter a commit message before committing this managed submodule.");
+      }
+
+      const managedState = await this.readSubmoduleState(run, canonicalUrl);
+      if (managedState.gitState.reconcileRequired) {
+        throw new ConfigError(
+          managedState.gitState.reconcileReason ??
+            `Managed submodule ${managedState.summary.name} requires reconciliation.`,
+        );
+      }
+      if (!managedState.gitState.hasDiff) {
+        throw new ConfigError(`Managed submodule ${managedState.summary.name} does not have any changes to commit.`);
+      }
+
+      await this.ensureBranchCheckedOut(managedState.gitState.worktreePath, managedState.gitState.branchName);
+      const identity = await this.resolveMissionGitIdentity();
+      try {
+        await this.runGitCommand(managedState.gitState.worktreePath, ["add", "-A"]);
+        await this.runGitCommand(managedState.gitState.worktreePath, [
+          "-c",
+          `user.name=${identity.name}`,
+          "-c",
+          `user.email=${identity.email}`,
+          "-c",
+          "commit.gpgsign=false",
+          "commit",
+          `--author=${identity.name} <${identity.email}>`,
+          "--cleanup=strip",
+          "-m",
+          trimmedMessage,
+        ]);
+      } catch (error) {
+        this.options.logger.warn(
+          { err: error, runId, ticketId: run.ticketId, canonicalUrl },
+          "Managed submodule commit failed",
+        );
+        throw new SpiraError(
+          "MISSIONS_SUBMODULE_COMMIT_FAILED",
+          `Failed to commit managed submodule ${managedState.summary.name}. Check the git log for the underlying error.`,
+          error,
+        );
+      }
+
+      const commitSha = (
+        await this.runGitCommand(managedState.gitState.worktreePath, ["rev-parse", "HEAD"])
+      ).stdout.trim();
+      const nextRun = this.persistRun(run, {
+        submodules: run.submodules.map((candidate) =>
+          candidate.canonicalUrl === canonicalUrl
+            ? {
+                ...candidate,
+                commitMessageDraft: null,
+              }
+            : candidate,
+        ),
+      });
+      const snapshot = this.requireMemoryDb().getTicketRunSnapshot();
+      this.emitSnapshot(snapshot);
+      return {
+        run: nextRun,
+        snapshot,
+        gitState: (await this.readSubmoduleState(nextRun, canonicalUrl)).gitState,
+        commitSha,
+      };
+    });
+  }
+
   async publishRun(runId: string, repoRelativePath?: string): Promise<SyncTicketRunRemoteResult> {
     return this.syncRemote(runId, "publish", repoRelativePath);
   }
@@ -898,16 +1644,25 @@ export class TicketRunService {
     return this.syncRemote(runId, "push", repoRelativePath);
   }
 
+  async publishSubmodule(runId: string, canonicalUrl: string): Promise<SyncTicketRunSubmoduleRemoteResult> {
+    return this.syncSubmoduleRemote(runId, canonicalUrl, "publish");
+  }
+
+  async pushSubmodule(runId: string, canonicalUrl: string): Promise<SyncTicketRunSubmoduleRemoteResult> {
+    return this.syncSubmoduleRemote(runId, canonicalUrl, "push");
+  }
+
   async createPullRequest(runId: string, repoRelativePath?: string): Promise<CreateTicketRunPullRequestResult> {
     return this.withRunLock(runId, async () => {
-      const run = this.getFreshRun(runId);
-      if (run.status !== "done") {
-        throw new ConfigError(`Ticket ${run.ticketId} must be completed before a pull request can be opened.`);
+      const run = await this.ensureRunSubmodules(this.getFreshRun(runId));
+      if (run.status !== "awaiting-review") {
+        throw new ConfigError(`Ticket ${run.ticketId} must be awaiting review before a pull request can be opened.`);
       }
 
       const gitState = await this.readGitState(run, repoRelativePath);
+      this.assertParentRepoSubmodulesReady(run, gitState, "open a pull request for");
       if (gitState.hasDiff) {
-        throw new ConfigError(`Commit the tracked changes for ${run.ticketId} before opening a pull request.`);
+        throw new ConfigError(`Commit the changes for ${run.ticketId} before opening a pull request.`);
       }
       if (gitState.pushAction !== "none") {
         throw new ConfigError(`Publish and push ${run.ticketId} before opening a pull request.`);
@@ -923,8 +1678,50 @@ export class TicketRunService {
     });
   }
 
+  async createSubmodulePullRequest(
+    runId: string,
+    canonicalUrl: string,
+  ): Promise<CreateTicketRunSubmodulePullRequestResult> {
+    return this.withRunLock(runId, async () => {
+      const run = await this.ensureRunSubmodules(this.getFreshRun(runId));
+      if (run.status !== "awaiting-review") {
+        throw new ConfigError(
+          `Ticket ${run.ticketId} must be awaiting review before a managed submodule pull request can be opened.`,
+        );
+      }
+
+      const managedState = await this.readSubmoduleState(run, canonicalUrl);
+      if (managedState.gitState.reconcileRequired) {
+        throw new ConfigError(
+          managedState.gitState.reconcileReason ??
+            `Managed submodule ${managedState.summary.name} requires reconciliation.`,
+        );
+      }
+      if (managedState.gitState.parents.some((parentState) => !parentState.isAligned)) {
+        throw new ConfigError(
+          `Publish ${managedState.summary.name} and align every parent repo before opening its pull request.`,
+        );
+      }
+      if (managedState.gitState.hasDiff) {
+        throw new ConfigError(`Commit the changes for ${managedState.summary.name} before opening a pull request.`);
+      }
+      if (managedState.gitState.pushAction !== "none") {
+        throw new ConfigError(`Publish and push ${managedState.summary.name} before opening a pull request.`);
+      }
+
+      const pullRequestUrl = await this.createGitHubPullRequest(run, managedState.gitState);
+      return {
+        run,
+        snapshot: this.requireMemoryDb().getTicketRunSnapshot(),
+        gitState: managedState.gitState,
+        pullRequestUrl,
+      };
+    });
+  }
+
   dispose(): void {
     this.disposed = true;
+    this.reviewSnapshotRequests.clear();
   }
 
   private requireMemoryDb(): SpiraMemoryDatabase {
@@ -960,12 +1757,21 @@ export class TicketRunService {
       return;
     }
 
+    const missionGitToken = this.getOptionalMissionGitToken();
     try {
-      await this.runGitCommand(worktree.worktreePath, ["submodule", "update", "--init", "--recursive"]);
+      await this.runGitCommand(worktree.worktreePath, [
+        ...(missionGitToken ? buildGitHubHttpAuthArgs(missionGitToken) : []),
+        "submodule",
+        "update",
+        "--init",
+        "--recursive",
+      ]);
     } catch (error) {
       throw new SpiraError(
         "MISSIONS_SUBMODULE_UPDATE_FAILED",
-        `Failed to hydrate submodules for ${worktree.repoRelativePath}.`,
+        !missionGitToken && isGitHubCredentialPromptFailure(error)
+          ? `Failed to hydrate submodules for ${worktree.repoRelativePath}. Set a mission GitHub PAT in Settings so Spira can clone private GitHub submodules.`
+          : `Failed to hydrate submodules for ${worktree.repoRelativePath}.`,
         error,
       );
     }
@@ -1197,34 +2003,282 @@ export class TicketRunService {
     return worktree;
   }
 
-  private async readGitState(run: TicketRunSummary, repoRelativePath?: string): Promise<TicketRunGitState> {
-    const worktree = this.resolveTargetWorktree(run, repoRelativePath);
-    const gitHubOrigin = await this.readGitHubOrigin(worktree.worktreePath);
+  private async pathExists(targetPath: string): Promise<boolean> {
+    try {
+      await access(targetPath);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private async hasLocalBranch(repoAbsolutePath: string, branchName: string): Promise<boolean> {
+    try {
+      const result = await this.runGitCommand(repoAbsolutePath, [
+        "branch",
+        "--list",
+        "--format=%(refname:short)",
+        branchName,
+      ]);
+      return result.stdout.trim() === branchName;
+    } catch {
+      return false;
+    }
+  }
+
+  private async isUsableManagedWorktree(
+    worktree: Pick<TicketRunSummary["worktrees"][number], "worktreePath">,
+  ): Promise<boolean> {
+    if (!(await this.pathExists(worktree.worktreePath))) {
+      return false;
+    }
+
+    try {
+      await this.runGitCommand(worktree.worktreePath, ["rev-parse", "--git-dir"]);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private async normalizeRecoverableWorktrees(
+    ticketId: string,
+    runId: string | null,
+    worktrees: Array<
+      Pick<
+        TicketRunSummary["worktrees"][number],
+        | "repoRelativePath"
+        | "repoAbsolutePath"
+        | "worktreePath"
+        | "branchName"
+        | "commitMessageDraft"
+        | "cleanupState"
+        | "createdAt"
+        | "updatedAt"
+      >
+    >,
+  ): Promise<typeof worktrees> {
+    const recoverableWorktrees: typeof worktrees = [];
+    for (const worktree of worktrees) {
+      if (await this.isUsableManagedWorktree(worktree)) {
+        recoverableWorktrees.push(worktree);
+        continue;
+      }
+
+      try {
+        await this.removeManagedWorktree(worktree);
+      } catch (cleanupError) {
+        this.options.logger.warn(
+          { err: cleanupError, ticketId, runId, worktreePath: worktree.worktreePath },
+          "Failed to clear an invalid recoverable managed worktree before recreation",
+        );
+      }
+    }
+    return recoverableWorktrees;
+  }
+
+  private async removeManagedWorktree(worktree: TicketRunSummary["worktrees"][number]): Promise<void> {
+    if (!(await this.pathExists(worktree.worktreePath))) {
+      try {
+        await this.runGitCommand(worktree.repoAbsolutePath, ["worktree", "prune"]);
+      } catch {
+        // Ignore prune failures for already-missing worktrees; delete retries should still be possible.
+      }
+      return;
+    }
+
+    try {
+      await this.runGitCommand(worktree.repoAbsolutePath, ["worktree", "remove", "--force", worktree.worktreePath]);
+      return;
+    } catch (error) {
+      await rm(worktree.worktreePath, { force: true, recursive: true });
+      try {
+        await this.runGitCommand(worktree.repoAbsolutePath, ["worktree", "prune"]);
+      } catch {
+        // Best effort prune after a forced directory cleanup.
+      }
+      if (await this.pathExists(worktree.worktreePath)) {
+        throw error;
+      }
+    }
+  }
+
+  private async deleteLocalMissionBranch(repoAbsolutePath: string, branchName: string): Promise<void> {
+    if (!(await this.hasLocalBranch(repoAbsolutePath, branchName))) {
+      return;
+    }
+
+    await this.runGitCommand(repoAbsolutePath, ["branch", "-D", branchName]);
+  }
+
+  private async readBranchUpstream(repoAbsolutePath: string, branchName: string): Promise<string | null> {
+    if (!(await this.pathExists(repoAbsolutePath))) {
+      return null;
+    }
+    if (!(await this.hasLocalBranch(repoAbsolutePath, branchName))) {
+      return null;
+    }
+
+    const result = await this.runGitCommand(repoAbsolutePath, [
+      "for-each-ref",
+      "--format=%(upstream:short)",
+      `refs/heads/${branchName}`,
+    ]);
+    const upstreamBranch = result.stdout.trim();
+    return upstreamBranch.length > 0 ? upstreamBranch : null;
+  }
+
+  private async buildDeleteBlockers(run: TicketRunSummary): Promise<TicketRunDeleteBlocker[]> {
+    const repoBlockers = await Promise.all(
+      run.worktrees.map(async (worktree): Promise<TicketRunDeleteBlocker | null> => {
+        try {
+          const upstreamBranch = await this.readBranchUpstream(worktree.repoAbsolutePath, worktree.branchName);
+          return upstreamBranch
+            ? {
+                label: worktree.repoRelativePath,
+                reason: `branch ${worktree.branchName} is already published`,
+              }
+            : null;
+        } catch {
+          return {
+            label: worktree.repoRelativePath,
+            reason: "publish state could not be verified",
+          };
+        }
+      }),
+    );
+
+    const submoduleBlockers = await Promise.all(
+      run.submodules.map(async (submodule): Promise<TicketRunDeleteBlocker | null> => {
+        let submoduleRepoPath: string | null = null;
+        for (const parentRef of submodule.parentRefs) {
+          if (await this.pathExists(parentRef.submoduleWorktreePath)) {
+            submoduleRepoPath = parentRef.submoduleWorktreePath;
+            break;
+          }
+        }
+        if (!submoduleRepoPath) {
+          return null;
+        }
+
+        try {
+          const upstreamBranch = await this.readBranchUpstream(submoduleRepoPath, submodule.branchName);
+          return upstreamBranch
+            ? {
+                label: submodule.name,
+                reason: `branch ${submodule.branchName} is already published`,
+              }
+            : null;
+        } catch {
+          return {
+            label: submodule.name,
+            reason: "publish state could not be verified",
+          };
+        }
+      }),
+    );
+
+    return [...repoBlockers, ...submoduleBlockers].filter(
+      (blocker): blocker is TicketRunDeleteBlocker => blocker !== null,
+    );
+  }
+
+  private async resolveHeadSha(worktreePath: string): Promise<string | null> {
+    try {
+      return (await this.runGitCommand(worktreePath, ["rev-parse", "HEAD"])).stdout.trim() || null;
+    } catch {
+      return null;
+    }
+  }
+
+  private async hasCommitObject(worktreePath: string, sha: string): Promise<boolean> {
+    try {
+      await this.runGitCommand(worktreePath, ["rev-parse", "--verify", `${sha}^{commit}`]);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private async ensureCommitObjectAvailable(
+    worktreePath: string,
+    sha: string,
+    sourcePath: string,
+    allowFetch = true,
+  ): Promise<boolean> {
+    if (await this.hasCommitObject(worktreePath, sha)) {
+      return true;
+    }
+
+    if (!allowFetch) {
+      return false;
+    }
+
+    if (sourcePath !== worktreePath) {
+      try {
+        await this.runGitCommand(worktreePath, ["fetch", "--no-tags", sourcePath, sha]);
+      } catch {
+        // Fall through and let the caller surface a reconciliation error if histories still cannot be compared.
+      }
+    }
+
+    return this.hasCommitObject(worktreePath, sha);
+  }
+
+  private async isAncestorInRepo(
+    worktreePath: string,
+    ancestorSha: string,
+    descendantSha: string,
+    ancestorSourcePath = worktreePath,
+    descendantSourcePath = worktreePath,
+    allowFetch = true,
+  ): Promise<boolean> {
+    const ancestorAvailable = await this.ensureCommitObjectAvailable(
+      worktreePath,
+      ancestorSha,
+      ancestorSourcePath,
+      allowFetch,
+    );
+    const descendantAvailable = await this.ensureCommitObjectAvailable(
+      worktreePath,
+      descendantSha,
+      descendantSourcePath,
+      allowFetch,
+    );
+    if (!ancestorAvailable || !descendantAvailable) {
+      return false;
+    }
+
+    try {
+      await this.runGitCommand(worktreePath, ["merge-base", "--is-ancestor", ancestorSha, descendantSha]);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private async readGitRepoState(
+    worktreePath: string,
+    branchName: string,
+    options: GitReadOptions = {},
+  ): Promise<GitRepoStateSnapshot> {
+    const includeFiles = options.includeFiles ?? true;
     let upstreamBranch: string | null = null;
     try {
       upstreamBranch = (
-        await this.runGitCommand(worktree.worktreePath, [
-          "rev-parse",
-          "--abbrev-ref",
-          "--symbolic-full-name",
-          "@{upstream}",
-        ])
+        await this.runGitCommand(worktreePath, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"])
       ).stdout.trim();
     } catch {
       upstreamBranch = null;
     }
+    const gitHubOrigin = upstreamBranch ? await this.readGitHubOrigin(worktreePath) : null;
 
     let aheadCount = 0;
     let behindCount = 0;
     if (upstreamBranch) {
       try {
         const counts = (
-          await this.runGitCommand(worktree.worktreePath, [
-            "rev-list",
-            "--left-right",
-            "--count",
-            `${upstreamBranch}...HEAD`,
-          ])
+          await this.runGitCommand(worktreePath, ["rev-list", "--left-right", "--count", `${upstreamBranch}...HEAD`])
         ).stdout
           .trim()
           .split(/\s+/u);
@@ -1236,50 +2290,72 @@ export class TicketRunService {
       }
     }
 
-    const [nameStatusResult, numstatResult, diffResult] = await Promise.all([
-      this.runGitCommand(worktree.worktreePath, [
-        "diff",
-        "--find-renames",
-        "--find-copies",
-        "--name-status",
-        "HEAD",
-        "--",
-      ]),
-      this.runGitCommand(worktree.worktreePath, ["diff", "--find-renames", "--find-copies", "--numstat", "HEAD", "--"]),
-      this.runGitCommand(worktree.worktreePath, [
-        "diff",
-        "--find-renames",
-        "--find-copies",
-        "--patch",
-        "--no-color",
-        "HEAD",
-        "--",
-      ]),
-    ]);
-    const files = parseDiffFiles(
-      diffResult.stdout,
-      parseNameStatusMap(nameStatusResult.stdout),
-      parseNumstatMap(numstatResult.stdout),
-    );
-    const hasDiff = files.length > 0;
+    let files: TicketRunDiffFileSummary[] = [];
+    let diffFingerprint: string | null = null;
+    let hasDiff = false;
+    if (includeFiles) {
+      const [nameStatusResult, numstatResult, diffResult, statusResult, untrackedResult] = await Promise.all([
+        this.runGitCommand(worktreePath, ["diff", "--find-renames", "--find-copies", "--name-status", "HEAD", "--"]),
+        this.runGitCommand(worktreePath, ["diff", "--find-renames", "--find-copies", "--numstat", "HEAD", "--"]),
+        this.runGitCommand(worktreePath, [
+          "diff",
+          "--find-renames",
+          "--find-copies",
+          "--patch",
+          "--no-color",
+          "HEAD",
+          "--",
+        ]),
+        this.runGitCommand(worktreePath, [
+          "status",
+          "--porcelain=v1",
+          "--untracked-files=all",
+          "--ignore-submodules=none",
+        ]).catch(() => ({
+          stdout: "",
+          stderr: "",
+        })),
+        this.runGitCommand(worktreePath, ["ls-files", "--others", "--exclude-standard", "-z"]).catch(() => ({
+          stdout: "",
+          stderr: "",
+        })),
+      ]);
+      files = mergeUntrackedFiles(
+        parseDiffFiles(
+          diffResult.stdout,
+          parseNameStatusMap(nameStatusResult.stdout),
+          parseNumstatMap(numstatResult.stdout),
+        ),
+        parseNullSeparatedEntries(untrackedResult.stdout),
+      );
+      const normalizedStatus = statusResult.stdout.trim();
+      hasDiff = files.length > 0 || normalizedStatus.length > 0;
+      diffFingerprint = hasDiff ? (buildSubmoduleDiffFingerprint(files) ?? normalizedStatus) : null;
+    } else {
+      const statusResult = await this.runGitCommand(worktreePath, [
+        "status",
+        "--porcelain=v1",
+        "--untracked-files=all",
+        "--ignore-submodules=none",
+      ]);
+      const normalizedStatus = statusResult.stdout.trim();
+      hasDiff = normalizedStatus.length > 0;
+      diffFingerprint = hasDiff ? normalizedStatus : null;
+    }
+
     let unpublishedCommitCount = 0;
     if (!upstreamBranch) {
       try {
         unpublishedCommitCount = Number(
           (
-            await this.runGitCommand(worktree.worktreePath, [
-              "rev-list",
-              "--count",
-              "HEAD",
-              "--not",
-              "--remotes=origin",
-            ])
+            await this.runGitCommand(worktreePath, ["rev-list", "--count", "HEAD", "--not", "--remotes=origin"])
           ).stdout.trim(),
         );
       } catch {
         unpublishedCommitCount = 0;
       }
     }
+
     const pushAction: TicketRunPushAction = hasDiff
       ? "none"
       : upstreamBranch
@@ -1291,52 +2367,390 @@ export class TicketRunService {
           : "none";
     const pullRequestUrls =
       gitHubOrigin && upstreamBranch
-        ? this.buildPullRequestUrls(gitHubOrigin.repositoryUrl, gitHubOrigin.defaultBranch, worktree.branchName)
+        ? this.buildPullRequestUrls(gitHubOrigin.repositoryUrl, gitHubOrigin.defaultBranch, branchName)
         : { open: null, draft: null };
+
+    return {
+      worktreePath,
+      branchName,
+      upstreamBranch,
+      aheadCount,
+      behindCount,
+      hasDiff,
+      pushAction,
+      pullRequestUrls,
+      files,
+      diffFingerprint,
+    };
+  }
+
+  private async readManagedSubmoduleParentState(
+    parentRef: TicketRunSubmoduleParentRef,
+    branchName: string,
+    options: GitReadOptions = {},
+  ): Promise<ManagedSubmoduleParentRuntimeState> {
+    const gitState = await this.readGitRepoState(parentRef.submoduleWorktreePath, branchName, options);
+    const headSha = await this.resolveHeadSha(parentRef.submoduleWorktreePath);
+    return {
+      parentRef,
+      gitState,
+      headSha,
+      diffFingerprint: gitState.diffFingerprint,
+    };
+  }
+
+  private async selectPrimarySubmoduleState(
+    parentStates: readonly ManagedSubmoduleParentRuntimeState[],
+    options: GitReadOptions = {},
+  ): Promise<{ primary: ManagedSubmoduleParentRuntimeState | null; reconcileReason: string | null }> {
+    const allowHistoryFetch = options.allowHistoryFetch ?? true;
+    if (parentStates.length === 0) {
+      return {
+        primary: null,
+        reconcileReason: "No managed submodule working copy is available for this mission.",
+      };
+    }
+
+    const sortedStates = [...parentStates].sort((left, right) =>
+      left.parentRef.parentRepoRelativePath.localeCompare(right.parentRef.parentRepoRelativePath),
+    );
+    const uniqueHeadShas = [
+      ...new Set(sortedStates.map((state) => state.headSha).filter((sha): sha is string => Boolean(sha))),
+    ];
+    if (uniqueHeadShas.length <= 1) {
+      const dirtyStates = sortedStates.filter((state) => state.gitState.hasDiff);
+      const fingerprints = [...new Set(dirtyStates.map((state) => state.diffFingerprint).filter(Boolean))];
+      if (fingerprints.length > 1) {
+        return {
+          primary: dirtyStates[0] ?? sortedStates[0] ?? null,
+          reconcileReason: "Managed submodule changes differ between parent repos and need manual reconciliation.",
+        };
+      }
+      return { primary: dirtyStates[0] ?? sortedStates[0] ?? null, reconcileReason: null };
+    }
+
+    for (const candidate of sortedStates) {
+      if (!candidate.headSha) {
+        continue;
+      }
+      let isDominant = true;
+      for (const other of sortedStates) {
+        if (other === candidate || !other.headSha || other.headSha === candidate.headSha) {
+          continue;
+        }
+        if (
+          !(await this.isAncestorInRepo(
+            candidate.parentRef.submoduleWorktreePath,
+            other.headSha,
+            candidate.headSha,
+            other.parentRef.submoduleWorktreePath,
+            candidate.parentRef.submoduleWorktreePath,
+            allowHistoryFetch,
+          ))
+        ) {
+          isDominant = false;
+          break;
+        }
+      }
+      if (isDominant) {
+        const dirtyStates = sortedStates.filter((state) => state.gitState.hasDiff);
+        const fingerprints = [...new Set(dirtyStates.map((state) => state.diffFingerprint).filter(Boolean))];
+        if (fingerprints.length > 1) {
+          return {
+            primary: candidate,
+            reconcileReason: "Managed submodule changes differ between parent repos and need manual reconciliation.",
+          };
+        }
+        return { primary: candidate, reconcileReason: null };
+      }
+    }
+
+    return {
+      primary: sortedStates[0] ?? null,
+      reconcileReason: "Managed submodule histories diverge across parent repos and need manual reconciliation.",
+    };
+  }
+
+  private async readSubmoduleState(
+    run: TicketRunSummary,
+    canonicalUrl: string,
+    options: GitReadOptions = {},
+  ): Promise<ManagedSubmoduleRuntimeState> {
+    const summary = run.submodules.find((candidate) => candidate.canonicalUrl === canonicalUrl);
+    if (!summary) {
+      throw new ConfigError(`Ticket ${run.ticketId} does not track a managed submodule for ${canonicalUrl}.`);
+    }
+
+    const parentStates = await Promise.all(
+      summary.parentRefs.map((parentRef) =>
+        this.readManagedSubmoduleParentState(parentRef, summary.branchName, options),
+      ),
+    );
+    const { primary, reconcileReason } = await this.selectPrimarySubmoduleState(parentStates, options);
+    const fallbackState = primary ?? parentStates.find((state) => state.gitState.hasDiff) ?? parentStates[0];
+    if (!fallbackState) {
+      throw new ConfigError(`Ticket ${run.ticketId} does not have a readable managed submodule for ${summary.name}.`);
+    }
+
+    const committedSha = primary?.headSha ?? fallbackState.headSha;
+    return {
+      summary,
+      gitState: {
+        runId: run.runId,
+        canonicalUrl: summary.canonicalUrl,
+        name: summary.name,
+        branchName: summary.branchName,
+        worktreePath: fallbackState.parentRef.submoduleWorktreePath,
+        upstreamBranch: fallbackState.gitState.upstreamBranch,
+        aheadCount: fallbackState.gitState.aheadCount,
+        behindCount: fallbackState.gitState.behindCount,
+        hasDiff: fallbackState.gitState.hasDiff,
+        pushAction: fallbackState.gitState.pushAction,
+        commitMessageDraft: summary.commitMessageDraft ?? null,
+        pullRequestUrls: fallbackState.gitState.pullRequestUrls,
+        files: fallbackState.gitState.files,
+        parents: parentStates.map((state) => ({
+          parentRepoRelativePath: state.parentRef.parentRepoRelativePath,
+          submodulePath: state.parentRef.submodulePath,
+          submoduleWorktreePath: state.parentRef.submoduleWorktreePath,
+          headSha: state.headSha,
+          hasDiff: state.gitState.hasDiff,
+          isPrimary:
+            primary?.parentRef.parentRepoRelativePath === state.parentRef.parentRepoRelativePath &&
+            primary?.parentRef.submodulePath === state.parentRef.submodulePath,
+          isAligned: committedSha !== null && state.headSha === committedSha && !state.gitState.hasDiff,
+        })),
+        primaryParentRepoRelativePath: primary?.parentRef.parentRepoRelativePath ?? null,
+        committedSha,
+        reconcileRequired: reconcileReason !== null,
+        reconcileReason,
+      },
+    };
+  }
+
+  private listRunSubmodulesForRepo(run: TicketRunSummary, repoRelativePath: string): TicketRunSubmoduleSummary[] {
+    return run.submodules.filter((candidate) =>
+      candidate.parentRefs.some((parentRef) => parentRef.parentRepoRelativePath === repoRelativePath),
+    );
+  }
+
+  private buildBlockingSubmoduleCanonicalUrls(
+    run: TicketRunSummary,
+    repoRelativePath: string,
+    submoduleGitStatesByUrl: ReadonlyMap<
+      string,
+      Pick<TicketRunSubmoduleGitState, "hasDiff" | "reconcileRequired" | "pushAction" | "parents">
+    >,
+  ): string[] {
+    return this.listRunSubmodulesForRepo(run, repoRelativePath)
+      .filter((submodule) => {
+        const gitState = submoduleGitStatesByUrl.get(submodule.canonicalUrl);
+        return gitState ? isSubmoduleBlockingClose(gitState) : true;
+      })
+      .map((submodule) => submodule.canonicalUrl);
+  }
+
+  private async readGitState(
+    run: TicketRunSummary,
+    repoRelativePath?: string,
+    submoduleGitStatesByUrl?: ReadonlyMap<
+      string,
+      Pick<TicketRunSubmoduleGitState, "hasDiff" | "reconcileRequired" | "pushAction" | "parents">
+    >,
+    options: GitReadOptions = {},
+  ): Promise<TicketRunGitState> {
+    const worktree = this.resolveTargetWorktree(run, repoRelativePath);
+    const repoState = await this.readGitRepoState(worktree.worktreePath, worktree.branchName, options);
+    const blockingSubmodules = submoduleGitStatesByUrl
+      ? this.buildBlockingSubmoduleCanonicalUrls(run, worktree.repoRelativePath, submoduleGitStatesByUrl)
+      : (
+          await Promise.all(
+            this.listRunSubmodulesForRepo(run, worktree.repoRelativePath).map(async (submodule) => ({
+              canonicalUrl: submodule.canonicalUrl,
+              managedState: await this.readSubmoduleState(run, submodule.canonicalUrl, {
+                includeFiles: false,
+                allowHistoryFetch: options.allowHistoryFetch,
+              }),
+            })),
+          )
+        )
+          .filter(({ managedState }) => isSubmoduleBlockingClose(managedState.gitState))
+          .map(({ canonicalUrl }) => canonicalUrl);
 
     return {
       runId: run.runId,
       repoRelativePath: worktree.repoRelativePath,
       worktreePath: worktree.worktreePath,
       branchName: worktree.branchName,
-      upstreamBranch,
-      aheadCount,
-      behindCount,
-      hasDiff,
-      pushAction,
+      upstreamBranch: repoState.upstreamBranch,
+      aheadCount: repoState.aheadCount,
+      behindCount: repoState.behindCount,
+      hasDiff: repoState.hasDiff,
+      pushAction: repoState.pushAction,
       commitMessageDraft: worktree.commitMessageDraft ?? null,
-      pullRequestUrls,
-      files,
+      pullRequestUrls: repoState.pullRequestUrls,
+      blockedBySubmoduleCanonicalUrls: blockingSubmodules,
+      files: repoState.files,
     };
   }
 
-  private async generateAndPersistCommitDraft(
+  private requireManagedSubmodule(run: TicketRunSummary, canonicalUrl: string): TicketRunSubmoduleSummary {
+    const submodule = run.submodules.find((candidate) => candidate.canonicalUrl === canonicalUrl);
+    if (!submodule) {
+      throw new ConfigError(`Ticket ${run.ticketId} does not track a managed submodule for ${canonicalUrl}.`);
+    }
+    return submodule;
+  }
+
+  private assertParentRepoSubmodulesReady(
     run: TicketRunSummary,
-    repoRelativePath?: string,
+    gitState: TicketRunGitState,
+    actionLabel: string,
+  ): void {
+    if (gitState.blockedBySubmoduleCanonicalUrls.length === 0) {
+      return;
+    }
+
+    const blockedNames = gitState.blockedBySubmoduleCanonicalUrls.map(
+      (canonicalUrl) => this.requireManagedSubmodule(run, canonicalUrl).name,
+    );
+    throw new ConfigError(
+      `Finish the managed submodule workflow before trying to ${actionLabel} ${gitState.repoRelativePath}: ${blockedNames.join(", ")}.`,
+    );
+  }
+
+  private async ensureBranchCheckedOut(worktreePath: string, branchName: string): Promise<void> {
+    const currentBranch = (await this.runGitCommand(worktreePath, ["branch", "--show-current"])).stdout.trim();
+    if (currentBranch === branchName) {
+      return;
+    }
+
+    try {
+      await this.runGitCommand(worktreePath, ["checkout", "-B", branchName]);
+    } catch (error) {
+      throw new SpiraError(
+        "MISSIONS_SUBMODULE_BRANCH_FAILED",
+        `Failed to prepare managed submodule branch ${branchName}.`,
+        error,
+      );
+    }
+  }
+
+  private async alignManagedSubmoduleParents(
+    run: TicketRunSummary,
+    managedState: ManagedSubmoduleRuntimeState,
+    commitSha: string,
+  ): Promise<void> {
+    let firstError: unknown = null;
+    const failedParents: string[] = [];
+    for (const parentState of managedState.gitState.parents) {
+      try {
+        if (!parentState.isPrimary) {
+          await this.runGitCommand(parentState.submoduleWorktreePath, [
+            "fetch",
+            "origin",
+            managedState.gitState.branchName,
+          ]);
+          // Secondary embedded copies should resolve to the canonical published commit, not keep their own detached edits.
+          await this.runGitCommand(parentState.submoduleWorktreePath, ["checkout", "--detach", commitSha]);
+        }
+
+        const parentWorktree = this.resolveTargetWorktree(run, parentState.parentRepoRelativePath);
+        await this.runGitCommand(parentWorktree.worktreePath, ["add", parentState.submodulePath]);
+      } catch (error) {
+        firstError ??= error;
+        failedParents.push(`${parentState.parentRepoRelativePath} (${parentState.submodulePath})`);
+        this.options.logger.warn(
+          {
+            err: error,
+            runId: run.runId,
+            ticketId: run.ticketId,
+            canonicalUrl: managedState.summary.canonicalUrl,
+            parentRepoRelativePath: parentState.parentRepoRelativePath,
+            submodulePath: parentState.submodulePath,
+          },
+          "Managed submodule parent alignment failed",
+        );
+      }
+    }
+
+    if (failedParents.length > 0) {
+      throw new SpiraError(
+        "MISSIONS_SUBMODULE_ALIGN_FAILED",
+        `Failed to align managed submodule ${managedState.summary.name} in ${failedParents.join(", ")}.`,
+        firstError,
+      );
+    }
+  }
+
+  private async generateAndPersistSubmoduleCommitDraft(
+    run: TicketRunSummary,
+    canonicalUrl: string,
   ): Promise<TicketRunSummary> {
-    const worktree = this.resolveTargetWorktree(run, repoRelativePath);
-    const gitState = await this.readGitState(run, worktree.repoRelativePath);
-    const fallbackBullets = buildFallbackCommitBullets(gitState.files);
-    const fallbackDraft = normalizeCommitDraft(run.ticketId, run.ticketSummary, fallbackBullets);
+    const managedState = await this.readSubmoduleState(run, canonicalUrl);
+    const fallbackBullets = buildFallbackCommitBullets(managedState.gitState.files);
+    const fallbackDraft = normalizeCommitDraft(
+      run.ticketId,
+      `${managedState.summary.name}: ${run.ticketSummary}`,
+      fallbackBullets,
+    );
     let draft = fallbackDraft;
 
     if (this.options.generateCommitDraft) {
       try {
         draft = normalizeCommitDraft(
           run.ticketId,
-          await this.options.generateCommitDraft({ run, gitState }),
+          await this.options.generateCommitDraft({ run, gitState: managedState.gitState }),
           fallbackBullets,
         );
       } catch (error) {
         this.options.logger.warn(
-          { err: error, runId: run.runId, ticketId: run.ticketId },
-          "Commit draft generation failed",
+          { err: error, runId: run.runId, ticketId: run.ticketId, canonicalUrl },
+          "Managed submodule commit draft generation failed",
         );
       }
     }
 
     return this.persistRun(run, {
-      worktrees: run.worktrees.map((candidate) =>
+      submodules: run.submodules.map((candidate) =>
+        candidate.canonicalUrl === canonicalUrl
+          ? {
+              ...candidate,
+              commitMessageDraft: draft,
+            }
+          : candidate,
+      ),
+    });
+  }
+
+  private async generateAndPersistCommitDraft(
+    run: TicketRunSummary,
+    repoRelativePath?: string,
+  ): Promise<TicketRunSummary> {
+    const hydratedRun = await this.ensureRunSubmodules(run);
+    const worktree = this.resolveTargetWorktree(hydratedRun, repoRelativePath);
+    const gitState = await this.readGitState(hydratedRun, worktree.repoRelativePath);
+    const fallbackBullets = buildFallbackCommitBullets(gitState.files);
+    const fallbackDraft = normalizeCommitDraft(hydratedRun.ticketId, hydratedRun.ticketSummary, fallbackBullets);
+    let draft = fallbackDraft;
+
+    if (this.options.generateCommitDraft) {
+      try {
+        draft = normalizeCommitDraft(
+          hydratedRun.ticketId,
+          await this.options.generateCommitDraft({ run: hydratedRun, gitState }),
+          fallbackBullets,
+        );
+      } catch (error) {
+        this.options.logger.warn(
+          { err: error, runId: hydratedRun.runId, ticketId: hydratedRun.ticketId },
+          "Commit draft generation failed",
+        );
+      }
+    }
+
+    return this.persistRun(hydratedRun, {
+      worktrees: hydratedRun.worktrees.map((candidate) =>
         candidate.repoRelativePath === worktree.repoRelativePath
           ? {
               ...candidate,
@@ -1354,8 +2768,13 @@ export class TicketRunService {
     return this.options.resolveMissionGitIdentity();
   }
 
-  private getMissionGitToken(): string {
+  private getOptionalMissionGitToken(): string | null {
     const token = this.options.getMissionGitToken?.()?.trim();
+    return token ? token : null;
+  }
+
+  private getMissionGitToken(): string {
+    const token = this.getOptionalMissionGitToken();
     if (!token) {
       throw new ConfigError("Set a mission GitHub PAT in Settings before using mission git actions.");
     }
@@ -1415,7 +2834,10 @@ export class TicketRunService {
     }
   }
 
-  private async createGitHubPullRequest(run: TicketRunSummary, gitState: TicketRunGitState): Promise<string> {
+  private async createGitHubPullRequest(
+    run: TicketRunSummary,
+    gitState: TicketRunGitState | TicketRunSubmoduleGitState,
+  ): Promise<string> {
     const origin = await this.readGitHubOrigin(gitState.worktreePath);
     if (!origin?.defaultBranch) {
       throw new ConfigError("Mission pull requests require an HTTPS GitHub origin with a detectable default branch.");
@@ -1507,14 +2929,15 @@ export class TicketRunService {
     repoRelativePath?: string,
   ): Promise<SyncTicketRunRemoteResult> {
     return this.withRunLock(runId, async () => {
-      const run = this.getFreshRun(runId);
-      if (run.status !== "done") {
-        throw new ConfigError(`Ticket ${run.ticketId} must be completed before it can be ${requestedAction}ed.`);
+      const run = await this.ensureRunSubmodules(this.getFreshRun(runId));
+      if (run.status !== "awaiting-review") {
+        throw new ConfigError(`Ticket ${run.ticketId} must be awaiting review before it can be ${requestedAction}ed.`);
       }
       const worktree = this.resolveTargetWorktree(run, repoRelativePath);
       const gitState = await this.readGitState(run, worktree.repoRelativePath);
+      this.assertParentRepoSubmodulesReady(run, gitState, requestedAction);
       if (gitState.hasDiff) {
-        throw new ConfigError(`Commit the tracked changes for ${run.ticketId} before trying to ${requestedAction}.`);
+        throw new ConfigError(`Commit the changes for ${run.ticketId} before trying to ${requestedAction}.`);
       }
       if (requestedAction === "push" && gitState.pushAction !== "push") {
         throw new ConfigError(`Ticket ${run.ticketId} does not have any local commits ready to push.`);
@@ -1524,11 +2947,9 @@ export class TicketRunService {
       }
 
       await this.ensurePublishableRemote(worktree.worktreePath);
-      const authHeader = Buffer.from(`x-access-token:${this.getMissionGitToken()}`).toString("base64");
       try {
         await this.runGitCommand(worktree.worktreePath, [
-          "-c",
-          `http.extraheader=AUTHORIZATION: basic ${authHeader}`,
+          ...buildGitHubHttpAuthArgs(this.getMissionGitToken()),
           "push",
           ...(requestedAction === "publish"
             ? ["--set-upstream", "origin", worktree.branchName]
@@ -1555,14 +2976,97 @@ export class TicketRunService {
     });
   }
 
+  private async syncSubmoduleRemote(
+    runId: string,
+    canonicalUrl: string,
+    requestedAction: Exclude<TicketRunPushAction, "none">,
+  ): Promise<SyncTicketRunSubmoduleRemoteResult> {
+    return this.withRunLock(runId, async () => {
+      const run = await this.ensureRunSubmodules(this.getFreshRun(runId));
+      if (run.status !== "awaiting-review") {
+        throw new ConfigError(
+          `Ticket ${run.ticketId} must be awaiting review before managed submodules can be ${requestedAction}ed.`,
+        );
+      }
+
+      const managedState = await this.readSubmoduleState(run, canonicalUrl);
+      if (managedState.gitState.reconcileRequired) {
+        throw new ConfigError(
+          managedState.gitState.reconcileReason ??
+            `Managed submodule ${managedState.summary.name} requires reconciliation.`,
+        );
+      }
+      if (managedState.gitState.hasDiff) {
+        throw new ConfigError(
+          `Commit the changes for ${managedState.summary.name} before trying to ${requestedAction}.`,
+        );
+      }
+      await this.ensureBranchCheckedOut(managedState.gitState.worktreePath, managedState.gitState.branchName);
+      const preparedState = await this.readSubmoduleState(run, canonicalUrl);
+      const needsParentAlignment = preparedState.gitState.parents.some((parentState) => !parentState.isAligned);
+      const alignmentRetryOnly = preparedState.gitState.pushAction === "none" && needsParentAlignment;
+      if (requestedAction === "push" && preparedState.gitState.pushAction !== "push" && !alignmentRetryOnly) {
+        throw new ConfigError(
+          `Managed submodule ${managedState.summary.name} does not have any local commits ready to push.`,
+        );
+      }
+      if (requestedAction === "publish" && preparedState.gitState.pushAction !== "publish" && !alignmentRetryOnly) {
+        throw new ConfigError(
+          `Managed submodule ${managedState.summary.name} is already published or has nothing ready to publish.`,
+        );
+      }
+
+      if (!alignmentRetryOnly) {
+        await this.ensurePublishableRemote(preparedState.gitState.worktreePath);
+        try {
+          await this.runGitCommand(preparedState.gitState.worktreePath, [
+            ...buildGitHubHttpAuthArgs(this.getMissionGitToken()),
+            "push",
+            ...(requestedAction === "publish"
+              ? ["--set-upstream", "origin", preparedState.gitState.branchName]
+              : ["origin", preparedState.gitState.branchName]),
+          ]);
+        } catch (error) {
+          this.options.logger.warn(
+            { err: error, runId, ticketId: run.ticketId, canonicalUrl, requestedAction },
+            "Managed submodule remote sync failed",
+          );
+          throw new SpiraError(
+            "MISSIONS_SUBMODULE_PUSH_FAILED",
+            `Failed to ${requestedAction} managed submodule ${managedState.summary.name}. Check the git log for the underlying error.`,
+            error,
+          );
+        }
+      }
+
+      const commitSha = (
+        await this.runGitCommand(preparedState.gitState.worktreePath, ["rev-parse", "HEAD"])
+      ).stdout.trim();
+      await this.alignManagedSubmoduleParents(run, preparedState, commitSha);
+      const nextRun = this.getFreshRun(runId);
+      const snapshot = this.requireMemoryDb().getTicketRunSnapshot();
+
+      return {
+        run: nextRun,
+        snapshot,
+        gitState: (await this.readSubmoduleState(nextRun, canonicalUrl)).gitState,
+        action: requestedAction,
+      };
+    });
+  }
+
   private persistRun(
     run: TicketRunSummary,
     overrides: Partial<
-      Pick<TicketRunSummary, "stationId" | "status" | "statusMessage" | "commitMessageDraft" | "attempts" | "worktrees">
+      Pick<
+        TicketRunSummary,
+        "stationId" | "status" | "statusMessage" | "commitMessageDraft" | "attempts" | "worktrees" | "submodules"
+      >
     >,
   ): TicketRunSummary {
     const memoryDb = this.requireMemoryDb();
     const worktrees = overrides.worktrees ?? run.worktrees;
+    const submodules = overrides.submodules ?? run.submodules;
     return memoryDb.upsertTicketRun({
       runId: run.runId,
       stationId: overrides.stationId !== undefined ? overrides.stationId : run.stationId,
@@ -1586,6 +3090,15 @@ export class TicketRunService {
         commitMessageDraft: worktree.commitMessageDraft ?? null,
         cleanupState: worktree.cleanupState,
         createdAt: worktree.createdAt,
+        updatedAt: this.now(),
+      })),
+      submodules: submodules.map((submodule) => ({
+        canonicalUrl: submodule.canonicalUrl,
+        name: submodule.name,
+        branchName: submodule.branchName,
+        commitMessageDraft: submodule.commitMessageDraft ?? null,
+        parentRefs: submodule.parentRefs,
+        createdAt: submodule.createdAt,
         updatedAt: this.now(),
       })),
       attempts: (overrides.attempts ?? run.attempts).map((attempt) => ({
@@ -1674,6 +3187,15 @@ export class TicketRunService {
         commitMessageDraft: worktree.commitMessageDraft ?? null,
         cleanupState: worktree.cleanupState,
         createdAt: worktree.createdAt,
+        updatedAt: this.now(),
+      })),
+      submodules: run.submodules.map((submodule) => ({
+        canonicalUrl: submodule.canonicalUrl,
+        name: submodule.name,
+        branchName: submodule.branchName,
+        commitMessageDraft: submodule.commitMessageDraft ?? null,
+        parentRefs: submodule.parentRefs,
+        createdAt: submodule.createdAt,
         updatedAt: this.now(),
       })),
       attempts: previousRun?.attempts ?? [],

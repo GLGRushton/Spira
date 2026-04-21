@@ -10,14 +10,18 @@ import { SPIRA_MEMORY_DB_PATH_ENV, getSpiraMemoryDbPath } from "@spira/memory-db
 import {
   type CancelTicketRunWorkResult,
   type CommitTicketRunResult,
+  type CommitTicketRunSubmoduleResult,
   type CompleteTicketRunResult,
   type ConnectionStatus,
   type ContinueTicketRunWorkResult,
   type ConversationMessage,
   type ConversationSearchMatch,
   type CreateTicketRunPullRequestResult,
+  type CreateTicketRunSubmodulePullRequestResult,
   DEFAULT_YOUTRACK_STATE_MAPPING,
+  type DeleteTicketRunResult,
   type GenerateTicketRunCommitDraftResult,
+  type GenerateTicketRunSubmoduleCommitDraftResult,
   type MissionServiceSnapshot,
   type ProjectRepoMappingsSnapshot,
   RUNTIME_CONFIG_KEYS,
@@ -28,13 +32,17 @@ import {
   type RuntimeConfigSummary,
   type RuntimeConfigUpdate,
   type SetTicketRunCommitDraftResult,
+  type SetTicketRunSubmoduleCommitDraftResult,
   type StartTicketRunResult,
   type StartTicketRunWorkResult,
   type StoredConversation,
   type StoredConversationSummary,
   type SyncTicketRunRemoteResult,
+  type SyncTicketRunSubmoduleRemoteResult,
   type TicketRunGitStateResult,
+  type TicketRunReviewSnapshotResult,
   type TicketRunSnapshot,
+  type TicketRunSubmoduleGitStateResult,
   type UpgradeProposal,
   type UserSettings,
   type YouTrackProjectSummary,
@@ -48,7 +56,7 @@ import type { IpcMainEvent, IpcMainInvokeEvent, OpenDialogOptions, Tray } from "
 import { BrowserWindow, app, dialog, ipcMain, safeStorage, shell } from "electron";
 import WebSocket from "ws";
 import { setupAutoUpdater } from "./auto-update.js";
-import { BackendLifecycle, type BackendExitInfo } from "./backend-lifecycle.js";
+import { type BackendExitInfo, BackendLifecycle } from "./backend-lifecycle.js";
 import { type IpcBridgeHandle, setupIpcBridge } from "./ipc-bridge.js";
 import { SpiraUiControlBridge } from "./spira-ui-control-bridge.js";
 import { createTray } from "./tray.js";
@@ -81,13 +89,22 @@ const TICKET_RUN_WORK_START_CHANNEL = "missions:ticket-run:work:start";
 const TICKET_RUN_WORK_CONTINUE_CHANNEL = "missions:ticket-run:work:continue";
 const TICKET_RUN_WORK_CANCEL_CHANNEL = "missions:ticket-run:work:cancel";
 const TICKET_RUN_COMPLETE_CHANNEL = "missions:ticket-run:complete";
+const TICKET_RUN_DELETE_CHANNEL = "missions:ticket-run:delete";
+const TICKET_RUN_REVIEW_SNAPSHOT_CHANNEL = "missions:ticket-run:review-snapshot:get";
 const TICKET_RUN_GIT_STATE_CHANNEL = "missions:ticket-run:git-state:get";
+const TICKET_RUN_SUBMODULE_GIT_STATE_CHANNEL = "missions:ticket-run:submodule-git-state:get";
 const TICKET_RUN_COMMIT_DRAFT_GENERATE_CHANNEL = "missions:ticket-run:commit-draft:generate";
 const TICKET_RUN_COMMIT_DRAFT_SET_CHANNEL = "missions:ticket-run:commit-draft:set";
+const TICKET_RUN_SUBMODULE_COMMIT_DRAFT_GENERATE_CHANNEL = "missions:ticket-run:submodule:commit-draft:generate";
+const TICKET_RUN_SUBMODULE_COMMIT_DRAFT_SET_CHANNEL = "missions:ticket-run:submodule:commit-draft:set";
 const TICKET_RUN_COMMIT_CHANNEL = "missions:ticket-run:commit";
+const TICKET_RUN_SUBMODULE_COMMIT_CHANNEL = "missions:ticket-run:submodule:commit";
 const TICKET_RUN_PUBLISH_CHANNEL = "missions:ticket-run:publish";
+const TICKET_RUN_SUBMODULE_PUBLISH_CHANNEL = "missions:ticket-run:submodule:publish";
 const TICKET_RUN_PUSH_CHANNEL = "missions:ticket-run:push";
+const TICKET_RUN_SUBMODULE_PUSH_CHANNEL = "missions:ticket-run:submodule:push";
 const TICKET_RUN_PULL_REQUEST_CREATE_CHANNEL = "missions:ticket-run:pull-request:create";
+const TICKET_RUN_SUBMODULE_PULL_REQUEST_CREATE_CHANNEL = "missions:ticket-run:submodule:pull-request:create";
 const TICKET_RUN_SERVICES_GET_CHANNEL = "missions:ticket-run:services:get";
 const TICKET_RUN_SERVICE_START_CHANNEL = "missions:ticket-run:service:start";
 const TICKET_RUN_SERVICE_STOP_CHANNEL = "missions:ticket-run:service:stop";
@@ -258,7 +275,8 @@ const RUNTIME_CONFIG_METADATA: Record<RuntimeConfigKey, { envKey: string; label:
   missionGitHubToken: {
     envKey: "MISSION_GITHUB_TOKEN",
     label: "Mission GitHub PAT",
-    description: "Used for mission commits, publish, push, and deriving the GitHub author identity.",
+    description:
+      "Used for mission submodule hydration, commits, publish, push, and deriving the GitHub author identity.",
   },
   elevenLabsApiKey: {
     envKey: "ELEVENLABS_API_KEY",
@@ -786,6 +804,34 @@ const handleCompleteTicketRun = async (
 
   return bridge.completeTicketRun(input.runId);
 };
+const handleDeleteTicketRun = async (
+  _event: IpcMainInvokeEvent,
+  input?: { runId?: string },
+): Promise<DeleteTicketRunResult> => {
+  if (!input?.runId) {
+    throw new Error("Run id is required.");
+  }
+
+  if (!bridge) {
+    throw new Error("Backend bridge is unavailable.");
+  }
+
+  return bridge.deleteTicketRun(input.runId);
+};
+const handleGetTicketRunReviewSnapshot = async (
+  _event: IpcMainInvokeEvent,
+  input?: { runId?: string },
+): Promise<TicketRunReviewSnapshotResult> => {
+  if (!input?.runId) {
+    throw new Error("Run id is required.");
+  }
+
+  if (!bridge) {
+    throw new Error("Backend bridge is unavailable.");
+  }
+
+  return bridge.getTicketRunReviewSnapshot(input.runId);
+};
 const handleGetTicketRunGitState = async (
   _event: IpcMainInvokeEvent,
   input?: { runId?: string; repoRelativePath?: string },
@@ -800,6 +846,23 @@ const handleGetTicketRunGitState = async (
 
   return bridge.getTicketRunGitState(input.runId, input.repoRelativePath);
 };
+const handleGetTicketRunSubmoduleGitState = async (
+  _event: IpcMainInvokeEvent,
+  input?: { runId?: string; canonicalUrl?: string },
+): Promise<TicketRunSubmoduleGitStateResult> => {
+  if (!input?.runId) {
+    throw new Error("Run id is required.");
+  }
+  if (!input.canonicalUrl) {
+    throw new Error("Submodule URL is required.");
+  }
+
+  if (!bridge) {
+    throw new Error("Backend bridge is unavailable.");
+  }
+
+  return bridge.getTicketRunSubmoduleGitState(input.runId, input.canonicalUrl);
+};
 const handleGenerateTicketRunCommitDraft = async (
   _event: IpcMainInvokeEvent,
   input?: { runId?: string; repoRelativePath?: string },
@@ -813,6 +876,23 @@ const handleGenerateTicketRunCommitDraft = async (
   }
 
   return bridge.generateTicketRunCommitDraft(input.runId, input.repoRelativePath);
+};
+const handleGenerateTicketRunSubmoduleCommitDraft = async (
+  _event: IpcMainInvokeEvent,
+  input?: { runId?: string; canonicalUrl?: string },
+): Promise<GenerateTicketRunSubmoduleCommitDraftResult> => {
+  if (!input?.runId) {
+    throw new Error("Run id is required.");
+  }
+  if (!input.canonicalUrl) {
+    throw new Error("Submodule URL is required.");
+  }
+
+  if (!bridge) {
+    throw new Error("Backend bridge is unavailable.");
+  }
+
+  return bridge.generateTicketRunSubmoduleCommitDraft(input.runId, input.canonicalUrl);
 };
 const handleSetTicketRunCommitDraft = async (
   _event: IpcMainInvokeEvent,
@@ -831,6 +911,26 @@ const handleSetTicketRunCommitDraft = async (
 
   return bridge.setTicketRunCommitDraft(input.runId, input.message, input.repoRelativePath);
 };
+const handleSetTicketRunSubmoduleCommitDraft = async (
+  _event: IpcMainInvokeEvent,
+  input?: { runId?: string; canonicalUrl?: string; message?: string },
+): Promise<SetTicketRunSubmoduleCommitDraftResult> => {
+  if (!input?.runId) {
+    throw new Error("Run id is required.");
+  }
+  if (!input.canonicalUrl) {
+    throw new Error("Submodule URL is required.");
+  }
+  if (typeof input.message !== "string") {
+    throw new Error("Commit message draft is required.");
+  }
+
+  if (!bridge) {
+    throw new Error("Backend bridge is unavailable.");
+  }
+
+  return bridge.setTicketRunSubmoduleCommitDraft(input.runId, input.canonicalUrl, input.message);
+};
 const handleCommitTicketRun = async (
   _event: IpcMainInvokeEvent,
   input?: { runId?: string; message?: string; repoRelativePath?: string },
@@ -848,6 +948,26 @@ const handleCommitTicketRun = async (
 
   return bridge.commitTicketRun(input.runId, input.message, input.repoRelativePath);
 };
+const handleCommitTicketRunSubmodule = async (
+  _event: IpcMainInvokeEvent,
+  input?: { runId?: string; canonicalUrl?: string; message?: string },
+): Promise<CommitTicketRunSubmoduleResult> => {
+  if (!input?.runId) {
+    throw new Error("Run id is required.");
+  }
+  if (!input.canonicalUrl) {
+    throw new Error("Submodule URL is required.");
+  }
+  if (typeof input.message !== "string") {
+    throw new Error("Commit message is required.");
+  }
+
+  if (!bridge) {
+    throw new Error("Backend bridge is unavailable.");
+  }
+
+  return bridge.commitTicketRunSubmodule(input.runId, input.canonicalUrl, input.message);
+};
 const handlePublishTicketRun = async (
   _event: IpcMainInvokeEvent,
   input?: { runId?: string; repoRelativePath?: string },
@@ -861,6 +981,23 @@ const handlePublishTicketRun = async (
   }
 
   return bridge.publishTicketRun(input.runId, input.repoRelativePath);
+};
+const handlePublishTicketRunSubmodule = async (
+  _event: IpcMainInvokeEvent,
+  input?: { runId?: string; canonicalUrl?: string },
+): Promise<SyncTicketRunSubmoduleRemoteResult> => {
+  if (!input?.runId) {
+    throw new Error("Run id is required.");
+  }
+  if (!input.canonicalUrl) {
+    throw new Error("Submodule URL is required.");
+  }
+
+  if (!bridge) {
+    throw new Error("Backend bridge is unavailable.");
+  }
+
+  return bridge.publishTicketRunSubmodule(input.runId, input.canonicalUrl);
 };
 const handlePushTicketRun = async (
   _event: IpcMainInvokeEvent,
@@ -876,6 +1013,23 @@ const handlePushTicketRun = async (
 
   return bridge.pushTicketRun(input.runId, input.repoRelativePath);
 };
+const handlePushTicketRunSubmodule = async (
+  _event: IpcMainInvokeEvent,
+  input?: { runId?: string; canonicalUrl?: string },
+): Promise<SyncTicketRunSubmoduleRemoteResult> => {
+  if (!input?.runId) {
+    throw new Error("Run id is required.");
+  }
+  if (!input.canonicalUrl) {
+    throw new Error("Submodule URL is required.");
+  }
+
+  if (!bridge) {
+    throw new Error("Backend bridge is unavailable.");
+  }
+
+  return bridge.pushTicketRunSubmodule(input.runId, input.canonicalUrl);
+};
 const handleCreateTicketRunPullRequest = async (
   _event: IpcMainInvokeEvent,
   input?: { runId?: string; repoRelativePath?: string },
@@ -889,6 +1043,23 @@ const handleCreateTicketRunPullRequest = async (
   }
 
   return bridge.createTicketRunPullRequest(input.runId, input.repoRelativePath);
+};
+const handleCreateTicketRunSubmodulePullRequest = async (
+  _event: IpcMainInvokeEvent,
+  input?: { runId?: string; canonicalUrl?: string },
+): Promise<CreateTicketRunSubmodulePullRequestResult> => {
+  if (!input?.runId) {
+    throw new Error("Run id is required.");
+  }
+  if (!input.canonicalUrl) {
+    throw new Error("Submodule URL is required.");
+  }
+
+  if (!bridge) {
+    throw new Error("Backend bridge is unavailable.");
+  }
+
+  return bridge.createTicketRunSubmodulePullRequest(input.runId, input.canonicalUrl);
 };
 const handlePickDirectory = async (_event: IpcMainInvokeEvent, input?: { title?: string }): Promise<string | null> => {
   const options: OpenDialogOptions = {
@@ -1328,13 +1499,22 @@ void app.whenReady().then(async () => {
   ipcMain.handle(TICKET_RUN_WORK_CONTINUE_CHANNEL, handleContinueTicketRunWork);
   ipcMain.handle(TICKET_RUN_WORK_CANCEL_CHANNEL, handleCancelTicketRunWork);
   ipcMain.handle(TICKET_RUN_COMPLETE_CHANNEL, handleCompleteTicketRun);
+  ipcMain.handle(TICKET_RUN_DELETE_CHANNEL, handleDeleteTicketRun);
+  ipcMain.handle(TICKET_RUN_REVIEW_SNAPSHOT_CHANNEL, handleGetTicketRunReviewSnapshot);
   ipcMain.handle(TICKET_RUN_GIT_STATE_CHANNEL, handleGetTicketRunGitState);
+  ipcMain.handle(TICKET_RUN_SUBMODULE_GIT_STATE_CHANNEL, handleGetTicketRunSubmoduleGitState);
   ipcMain.handle(TICKET_RUN_COMMIT_DRAFT_GENERATE_CHANNEL, handleGenerateTicketRunCommitDraft);
+  ipcMain.handle(TICKET_RUN_SUBMODULE_COMMIT_DRAFT_GENERATE_CHANNEL, handleGenerateTicketRunSubmoduleCommitDraft);
   ipcMain.handle(TICKET_RUN_COMMIT_DRAFT_SET_CHANNEL, handleSetTicketRunCommitDraft);
+  ipcMain.handle(TICKET_RUN_SUBMODULE_COMMIT_DRAFT_SET_CHANNEL, handleSetTicketRunSubmoduleCommitDraft);
   ipcMain.handle(TICKET_RUN_COMMIT_CHANNEL, handleCommitTicketRun);
+  ipcMain.handle(TICKET_RUN_SUBMODULE_COMMIT_CHANNEL, handleCommitTicketRunSubmodule);
   ipcMain.handle(TICKET_RUN_PUBLISH_CHANNEL, handlePublishTicketRun);
+  ipcMain.handle(TICKET_RUN_SUBMODULE_PUBLISH_CHANNEL, handlePublishTicketRunSubmodule);
   ipcMain.handle(TICKET_RUN_PUSH_CHANNEL, handlePushTicketRun);
+  ipcMain.handle(TICKET_RUN_SUBMODULE_PUSH_CHANNEL, handlePushTicketRunSubmodule);
   ipcMain.handle(TICKET_RUN_PULL_REQUEST_CREATE_CHANNEL, handleCreateTicketRunPullRequest);
+  ipcMain.handle(TICKET_RUN_SUBMODULE_PULL_REQUEST_CREATE_CHANNEL, handleCreateTicketRunSubmodulePullRequest);
   ipcMain.handle(DIRECTORY_PICK_CHANNEL, handlePickDirectory);
   ipcMain.handle(OPEN_EXTERNAL_CHANNEL, handleOpenExternal);
   ipcMain.handle(RUNTIME_CONFIG_GET_CHANNEL, handleGetRuntimeConfig);

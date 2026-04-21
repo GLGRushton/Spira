@@ -398,6 +398,23 @@ describe("SpiraMemoryDatabase", () => {
           updatedAt: 1_100,
         },
       ],
+      submodules: [
+        {
+          canonicalUrl: "github.com/uk-parliament/legapp_legapp-common",
+          name: "LegAppCommon",
+          branchName: "feat/spi-101-start-missions-pickup",
+          commitMessageDraft: "feat(SPI-101): update legapp common",
+          parentRefs: [
+            {
+              parentRepoRelativePath: "service-api",
+              submodulePath: "Submodules/LegAppCommon",
+              submoduleWorktreePath: "C:\\Repos\\.spira-worktrees\\spi-101-service-api\\Submodules\\LegAppCommon",
+            },
+          ],
+          createdAt: 1_000,
+          updatedAt: 1_150,
+        },
+      ],
       attempts: [
         {
           attemptId: "attempt-1",
@@ -420,6 +437,20 @@ describe("SpiraMemoryDatabase", () => {
       stationId: "mission:run-1",
       ticketId: "SPI-101",
       status: "ready",
+      submodules: [
+        {
+          canonicalUrl: "github.com/uk-parliament/legapp_legapp-common",
+          name: "LegAppCommon",
+          branchName: "feat/spi-101-start-missions-pickup",
+          commitMessageDraft: "feat(SPI-101): update legapp common",
+          parentRefs: [
+            {
+              parentRepoRelativePath: "service-api",
+              submodulePath: "Submodules/LegAppCommon",
+            },
+          ],
+        },
+      ],
       attempts: [
         {
           status: "completed",
@@ -436,5 +467,69 @@ describe("SpiraMemoryDatabase", () => {
     });
     expect(database.getTicketRunByTicketId("SPI-101")?.runId).toBe("run-1");
     expect(database.getTicketRunSnapshot().runs).toHaveLength(1);
+  });
+
+  it("deletes ticket runs and cascades child mission records", () => {
+    const database = createTestDatabase();
+
+    database.upsertTicketRun({
+      runId: "run-delete",
+      stationId: "mission:run-delete",
+      ticketId: "SPI-102",
+      ticketSummary: "Delete local mission",
+      ticketUrl: "https://example.youtrack.cloud/issue/SPI-102",
+      projectKey: "SPI",
+      status: "awaiting-review",
+      statusMessage: "Ready to tear down.",
+      createdAt: 2_000,
+      startedAt: 2_000,
+      worktrees: [
+        {
+          repoRelativePath: "service-api",
+          repoAbsolutePath: "C:\\Repos\\service-api",
+          worktreePath: "C:\\Repos\\.spira-worktrees\\spi-102-service-api",
+          branchName: "feat/spi-102-delete-local-mission",
+          cleanupState: "retained",
+          createdAt: 2_000,
+          updatedAt: 2_100,
+        },
+      ],
+      submodules: [
+        {
+          canonicalUrl: "github.com/uk-parliament/legapp_legapp-common",
+          name: "LegAppCommon",
+          branchName: "feat/spi-102-delete-local-mission",
+          commitMessageDraft: null,
+          parentRefs: [
+            {
+              parentRepoRelativePath: "service-api",
+              submodulePath: "Submodules/LegAppCommon",
+              submoduleWorktreePath: "C:\\Repos\\.spira-worktrees\\spi-102-service-api\\Submodules\\LegAppCommon",
+            },
+          ],
+          createdAt: 2_000,
+          updatedAt: 2_100,
+        },
+      ],
+      attempts: [
+        {
+          attemptId: "attempt-delete",
+          subagentRunId: null,
+          sequence: 1,
+          status: "completed",
+          summary: "Ready for deletion.",
+          followupNeeded: false,
+          startedAt: 2_000,
+          createdAt: 2_000,
+          updatedAt: 2_100,
+          completedAt: 2_100,
+        },
+      ],
+    });
+
+    expect(database.deleteTicketRun("run-delete")).toBe(true);
+    expect(database.getTicketRun("run-delete")).toBeNull();
+    expect(database.getTicketRunByTicketId("SPI-102")).toBeNull();
+    expect(database.getTicketRunSnapshot().runs).toEqual([]);
   });
 });

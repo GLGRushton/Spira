@@ -11,6 +11,8 @@ import type {
   TicketRunCleanupState,
   TicketRunSnapshot,
   TicketRunStatus,
+  TicketRunSubmoduleParentRef,
+  TicketRunSubmoduleSummary,
   TicketRunSummary,
   TicketRunWorktreeSummary,
   YouTrackStateMapping,
@@ -171,6 +173,16 @@ export interface UpsertTicketRunWorktreeInput {
   updatedAt?: number;
 }
 
+export interface UpsertTicketRunSubmoduleInput {
+  canonicalUrl: string;
+  name: string;
+  branchName: string;
+  commitMessageDraft?: string | null;
+  parentRefs: readonly TicketRunSubmoduleParentRef[];
+  createdAt?: number;
+  updatedAt?: number;
+}
+
 export interface UpsertTicketRunInput {
   runId: string;
   stationId?: string | null;
@@ -184,6 +196,7 @@ export interface UpsertTicketRunInput {
   startedAt?: number;
   createdAt?: number;
   worktrees: readonly UpsertTicketRunWorktreeInput[];
+  submodules?: readonly UpsertTicketRunSubmoduleInput[];
   attempts?: readonly UpsertTicketRunAttemptInput[];
 }
 
@@ -316,6 +329,24 @@ interface TicketRunAttemptRow {
   createdAt: number;
   updatedAt: number;
   completedAt: number | null;
+}
+
+interface TicketRunSubmoduleRow {
+  runId: string;
+  canonicalUrl: string;
+  name: string;
+  branchName: string;
+  commitMessageDraft: string | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+interface TicketRunSubmoduleParentRow {
+  runId: string;
+  canonicalUrl: string;
+  parentRepoRelativePath: string;
+  submodulePath: string;
+  submoduleWorktreePath: string;
 }
 
 interface McpServerConfigRow {
@@ -732,6 +763,33 @@ const MIGRATIONS: MigrationDefinition[] = [
        )`,
     ],
   },
+  {
+    version: 15,
+    statements: [
+      `CREATE TABLE ticket_run_submodules (
+        run_id TEXT NOT NULL,
+        canonical_url TEXT NOT NULL,
+        name TEXT NOT NULL,
+        branch_name TEXT NOT NULL,
+        commit_message_draft TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (run_id, canonical_url),
+        FOREIGN KEY(run_id) REFERENCES ticket_runs(run_id) ON DELETE CASCADE
+      )`,
+      "CREATE INDEX idx_ticket_run_submodules_updated_at_v15 ON ticket_run_submodules(updated_at DESC)",
+      `CREATE TABLE ticket_run_submodule_parents (
+        run_id TEXT NOT NULL,
+        canonical_url TEXT NOT NULL,
+        parent_repo_relative_path TEXT NOT NULL,
+        submodule_path TEXT NOT NULL,
+        submodule_worktree_path TEXT NOT NULL,
+        PRIMARY KEY (run_id, canonical_url, parent_repo_relative_path, submodule_path),
+        FOREIGN KEY(run_id, canonical_url) REFERENCES ticket_run_submodules(run_id, canonical_url) ON DELETE CASCADE
+      )`,
+      "CREATE INDEX idx_ticket_run_submodule_parents_parent_v15 ON ticket_run_submodule_parents(parent_repo_relative_path)",
+    ],
+  },
 ];
 
 type SqliteDatabase = InstanceType<typeof BetterSqlite3>;
@@ -773,6 +831,22 @@ const parseStringArray = (value: string | null, fallback: string[] = []): string
   const parsed = tryParseJson(value);
   return Array.isArray(parsed) ? parsed.filter((entry): entry is string => typeof entry === "string") : fallback;
 };
+
+const normalizeTicketRunSubmoduleParentRefs = (
+  value: readonly TicketRunSubmoduleParentRef[] | null | undefined,
+): TicketRunSubmoduleParentRef[] =>
+  (value ?? [])
+    .map((parentRef) => ({
+      parentRepoRelativePath: parentRef.parentRepoRelativePath.trim(),
+      submodulePath: parentRef.submodulePath.trim(),
+      submoduleWorktreePath: parentRef.submoduleWorktreePath.trim(),
+    }))
+    .filter(
+      (parentRef) =>
+        parentRef.parentRepoRelativePath.length > 0 &&
+        parentRef.submodulePath.length > 0 &&
+        parentRef.submoduleWorktreePath.length > 0,
+    );
 
 const normalizeStringArray = (value: readonly string[] | null | undefined): string[] =>
   (value ?? []).map((entry) => entry.trim()).filter((entry) => entry.length > 0);
@@ -944,10 +1018,30 @@ const mapTicketRunAttemptRow = (row: TicketRunAttemptRow): TicketRunAttemptSumma
   };
 };
 
+const mapTicketRunSubmoduleParentRow = (row: TicketRunSubmoduleParentRow): TicketRunSubmoduleParentRef => ({
+  parentRepoRelativePath: String(row.parentRepoRelativePath),
+  submodulePath: String(row.submodulePath),
+  submoduleWorktreePath: String(row.submoduleWorktreePath),
+});
+
+const mapTicketRunSubmoduleRow = (
+  row: TicketRunSubmoduleRow,
+  parentRefs: readonly TicketRunSubmoduleParentRef[],
+): TicketRunSubmoduleSummary => ({
+  canonicalUrl: String(row.canonicalUrl),
+  name: String(row.name),
+  branchName: String(row.branchName),
+  commitMessageDraft: row.commitMessageDraft === null ? null : String(row.commitMessageDraft),
+  parentRefs: [...parentRefs],
+  createdAt: Number(row.createdAt),
+  updatedAt: Number(row.updatedAt),
+});
+
 const mapTicketRunRow = (
   row: TicketRunRow,
   worktrees: readonly TicketRunWorktreeSummary[],
   attempts: readonly TicketRunAttemptSummary[],
+  submodules: readonly TicketRunSubmoduleSummary[],
 ): TicketRunSummary => {
   assertTicketRunStatus(row.status);
   return {
@@ -965,6 +1059,7 @@ const mapTicketRunRow = (
     createdAt: Number(row.createdAt),
     updatedAt: Number(row.updatedAt),
     worktrees: [...worktrees],
+    submodules: [...submodules],
     attempts: [...attempts],
   };
 };
@@ -1648,8 +1743,57 @@ export class SpiraMemoryDatabase {
       attemptsByRun.set(row.runId, attempts);
     }
 
+    const submoduleRows = this.db
+      .prepare(
+        `SELECT
+           run_id AS runId,
+           canonical_url AS canonicalUrl,
+           name,
+           branch_name AS branchName,
+           commit_message_draft AS commitMessageDraft,
+           created_at AS createdAt,
+           updated_at AS updatedAt
+         FROM ticket_run_submodules
+         ORDER BY run_id ASC, canonical_url COLLATE NOCASE ASC`,
+      )
+      .all() as unknown as TicketRunSubmoduleRow[];
+
+    const submoduleParentRows = this.db
+      .prepare(
+        `SELECT
+           run_id AS runId,
+           canonical_url AS canonicalUrl,
+           parent_repo_relative_path AS parentRepoRelativePath,
+           submodule_path AS submodulePath,
+           submodule_worktree_path AS submoduleWorktreePath
+         FROM ticket_run_submodule_parents
+         ORDER BY run_id ASC, canonical_url COLLATE NOCASE ASC, parent_repo_relative_path COLLATE NOCASE ASC, submodule_path COLLATE NOCASE ASC`,
+      )
+      .all() as unknown as TicketRunSubmoduleParentRow[];
+
+    const submoduleParentRefsByKey = new Map<string, TicketRunSubmoduleParentRef[]>();
+    for (const row of submoduleParentRows) {
+      const key = `${row.runId}\u0000${row.canonicalUrl}`;
+      const parentRefs = submoduleParentRefsByKey.get(key) ?? [];
+      parentRefs.push(mapTicketRunSubmoduleParentRow(row));
+      submoduleParentRefsByKey.set(key, parentRefs);
+    }
+
+    const submodulesByRun = new Map<string, TicketRunSubmoduleSummary[]>();
+    for (const row of submoduleRows) {
+      const key = `${row.runId}\u0000${row.canonicalUrl}`;
+      const submodules = submodulesByRun.get(row.runId) ?? [];
+      submodules.push(mapTicketRunSubmoduleRow(row, submoduleParentRefsByKey.get(key) ?? []));
+      submodulesByRun.set(row.runId, submodules);
+    }
+
     return runRows.map((row) =>
-      mapTicketRunRow(row, worktreesByRun.get(row.runId) ?? [], attemptsByRun.get(row.runId) ?? []),
+      mapTicketRunRow(
+        row,
+        worktreesByRun.get(row.runId) ?? [],
+        attemptsByRun.get(row.runId) ?? [],
+        submodulesByRun.get(row.runId) ?? [],
+      ),
     );
   }
 
@@ -1717,10 +1861,50 @@ export class SpiraMemoryDatabase {
       )
       .all({ runId }) as unknown as TicketRunAttemptRow[];
 
+    const submodules = this.db
+      .prepare(
+        `SELECT
+           run_id AS runId,
+           canonical_url AS canonicalUrl,
+           name,
+           branch_name AS branchName,
+           commit_message_draft AS commitMessageDraft,
+           created_at AS createdAt,
+           updated_at AS updatedAt
+         FROM ticket_run_submodules
+         WHERE run_id = @runId
+         ORDER BY canonical_url COLLATE NOCASE ASC`,
+      )
+      .all({ runId }) as unknown as TicketRunSubmoduleRow[];
+
+    const submoduleParents = this.db
+      .prepare(
+        `SELECT
+           run_id AS runId,
+           canonical_url AS canonicalUrl,
+           parent_repo_relative_path AS parentRepoRelativePath,
+           submodule_path AS submodulePath,
+           submodule_worktree_path AS submoduleWorktreePath
+         FROM ticket_run_submodule_parents
+         WHERE run_id = @runId
+         ORDER BY canonical_url COLLATE NOCASE ASC, parent_repo_relative_path COLLATE NOCASE ASC, submodule_path COLLATE NOCASE ASC`,
+      )
+      .all({ runId }) as unknown as TicketRunSubmoduleParentRow[];
+
+    const submoduleParentRefsByCanonicalUrl = new Map<string, TicketRunSubmoduleParentRef[]>();
+    for (const parentRow of submoduleParents) {
+      const parentRefs = submoduleParentRefsByCanonicalUrl.get(parentRow.canonicalUrl) ?? [];
+      parentRefs.push(mapTicketRunSubmoduleParentRow(parentRow));
+      submoduleParentRefsByCanonicalUrl.set(parentRow.canonicalUrl, parentRefs);
+    }
+
     return mapTicketRunRow(
       row,
       worktrees.map((worktree) => mapTicketRunWorktreeRow(worktree)),
       attempts.map((attempt) => mapTicketRunAttemptRow(attempt)),
+      submodules.map((submodule) =>
+        mapTicketRunSubmoduleRow(submodule, submoduleParentRefsByCanonicalUrl.get(submodule.canonicalUrl) ?? []),
+      ),
     );
   }
 
@@ -1735,6 +1919,23 @@ export class SpiraMemoryDatabase {
       .get({ ticketId }) as { runId: string } | undefined;
 
     return row ? this.getTicketRun(String(row.runId)) : null;
+  }
+
+  deleteTicketRun(runId: string): boolean {
+    this.assertWritable();
+    const normalizedRunId = runId.trim();
+    if (!normalizedRunId) {
+      throw new Error("Ticket runs require a non-empty run id to delete.");
+    }
+
+    return (
+      this.db
+        .prepare(
+          `DELETE FROM ticket_runs
+           WHERE run_id = @runId`,
+        )
+        .run({ runId: normalizedRunId }).changes > 0
+    );
   }
 
   upsertTicketRun(input: UpsertTicketRunInput): TicketRunSummary {
@@ -1781,6 +1982,26 @@ export class SpiraMemoryDatabase {
     const commitMessageDraft = normalizeTitle(
       input.commitMessageDraft ?? normalizedWorktrees[0]?.commitMessageDraft ?? null,
     );
+    const normalizedSubmodules = (input.submodules ?? []).map((submodule) => {
+      const canonicalUrl = submodule.canonicalUrl.trim();
+      const name = submodule.name.trim();
+      const branchName = submodule.branchName.trim();
+      const commitMessageDraft = normalizeTitle(submodule.commitMessageDraft);
+      const parentRefs = normalizeTicketRunSubmoduleParentRefs(submodule.parentRefs);
+      if (!canonicalUrl || !name || !branchName || parentRefs.length === 0) {
+        throw new Error("Ticket run submodules require a canonical URL, name, branch name, and parent refs.");
+      }
+
+      return {
+        canonicalUrl,
+        name,
+        branchName,
+        commitMessageDraft,
+        parentRefs,
+        createdAt: submodule.createdAt ?? createdAt,
+        updatedAt: submodule.updatedAt ?? now,
+      };
+    });
     const normalizedAttempts = (input.attempts ?? []).map((attempt) => {
       const attemptId = attempt.attemptId.trim();
       const prompt = normalizeTitle(attempt.prompt);
@@ -1897,6 +2118,69 @@ export class SpiraMemoryDatabase {
           runId,
           ...worktree,
         });
+      }
+
+      this.db
+        .prepare(
+          `DELETE FROM ticket_run_submodules
+           WHERE run_id = @runId`,
+        )
+        .run({ runId });
+
+      const insertSubmodule = this.db.prepare(
+        `INSERT INTO ticket_run_submodules (
+           run_id,
+           canonical_url,
+           name,
+           branch_name,
+           commit_message_draft,
+           created_at,
+           updated_at
+         ) VALUES (
+           @runId,
+           @canonicalUrl,
+           @name,
+           @branchName,
+           @commitMessageDraft,
+           @createdAt,
+           @updatedAt
+         )`,
+      );
+
+      const insertSubmoduleParent = this.db.prepare(
+        `INSERT INTO ticket_run_submodule_parents (
+           run_id,
+           canonical_url,
+           parent_repo_relative_path,
+           submodule_path,
+           submodule_worktree_path
+         ) VALUES (
+           @runId,
+           @canonicalUrl,
+           @parentRepoRelativePath,
+           @submodulePath,
+           @submoduleWorktreePath
+         )`,
+      );
+
+      for (const submodule of normalizedSubmodules) {
+        insertSubmodule.run({
+          runId,
+          canonicalUrl: submodule.canonicalUrl,
+          name: submodule.name,
+          branchName: submodule.branchName,
+          commitMessageDraft: submodule.commitMessageDraft,
+          createdAt: submodule.createdAt,
+          updatedAt: submodule.updatedAt,
+        });
+
+        for (const parentRef of submodule.parentRefs) {
+          insertSubmoduleParent.run({
+            runId,
+            canonicalUrl: submodule.canonicalUrl,
+            ...parentRef,
+          });
+        }
       }
 
       this.db

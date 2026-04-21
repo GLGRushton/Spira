@@ -18,6 +18,11 @@ export function MissionDetailsRoom({ run, controller }: MissionDetailsRoomProps)
   );
   const latestAttempt = run.attempts[run.attempts.length - 1] ?? null;
   const canRecoverErroredRun = run.status === "error" && run.attempts.length > 0;
+  const canCloseMission = controller.reviewSnapshot?.canClose ?? false;
+  const canDeleteMission = controller.reviewSnapshot?.canDelete ?? false;
+  const deleteBlockersText =
+    controller.reviewSnapshot?.deleteBlockers.map((blocker) => `${blocker.label}: ${blocker.reason}`).join("; ") ??
+    null;
 
   return (
     <section className={shellStyles.roomSection}>
@@ -74,6 +79,7 @@ export function MissionDetailsRoom({ run, controller }: MissionDetailsRoomProps)
 
         {controller.runNotice ? <div className={projectStyles.notice}>{controller.runNotice}</div> : null}
         {controller.runError ? <div className={projectStyles.error}>{controller.runError}</div> : null}
+        {controller.gitError ? <div className={projectStyles.error}>{controller.gitError}</div> : null}
 
         {run.status === "blocked" ? (
           <div className={projectStyles.workActions}>
@@ -145,11 +151,20 @@ export function MissionDetailsRoom({ run, controller }: MissionDetailsRoomProps)
                 type="button"
                 className={projectStyles.actionButton}
                 onClick={() => void controller.completeRun()}
-                disabled={controller.isCompletingRun}
+                disabled={controller.isCompletingRun || controller.isReviewSnapshotLoading || !canCloseMission}
               >
-                {controller.isCompletingRun ? "Completing..." : "Mark complete"}
+                {controller.isCompletingRun
+                  ? "Closing..."
+                  : controller.isReviewSnapshotLoading
+                    ? "Checking..."
+                    : "Close mission"}
               </button>
             </div>
+            {controller.reviewSnapshot !== null && !canCloseMission ? (
+              <div className={projectStyles.workHint}>
+                Finish the remaining repo and managed submodule review work before closing this mission.
+              </div>
+            ) : null}
           </div>
         ) : null}
 
@@ -189,6 +204,42 @@ export function MissionDetailsRoom({ run, controller }: MissionDetailsRoomProps)
             </div>
           )
         ) : null}
+
+        <div className={projectStyles.reviewPanel}>
+          <div className={projectStyles.sectionLabel}>Local teardown</div>
+          <div className={projectStyles.workHint}>
+            Delete removes local mission worktrees and unpublished mission branches, then forgets the run entirely.
+          </div>
+          <div className={projectStyles.inlineActions}>
+            <button
+              type="button"
+              className={projectStyles.secondaryButton}
+              onClick={() => {
+                if (
+                  window.confirm(
+                    `Delete mission ${run.ticketId}? This removes local worktrees and unpublished mission branches.`,
+                  )
+                ) {
+                  void controller.deleteRun();
+                }
+              }}
+              disabled={controller.isDeletingRun || controller.isReviewSnapshotLoading || !canDeleteMission}
+            >
+              {controller.isDeletingRun
+                ? "Deleting..."
+                : controller.isReviewSnapshotLoading
+                  ? "Checking..."
+                  : "Delete mission"}
+            </button>
+          </div>
+          {controller.reviewSnapshot === null && !controller.isReviewSnapshotLoading ? (
+            <div className={projectStyles.workHint}>Refresh the mission review before deleting.</div>
+          ) : controller.reviewSnapshot !== null && !canDeleteMission ? (
+            <div className={projectStyles.workHint}>
+              Delete is disabled because published branches were found: {deleteBlockersText ?? "state is unresolved"}.
+            </div>
+          ) : null}
+        </div>
       </article>
 
       {run.attempts.length > 0 ? (

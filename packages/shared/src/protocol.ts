@@ -22,18 +22,26 @@ import type {
 import type {
   CancelTicketRunWorkResult,
   CommitTicketRunResult,
+  CommitTicketRunSubmoduleResult,
   CompleteTicketRunResult,
   ContinueTicketRunWorkResult,
   CreateTicketRunPullRequestResult,
+  CreateTicketRunSubmodulePullRequestResult,
+  DeleteTicketRunResult,
   GenerateTicketRunCommitDraftResult,
+  GenerateTicketRunSubmoduleCommitDraftResult,
   RetryTicketRunSyncResult,
   SetTicketRunCommitDraftResult,
+  SetTicketRunSubmoduleCommitDraftResult,
   StartTicketRunRequest,
   StartTicketRunResult,
   StartTicketRunWorkResult,
   SyncTicketRunRemoteResult,
+  SyncTicketRunSubmoduleRemoteResult,
   TicketRunGitStateResult,
+  TicketRunReviewSnapshotResult,
   TicketRunSnapshot,
+  TicketRunSubmoduleGitStateResult,
 } from "./ticket-run-types.js";
 import type { UpgradeProposal, UpgradeStatus } from "./upgrade.js";
 import type {
@@ -76,7 +84,7 @@ export interface StationSummary {
   isStreaming: boolean;
 }
 
-export const PROTOCOL_VERSION = 16;
+export const PROTOCOL_VERSION = 17;
 
 export const TTS_PROVIDERS = ["elevenlabs", "kokoro"] as const;
 export type TtsProvider = (typeof TTS_PROVIDERS)[number];
@@ -115,8 +123,17 @@ export type ClientMessage =
   | { type: "missions:ticket-run:work:continue"; requestId: string; runId: string; prompt?: string }
   | { type: "missions:ticket-run:work:cancel"; requestId: string; runId: string }
   | { type: "missions:ticket-run:complete"; requestId: string; runId: string }
+  | { type: "missions:ticket-run:delete"; requestId: string; runId: string }
+  | { type: "missions:ticket-run:review-snapshot:get"; requestId: string; runId: string }
   | { type: "missions:ticket-run:git-state:get"; requestId: string; runId: string; repoRelativePath?: string }
+  | { type: "missions:ticket-run:submodule-git-state:get"; requestId: string; runId: string; canonicalUrl: string }
   | { type: "missions:ticket-run:commit-draft:generate"; requestId: string; runId: string; repoRelativePath?: string }
+  | {
+      type: "missions:ticket-run:submodule:commit-draft:generate";
+      requestId: string;
+      runId: string;
+      canonicalUrl: string;
+    }
   | {
       type: "missions:ticket-run:commit-draft:set";
       requestId: string;
@@ -124,10 +141,32 @@ export type ClientMessage =
       message: string;
       repoRelativePath?: string;
     }
+  | {
+      type: "missions:ticket-run:submodule:commit-draft:set";
+      requestId: string;
+      runId: string;
+      canonicalUrl: string;
+      message: string;
+    }
   | { type: "missions:ticket-run:commit"; requestId: string; runId: string; message: string; repoRelativePath?: string }
+  | {
+      type: "missions:ticket-run:submodule:commit";
+      requestId: string;
+      runId: string;
+      canonicalUrl: string;
+      message: string;
+    }
   | { type: "missions:ticket-run:publish"; requestId: string; runId: string; repoRelativePath?: string }
+  | { type: "missions:ticket-run:submodule:publish"; requestId: string; runId: string; canonicalUrl: string }
   | { type: "missions:ticket-run:push"; requestId: string; runId: string; repoRelativePath?: string }
+  | { type: "missions:ticket-run:submodule:push"; requestId: string; runId: string; canonicalUrl: string }
   | { type: "missions:ticket-run:pull-request:create"; requestId: string; runId: string; repoRelativePath?: string }
+  | {
+      type: "missions:ticket-run:submodule:pull-request:create";
+      requestId: string;
+      runId: string;
+      canonicalUrl: string;
+    }
   | { type: "missions:ticket-run:services:get"; requestId: string; runId: string }
   | { type: "missions:ticket-run:service:start"; requestId: string; runId: string; profileId: string }
   | { type: "missions:ticket-run:service:stop"; requestId: string; runId: string; serviceId: string }
@@ -216,9 +255,24 @@ export type ServerMessage =
       result: CompleteTicketRunResult;
     }
   | {
+      type: "missions:ticket-run:delete:result";
+      requestId: string;
+      result: DeleteTicketRunResult;
+    }
+  | {
+      type: "missions:ticket-run:review-snapshot:result";
+      requestId: string;
+      result: TicketRunReviewSnapshotResult;
+    }
+  | {
       type: "missions:ticket-run:git-state:result";
       requestId: string;
       result: TicketRunGitStateResult;
+    }
+  | {
+      type: "missions:ticket-run:submodule-git-state:result";
+      requestId: string;
+      result: TicketRunSubmoduleGitStateResult;
     }
   | {
       type: "missions:ticket-run:commit-draft:generate:result";
@@ -226,9 +280,19 @@ export type ServerMessage =
       result: GenerateTicketRunCommitDraftResult;
     }
   | {
+      type: "missions:ticket-run:submodule:commit-draft:generate:result";
+      requestId: string;
+      result: GenerateTicketRunSubmoduleCommitDraftResult;
+    }
+  | {
       type: "missions:ticket-run:commit-draft:set:result";
       requestId: string;
       result: SetTicketRunCommitDraftResult;
+    }
+  | {
+      type: "missions:ticket-run:submodule:commit-draft:set:result";
+      requestId: string;
+      result: SetTicketRunSubmoduleCommitDraftResult;
     }
   | {
       type: "missions:ticket-run:commit:result";
@@ -236,9 +300,19 @@ export type ServerMessage =
       result: CommitTicketRunResult;
     }
   | {
+      type: "missions:ticket-run:submodule:commit:result";
+      requestId: string;
+      result: CommitTicketRunSubmoduleResult;
+    }
+  | {
       type: "missions:ticket-run:publish:result";
       requestId: string;
       result: SyncTicketRunRemoteResult;
+    }
+  | {
+      type: "missions:ticket-run:submodule:publish:result";
+      requestId: string;
+      result: SyncTicketRunSubmoduleRemoteResult;
     }
   | {
       type: "missions:ticket-run:push:result";
@@ -246,9 +320,19 @@ export type ServerMessage =
       result: SyncTicketRunRemoteResult;
     }
   | {
+      type: "missions:ticket-run:submodule:push:result";
+      requestId: string;
+      result: SyncTicketRunSubmoduleRemoteResult;
+    }
+  | {
       type: "missions:ticket-run:pull-request:create:result";
       requestId: string;
       result: CreateTicketRunPullRequestResult;
+    }
+  | {
+      type: "missions:ticket-run:submodule:pull-request:create:result";
+      requestId: string;
+      result: CreateTicketRunSubmodulePullRequestResult;
     }
   | {
       type: "missions:ticket-run:services:get:result";

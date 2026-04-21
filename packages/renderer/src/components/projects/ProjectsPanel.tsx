@@ -6,6 +6,8 @@ import {
   type MissionUiRoom,
   type ProjectRepoMappingsSnapshot,
   type TicketRunGitState,
+  type TicketRunReviewSnapshot,
+  type TicketRunSubmoduleGitState,
   type TicketRunSummary,
   type YouTrackProjectSummary,
   type YouTrackStateMapping,
@@ -14,8 +16,8 @@ import {
   normalizeYouTrackStateMapping,
 } from "@spira/shared";
 import { type KeyboardEvent as ReactKeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useNavigationStore } from "../../stores/navigation-store.js";
 import { useMissionRunsStore } from "../../stores/mission-runs-store.js";
+import { useNavigationStore } from "../../stores/navigation-store.js";
 import { useSettingsStore } from "../../stores/settings-store.js";
 import { useStationStore } from "../../stores/station-store.js";
 import { ProjectTypeahead } from "./ProjectTypeahead.js";
@@ -38,6 +40,7 @@ const YOUTRACK_TICKET_LIST_LIMIT = 50;
 type MissionsTabId = "quarterdeck" | MissionLaneTabId;
 type MissionSelection = { kind: "ticket"; ticketId: string } | { kind: "run"; runId: string };
 const MISSIONS_TAB_ORDER: MissionsTabId[] = ["quarterdeck", "launch-bay", "flight-deck", "dry-dock"];
+const buildManagedSubmoduleKey = (runId: string, canonicalUrl: string): string => `${runId}:${canonicalUrl}`;
 const ACTIVE_MISSION_SERVICE_STATES = new Set<MissionServiceProcessSummary["state"]>([
   "starting",
   "running",
@@ -271,29 +274,46 @@ export function ProjectsPanel() {
   const [continuingRunId, setContinuingRunId] = useState<string | null>(null);
   const [cancellingRunId, setCancellingRunId] = useState<string | null>(null);
   const [completingRunId, setCompletingRunId] = useState<string | null>(null);
+  const [deletingRunId, setDeletingRunId] = useState<string | null>(null);
   const [loadingGitRunId, setLoadingGitRunId] = useState<string | null>(null);
+  const [loadingSubmoduleKey, setLoadingSubmoduleKey] = useState<string | null>(null);
   const [loadingServicesRunId, setLoadingServicesRunId] = useState<string | null>(null);
+  const [loadingReviewRunId, setLoadingReviewRunId] = useState<string | null>(null);
   const [generatingCommitDraftRunId, setGeneratingCommitDraftRunId] = useState<string | null>(null);
+  const [generatingSubmoduleCommitDraftKey, setGeneratingSubmoduleCommitDraftKey] = useState<string | null>(null);
   const [savingCommitDraftRunId, setSavingCommitDraftRunId] = useState<string | null>(null);
+  const [savingSubmoduleCommitDraftKey, setSavingSubmoduleCommitDraftKey] = useState<string | null>(null);
   const [committingGitRunId, setCommittingGitRunId] = useState<string | null>(null);
+  const [committingSubmoduleKey, setCommittingSubmoduleKey] = useState<string | null>(null);
   const [syncingRemoteRunId, setSyncingRemoteRunId] = useState<string | null>(null);
+  const [syncingSubmoduleKey, setSyncingSubmoduleKey] = useState<string | null>(null);
   const [creatingPullRequestRunId, setCreatingPullRequestRunId] = useState<string | null>(null);
+  const [creatingSubmodulePullRequestKey, setCreatingSubmodulePullRequestKey] = useState<string | null>(null);
   const [startingServiceProfileId, setStartingServiceProfileId] = useState<string | null>(null);
   const [stoppingServiceId, setStoppingServiceId] = useState<string | null>(null);
   const [selectedMission, setSelectedMission] = useState<MissionSelection | null>(null);
   const [selectedMissionServices, setSelectedMissionServices] = useState<MissionServiceSnapshot | null>(null);
+  const [selectedMissionReviewSnapshot, setSelectedMissionReviewSnapshot] = useState<TicketRunReviewSnapshot | null>(
+    null,
+  );
   const [continueDrafts, setContinueDrafts] = useState<Record<string, string>>({});
   const [commitDraft, setCommitDraft] = useState("");
   const [commitDraftDirty, setCommitDraftDirty] = useState(false);
+  const [submoduleCommitDraft, setSubmoduleCommitDraft] = useState("");
+  const [submoduleCommitDraftDirty, setSubmoduleCommitDraftDirty] = useState(false);
   const [selectedRepoRelativePath, setSelectedRepoRelativePath] = useState<string | null>(null);
+  const [selectedSubmoduleCanonicalUrl, setSelectedSubmoduleCanonicalUrl] = useState<string | null>(null);
   const [selectedGitState, setSelectedGitState] = useState<TicketRunGitState | null>(null);
+  const [selectedSubmoduleGitState, setSelectedSubmoduleGitState] = useState<TicketRunSubmoduleGitState | null>(null);
   const [expandedDiffPaths, setExpandedDiffPaths] = useState<Record<string, boolean>>({});
   const [activeTab, setActiveTab] = useState<MissionsTabId>("quarterdeck");
   const editorRef = useRef<HTMLElement | null>(null);
   const tabButtonRefs = useRef(new Map<MissionsTabId, HTMLButtonElement>());
   const autoDraftedRunIdsRef = useRef(new Set<string>());
+  const autoDraftedSubmoduleKeysRef = useRef(new Set<string>());
   const selectedMissionRunIdRef = useRef<string | null>(null);
   const selectedRepoRelativePathRef = useRef<string | null>(null);
+  const selectedSubmoduleCanonicalUrlRef = useRef<string | null>(null);
 
   const refreshData = useCallback(async () => {
     setIsRefreshing(true);
@@ -341,7 +361,7 @@ export function ProjectsPanel() {
     }
 
     setIsRefreshing(false);
-  }, []);
+  }, [setRunSnapshot]);
 
   useEffect(() => {
     void refreshData();
@@ -525,9 +545,19 @@ export function ProjectsPanel() {
   );
   const selectedMissionRunId = selectedMissionRun?.runId ?? null;
   const selectedMissionRunStatus = selectedMissionRun?.status ?? null;
+  const isSelectedMissionReviewLoading = selectedMissionRunId !== null && loadingReviewRunId === selectedMissionRunId;
+  const canCloseSelectedMission = selectedMissionReviewSnapshot?.canClose ?? false;
+  const canDeleteSelectedMission = selectedMissionReviewSnapshot?.canDelete ?? false;
+  const selectedMissionDeleteBlockers =
+    selectedMissionReviewSnapshot?.deleteBlockers.map((blocker) => `${blocker.label}: ${blocker.reason}`).join("; ") ??
+    null;
   const selectedMissionWorktree =
     selectedMissionRun?.worktrees.find((worktree) => worktree.repoRelativePath === selectedRepoRelativePath) ??
     selectedMissionRun?.worktrees[0] ??
+    null;
+  const selectedMissionSubmodule =
+    selectedMissionRun?.submodules.find((submodule) => submodule.canonicalUrl === selectedSubmoduleCanonicalUrl) ??
+    selectedMissionRun?.submodules[0] ??
     null;
   const selectedMissionRunCommitDraft =
     selectedMissionWorktree?.commitMessageDraft ?? selectedMissionRun?.commitMessageDraft ?? null;
@@ -537,6 +567,7 @@ export function ProjectsPanel() {
   const selectedMissionUrl = selectedMissionTicket?.url ?? selectedMissionRun?.ticketUrl ?? null;
   const selectedMissionGitRepoLabel =
     selectedGitState?.repoRelativePath ?? selectedMissionWorktree?.repoRelativePath ?? null;
+  const selectedMissionSubmoduleLabel = selectedSubmoduleGitState?.name ?? selectedMissionSubmodule?.name ?? null;
   const selectedMissionServicesSnapshot =
     selectedMissionServices?.runId === selectedMissionRunId ? selectedMissionServices : null;
   const selectedMissionServiceProfiles = selectedMissionServicesSnapshot?.profiles ?? [];
@@ -564,13 +595,49 @@ export function ProjectsPanel() {
       ),
     [selectedMissionServiceProcesses],
   );
-  const showPullRequestActions =
-    selectedMissionRun?.status === "done" &&
+  const selectedMissionBlockingSubmoduleNames = useMemo(
+    () =>
+      (selectedGitState?.blockedBySubmoduleCanonicalUrls ?? []).map(
+        (canonicalUrl) =>
+          selectedMissionRun?.submodules.find((submodule) => submodule.canonicalUrl === canonicalUrl)?.name ??
+          canonicalUrl,
+      ),
+    [selectedGitState?.blockedBySubmoduleCanonicalUrls, selectedMissionRun?.submodules],
+  );
+  const selectedSubmoduleKey =
+    selectedMissionRunId && selectedMissionSubmodule
+      ? buildManagedSubmoduleKey(selectedMissionRunId, selectedMissionSubmodule.canonicalUrl)
+      : null;
+  const selectedSubmoduleNeedsAlignment =
+    selectedSubmoduleGitState?.parents.some((parent) => !parent.isAligned) ?? false;
+  const selectedSubmoduleCanSync =
+    selectedSubmoduleGitState !== null &&
+    (selectedSubmoduleGitState.pushAction !== "none" || selectedSubmoduleNeedsAlignment);
+  const selectedSubmoduleSyncLabel =
+    selectedSubmoduleGitState?.pushAction === "publish"
+      ? "Publish"
+      : selectedSubmoduleGitState?.pushAction === "push"
+        ? "Push"
+        : selectedSubmoduleNeedsAlignment
+          ? "Align parents"
+          : "Push";
+  const showRepoPullRequestActions =
+    selectedMissionRun?.status === "awaiting-review" &&
     selectedGitState !== null &&
+    selectedGitState.blockedBySubmoduleCanonicalUrls.length === 0 &&
     !selectedGitState.hasDiff &&
     selectedGitState.pushAction === "none" &&
     selectedGitState.pullRequestUrls.open !== null &&
     selectedGitState.pullRequestUrls.draft !== null;
+  const showSubmodulePullRequestActions =
+    selectedMissionRun?.status === "awaiting-review" &&
+    selectedSubmoduleGitState !== null &&
+    !selectedSubmoduleGitState.reconcileRequired &&
+    !selectedSubmoduleNeedsAlignment &&
+    !selectedSubmoduleGitState.hasDiff &&
+    selectedSubmoduleGitState.pushAction === "none" &&
+    selectedSubmoduleGitState.pullRequestUrls.open !== null &&
+    selectedSubmoduleGitState.pullRequestUrls.draft !== null;
   useEffect(() => {
     selectedMissionRunIdRef.current = selectedMissionRunId;
   }, [selectedMissionRunId]);
@@ -579,8 +646,16 @@ export function ProjectsPanel() {
     selectedRepoRelativePathRef.current = selectedRepoRelativePath;
   }, [selectedRepoRelativePath]);
 
+  useEffect(() => {
+    selectedSubmoduleCanonicalUrlRef.current = selectedSubmoduleCanonicalUrl;
+  }, [selectedSubmoduleCanonicalUrl]);
+
   const isSelectedMissionRepo = useCallback((runId: string, repoRelativePath: string) => {
     return selectedMissionRunIdRef.current === runId && selectedRepoRelativePathRef.current === repoRelativePath;
+  }, []);
+
+  const isSelectedMissionSubmodule = useCallback((runId: string, canonicalUrl: string) => {
+    return selectedMissionRunIdRef.current === runId && selectedSubmoduleCanonicalUrlRef.current === canonicalUrl;
   }, []);
 
   const missionDetailBackLabel =
@@ -882,6 +957,33 @@ export function ProjectsPanel() {
     }
   }, []);
 
+  const refreshSelectedMissionReviewSnapshot = useCallback(
+    async (runId: string): Promise<TicketRunReviewSnapshot | null> => {
+      setLoadingReviewRunId(runId);
+
+      try {
+        const result = await window.electronAPI.getTicketRunReviewSnapshot(runId);
+        if (selectedMissionRunIdRef.current === runId) {
+          setRunSnapshot(result.snapshot);
+          setSelectedMissionReviewSnapshot(result.reviewSnapshot);
+        }
+        return result.reviewSnapshot;
+      } catch (error) {
+        if (selectedMissionRunIdRef.current === runId) {
+          console.error("Failed to load mission review snapshot", error);
+          setRunError(error instanceof Error ? error.message : "Failed to load the mission review snapshot.");
+          setSelectedMissionReviewSnapshot(null);
+        }
+        return null;
+      } finally {
+        if (selectedMissionRunIdRef.current === runId) {
+          setLoadingReviewRunId((current) => (current === runId ? null : current));
+        }
+      }
+    },
+    [setRunSnapshot],
+  );
+
   const startMissionService = useCallback(async (runId: string, profile: MissionServiceProfileSummary) => {
     setStartingServiceProfileId(profile.profileId);
     setServiceNotice(null);
@@ -957,15 +1059,34 @@ export function ProjectsPanel() {
   }, [selectedMissionRun]);
 
   useEffect(() => {
+    if (!selectedMissionRun) {
+      setSelectedSubmoduleCanonicalUrl(null);
+      return;
+    }
+
+    setSelectedSubmoduleCanonicalUrl((current) =>
+      selectedMissionRun.submodules.some((submodule) => submodule.canonicalUrl === current)
+        ? current
+        : (selectedMissionRun.submodules[0]?.canonicalUrl ?? null),
+    );
+  }, [selectedMissionRun]);
+
+  useEffect(() => {
     if (!selectedMissionRunId) {
       setSelectedMissionServices(null);
+      setSelectedMissionReviewSnapshot(null);
       setLoadingServicesRunId(null);
+      setLoadingReviewRunId(null);
       setServiceNotice(null);
       setServiceError(null);
       setSelectedGitState(null);
+      setSelectedSubmoduleGitState(null);
       setCommitDraft("");
       setCommitDraftDirty(false);
+      setSubmoduleCommitDraft("");
+      setSubmoduleCommitDraftDirty(false);
       setSelectedRepoRelativePath(null);
+      setSelectedSubmoduleCanonicalUrl(null);
       setExpandedDiffPaths({});
       setGitNotice(null);
       setGitError(null);
@@ -973,6 +1094,7 @@ export function ProjectsPanel() {
     }
 
     setSelectedGitState(null);
+    setSelectedSubmoduleGitState(null);
     setExpandedDiffPaths({});
     setGitNotice(null);
     setGitError(null);
@@ -987,6 +1109,19 @@ export function ProjectsPanel() {
   }, [refreshMissionServices, selectedMissionRunId]);
 
   useEffect(() => {
+    if (!selectedMissionRunId) {
+      setSelectedMissionReviewSnapshot(null);
+      setLoadingReviewRunId(null);
+      return;
+    }
+    if (!selectedMissionRunStatus) {
+      return;
+    }
+
+    void refreshSelectedMissionReviewSnapshot(selectedMissionRunId);
+  }, [refreshSelectedMissionReviewSnapshot, selectedMissionRunId, selectedMissionRunStatus]);
+
+  useEffect(() => {
     if (!selectedMissionRunId || !selectedRepoRelativePath) {
       return;
     }
@@ -998,6 +1133,19 @@ export function ProjectsPanel() {
   }, [selectedMissionRunId, selectedRepoRelativePath]);
 
   useEffect(() => {
+    if (!selectedMissionRunId || !selectedSubmoduleCanonicalUrl) {
+      return;
+    }
+
+    setSelectedSubmoduleGitState(null);
+    setSubmoduleCommitDraft("");
+    setSubmoduleCommitDraftDirty(false);
+    setExpandedDiffPaths({});
+    setGitNotice(null);
+    setGitError(null);
+  }, [selectedMissionRunId, selectedSubmoduleCanonicalUrl]);
+
+  useEffect(() => {
     if (!selectedMissionRunId) {
       return;
     }
@@ -1005,6 +1153,15 @@ export function ProjectsPanel() {
     setCommitDraft(selectedMissionRunCommitDraft ?? "");
     setCommitDraftDirty(false);
   }, [selectedMissionRunCommitDraft, selectedMissionRunId]);
+
+  useEffect(() => {
+    if (!selectedMissionRunId) {
+      return;
+    }
+
+    setSubmoduleCommitDraft(selectedSubmoduleGitState?.commitMessageDraft ?? "");
+    setSubmoduleCommitDraftDirty(false);
+  }, [selectedMissionRunId, selectedSubmoduleGitState?.commitMessageDraft]);
 
   useEffect(() => {
     if (!selectedMissionRunId || selectedMissionRunWorktreeCount === 0 || !selectedRepoRelativePath) {
@@ -1041,7 +1198,45 @@ export function ProjectsPanel() {
     return () => {
       cancelled = true;
     };
-  }, [selectedMissionRunId, selectedMissionRunWorktreeCount, selectedRepoRelativePath]);
+  }, [selectedMissionRunId, selectedMissionRunWorktreeCount, selectedRepoRelativePath, setRunSnapshot]);
+
+  useEffect(() => {
+    if (!selectedMissionRunId || !selectedSubmoduleCanonicalUrl) {
+      return;
+    }
+
+    const runId = selectedMissionRunId;
+    const canonicalUrl = selectedSubmoduleCanonicalUrl;
+    const submoduleKey = buildManagedSubmoduleKey(runId, canonicalUrl);
+    let cancelled = false;
+    const loadSubmoduleGitState = async () => {
+      setLoadingSubmoduleKey(submoduleKey);
+      setGitError(null);
+      try {
+        const result = await window.electronAPI.getTicketRunSubmoduleGitState(runId, canonicalUrl);
+        if (cancelled) {
+          return;
+        }
+        setRunSnapshot(result.snapshot);
+        setSelectedSubmoduleGitState(result.gitState);
+      } catch (error) {
+        if (cancelled) {
+          return;
+        }
+        console.error("Failed to load managed submodule git state", error);
+        setGitError(error instanceof Error ? error.message : "Failed to load managed submodule git state.");
+      } finally {
+        if (!cancelled) {
+          setLoadingSubmoduleKey((current) => (current === submoduleKey ? null : current));
+        }
+      }
+    };
+
+    void loadSubmoduleGitState();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedMissionRunId, selectedSubmoduleCanonicalUrl, setRunSnapshot]);
 
   const refreshMissionGitState = async (runId: string, repoRelativePath = selectedRepoRelativePath) => {
     if (!repoRelativePath) {
@@ -1062,6 +1257,40 @@ export function ProjectsPanel() {
     } finally {
       setLoadingGitRunId(null);
     }
+  };
+
+  const refreshSelectedSubmoduleGitState = async (
+    runId: string,
+    canonicalUrl = selectedSubmoduleCanonicalUrl,
+  ): Promise<void> => {
+    if (!canonicalUrl) {
+      return;
+    }
+
+    const submoduleKey = buildManagedSubmoduleKey(runId, canonicalUrl);
+    setLoadingSubmoduleKey(submoduleKey);
+    setGitError(null);
+    try {
+      const result = await window.electronAPI.getTicketRunSubmoduleGitState(runId, canonicalUrl);
+      setRunSnapshot(result.snapshot);
+      if (isSelectedMissionSubmodule(runId, canonicalUrl)) {
+        setSelectedSubmoduleGitState(result.gitState);
+      }
+    } catch (error) {
+      console.error("Failed to refresh managed submodule git state", error);
+      setGitError(error instanceof Error ? error.message : "Failed to refresh managed submodule git state.");
+    } finally {
+      setLoadingSubmoduleKey((current) => (current === submoduleKey ? null : current));
+    }
+  };
+
+  const refreshSelectedRepoAfterSubmoduleAction = async (runId: string): Promise<void> => {
+    const repoRelativePath = selectedRepoRelativePathRef.current;
+    if (!repoRelativePath) {
+      return;
+    }
+
+    await refreshMissionGitState(runId, repoRelativePath);
   };
 
   const generateCommitDraft = useCallback(
@@ -1089,14 +1318,14 @@ export function ProjectsPanel() {
         setGeneratingCommitDraftRunId(null);
       }
     },
-    [isSelectedMissionRepo, selectedRepoRelativePath],
+    [isSelectedMissionRepo, selectedRepoRelativePath, setRunSnapshot],
   );
 
   useEffect(() => {
     if (
       !selectedMissionRunId ||
       !selectedRepoRelativePath ||
-      selectedMissionRunStatus !== "done" ||
+      selectedMissionRunStatus !== "awaiting-review" ||
       selectedMissionRunCommitDraft
     ) {
       return;
@@ -1113,6 +1342,46 @@ export function ProjectsPanel() {
     selectedMissionRunId,
     selectedMissionRunStatus,
     selectedRepoRelativePath,
+  ]);
+
+  useEffect(() => {
+    if (
+      !selectedMissionRunId ||
+      !selectedMissionSubmodule ||
+      !selectedSubmoduleGitState?.hasDiff ||
+      selectedMissionRunStatus !== "awaiting-review" ||
+      selectedSubmoduleGitState.commitMessageDraft
+    ) {
+      return;
+    }
+    const autoDraftKey = buildManagedSubmoduleKey(selectedMissionRunId, selectedMissionSubmodule.canonicalUrl);
+    if (autoDraftedSubmoduleKeysRef.current.has(autoDraftKey)) {
+      return;
+    }
+    autoDraftedSubmoduleKeysRef.current.add(autoDraftKey);
+    void (async () => {
+      const result = await window.electronAPI.generateTicketRunSubmoduleCommitDraft(
+        selectedMissionRunId,
+        selectedMissionSubmodule.canonicalUrl,
+      );
+      setRunSnapshot(result.snapshot);
+      if (isSelectedMissionSubmodule(selectedMissionRunId, selectedMissionSubmodule.canonicalUrl)) {
+        setSelectedSubmoduleGitState(result.gitState);
+        setSubmoduleCommitDraft(result.gitState.commitMessageDraft ?? "");
+        setSubmoduleCommitDraftDirty(false);
+      }
+    })().catch((error) => {
+      console.error("Failed to generate managed submodule commit draft", error);
+      setGitError(error instanceof Error ? error.message : "Failed to generate the managed submodule commit draft.");
+    });
+  }, [
+    isSelectedMissionSubmodule,
+    selectedMissionRunId,
+    selectedMissionRunStatus,
+    selectedMissionSubmodule,
+    selectedSubmoduleGitState?.commitMessageDraft,
+    selectedSubmoduleGitState?.hasDiff,
+    setRunSnapshot,
   ]);
 
   const persistCommitDraft = async (runId: string, repoRelativePath = selectedRepoRelativePath) => {
@@ -1158,6 +1427,7 @@ export function ProjectsPanel() {
       setGitNotice(
         `${result.run.ticketId} committed in ${result.gitState.repoRelativePath} on ${result.gitState.branchName}.`,
       );
+      await refreshSelectedMissionReviewSnapshot(runId);
     } catch (error) {
       console.error("Failed to commit mission run", error);
       setGitError(error instanceof Error ? error.message : "Failed to commit the mission worktree.");
@@ -1192,6 +1462,7 @@ export function ProjectsPanel() {
           ? `${result.run.ticketId} published ${result.gitState.repoRelativePath} to origin/${result.gitState.branchName}.`
           : `${result.run.ticketId} pushed ${result.gitState.repoRelativePath} to origin/${result.gitState.branchName}.`,
       );
+      await refreshSelectedMissionReviewSnapshot(runId);
     } catch (error) {
       console.error("Failed to sync mission remote", error);
       setGitError(error instanceof Error ? error.message : "Failed to sync the mission branch.");
@@ -1216,11 +1487,171 @@ export function ProjectsPanel() {
       }
       await window.electronAPI.openExternal(result.pullRequestUrl);
       setGitNotice(`${result.run.ticketId} pull request opened for ${result.gitState.repoRelativePath}.`);
+      await refreshSelectedMissionReviewSnapshot(runId);
     } catch (error) {
       console.error("Failed to open mission pull request", error);
       setGitError(error instanceof Error ? error.message : "Failed to open the mission pull request.");
     } finally {
       setCreatingPullRequestRunId(null);
+    }
+  };
+
+  const generateSubmoduleCommitDraft = async (
+    runId: string,
+    canonicalUrl = selectedSubmoduleCanonicalUrl,
+  ): Promise<void> => {
+    if (!canonicalUrl) {
+      return;
+    }
+
+    const submoduleKey = buildManagedSubmoduleKey(runId, canonicalUrl);
+    setGeneratingSubmoduleCommitDraftKey(submoduleKey);
+    setGitNotice(null);
+    setGitError(null);
+    try {
+      const result = await window.electronAPI.generateTicketRunSubmoduleCommitDraft(runId, canonicalUrl);
+      setRunSnapshot(result.snapshot);
+      if (isSelectedMissionSubmodule(runId, canonicalUrl)) {
+        setSelectedSubmoduleGitState(result.gitState);
+        setSubmoduleCommitDraft(result.gitState.commitMessageDraft ?? "");
+        setSubmoduleCommitDraftDirty(false);
+      }
+      setGitNotice(`${result.run.ticketId} commit draft refreshed for submodule ${result.gitState.name}.`);
+    } catch (error) {
+      console.error("Failed to generate managed submodule commit draft", error);
+      setGitError(error instanceof Error ? error.message : "Failed to generate the managed submodule commit draft.");
+    } finally {
+      setGeneratingSubmoduleCommitDraftKey((current) => (current === submoduleKey ? null : current));
+    }
+  };
+
+  const persistSubmoduleCommitDraft = async (
+    runId: string,
+    canonicalUrl = selectedSubmoduleCanonicalUrl,
+  ): Promise<void> => {
+    if (!canonicalUrl) {
+      return;
+    }
+
+    const submoduleKey = buildManagedSubmoduleKey(runId, canonicalUrl);
+    setSavingSubmoduleCommitDraftKey(submoduleKey);
+    setGitNotice(null);
+    setGitError(null);
+    try {
+      const result = await window.electronAPI.setTicketRunSubmoduleCommitDraft(
+        runId,
+        canonicalUrl,
+        submoduleCommitDraft,
+      );
+      setRunSnapshot(result.snapshot);
+      if (isSelectedMissionSubmodule(runId, canonicalUrl)) {
+        setSelectedSubmoduleGitState(result.gitState);
+        setSubmoduleCommitDraft(result.gitState.commitMessageDraft ?? "");
+        setSubmoduleCommitDraftDirty(false);
+      }
+    } catch (error) {
+      console.error("Failed to save managed submodule commit draft", error);
+      setGitError(error instanceof Error ? error.message : "Failed to save the managed submodule commit draft.");
+    } finally {
+      setSavingSubmoduleCommitDraftKey((current) => (current === submoduleKey ? null : current));
+    }
+  };
+
+  const commitMissionSubmodule = async (runId: string, canonicalUrl = selectedSubmoduleCanonicalUrl): Promise<void> => {
+    if (!canonicalUrl) {
+      return;
+    }
+
+    const submoduleKey = buildManagedSubmoduleKey(runId, canonicalUrl);
+    setCommittingSubmoduleKey(submoduleKey);
+    setGitNotice(null);
+    setGitError(null);
+    try {
+      const result = await window.electronAPI.commitTicketRunSubmodule(runId, canonicalUrl, submoduleCommitDraft);
+      setRunSnapshot(result.snapshot);
+      if (isSelectedMissionSubmodule(runId, canonicalUrl)) {
+        setSelectedSubmoduleGitState(result.gitState);
+        setSubmoduleCommitDraft("");
+        setSubmoduleCommitDraftDirty(false);
+      }
+      await refreshSelectedRepoAfterSubmoduleAction(runId);
+      setGitNotice(`${result.run.ticketId} committed managed submodule ${result.gitState.name}.`);
+      await refreshSelectedMissionReviewSnapshot(runId);
+    } catch (error) {
+      console.error("Failed to commit managed submodule", error);
+      setGitError(error instanceof Error ? error.message : "Failed to commit the managed submodule.");
+    } finally {
+      setCommittingSubmoduleKey((current) => (current === submoduleKey ? null : current));
+    }
+  };
+
+  const syncSubmoduleRemote = async (
+    runId: string,
+    action: "publish" | "push",
+    canonicalUrl = selectedSubmoduleCanonicalUrl,
+  ): Promise<void> => {
+    if (!canonicalUrl) {
+      return;
+    }
+
+    const submoduleKey = buildManagedSubmoduleKey(runId, canonicalUrl);
+    const alignmentOnly =
+      action === "push" && selectedSubmoduleGitState?.pushAction === "none" && selectedSubmoduleNeedsAlignment;
+    setSyncingSubmoduleKey(submoduleKey);
+    setGitNotice(null);
+    setGitError(null);
+    try {
+      const result =
+        action === "publish"
+          ? await window.electronAPI.publishTicketRunSubmodule(runId, canonicalUrl)
+          : await window.electronAPI.pushTicketRunSubmodule(runId, canonicalUrl);
+      setRunSnapshot(result.snapshot);
+      if (isSelectedMissionSubmodule(runId, canonicalUrl)) {
+        setSelectedSubmoduleGitState(result.gitState);
+      }
+      await refreshSelectedRepoAfterSubmoduleAction(runId);
+      setGitNotice(
+        alignmentOnly
+          ? `${result.run.ticketId} aligned every parent repo to managed submodule ${result.gitState.name}.`
+          : result.action === "publish"
+            ? `${result.run.ticketId} published managed submodule ${result.gitState.name} to origin/${result.gitState.branchName}.`
+            : `${result.run.ticketId} pushed managed submodule ${result.gitState.name} to origin/${result.gitState.branchName}.`,
+      );
+      await refreshSelectedMissionReviewSnapshot(runId);
+    } catch (error) {
+      console.error("Failed to sync managed submodule remote", error);
+      setGitError(error instanceof Error ? error.message : "Failed to sync the managed submodule branch.");
+    } finally {
+      setSyncingSubmoduleKey((current) => (current === submoduleKey ? null : current));
+    }
+  };
+
+  const openSubmodulePullRequest = async (
+    runId: string,
+    canonicalUrl = selectedSubmoduleCanonicalUrl,
+  ): Promise<void> => {
+    if (!canonicalUrl) {
+      return;
+    }
+
+    const submoduleKey = buildManagedSubmoduleKey(runId, canonicalUrl);
+    setCreatingSubmodulePullRequestKey(submoduleKey);
+    setGitNotice(null);
+    setGitError(null);
+    try {
+      const result = await window.electronAPI.createTicketRunSubmodulePullRequest(runId, canonicalUrl);
+      setRunSnapshot(result.snapshot);
+      if (isSelectedMissionSubmodule(runId, canonicalUrl)) {
+        setSelectedSubmoduleGitState(result.gitState);
+      }
+      await window.electronAPI.openExternal(result.pullRequestUrl);
+      setGitNotice(`${result.run.ticketId} pull request opened for managed submodule ${result.gitState.name}.`);
+      await refreshSelectedMissionReviewSnapshot(runId);
+    } catch (error) {
+      console.error("Failed to open managed submodule pull request", error);
+      setGitError(error instanceof Error ? error.message : "Failed to open the managed submodule pull request.");
+    } finally {
+      setCreatingSubmodulePullRequestKey((current) => (current === submoduleKey ? null : current));
     }
   };
 
@@ -1355,18 +1786,61 @@ export function ProjectsPanel() {
     setRunNotice(null);
     setRunError(null);
     try {
+      const reviewSnapshot = await refreshSelectedMissionReviewSnapshot(runId);
+      if (!reviewSnapshot) {
+        return;
+      }
+      if (!reviewSnapshot.canClose) {
+        setRunError("Finish the remaining repo and managed submodule review work before closing this mission.");
+        return;
+      }
       const result = await window.electronAPI.completeTicketRun(runId);
       setRunSnapshot(result.snapshot);
+      setSelectedMissionReviewSnapshot(null);
       setMissionFlash(result.run.runId, {
         tone: "notice",
-        message: `${result.run.ticketId} was marked complete.`,
+        message: `${result.run.ticketId} was closed.`,
       });
-      openRunMissionDetail(result.run.runId, "actions");
+      openRunMissionDetail(result.run.runId, "details");
     } catch (completeError) {
-      console.error("Failed to complete mission", completeError);
-      setRunError(completeError instanceof Error ? completeError.message : "Failed to complete the mission.");
+      console.error("Failed to close mission", completeError);
+      setRunError(completeError instanceof Error ? completeError.message : "Failed to close the mission.");
     } finally {
       setCompletingRunId(null);
+    }
+  };
+
+  const deleteRun = async (runId: string) => {
+    setDeletingRunId(runId);
+    setRunNotice(null);
+    setRunError(null);
+    try {
+      const reviewSnapshot = await refreshSelectedMissionReviewSnapshot(runId);
+      if (!reviewSnapshot) {
+        return;
+      }
+      if (!reviewSnapshot.canDelete) {
+        setRunError(
+          `Delete is disabled because published branches were found: ${
+            reviewSnapshot.deleteBlockers.map((blocker) => `${blocker.label}: ${blocker.reason}`).join("; ") ||
+            "state is unresolved"
+          }.`,
+        );
+        return;
+      }
+      const result = await window.electronAPI.deleteTicketRun(runId);
+      setRunSnapshot(result.snapshot);
+      setSelectedMissionReviewSnapshot(null);
+      setSelectedMissionServices(null);
+      setSelectedMission(null);
+      setSelectedGitState(null);
+      setSelectedSubmoduleGitState(null);
+      setRunNotice(`${result.ticketId} was deleted locally.`);
+    } catch (deleteError) {
+      console.error("Failed to delete mission", deleteError);
+      setRunError(deleteError instanceof Error ? deleteError.message : "Failed to delete the mission.");
+    } finally {
+      setDeletingRunId(null);
     }
   };
 
@@ -1633,22 +2107,81 @@ export function ProjectsPanel() {
                       type="button"
                       className={styles.actionButton}
                       onClick={() => void completeRun(selectedMissionRun.runId)}
-                      disabled={completingRunId === selectedMissionRun.runId}
+                      disabled={
+                        completingRunId === selectedMissionRun.runId ||
+                        isSelectedMissionReviewLoading ||
+                        !canCloseSelectedMission
+                      }
                     >
-                      {completingRunId === selectedMissionRun.runId ? "Completing..." : "Mark complete"}
+                      {completingRunId === selectedMissionRun.runId
+                        ? "Closing..."
+                        : isSelectedMissionReviewLoading
+                          ? "Checking..."
+                          : "Close mission"}
                     </button>
                   </div>
+                  {selectedMissionReviewSnapshot !== null && !canCloseSelectedMission ? (
+                    <div className={styles.workHint}>
+                      Finish the remaining repo and managed submodule review work before closing this mission.
+                    </div>
+                  ) : null}
                 </div>
               ) : null}
 
-              {selectedMissionRun?.status === "done" ? (
+              {selectedMissionRun ? (
+                <div className={styles.reviewPanel}>
+                  <div className={styles.sectionLabel}>Local teardown</div>
+                  <div className={styles.workHint}>
+                    Delete removes local mission worktrees and unpublished mission branches, then forgets the run.
+                  </div>
+                  <div className={styles.inlineActions}>
+                    <button
+                      type="button"
+                      className={styles.secondaryButton}
+                      onClick={() => {
+                        if (
+                          window.confirm(
+                            `Delete mission ${selectedMissionRun.ticketId}? This removes local worktrees and unpublished mission branches.`,
+                          )
+                        ) {
+                          void deleteRun(selectedMissionRun.runId);
+                        }
+                      }}
+                      disabled={
+                        deletingRunId === selectedMissionRun.runId ||
+                        isSelectedMissionReviewLoading ||
+                        !canDeleteSelectedMission
+                      }
+                    >
+                      {deletingRunId === selectedMissionRun.runId
+                        ? "Deleting..."
+                        : isSelectedMissionReviewLoading
+                          ? "Checking..."
+                          : "Delete mission"}
+                    </button>
+                  </div>
+                  {selectedMissionReviewSnapshot !== null && !canDeleteSelectedMission ? (
+                    <div className={styles.workHint}>
+                      Delete is disabled because published branches were found:{" "}
+                      {selectedMissionDeleteBlockers ?? "state is unresolved"}.
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+
+              {selectedMissionRun?.status === "awaiting-review" ? (
                 <div className={styles.reviewPanel}>
                   {gitNotice ? <div className={styles.notice}>{gitNotice}</div> : null}
                   {gitError ? <div className={styles.error}>{gitError}</div> : null}
                   {selectedMissionGitRepoLabel ? (
                     <div className={styles.workHint}>Active repo: {selectedMissionGitRepoLabel}</div>
                   ) : null}
-                  {showPullRequestActions ? (
+                  {selectedMissionBlockingSubmoduleNames.length > 0 ? (
+                    <div className={styles.blockedState}>
+                      Finish the managed submodule workflow first: {selectedMissionBlockingSubmoduleNames.join(", ")}.
+                    </div>
+                  ) : null}
+                  {showRepoPullRequestActions ? (
                     <>
                       <div className={styles.sectionLabel}>Pull request</div>
                       <div className={styles.inlineActions}>
@@ -1717,6 +2250,7 @@ export function ProjectsPanel() {
                           disabled={
                             !commitDraft.trim() ||
                             (selectedGitState !== null && !selectedGitState.hasDiff) ||
+                            selectedMissionBlockingSubmoduleNames.length > 0 ||
                             committingGitRunId === selectedMissionRun.runId ||
                             savingCommitDraftRunId === selectedMissionRun.runId
                           }
@@ -1735,6 +2269,7 @@ export function ProjectsPanel() {
                           disabled={
                             syncingRemoteRunId === selectedMissionRun.runId ||
                             !selectedGitState ||
+                            selectedMissionBlockingSubmoduleNames.length > 0 ||
                             selectedGitState.pushAction === "none"
                           }
                         >
@@ -1746,19 +2281,314 @@ export function ProjectsPanel() {
                         </button>
                       </div>
                       <div className={styles.workHint}>
-                        {selectedGitState?.hasDiff
-                          ? "Tracked changes are still waiting to be committed."
-                          : selectedGitState?.pushAction === "publish"
-                            ? "This branch is ready to publish to origin."
-                            : selectedGitState?.pushAction === "push"
-                              ? "This branch has local commits ready to push."
-                              : "The branch is currently up to date."}
+                        {selectedMissionBlockingSubmoduleNames.length > 0
+                          ? "Managed submodules still need to be committed, published, or aligned before this repo can move."
+                          : selectedGitState?.hasDiff
+                            ? "Changes are still waiting to be committed."
+                            : selectedGitState?.pushAction === "publish"
+                              ? "This branch is ready to publish to origin."
+                              : selectedGitState?.pushAction === "push"
+                                ? "This branch has local commits ready to push."
+                                : "The branch is currently up to date."}
                       </div>
                     </>
                   )}
                 </div>
               ) : null}
             </article>
+
+            {selectedMissionRun?.submodules.length ? (
+              <article className={styles.detailCard}>
+                <div className={styles.sectionHeader}>
+                  <div>
+                    <div className={styles.sectionLabel}>Managed submodules</div>
+                    <div className={styles.sectionCaption}>
+                      Shared submodule work is committed, published, and PR&apos;d once here before the parent repos
+                      take their turn.
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    className={styles.secondaryButton}
+                    onClick={() => void refreshSelectedSubmoduleGitState(selectedMissionRun.runId)}
+                    disabled={!selectedMissionSubmodule || loadingSubmoduleKey === selectedSubmoduleKey}
+                  >
+                    {loadingSubmoduleKey === selectedSubmoduleKey ? "Refreshing..." : "Refresh submodule"}
+                  </button>
+                </div>
+
+                <div className={styles.repoTabBar} role="tablist" aria-label="Managed submodules">
+                  {selectedMissionRun.submodules.map((submodule) => {
+                    const isActive = selectedMissionSubmodule?.canonicalUrl === submodule.canonicalUrl;
+                    return (
+                      <button
+                        key={`${selectedMissionRun.runId}-${submodule.canonicalUrl}-tab`}
+                        type="button"
+                        role="tab"
+                        aria-selected={isActive}
+                        className={`${styles.repoTabButton} ${isActive ? styles.repoTabButtonActive : ""}`}
+                        onClick={() => {
+                          setSelectedSubmoduleCanonicalUrl(submodule.canonicalUrl);
+                          setSelectedSubmoduleGitState(null);
+                        }}
+                      >
+                        <span>{submodule.name}</span>
+                        <span className={styles.repoTabMeta}>
+                          {submodule.parentRefs.length} parent{submodule.parentRefs.length === 1 ? "" : "s"}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {selectedSubmoduleGitState ? (
+                  <>
+                    {selectedMissionSubmoduleLabel ? (
+                      <div className={styles.workHint}>Active submodule: {selectedMissionSubmoduleLabel}</div>
+                    ) : null}
+                    <div className={styles.inlineRunFacts}>
+                      <div className={styles.inlineRunFact}>
+                        <strong>Branch</strong>
+                        {selectedSubmoduleGitState.branchName}
+                      </div>
+                      <div className={styles.inlineRunFact}>
+                        <strong>Primary repo</strong>
+                        {selectedSubmoduleGitState.primaryParentRepoRelativePath ?? "Pending selection"}
+                      </div>
+                      <div className={styles.inlineRunFact}>
+                        <strong>Canonical commit</strong>
+                        {selectedSubmoduleGitState.committedSha?.slice(0, 12) ?? "Unknown"}
+                      </div>
+                      <div className={styles.inlineRunFact}>
+                        <strong>Source</strong>
+                        {selectedSubmoduleGitState.worktreePath}
+                      </div>
+                    </div>
+
+                    {selectedSubmoduleGitState.reconcileRequired ? (
+                      <>
+                        <div className={styles.blockedState}>
+                          {selectedSubmoduleGitState.reconcileReason ?? "This managed submodule needs reconciliation."}
+                        </div>
+                        <div className={styles.workHint}>
+                          Consolidate the wanted submodule edits into one parent copy, discard the conflicting duplicate
+                          edits in the others, then refresh the managed submodule state.
+                        </div>
+                      </>
+                    ) : null}
+
+                    <div className={styles.sectionLabel}>Parent repos</div>
+                    <div className={styles.runWorktrees}>
+                      {selectedSubmoduleGitState.parents.map((parent) => (
+                        <div
+                          key={`${selectedSubmoduleGitState.canonicalUrl}:${parent.parentRepoRelativePath}:${parent.submodulePath}`}
+                          className={styles.runWorktree}
+                        >
+                          <strong>{parent.parentRepoRelativePath}</strong>
+                          <span>{parent.submodulePath}</span>
+                          <span>
+                            {parent.isPrimary
+                              ? parent.isAligned
+                                ? "Primary"
+                                : parent.hasDiff
+                                  ? "Primary - dirty"
+                                  : "Primary - pending"
+                              : parent.isAligned
+                                ? "Aligned"
+                                : parent.hasDiff
+                                  ? "Needs alignment"
+                                  : "Pending alignment"}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+
+                    {selectedMissionRun.status !== "awaiting-review" ? (
+                      <div className={styles.workHint}>
+                        Finish the active mission pass before committing, publishing, or opening pull requests for
+                        managed submodules.
+                      </div>
+                    ) : showSubmodulePullRequestActions ? (
+                      <>
+                        <div className={styles.sectionLabel}>Pull request</div>
+                        <div className={styles.inlineActions}>
+                          <button
+                            type="button"
+                            className={styles.actionLinkButton}
+                            onClick={() => void openSubmodulePullRequest(selectedMissionRun.runId)}
+                            disabled={creatingSubmodulePullRequestKey === selectedSubmoduleKey}
+                          >
+                            {creatingSubmodulePullRequestKey === selectedSubmoduleKey ? "Opening PR..." : "Open PR"}
+                          </button>
+                          <a
+                            className={styles.secondaryLinkButton}
+                            href={selectedSubmoduleGitState.pullRequestUrls.draft ?? "#"}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            Open draft PR
+                          </a>
+                        </div>
+                        <div className={styles.workHint}>
+                          This managed submodule is published, aligned across every parent repo, and ready for review.
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <label className={styles.field}>
+                          <span>
+                            {selectedMissionSubmoduleLabel
+                              ? `Commit draft - ${selectedMissionSubmoduleLabel}`
+                              : "Submodule commit draft"}
+                          </span>
+                          <textarea
+                            className={`${styles.input} ${styles.textarea}`}
+                            value={submoduleCommitDraft}
+                            disabled={
+                              selectedMissionRun.status !== "awaiting-review" ||
+                              savingSubmoduleCommitDraftKey === selectedSubmoduleKey
+                            }
+                            onChange={(event) => {
+                              setSubmoduleCommitDraft(event.target.value);
+                              setSubmoduleCommitDraftDirty(true);
+                            }}
+                            onBlur={() => {
+                              if (submoduleCommitDraftDirty) {
+                                void persistSubmoduleCommitDraft(selectedMissionRun.runId);
+                              }
+                            }}
+                            placeholder={`feat(${selectedMissionRun.ticketId}): summary`}
+                          />
+                        </label>
+                        <div className={styles.inlineActions}>
+                          <button
+                            type="button"
+                            className={styles.secondaryButton}
+                            onClick={() => void generateSubmoduleCommitDraft(selectedMissionRun.runId)}
+                            disabled={
+                              selectedMissionRun.status !== "awaiting-review" ||
+                              generatingSubmoduleCommitDraftKey === selectedSubmoduleKey ||
+                              savingSubmoduleCommitDraftKey === selectedSubmoduleKey
+                            }
+                          >
+                            {generatingSubmoduleCommitDraftKey === selectedSubmoduleKey
+                              ? "Regenerating..."
+                              : "Regenerate"}
+                          </button>
+                          <button
+                            type="button"
+                            className={styles.actionButton}
+                            onClick={() => void commitMissionSubmodule(selectedMissionRun.runId)}
+                            disabled={
+                              selectedMissionRun.status !== "awaiting-review" ||
+                              !submoduleCommitDraft.trim() ||
+                              !selectedSubmoduleGitState.hasDiff ||
+                              selectedSubmoduleGitState.reconcileRequired ||
+                              committingSubmoduleKey === selectedSubmoduleKey ||
+                              savingSubmoduleCommitDraftKey === selectedSubmoduleKey
+                            }
+                          >
+                            {committingSubmoduleKey === selectedSubmoduleKey ? "Committing..." : "Commit"}
+                          </button>
+                          <button
+                            type="button"
+                            className={styles.secondaryButton}
+                            onClick={() =>
+                              void syncSubmoduleRemote(
+                                selectedMissionRun.runId,
+                                selectedSubmoduleGitState.pushAction === "publish" ? "publish" : "push",
+                              )
+                            }
+                            disabled={
+                              selectedMissionRun.status !== "awaiting-review" ||
+                              syncingSubmoduleKey === selectedSubmoduleKey ||
+                              selectedSubmoduleGitState.reconcileRequired ||
+                              !selectedSubmoduleCanSync
+                            }
+                          >
+                            {syncingSubmoduleKey === selectedSubmoduleKey ? "Syncing..." : selectedSubmoduleSyncLabel}
+                          </button>
+                        </div>
+                        <div className={styles.workHint}>
+                          {selectedSubmoduleGitState.reconcileRequired
+                            ? (selectedSubmoduleGitState.reconcileReason ??
+                              "This managed submodule needs reconciliation.")
+                            : selectedSubmoduleGitState.hasDiff
+                              ? "Submodule changes are still waiting to be committed."
+                              : selectedSubmoduleGitState.pushAction === "publish"
+                                ? "This submodule branch is ready to publish to origin."
+                                : selectedSubmoduleGitState.pushAction === "push"
+                                  ? "This submodule branch has local commits ready to push."
+                                  : selectedSubmoduleNeedsAlignment
+                                    ? "Parent repos still need to align to the canonical submodule commit. Use Align parents to restage the shared pointer updates."
+                                    : "The submodule branch is currently up to date and aligned across parent repos."}
+                        </div>
+                      </>
+                    )}
+
+                    <div className={styles.sectionHeader}>
+                      <div>
+                        <div className={styles.sectionLabel}>Submodule diff</div>
+                        <div className={styles.sectionCaption}>Changes inside the selected managed submodule.</div>
+                      </div>
+                    </div>
+                    {selectedSubmoduleGitState.files.length > 0 ? (
+                      <div className={styles.diffList}>
+                        {selectedSubmoduleGitState.files.map((file) => {
+                          const expandedKey = `${selectedSubmoduleGitState.canonicalUrl}:${file.path}`;
+                          const expanded = expandedDiffPaths[expandedKey] ?? false;
+                          const diffStatusTone = getDiffStatusTone(file.status);
+                          return (
+                            <div
+                              key={`${selectedSubmoduleGitState.canonicalUrl}:${file.path}-${file.status}`}
+                              className={`${styles.diffFileCard} ${diffStatusTone}`}
+                            >
+                              <button
+                                type="button"
+                                className={`${styles.diffFileButton} ${diffStatusTone}`}
+                                onClick={() =>
+                                  setExpandedDiffPaths((current) => ({ ...current, [expandedKey]: !expanded }))
+                                }
+                              >
+                                <span className={`${styles.statusBadge} ${diffStatusTone}`}>{file.status}</span>
+                                <span className={styles.diffFilePath}>
+                                  {file.previousPath ? `${file.previousPath} -> ${file.path}` : file.path}
+                                </span>
+                                <span className={styles.diffFileDelta}>
+                                  {formatDiffDelta(file.additions, file.deletions)}
+                                </span>
+                              </button>
+                              {expanded ? (
+                                <div className={styles.diffPatch}>
+                                  {file.patch.split(/\r?\n/u).map((line, index) => (
+                                    <div
+                                      key={`${selectedSubmoduleGitState.canonicalUrl}:${file.path}-${file.status}-${index}`}
+                                      className={`${styles.diffPatchLine} ${getDiffLineTone(line)}`}
+                                    >
+                                      {line || " "}
+                                    </div>
+                                  ))}
+                                </div>
+                              ) : null}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <div className={styles.emptyState}>
+                        No tracked diff remains in the selected managed submodule.
+                      </div>
+                    )}
+                  </>
+                ) : loadingSubmoduleKey === selectedSubmoduleKey ? (
+                  <div className={styles.emptyState}>Loading managed submodule diff...</div>
+                ) : gitError ? (
+                  <div className={styles.error}>{gitError}</div>
+                ) : (
+                  <div className={styles.emptyState}>Managed submodule state is waiting to load.</div>
+                )}
+              </article>
+            ) : null}
 
             {selectedMissionRun?.attempts.length ? (
               <article className={styles.detailCard}>
@@ -1798,7 +2628,7 @@ export function ProjectsPanel() {
 
             {selectedMissionRun && selectedMissionRun.worktrees.length > 1 ? (
               <article className={styles.detailCard}>
-                <div className={styles.sectionLabel}>Repo tabs</div>
+                <div className={styles.sectionLabel}>Parent repos</div>
                 <div className={styles.repoTabBar} role="tablist" aria-label="Mission repositories">
                   {selectedMissionRun.worktrees.map((worktree) => {
                     const isActive = selectedMissionWorktree?.repoRelativePath === worktree.repoRelativePath;

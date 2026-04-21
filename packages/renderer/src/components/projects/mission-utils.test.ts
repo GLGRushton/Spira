@@ -27,6 +27,7 @@ const createRun = (ticketId: string, status: TicketRunSummary["status"]): Ticket
   updatedAt: 2_000,
   startedAt: 1_500,
   worktrees: [],
+  submodules: [],
   attempts: [],
 });
 

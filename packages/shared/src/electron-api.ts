@@ -19,18 +19,26 @@ import type { SubagentDomain } from "./subagent-types.js";
 import type {
   CancelTicketRunWorkResult,
   CommitTicketRunResult,
+  CommitTicketRunSubmoduleResult,
   CompleteTicketRunResult,
   ContinueTicketRunWorkResult,
   CreateTicketRunPullRequestResult,
+  CreateTicketRunSubmodulePullRequestResult,
+  DeleteTicketRunResult,
   GenerateTicketRunCommitDraftResult,
+  GenerateTicketRunSubmoduleCommitDraftResult,
   RetryTicketRunSyncResult,
   SetTicketRunCommitDraftResult,
+  SetTicketRunSubmoduleCommitDraftResult,
   StartTicketRunRequest,
   StartTicketRunResult,
   StartTicketRunWorkResult,
   SyncTicketRunRemoteResult,
+  SyncTicketRunSubmoduleRemoteResult,
   TicketRunGitStateResult,
+  TicketRunReviewSnapshotResult,
   TicketRunSnapshot,
+  TicketRunSubmoduleGitStateResult,
 } from "./ticket-run-types.js";
 import type { UpgradeProposal, UpgradeStatus } from "./upgrade.js";
 import type {
@@ -98,17 +106,40 @@ export interface ElectronApi {
   continueTicketRunWork(runId: string, prompt?: string): Promise<ContinueTicketRunWorkResult>;
   cancelTicketRunWork(runId: string): Promise<CancelTicketRunWorkResult>;
   completeTicketRun(runId: string): Promise<CompleteTicketRunResult>;
+  deleteTicketRun(runId: string): Promise<DeleteTicketRunResult>;
+  getTicketRunReviewSnapshot(runId: string): Promise<TicketRunReviewSnapshotResult>;
   getTicketRunGitState(runId: string, repoRelativePath?: string): Promise<TicketRunGitStateResult>;
+  getTicketRunSubmoduleGitState(runId: string, canonicalUrl: string): Promise<TicketRunSubmoduleGitStateResult>;
   generateTicketRunCommitDraft(runId: string, repoRelativePath?: string): Promise<GenerateTicketRunCommitDraftResult>;
+  generateTicketRunSubmoduleCommitDraft(
+    runId: string,
+    canonicalUrl: string,
+  ): Promise<GenerateTicketRunSubmoduleCommitDraftResult>;
   setTicketRunCommitDraft(
     runId: string,
     message: string,
     repoRelativePath?: string,
   ): Promise<SetTicketRunCommitDraftResult>;
+  setTicketRunSubmoduleCommitDraft(
+    runId: string,
+    canonicalUrl: string,
+    message: string,
+  ): Promise<SetTicketRunSubmoduleCommitDraftResult>;
   commitTicketRun(runId: string, message: string, repoRelativePath?: string): Promise<CommitTicketRunResult>;
+  commitTicketRunSubmodule(
+    runId: string,
+    canonicalUrl: string,
+    message: string,
+  ): Promise<CommitTicketRunSubmoduleResult>;
   publishTicketRun(runId: string, repoRelativePath?: string): Promise<SyncTicketRunRemoteResult>;
+  publishTicketRunSubmodule(runId: string, canonicalUrl: string): Promise<SyncTicketRunSubmoduleRemoteResult>;
   pushTicketRun(runId: string, repoRelativePath?: string): Promise<SyncTicketRunRemoteResult>;
+  pushTicketRunSubmodule(runId: string, canonicalUrl: string): Promise<SyncTicketRunSubmoduleRemoteResult>;
   createTicketRunPullRequest(runId: string, repoRelativePath?: string): Promise<CreateTicketRunPullRequestResult>;
+  createTicketRunSubmodulePullRequest(
+    runId: string,
+    canonicalUrl: string,
+  ): Promise<CreateTicketRunSubmodulePullRequestResult>;
   getTicketRunServices(runId: string): Promise<MissionServiceSnapshot>;
   startTicketRunService(runId: string, profileId: string): Promise<MissionServiceSnapshot>;
   stopTicketRunService(runId: string, serviceId: string): Promise<MissionServiceSnapshot>;

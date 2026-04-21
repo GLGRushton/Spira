@@ -27,13 +27,22 @@ const TICKET_RUN_WORK_START_CHANNEL = "missions:ticket-run:work:start";
 const TICKET_RUN_WORK_CONTINUE_CHANNEL = "missions:ticket-run:work:continue";
 const TICKET_RUN_WORK_CANCEL_CHANNEL = "missions:ticket-run:work:cancel";
 const TICKET_RUN_COMPLETE_CHANNEL = "missions:ticket-run:complete";
+const TICKET_RUN_DELETE_CHANNEL = "missions:ticket-run:delete";
+const TICKET_RUN_REVIEW_SNAPSHOT_CHANNEL = "missions:ticket-run:review-snapshot:get";
 const TICKET_RUN_GIT_STATE_CHANNEL = "missions:ticket-run:git-state:get";
+const TICKET_RUN_SUBMODULE_GIT_STATE_CHANNEL = "missions:ticket-run:submodule-git-state:get";
 const TICKET_RUN_COMMIT_DRAFT_GENERATE_CHANNEL = "missions:ticket-run:commit-draft:generate";
+const TICKET_RUN_SUBMODULE_COMMIT_DRAFT_GENERATE_CHANNEL = "missions:ticket-run:submodule:commit-draft:generate";
 const TICKET_RUN_COMMIT_DRAFT_SET_CHANNEL = "missions:ticket-run:commit-draft:set";
+const TICKET_RUN_SUBMODULE_COMMIT_DRAFT_SET_CHANNEL = "missions:ticket-run:submodule:commit-draft:set";
 const TICKET_RUN_COMMIT_CHANNEL = "missions:ticket-run:commit";
+const TICKET_RUN_SUBMODULE_COMMIT_CHANNEL = "missions:ticket-run:submodule:commit";
 const TICKET_RUN_PUBLISH_CHANNEL = "missions:ticket-run:publish";
+const TICKET_RUN_SUBMODULE_PUBLISH_CHANNEL = "missions:ticket-run:submodule:publish";
 const TICKET_RUN_PUSH_CHANNEL = "missions:ticket-run:push";
+const TICKET_RUN_SUBMODULE_PUSH_CHANNEL = "missions:ticket-run:submodule:push";
 const TICKET_RUN_PULL_REQUEST_CREATE_CHANNEL = "missions:ticket-run:pull-request:create";
+const TICKET_RUN_SUBMODULE_PULL_REQUEST_CREATE_CHANNEL = "missions:ticket-run:submodule:pull-request:create";
 const TICKET_RUN_SERVICES_GET_CHANNEL = "missions:ticket-run:services:get";
 const TICKET_RUN_SERVICE_START_CHANNEL = "missions:ticket-run:service:start";
 const TICKET_RUN_SERVICE_STOP_CHANNEL = "missions:ticket-run:service:stop";
@@ -241,26 +250,53 @@ const electronAPI: ElectronApi = {
   completeTicketRun(runId) {
     return ipcRenderer.invoke(TICKET_RUN_COMPLETE_CHANNEL, { runId });
   },
+  deleteTicketRun(runId) {
+    return ipcRenderer.invoke(TICKET_RUN_DELETE_CHANNEL, { runId });
+  },
+  getTicketRunReviewSnapshot(runId) {
+    return ipcRenderer.invoke(TICKET_RUN_REVIEW_SNAPSHOT_CHANNEL, { runId });
+  },
   getTicketRunGitState(runId, repoRelativePath) {
     return ipcRenderer.invoke(TICKET_RUN_GIT_STATE_CHANNEL, { runId, repoRelativePath });
+  },
+  getTicketRunSubmoduleGitState(runId, canonicalUrl) {
+    return ipcRenderer.invoke(TICKET_RUN_SUBMODULE_GIT_STATE_CHANNEL, { runId, canonicalUrl });
   },
   generateTicketRunCommitDraft(runId, repoRelativePath) {
     return ipcRenderer.invoke(TICKET_RUN_COMMIT_DRAFT_GENERATE_CHANNEL, { runId, repoRelativePath });
   },
+  generateTicketRunSubmoduleCommitDraft(runId, canonicalUrl) {
+    return ipcRenderer.invoke(TICKET_RUN_SUBMODULE_COMMIT_DRAFT_GENERATE_CHANNEL, { runId, canonicalUrl });
+  },
   setTicketRunCommitDraft(runId, message, repoRelativePath) {
     return ipcRenderer.invoke(TICKET_RUN_COMMIT_DRAFT_SET_CHANNEL, { runId, message, repoRelativePath });
+  },
+  setTicketRunSubmoduleCommitDraft(runId, canonicalUrl, message) {
+    return ipcRenderer.invoke(TICKET_RUN_SUBMODULE_COMMIT_DRAFT_SET_CHANNEL, { runId, canonicalUrl, message });
   },
   commitTicketRun(runId, message, repoRelativePath) {
     return ipcRenderer.invoke(TICKET_RUN_COMMIT_CHANNEL, { runId, message, repoRelativePath });
   },
+  commitTicketRunSubmodule(runId, canonicalUrl, message) {
+    return ipcRenderer.invoke(TICKET_RUN_SUBMODULE_COMMIT_CHANNEL, { runId, canonicalUrl, message });
+  },
   publishTicketRun(runId, repoRelativePath) {
     return ipcRenderer.invoke(TICKET_RUN_PUBLISH_CHANNEL, { runId, repoRelativePath });
+  },
+  publishTicketRunSubmodule(runId, canonicalUrl) {
+    return ipcRenderer.invoke(TICKET_RUN_SUBMODULE_PUBLISH_CHANNEL, { runId, canonicalUrl });
   },
   pushTicketRun(runId, repoRelativePath) {
     return ipcRenderer.invoke(TICKET_RUN_PUSH_CHANNEL, { runId, repoRelativePath });
   },
+  pushTicketRunSubmodule(runId, canonicalUrl) {
+    return ipcRenderer.invoke(TICKET_RUN_SUBMODULE_PUSH_CHANNEL, { runId, canonicalUrl });
+  },
   createTicketRunPullRequest(runId, repoRelativePath) {
     return ipcRenderer.invoke(TICKET_RUN_PULL_REQUEST_CREATE_CHANNEL, { runId, repoRelativePath });
+  },
+  createTicketRunSubmodulePullRequest(runId, canonicalUrl) {
+    return ipcRenderer.invoke(TICKET_RUN_SUBMODULE_PULL_REQUEST_CREATE_CHANNEL, { runId, canonicalUrl });
   },
   getTicketRunServices(runId) {
     return ipcRenderer.invoke(TICKET_RUN_SERVICES_GET_CHANNEL, { runId });

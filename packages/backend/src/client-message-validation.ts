@@ -1,4 +1,4 @@
-import { McpServerConfigSchema, type ClientMessage } from "@spira/shared";
+import { type ClientMessage, McpServerConfigSchema } from "@spira/shared";
 import { z } from "zod";
 
 const StringArraySchema = z.array(z.string());
@@ -186,15 +186,33 @@ const ClientMessageSchema = z.discriminatedUnion("type", [
     requestId: z.string(),
     runId: z.string(),
   }),
+  messageSchema("missions:ticket-run:delete", {
+    requestId: z.string(),
+    runId: z.string(),
+  }),
+  messageSchema("missions:ticket-run:review-snapshot:get", {
+    requestId: z.string(),
+    runId: z.string(),
+  }),
   messageSchema("missions:ticket-run:git-state:get", {
     requestId: z.string(),
     runId: z.string(),
     repoRelativePath: z.string().optional(),
   }),
+  messageSchema("missions:ticket-run:submodule-git-state:get", {
+    requestId: z.string(),
+    runId: z.string(),
+    canonicalUrl: z.string(),
+  }),
   messageSchema("missions:ticket-run:commit-draft:generate", {
     requestId: z.string(),
     runId: z.string(),
     repoRelativePath: z.string().optional(),
+  }),
+  messageSchema("missions:ticket-run:submodule:commit-draft:generate", {
+    requestId: z.string(),
+    runId: z.string(),
+    canonicalUrl: z.string(),
   }),
   messageSchema("missions:ticket-run:commit-draft:set", {
     requestId: z.string(),
@@ -202,26 +220,53 @@ const ClientMessageSchema = z.discriminatedUnion("type", [
     message: z.string(),
     repoRelativePath: z.string().optional(),
   }),
+  messageSchema("missions:ticket-run:submodule:commit-draft:set", {
+    requestId: z.string(),
+    runId: z.string(),
+    canonicalUrl: z.string(),
+    message: z.string(),
+  }),
   messageSchema("missions:ticket-run:commit", {
     requestId: z.string(),
     runId: z.string(),
     message: z.string(),
     repoRelativePath: z.string().optional(),
   }),
+  messageSchema("missions:ticket-run:submodule:commit", {
+    requestId: z.string(),
+    runId: z.string(),
+    canonicalUrl: z.string(),
+    message: z.string(),
+  }),
   messageSchema("missions:ticket-run:publish", {
     requestId: z.string(),
     runId: z.string(),
     repoRelativePath: z.string().optional(),
+  }),
+  messageSchema("missions:ticket-run:submodule:publish", {
+    requestId: z.string(),
+    runId: z.string(),
+    canonicalUrl: z.string(),
   }),
   messageSchema("missions:ticket-run:push", {
     requestId: z.string(),
     runId: z.string(),
     repoRelativePath: z.string().optional(),
   }),
+  messageSchema("missions:ticket-run:submodule:push", {
+    requestId: z.string(),
+    runId: z.string(),
+    canonicalUrl: z.string(),
+  }),
   messageSchema("missions:ticket-run:pull-request:create", {
     requestId: z.string(),
     runId: z.string(),
     repoRelativePath: z.string().optional(),
+  }),
+  messageSchema("missions:ticket-run:submodule:pull-request:create", {
+    requestId: z.string(),
+    runId: z.string(),
+    canonicalUrl: z.string(),
   }),
   messageSchema("missions:ticket-run:services:get", {
     requestId: z.string(),

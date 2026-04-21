@@ -1,12 +1,16 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { SpiraMemoryDatabase, getSpiraMemoryDbPath } from "@spira/memory-db";
+import type { TicketRunSummary } from "@spira/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TicketRunService, buildTicketRunBranchName, buildTicketRunWorktreePath } from "./ticket-runs.js";
 
 const tempDirs: string[] = [];
 const openDatabases: SpiraMemoryDatabase[] = [];
+type EnsureRunSubmodulesTarget = {
+  ensureRunSubmodules: (run: TicketRunSummary) => Promise<TicketRunSummary>;
+};
 
 const createTestDatabase = (): SpiraMemoryDatabase => {
   const tempDir = mkdtempSync(path.join(os.tmpdir(), "spira-ticket-run-db-"));
@@ -17,6 +21,8 @@ const createTestDatabase = (): SpiraMemoryDatabase => {
 };
 
 afterEach(() => {
+  vi.restoreAllMocks();
+
   while (openDatabases.length > 0) {
     openDatabases.pop()?.close();
   }
@@ -104,14 +110,20 @@ describe("TicketRunService", () => {
       projectKey: "SPI",
     });
 
-    expect(gitRunner).toHaveBeenCalledWith("C:\\Repos\\service-api", [
+    expect(gitRunner).toHaveBeenNthCalledWith(1, "C:\\Repos\\service-api", [
+      "branch",
+      "--list",
+      "--format=%(refname:short)",
+      "feat/spi-101-start-missions-pickup",
+    ]);
+    expect(gitRunner).toHaveBeenNthCalledWith(2, "C:\\Repos\\service-api", [
       "worktree",
       "add",
       "-b",
       "feat/spi-101-start-missions-pickup",
       path.join("C:\\Repos", ".spira-worktrees", "spi-101", "service-api"),
     ]);
-    expect(gitRunner).toHaveBeenCalledTimes(1);
+    expect(gitRunner).toHaveBeenCalledTimes(2);
     expect(transitionTicket).toHaveBeenCalledWith("SPI-101");
     expect(result.reusedExistingRun).toBe(false);
     expect(result.run.status).toBe("ready");
@@ -175,20 +187,32 @@ describe("TicketRunService", () => {
 
     const missionDirectory = path.join("C:\\Repos", ".spira-worktrees", "spi-150");
     expect(gitRunner).toHaveBeenNthCalledWith(1, "C:\\Repos\\service-api", [
+      "branch",
+      "--list",
+      "--format=%(refname:short)",
+      "feat/spi-150-coordinate-repo-changes",
+    ]);
+    expect(gitRunner).toHaveBeenNthCalledWith(2, "C:\\Repos\\service-api", [
       "worktree",
       "add",
       "-b",
       "feat/spi-150-coordinate-repo-changes",
       path.join(missionDirectory, "service-api"),
     ]);
-    expect(gitRunner).toHaveBeenNthCalledWith(2, "C:\\Repos\\web-app", [
+    expect(gitRunner).toHaveBeenNthCalledWith(3, "C:\\Repos\\web-app", [
+      "branch",
+      "--list",
+      "--format=%(refname:short)",
+      "feat/spi-150-coordinate-repo-changes",
+    ]);
+    expect(gitRunner).toHaveBeenNthCalledWith(4, "C:\\Repos\\web-app", [
       "worktree",
       "add",
       "-b",
       "feat/spi-150-coordinate-repo-changes",
       path.join(missionDirectory, "web-app"),
     ]);
-    expect(gitRunner).toHaveBeenCalledTimes(2);
+    expect(gitRunner).toHaveBeenCalledTimes(4);
     expect(result.run.worktrees).toHaveLength(2);
     expect(result.run.worktrees.map((worktree) => worktree.repoRelativePath)).toEqual(["service-api", "web-app"]);
     expect(new Set(result.run.worktrees.map((worktree) => path.dirname(worktree.worktreePath)))).toEqual(
@@ -239,31 +263,104 @@ describe("TicketRunService", () => {
 
     const worktreePath = path.join("C:\\Repos", ".spira-worktrees", "spi-151", "service-api");
     expect(gitRunner).toHaveBeenNthCalledWith(1, "C:\\Repos\\service-api", [
+      "branch",
+      "--list",
+      "--format=%(refname:short)",
+      "feat/spi-151-hydrate-submodules",
+    ]);
+    expect(gitRunner).toHaveBeenNthCalledWith(2, "C:\\Repos\\service-api", [
       "worktree",
       "add",
       "-b",
       "feat/spi-151-hydrate-submodules",
       worktreePath,
     ]);
-    expect(gitRunner).toHaveBeenNthCalledWith(2, worktreePath, ["submodule", "update", "--init", "--recursive"]);
-    expect(gitRunner).toHaveBeenCalledTimes(2);
+    expect(gitRunner).toHaveBeenNthCalledWith(3, worktreePath, ["submodule", "update", "--init", "--recursive"]);
+    expect(gitRunner).toHaveBeenCalledTimes(3);
+  });
+
+  it("uses the mission GitHub PAT when hydrating GitHub submodules", async () => {
+    const database = createTestDatabase();
+    const gitRunner = vi.fn().mockResolvedValue({ stdout: "", stderr: "" });
+    const service = new TicketRunService({
+      memoryDb: database,
+      logger: createLogger(),
+      projectRegistry: {
+        getSnapshot: async () => ({
+          workspaceRoot: "C:\\Repos",
+          repos: [
+            {
+              name: "service-api",
+              relativePath: "service-api",
+              absolutePath: "C:\\Repos\\service-api",
+              hasSubmodules: true,
+              mappedProjectKeys: ["SPI"],
+            },
+          ],
+          mappings: [
+            {
+              projectKey: "SPI",
+              repoRelativePaths: ["service-api"],
+              missingRepoRelativePaths: [],
+              updatedAt: 100,
+            },
+          ],
+        }),
+      },
+      youTrackService: null,
+      runGitCommand: gitRunner,
+      getMissionGitToken: () => "github-pat",
+      runIdFactory: () => "run-1",
+      now: () => 1234,
+    });
+
+    await service.startRun({
+      ticketId: "SPI-151",
+      ticketSummary: "Hydrate submodules",
+      ticketUrl: "https://example.youtrack.cloud/issue/SPI-151",
+      projectKey: "SPI",
+    });
+
+    const worktreePath = path.join("C:\\Repos", ".spira-worktrees", "spi-151", "service-api");
+    const authHeader = Buffer.from("x-access-token:github-pat").toString("base64");
+    expect(gitRunner).toHaveBeenNthCalledWith(3, worktreePath, [
+      "-c",
+      `http.https://github.com/.extraheader=AUTHORIZATION: basic ${authHeader}`,
+      "submodule",
+      "update",
+      "--init",
+      "--recursive",
+    ]);
+    expect(gitRunner).toHaveBeenCalledTimes(3);
   });
 
   it("fails startup and rolls back newly created worktrees when submodule hydration fails", async () => {
     const database = createTestDatabase();
     const worktreePath = path.join("C:\\Repos", ".spira-worktrees", "spi-152", "service-api");
+    let branchCreated = false;
     const gitRunner = vi.fn().mockImplementation(async (cwd: string, args: readonly string[]) => {
       const command = args.join(" ");
       if (
         cwd === "C:\\Repos\\service-api" &&
+        command === "branch --list --format=%(refname:short) feat/spi-152-fail-submodule-hydration"
+      ) {
+        return { stdout: branchCreated ? "feat/spi-152-fail-submodule-hydration\n" : "", stderr: "" };
+      }
+      if (
+        cwd === "C:\\Repos\\service-api" &&
         command === `worktree add -b feat/spi-152-fail-submodule-hydration ${worktreePath}`
       ) {
+        branchCreated = true;
         return { stdout: "", stderr: "" };
       }
       if (cwd === worktreePath && command === "submodule update --init --recursive") {
         throw new Error("Submodule auth failed");
       }
       if (cwd === "C:\\Repos\\service-api" && command === `worktree remove --force ${worktreePath}`) {
+        return { stdout: "", stderr: "" };
+      }
+      if (cwd === "C:\\Repos\\service-api" && command === "branch -D feat/spi-152-fail-submodule-hydration") {
+        branchCreated = false;
         return { stdout: "", stderr: "" };
       }
       throw new Error(`Unexpected git command in ${cwd}: ${command}`);
@@ -309,20 +406,188 @@ describe("TicketRunService", () => {
     expect(result.run.status).toBe("error");
     expect(result.run.statusMessage).toBe("Failed to hydrate submodules for service-api.");
     expect(gitRunner).toHaveBeenNthCalledWith(1, "C:\\Repos\\service-api", [
+      "branch",
+      "--list",
+      "--format=%(refname:short)",
+      "feat/spi-152-fail-submodule-hydration",
+    ]);
+    expect(gitRunner).toHaveBeenNthCalledWith(2, "C:\\Repos\\service-api", [
       "worktree",
       "add",
       "-b",
       "feat/spi-152-fail-submodule-hydration",
       worktreePath,
     ]);
-    expect(gitRunner).toHaveBeenNthCalledWith(2, worktreePath, ["submodule", "update", "--init", "--recursive"]);
-    expect(gitRunner).toHaveBeenNthCalledWith(3, "C:\\Repos\\service-api", [
+    expect(gitRunner).toHaveBeenNthCalledWith(3, worktreePath, ["submodule", "update", "--init", "--recursive"]);
+    expect(gitRunner).toHaveBeenNthCalledWith(4, "C:\\Repos\\service-api", [
       "worktree",
       "remove",
       "--force",
       worktreePath,
     ]);
-    expect(gitRunner).toHaveBeenCalledTimes(3);
+    expect(gitRunner).toHaveBeenNthCalledWith(5, "C:\\Repos\\service-api", [
+      "branch",
+      "--list",
+      "--format=%(refname:short)",
+      "feat/spi-152-fail-submodule-hydration",
+    ]);
+    expect(gitRunner).toHaveBeenNthCalledWith(6, "C:\\Repos\\service-api", [
+      "branch",
+      "-D",
+      "feat/spi-152-fail-submodule-hydration",
+    ]);
+    expect(gitRunner).toHaveBeenCalledTimes(6);
+  });
+
+  it("surfaces a mission GitHub PAT hint when private submodule auth is missing", async () => {
+    const database = createTestDatabase();
+    const worktreePath = path.join("C:\\Repos", ".spira-worktrees", "spi-153", "service-api");
+    let branchCreated = false;
+    const gitRunner = vi.fn().mockImplementation(async (cwd: string, args: readonly string[]) => {
+      const command = args.join(" ");
+      if (
+        cwd === "C:\\Repos\\service-api" &&
+        command === "branch --list --format=%(refname:short) feat/spi-153-private-submodule-auth"
+      ) {
+        return { stdout: branchCreated ? "feat/spi-153-private-submodule-auth\n" : "", stderr: "" };
+      }
+      if (
+        cwd === "C:\\Repos\\service-api" &&
+        command === `worktree add -b feat/spi-153-private-submodule-auth ${worktreePath}`
+      ) {
+        branchCreated = true;
+        return { stdout: "", stderr: "" };
+      }
+      if (cwd === worktreePath && command === "submodule update --init --recursive") {
+        throw new Error(
+          "Command failed: git submodule update --init --recursive\nfatal: Cannot prompt because user interactivity has been disabled.\nfatal: could not read Username for 'https://github.com': terminal prompts disabled\n",
+        );
+      }
+      if (cwd === "C:\\Repos\\service-api" && command === `worktree remove --force ${worktreePath}`) {
+        return { stdout: "", stderr: "" };
+      }
+      if (cwd === "C:\\Repos\\service-api" && command === "branch -D feat/spi-153-private-submodule-auth") {
+        branchCreated = false;
+        return { stdout: "", stderr: "" };
+      }
+      throw new Error(`Unexpected git command in ${cwd}: ${command}`);
+    });
+    const service = new TicketRunService({
+      memoryDb: database,
+      logger: createLogger(),
+      projectRegistry: {
+        getSnapshot: async () => ({
+          workspaceRoot: "C:\\Repos",
+          repos: [
+            {
+              name: "service-api",
+              relativePath: "service-api",
+              absolutePath: "C:\\Repos\\service-api",
+              hasSubmodules: true,
+              mappedProjectKeys: ["SPI"],
+            },
+          ],
+          mappings: [
+            {
+              projectKey: "SPI",
+              repoRelativePaths: ["service-api"],
+              missingRepoRelativePaths: [],
+              updatedAt: 100,
+            },
+          ],
+        }),
+      },
+      youTrackService: null,
+      runGitCommand: gitRunner,
+      runIdFactory: () => "run-1",
+      now: () => 1234,
+    });
+
+    const result = await service.startRun({
+      ticketId: "SPI-153",
+      ticketSummary: "Private submodule auth",
+      ticketUrl: "https://example.youtrack.cloud/issue/SPI-153",
+      projectKey: "SPI",
+    });
+
+    expect(result.run.status).toBe("error");
+    expect(result.run.statusMessage).toBe(
+      "Failed to hydrate submodules for service-api. Set a mission GitHub PAT in Settings so Spira can clone private GitHub submodules.",
+    );
+    expect(gitRunner).toHaveBeenNthCalledWith(3, worktreePath, ["submodule", "update", "--init", "--recursive"]);
+    expect(gitRunner).toHaveBeenNthCalledWith(6, "C:\\Repos\\service-api", [
+      "branch",
+      "-D",
+      "feat/spi-153-private-submodule-auth",
+    ]);
+    expect(gitRunner).toHaveBeenCalledTimes(6);
+  });
+
+  it("reuses an existing local mission branch when recreating a missing worktree", async () => {
+    const database = createTestDatabase();
+    const gitRunner = vi.fn().mockImplementation(async (cwd: string, args: readonly string[]) => {
+      const command = args.join(" ");
+      if (
+        cwd === "C:\\Repos\\service-api" &&
+        command === "branch --list --format=%(refname:short) feat/spi-154-reuse-existing-branch"
+      ) {
+        return { stdout: "feat/spi-154-reuse-existing-branch\n", stderr: "" };
+      }
+      if (
+        cwd === "C:\\Repos\\service-api" &&
+        command ===
+          `worktree add ${path.join("C:\\Repos", ".spira-worktrees", "spi-154", "service-api")} feat/spi-154-reuse-existing-branch`
+      ) {
+        return { stdout: "", stderr: "" };
+      }
+      throw new Error(`Unexpected git command in ${cwd}: ${command}`);
+    });
+    const service = new TicketRunService({
+      memoryDb: database,
+      logger: createLogger(),
+      projectRegistry: {
+        getSnapshot: async () => ({
+          workspaceRoot: "C:\\Repos",
+          repos: [
+            {
+              name: "service-api",
+              relativePath: "service-api",
+              absolutePath: "C:\\Repos\\service-api",
+              hasSubmodules: false,
+              mappedProjectKeys: ["SPI"],
+            },
+          ],
+          mappings: [
+            {
+              projectKey: "SPI",
+              repoRelativePaths: ["service-api"],
+              missingRepoRelativePaths: [],
+              updatedAt: 100,
+            },
+          ],
+        }),
+      },
+      youTrackService: null,
+      runGitCommand: gitRunner,
+      runIdFactory: () => "run-1",
+      now: () => 1234,
+    });
+
+    const result = await service.startRun({
+      ticketId: "SPI-154",
+      ticketSummary: "Reuse existing branch",
+      ticketUrl: "https://example.youtrack.cloud/issue/SPI-154",
+      projectKey: "SPI",
+    });
+
+    expect(result.run.status).toBe("ready");
+    expect(gitRunner).toHaveBeenNthCalledWith(2, "C:\\Repos\\service-api", [
+      "worktree",
+      "add",
+      path.join("C:\\Repos", ".spira-worktrees", "spi-154", "service-api"),
+      "feat/spi-154-reuse-existing-branch",
+    ]);
+    expect(gitRunner).toHaveBeenCalledTimes(2);
   });
 
   it("reuses an existing run for the same ticket", async () => {
@@ -512,6 +777,8 @@ describe("TicketRunService", () => {
 
   it("resumes a starting run with an existing worktree instead of recreating it", async () => {
     const database = createTestDatabase();
+    const worktreePath = mkdtempSync(path.join(os.tmpdir(), "spira-existing-worktree-"));
+    tempDirs.push(worktreePath);
     database.upsertTicketRun({
       runId: "run-1",
       ticketId: "SPI-105",
@@ -525,12 +792,18 @@ describe("TicketRunService", () => {
         {
           repoRelativePath: "service-api",
           repoAbsolutePath: "C:\\Repos\\service-api",
-          worktreePath: "C:\\Repos\\.spira-worktrees\\spi-105-service-api",
+          worktreePath,
           branchName: "feat/spi-105-resume-interrupted-run",
         },
       ],
     });
-    const gitRunner = vi.fn();
+    const gitRunner = vi.fn().mockImplementation(async (cwd: string, args: readonly string[]) => {
+      const command = args.join(" ");
+      if (cwd === worktreePath && command === "rev-parse --git-dir") {
+        return { stdout: ".git\n", stderr: "" };
+      }
+      throw new Error(`Unexpected git command in ${cwd}: ${command}`);
+    });
     const transitionTicket = vi.fn().mockResolvedValue(undefined);
     const service = new TicketRunService({
       memoryDb: database,
@@ -550,13 +823,16 @@ describe("TicketRunService", () => {
       projectKey: "SPI",
     });
 
-    expect(gitRunner).not.toHaveBeenCalled();
+    expect(gitRunner).toHaveBeenCalledTimes(1);
+    expect(gitRunner).toHaveBeenCalledWith(worktreePath, ["rev-parse", "--git-dir"]);
     expect(transitionTicket).toHaveBeenCalledWith("SPI-105");
     expect(result.run.status).toBe("ready");
   });
 
   it("rehydrates submodules when resuming an interrupted start", async () => {
     const database = createTestDatabase();
+    const worktreePath = mkdtempSync(path.join(os.tmpdir(), "spira-existing-worktree-"));
+    tempDirs.push(worktreePath);
     database.upsertTicketRun({
       runId: "run-1",
       ticketId: "SPI-105",
@@ -570,12 +846,21 @@ describe("TicketRunService", () => {
         {
           repoRelativePath: "service-api",
           repoAbsolutePath: "C:\\Repos\\service-api",
-          worktreePath: "C:\\Repos\\.spira-worktrees\\spi-105\\service-api",
+          worktreePath,
           branchName: "feat/spi-105-resume-interrupted-run",
         },
       ],
     });
-    const gitRunner = vi.fn().mockResolvedValue({ stdout: "", stderr: "" });
+    const gitRunner = vi.fn().mockImplementation(async (cwd: string, args: readonly string[]) => {
+      const command = args.join(" ");
+      if (cwd === worktreePath && command === "rev-parse --git-dir") {
+        return { stdout: ".git\n", stderr: "" };
+      }
+      if (cwd === worktreePath && command === "submodule update --init --recursive") {
+        return { stdout: "", stderr: "" };
+      }
+      throw new Error(`Unexpected git command in ${cwd}: ${command}`);
+    });
     const transitionTicket = vi.fn().mockResolvedValue(undefined);
     const service = new TicketRunService({
       memoryDb: database,
@@ -609,13 +894,9 @@ describe("TicketRunService", () => {
       projectKey: "SPI",
     });
 
-    expect(gitRunner).toHaveBeenCalledTimes(1);
-    expect(gitRunner).toHaveBeenCalledWith("C:\\Repos\\.spira-worktrees\\spi-105\\service-api", [
-      "submodule",
-      "update",
-      "--init",
-      "--recursive",
-    ]);
+    expect(gitRunner).toHaveBeenCalledTimes(2);
+    expect(gitRunner).toHaveBeenNthCalledWith(1, worktreePath, ["rev-parse", "--git-dir"]);
+    expect(gitRunner).toHaveBeenNthCalledWith(2, worktreePath, ["submodule", "update", "--init", "--recursive"]);
     expect(transitionTicket).toHaveBeenCalledWith("SPI-105");
     expect(result.run.status).toBe("ready");
   });
@@ -967,7 +1248,7 @@ describe("TicketRunService", () => {
     });
   });
 
-  it("generates a persisted commit draft when a run is completed", async () => {
+  it("closes a review-clean run and releases its mission station", async () => {
     const database = createTestDatabase();
     database.upsertTicketRun({
       runId: "run-1",
@@ -990,8 +1271,94 @@ describe("TicketRunService", () => {
     });
     const gitRunner = vi.fn().mockImplementation(async (_cwd: string, args: readonly string[]) => {
       const command = args.join(" ");
+      if (command === "remote get-url origin") {
+        return { stdout: "https://github.com/example/service-api.git\n", stderr: "" };
+      }
+      if (command === "symbolic-ref --short refs/remotes/origin/HEAD") {
+        return { stdout: "origin/main\n", stderr: "" };
+      }
       if (command.includes("rev-parse --abbrev-ref --symbolic-full-name @{upstream}")) {
         throw new Error("no upstream");
+      }
+      if (command === "status --porcelain=v1 --untracked-files=all --ignore-submodules=none") {
+        return { stdout: "", stderr: "" };
+      }
+      if (command.includes("diff --find-renames --find-copies --name-status HEAD --")) {
+        return { stdout: "", stderr: "" };
+      }
+      if (command.includes("diff --find-renames --find-copies --numstat HEAD --")) {
+        return { stdout: "", stderr: "" };
+      }
+      if (command.includes("diff --find-renames --find-copies --patch --no-color HEAD --")) {
+        return { stdout: "", stderr: "" };
+      }
+      if (command === "ls-files --others --exclude-standard -z") {
+        return { stdout: "", stderr: "" };
+      }
+      if (command === "rev-list --count HEAD --not --remotes=origin") {
+        return { stdout: "0\n", stderr: "" };
+      }
+      throw new Error(`Unexpected git command: ${command}`);
+    });
+    const stopRunServices = vi.fn().mockResolvedValue(undefined);
+    const closeMissionStation = vi.fn().mockResolvedValue(undefined);
+    const service = new TicketRunService({
+      memoryDb: database,
+      logger: createLogger(),
+      projectRegistry: { getSnapshot: async () => ({ workspaceRoot: null, repos: [], mappings: [] }) },
+      youTrackService: null,
+      runGitCommand: gitRunner,
+      stopRunServices,
+      closeMissionStation,
+      now: () => 500,
+    });
+
+    const result = await service.completeRun("run-1");
+
+    expect(stopRunServices).toHaveBeenCalledWith("run-1");
+    expect(closeMissionStation).toHaveBeenCalledWith("mission:run-1");
+    expect(result.run).toMatchObject({
+      status: "done",
+      stationId: null,
+      statusMessage: "Mission closed.",
+      commitMessageDraft: null,
+    });
+  });
+
+  it("blocks closing when review work remains", async () => {
+    const database = createTestDatabase();
+    database.upsertTicketRun({
+      runId: "run-1",
+      stationId: "mission:run-1",
+      ticketId: "SPI-110",
+      ticketSummary: "Prepare manual commit flow",
+      ticketUrl: "https://example.youtrack.cloud/issue/SPI-110",
+      projectKey: "SPI",
+      status: "awaiting-review",
+      createdAt: 100,
+      startedAt: 100,
+      worktrees: [
+        {
+          repoRelativePath: "service-api",
+          repoAbsolutePath: "C:\\Repos\\service-api",
+          worktreePath: "C:\\Repos\\.spira-worktrees\\spi-110-service-api",
+          branchName: "feat/spi-110-prepare-manual-commit-flow",
+        },
+      ],
+    });
+    const gitRunner = vi.fn().mockImplementation(async (_cwd: string, args: readonly string[]) => {
+      const command = args.join(" ");
+      if (command === "remote get-url origin") {
+        return { stdout: "https://github.com/example/service-api.git\n", stderr: "" };
+      }
+      if (command === "symbolic-ref --short refs/remotes/origin/HEAD") {
+        return { stdout: "origin/main\n", stderr: "" };
+      }
+      if (command.includes("rev-parse --abbrev-ref --symbolic-full-name @{upstream}")) {
+        throw new Error("no upstream");
+      }
+      if (command === "status --porcelain=v1 --untracked-files=all --ignore-submodules=none") {
+        return { stdout: " M src/mission.ts\n", stderr: "" };
       }
       if (command.includes("diff --find-renames --find-copies --name-status HEAD --")) {
         return { stdout: "M\tsrc/mission.ts\n", stderr: "" };
@@ -1006,14 +1373,12 @@ describe("TicketRunService", () => {
           stderr: "",
         };
       }
+      if (command === "ls-files --others --exclude-standard -z") {
+        return { stdout: "", stderr: "" };
+      }
       throw new Error(`Unexpected git command: ${command}`);
     });
     const closeMissionStation = vi.fn().mockResolvedValue(undefined);
-    const generateCommitDraft = vi
-      .fn()
-      .mockResolvedValue(
-        "feat(SPI-110): prepare manual commit flow\n\n- add mission git controls\n- persist the draft",
-      );
     const service = new TicketRunService({
       memoryDb: database,
       logger: createLogger(),
@@ -1021,34 +1386,16 @@ describe("TicketRunService", () => {
       youTrackService: null,
       runGitCommand: gitRunner,
       closeMissionStation,
-      generateCommitDraft,
       now: () => 500,
     });
 
-    const result = await service.completeRun("run-1");
-
-    expect(generateCommitDraft).toHaveBeenCalledWith(
-      expect.objectContaining({
-        run: expect.objectContaining({
-          runId: "run-1",
-          stationId: "mission:run-1",
-          status: "done",
-        }),
-      }),
+    await expect(service.completeRun("run-1")).rejects.toThrow(
+      "Finish the remaining mission review work before closing SPI-110: service-api.",
     );
-    expect(closeMissionStation).toHaveBeenCalledWith("mission:run-1");
-    expect(generateCommitDraft.mock.invocationCallOrder[0]).toBeLessThan(
-      closeMissionStation.mock.invocationCallOrder[0],
-    );
-    expect(result.run).toMatchObject({
-      status: "done",
-      stationId: null,
-      commitMessageDraft:
-        "feat(SPI-110): prepare manual commit flow\n\n- add mission git controls\n- persist the draft",
-    });
+    expect(closeMissionStation).not.toHaveBeenCalled();
   });
 
-  it("commits a completed run with the resolved mission git identity and clears the draft", async () => {
+  it("commits an awaiting-review run with the resolved mission git identity and clears the draft", async () => {
     const database = createTestDatabase();
     database.upsertTicketRun({
       runId: "run-1",
@@ -1056,7 +1403,7 @@ describe("TicketRunService", () => {
       ticketSummary: "Commit completed mission work",
       ticketUrl: "https://example.youtrack.cloud/issue/SPI-111",
       projectKey: "SPI",
-      status: "done",
+      status: "awaiting-review",
       commitMessageDraft: "feat(SPI-111): commit completed mission work\n\n- capture the mission changes",
       createdAt: 100,
       startedAt: 100,
@@ -1087,7 +1434,7 @@ describe("TicketRunService", () => {
           stderr: "",
         };
       }
-      if (command === "add -u") {
+      if (command === "add -A") {
         return { stdout: "", stderr: "" };
       }
       if (command.includes("commit --author=Shinra <shinra@example.com>")) {
@@ -1118,7 +1465,7 @@ describe("TicketRunService", () => {
 
     expect(result.commitSha).toBe("1234567890abcdef");
     expect(result.run.commitMessageDraft).toBeNull();
-    expect(gitRunner).toHaveBeenCalledWith("C:\\Repos\\.spira-worktrees\\spi-111-service-api", ["add", "-u"]);
+    expect(gitRunner).toHaveBeenCalledWith("C:\\Repos\\.spira-worktrees\\spi-111-service-api", ["add", "-A"]);
     expect(gitRunner).toHaveBeenCalledWith("C:\\Repos\\.spira-worktrees\\spi-111-service-api", [
       "-c",
       "user.name=Shinra",
@@ -1134,7 +1481,7 @@ describe("TicketRunService", () => {
     ]);
   });
 
-  it("publishes a completed run when the branch has no upstream", async () => {
+  it("publishes an awaiting-review run when the branch has no upstream", async () => {
     const database = createTestDatabase();
     database.upsertTicketRun({
       runId: "run-1",
@@ -1142,7 +1489,7 @@ describe("TicketRunService", () => {
       ticketSummary: "Publish mission branch",
       ticketUrl: "https://example.youtrack.cloud/issue/SPI-112",
       projectKey: "SPI",
-      status: "done",
+      status: "awaiting-review",
       createdAt: 100,
       startedAt: 100,
       worktrees: [
@@ -1218,7 +1565,7 @@ describe("TicketRunService", () => {
       ticketSummary: "Idle mission branch",
       ticketUrl: "https://example.youtrack.cloud/issue/SPI-113",
       projectKey: "SPI",
-      status: "done",
+      status: "awaiting-review",
       createdAt: 100,
       startedAt: 100,
       worktrees: [
@@ -1263,6 +1610,355 @@ describe("TicketRunService", () => {
     expect(result.gitState.pushAction).toBe("none");
   });
 
+  it("includes untracked files in mission git state", async () => {
+    const database = createTestDatabase();
+    database.upsertTicketRun({
+      runId: "run-1",
+      ticketId: "SPI-117",
+      ticketSummary: "Track untracked files",
+      ticketUrl: "https://example.youtrack.cloud/issue/SPI-117",
+      projectKey: "SPI",
+      status: "awaiting-review",
+      createdAt: 100,
+      startedAt: 100,
+      worktrees: [
+        {
+          repoRelativePath: "service-api",
+          repoAbsolutePath: "C:\\Repos\\service-api",
+          worktreePath: "C:\\Repos\\.spira-worktrees\\spi-117-service-api",
+          branchName: "feat/spi-117-track-untracked-files",
+        },
+      ],
+    });
+    const gitRunner = vi.fn().mockImplementation(async (_cwd: string, args: readonly string[]) => {
+      const command = args.join(" ");
+      if (command === "remote get-url origin") {
+        return { stdout: "https://github.com/example/service-api.git\n", stderr: "" };
+      }
+      if (command === "symbolic-ref --short refs/remotes/origin/HEAD") {
+        return { stdout: "origin/main\n", stderr: "" };
+      }
+      if (command.includes("rev-parse --abbrev-ref --symbolic-full-name @{upstream}")) {
+        return { stdout: "origin/feat/spi-117-track-untracked-files\n", stderr: "" };
+      }
+      if (command.startsWith("rev-list --left-right --count")) {
+        return { stdout: "0 0\n", stderr: "" };
+      }
+      if (command.includes("diff --find-renames --find-copies --name-status HEAD --")) {
+        return { stdout: "", stderr: "" };
+      }
+      if (command.includes("diff --find-renames --find-copies --numstat HEAD --")) {
+        return { stdout: "", stderr: "" };
+      }
+      if (command.includes("diff --find-renames --find-copies --patch --no-color HEAD --")) {
+        return { stdout: "", stderr: "" };
+      }
+      if (command === "ls-files --others --exclude-standard -z") {
+        return { stdout: "src/new-file.ts\u0000", stderr: "" };
+      }
+      throw new Error(`Unexpected git command: ${command}`);
+    });
+    const service = new TicketRunService({
+      memoryDb: database,
+      logger: createLogger(),
+      projectRegistry: { getSnapshot: async () => ({ workspaceRoot: null, repos: [], mappings: [] }) },
+      youTrackService: null,
+      runGitCommand: gitRunner,
+      now: () => 500,
+    });
+
+    const result = await service.getGitState("run-1");
+
+    expect(result.gitState.hasDiff).toBe(true);
+    expect(result.gitState.files).toEqual([
+      {
+        path: "src/new-file.ts",
+        previousPath: null,
+        status: "A",
+        additions: null,
+        deletions: null,
+        patch: "",
+      },
+    ]);
+  });
+
+  it("builds a review snapshot for shared submodule missions", async () => {
+    const database = createTestDatabase();
+    const branchName = "feat/spi-118-review-shared-submodule";
+    const canonicalUrl = "github.com/example/legapp-common";
+    const missionRoot = mkdtempSync(path.join(os.tmpdir(), "spira-review-snapshot-"));
+    tempDirs.push(missionRoot);
+    const serviceApiWorktreePath = path.join(missionRoot, "service-api");
+    const webAppWorktreePath = path.join(missionRoot, "web-app");
+    const serviceApiSubmodulePath = path.join(serviceApiWorktreePath, "Submodules", "LegAppCommon");
+    const webAppSubmodulePath = path.join(webAppWorktreePath, "Submodules", "LegAppCommon");
+    mkdirSync(serviceApiWorktreePath, { recursive: true });
+    mkdirSync(webAppWorktreePath, { recursive: true });
+    writeFileSync(
+      path.join(serviceApiWorktreePath, ".gitmodules"),
+      '[submodule "LegAppCommon"]\n\tpath = Submodules\\LegAppCommon\n\turl = https://github.com/example/legapp-common.git\n',
+    );
+    writeFileSync(
+      path.join(webAppWorktreePath, ".gitmodules"),
+      '[submodule "LegAppCommon"]\n\tpath = Submodules\\LegAppCommon\n\turl = https://github.com/example/legapp-common.git\n',
+    );
+    database.upsertTicketRun({
+      runId: "run-1",
+      ticketId: "SPI-118",
+      ticketSummary: "Review shared submodule state once",
+      ticketUrl: "https://example.youtrack.cloud/issue/SPI-118",
+      projectKey: "SPI",
+      status: "awaiting-review",
+      createdAt: 100,
+      startedAt: 100,
+      worktrees: [
+        {
+          repoRelativePath: "service-api",
+          repoAbsolutePath: "C:\\Repos\\service-api",
+          worktreePath: serviceApiWorktreePath,
+          branchName,
+        },
+        {
+          repoRelativePath: "web-app",
+          repoAbsolutePath: "C:\\Repos\\web-app",
+          worktreePath: webAppWorktreePath,
+          branchName,
+        },
+      ],
+      submodules: [],
+    });
+    const gitRunner = vi.fn().mockImplementation(async (cwd: string, args: readonly string[]) => {
+      const command = args.join(" ");
+      if (
+        (cwd === serviceApiWorktreePath || cwd === webAppWorktreePath) &&
+        command === "config --file .gitmodules --get-regexp ^submodule\\..*\\.(path|url)$"
+      ) {
+        return {
+          stdout:
+            "submodule.LegAppCommon.path Submodules\\LegAppCommon\nsubmodule.LegAppCommon.url https://github.com/example/legapp-common.git\n",
+          stderr: "",
+        };
+      }
+      if (command === "remote get-url origin") {
+        if (cwd === serviceApiWorktreePath) {
+          return { stdout: "https://github.com/example/service-api.git\n", stderr: "" };
+        }
+        if (cwd === webAppWorktreePath) {
+          return { stdout: "https://github.com/example/web-app.git\n", stderr: "" };
+        }
+        return { stdout: "https://github.com/example/legapp-common.git\n", stderr: "" };
+      }
+      if (command === "symbolic-ref --short refs/remotes/origin/HEAD") {
+        return { stdout: "origin/main\n", stderr: "" };
+      }
+      if (command.includes("rev-parse --abbrev-ref --symbolic-full-name @{upstream}")) {
+        return { stdout: `origin/${branchName}\n`, stderr: "" };
+      }
+      if (command.startsWith("rev-list --left-right --count")) {
+        return { stdout: "0 0\n", stderr: "" };
+      }
+      if (command === "status --porcelain=v1 --untracked-files=all --ignore-submodules=none") {
+        if (cwd === serviceApiWorktreePath || cwd === webAppWorktreePath) {
+          return { stdout: " M Submodules\\LegAppCommon\n", stderr: "" };
+        }
+        if (cwd === serviceApiSubmodulePath || cwd === webAppSubmodulePath) {
+          return { stdout: " M Shared\\Thing.cs\n", stderr: "" };
+        }
+        return { stdout: "", stderr: "" };
+      }
+      if (command === "rev-parse HEAD") {
+        return { stdout: "1234567890abcdef\n", stderr: "" };
+      }
+      if (command === "ls-files --others --exclude-standard -z") {
+        return { stdout: "", stderr: "" };
+      }
+      if (cwd === serviceApiSubmodulePath || cwd === webAppSubmodulePath) {
+        if (command.includes("diff --find-renames --find-copies --name-status HEAD --")) {
+          return { stdout: "M\tShared\\Thing.cs\n", stderr: "" };
+        }
+        if (command.includes("diff --find-renames --find-copies --numstat HEAD --")) {
+          return { stdout: "1\t1\tShared\\Thing.cs\n", stderr: "" };
+        }
+        if (command.includes("diff --find-renames --find-copies --patch --no-color HEAD --")) {
+          return {
+            stdout:
+              "diff --git a/Shared/Thing.cs b/Shared/Thing.cs\n--- a/Shared/Thing.cs\n+++ b/Shared/Thing.cs\n@@ -1 +1 @@\n-old\n+new\n",
+            stderr: "",
+          };
+        }
+      }
+      if (command.includes("diff --find-renames --find-copies --name-status HEAD --")) {
+        return { stdout: "", stderr: "" };
+      }
+      if (command.includes("diff --find-renames --find-copies --numstat HEAD --")) {
+        return { stdout: "", stderr: "" };
+      }
+      if (command.includes("diff --find-renames --find-copies --patch --no-color HEAD --")) {
+        return { stdout: "", stderr: "" };
+      }
+      throw new Error(`Unexpected git command in ${cwd}: ${command}`);
+    });
+    const service = new TicketRunService({
+      memoryDb: database,
+      logger: createLogger(),
+      projectRegistry: { getSnapshot: async () => ({ workspaceRoot: null, repos: [], mappings: [] }) },
+      youTrackService: null,
+      runGitCommand: gitRunner,
+      now: () => 500,
+    });
+
+    const result = await service.getReviewSnapshot("run-1");
+
+    expect(result.run.submodules).toEqual([
+      expect.objectContaining({
+        canonicalUrl,
+        name: "LegAppCommon",
+      }),
+    ]);
+    expect(result.reviewSnapshot.visibleSubmoduleUrls).toEqual([canonicalUrl]);
+    expect(result.reviewSnapshot.visibleRepoPaths).toEqual(["service-api", "web-app"]);
+    expect(result.reviewSnapshot.canClose).toBe(false);
+    expect(result.reviewSnapshot.repoEntries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          repoRelativePath: "service-api",
+          error: null,
+          gitState: expect.objectContaining({
+            blockedBySubmoduleCanonicalUrls: [canonicalUrl],
+          }),
+        }),
+        expect.objectContaining({
+          repoRelativePath: "web-app",
+          error: null,
+          gitState: expect.objectContaining({
+            blockedBySubmoduleCanonicalUrls: [canonicalUrl],
+          }),
+        }),
+      ]),
+    );
+  });
+
+  it("keeps review closure blocked when a managed submodule fails to load", async () => {
+    const database = createTestDatabase();
+    const branchName = "feat/spi-119-review-submodule-error";
+    const canonicalUrl = "github.com/example/legapp-common";
+    const missionRoot = mkdtempSync(path.join(os.tmpdir(), "spira-review-snapshot-error-"));
+    tempDirs.push(missionRoot);
+    const worktreePath = path.join(missionRoot, "service-api");
+    const submoduleWorktreePath = path.join(worktreePath, "Submodules", "LegAppCommon");
+    mkdirSync(worktreePath, { recursive: true });
+    writeFileSync(
+      path.join(worktreePath, ".gitmodules"),
+      '[submodule "LegAppCommon"]\n\tpath = Submodules\\LegAppCommon\n\turl = https://github.com/example/legapp-common.git\n',
+    );
+    database.upsertTicketRun({
+      runId: "run-1",
+      ticketId: "SPI-119",
+      ticketSummary: "Review shared submodule load error",
+      ticketUrl: "https://example.youtrack.cloud/issue/SPI-119",
+      projectKey: "SPI",
+      status: "awaiting-review",
+      createdAt: 100,
+      startedAt: 100,
+      worktrees: [
+        {
+          repoRelativePath: "service-api",
+          repoAbsolutePath: "C:\\Repos\\service-api",
+          worktreePath,
+          branchName,
+        },
+      ],
+      submodules: [
+        {
+          canonicalUrl,
+          name: "LegAppCommon",
+          branchName,
+          commitMessageDraft: null,
+          parentRefs: [
+            {
+              parentRepoRelativePath: "service-api",
+              submodulePath: "Submodules\\LegAppCommon",
+              submoduleWorktreePath,
+            },
+          ],
+        },
+      ],
+    });
+    const gitRunner = vi.fn().mockImplementation(async (cwd: string, args: readonly string[]) => {
+      const command = args.join(" ");
+      if (cwd === worktreePath && command === "config --file .gitmodules --get-regexp ^submodule\\..*\\.(path|url)$") {
+        return {
+          stdout:
+            "submodule.LegAppCommon.path Submodules\\LegAppCommon\nsubmodule.LegAppCommon.url https://github.com/example/legapp-common.git\n",
+          stderr: "",
+        };
+      }
+      if (cwd === worktreePath && command === "remote get-url origin") {
+        return { stdout: "https://github.com/example/service-api.git\n", stderr: "" };
+      }
+      if (cwd === worktreePath && command === "symbolic-ref --short refs/remotes/origin/HEAD") {
+        return { stdout: "origin/main\n", stderr: "" };
+      }
+      if (cwd === worktreePath && command.includes("rev-parse --abbrev-ref --symbolic-full-name @{upstream}")) {
+        return { stdout: `origin/${branchName}\n`, stderr: "" };
+      }
+      if (cwd === worktreePath && command.startsWith("rev-list --left-right --count")) {
+        return { stdout: "0 0\n", stderr: "" };
+      }
+      if (cwd === worktreePath && command === "status --porcelain=v1 --untracked-files=all --ignore-submodules=none") {
+        return { stdout: "", stderr: "" };
+      }
+      if (cwd === worktreePath && command === "rev-parse HEAD") {
+        return { stdout: "1234567890abcdef\n", stderr: "" };
+      }
+      if (cwd === worktreePath && command === "ls-files --others --exclude-standard -z") {
+        return { stdout: "", stderr: "" };
+      }
+      if (cwd === worktreePath && command.includes("diff --find-renames --find-copies --name-status HEAD --")) {
+        return { stdout: "", stderr: "" };
+      }
+      if (cwd === worktreePath && command.includes("diff --find-renames --find-copies --numstat HEAD --")) {
+        return { stdout: "", stderr: "" };
+      }
+      if (cwd === worktreePath && command.includes("diff --find-renames --find-copies --patch --no-color HEAD --")) {
+        return { stdout: "", stderr: "" };
+      }
+      if (cwd === submoduleWorktreePath) {
+        throw new Error("Submodule state unavailable");
+      }
+      throw new Error(`Unexpected git command in ${cwd}: ${command}`);
+    });
+    const service = new TicketRunService({
+      memoryDb: database,
+      logger: createLogger(),
+      projectRegistry: { getSnapshot: async () => ({ workspaceRoot: null, repos: [], mappings: [] }) },
+      youTrackService: null,
+      runGitCommand: gitRunner,
+      now: () => 500,
+    });
+
+    const result = await service.getReviewSnapshot("run-1");
+
+    expect(result.reviewSnapshot.canClose).toBe(false);
+    expect(result.reviewSnapshot.visibleSubmoduleUrls).toEqual([canonicalUrl]);
+    expect(result.reviewSnapshot.submoduleEntries).toEqual([
+      expect.objectContaining({
+        canonicalUrl,
+        gitState: null,
+        error: "Submodule state unavailable",
+      }),
+    ]);
+    expect(result.reviewSnapshot.repoEntries).toEqual([
+      expect.objectContaining({
+        repoRelativePath: "service-api",
+        error: null,
+        gitState: expect.objectContaining({
+          blockedBySubmoduleCanonicalUrls: [canonicalUrl],
+        }),
+      }),
+    ]);
+  });
+
   it("persists commit drafts on the selected repo worktree", async () => {
     const database = createTestDatabase();
     database.upsertTicketRun({
@@ -1271,7 +1967,7 @@ describe("TicketRunService", () => {
       ticketSummary: "Target repo commit draft",
       ticketUrl: "https://example.youtrack.cloud/issue/SPI-114",
       projectKey: "SPI",
-      status: "done",
+      status: "awaiting-review",
       createdAt: 100,
       startedAt: 100,
       worktrees: [
@@ -1350,5 +2046,448 @@ describe("TicketRunService", () => {
     expect(new Set(gitRunner.mock.calls.map(([cwd]) => cwd))).toEqual(
       new Set(["C:\\Repos\\.spira-worktrees\\spi-114\\web-app"]),
     );
+  });
+
+  it("commits a managed submodule during awaiting review and clears its draft", async () => {
+    const database = createTestDatabase();
+    const parentWorktreePath = "C:\\Repos\\.spira-worktrees\\spi-201\\service-api";
+    const submoduleWorktreePath = `${parentWorktreePath}\\Submodules\\LegAppCommon`;
+    const branchName = "feat/spi-201-update-shared-common";
+    const canonicalUrl = "github.com/example/legapp-common";
+    database.upsertTicketRun({
+      runId: "run-1",
+      ticketId: "SPI-201",
+      ticketSummary: "Update shared common models",
+      ticketUrl: "https://example.youtrack.cloud/issue/SPI-201",
+      projectKey: "SPI",
+      status: "awaiting-review",
+      createdAt: 100,
+      startedAt: 100,
+      worktrees: [
+        {
+          repoRelativePath: "service-api",
+          repoAbsolutePath: "C:\\Repos\\service-api",
+          worktreePath: parentWorktreePath,
+          branchName,
+        },
+      ],
+      submodules: [
+        {
+          canonicalUrl,
+          name: "LegAppCommon",
+          branchName,
+          commitMessageDraft: "feat(SPI-201): update shared common models",
+          parentRefs: [
+            {
+              parentRepoRelativePath: "service-api",
+              submodulePath: "Submodules\\LegAppCommon",
+              submoduleWorktreePath,
+            },
+          ],
+        },
+      ],
+    });
+    let committed = false;
+    const gitRunner = vi.fn().mockImplementation(async (cwd: string, args: readonly string[]) => {
+      const command = args.join(" ");
+      if (
+        cwd === parentWorktreePath &&
+        command === "config --file .gitmodules --get-regexp ^submodule\\..*\\.(path|url)$"
+      ) {
+        return {
+          stdout:
+            "submodule.LegAppCommon.path Submodules\\LegAppCommon\nsubmodule.LegAppCommon.url https://github.com/example/legapp-common.git\n",
+          stderr: "",
+        };
+      }
+      if (cwd !== submoduleWorktreePath) {
+        throw new Error(`Unexpected git command in ${cwd}: ${command}`);
+      }
+      if (command === "remote get-url origin") {
+        return { stdout: "https://github.com/example/legapp-common.git\n", stderr: "" };
+      }
+      if (command === "symbolic-ref --short refs/remotes/origin/HEAD") {
+        return { stdout: "origin/main\n", stderr: "" };
+      }
+      if (command.includes("rev-parse --abbrev-ref --symbolic-full-name @{upstream}")) {
+        throw new Error("no upstream");
+      }
+      if (command.includes("diff --find-renames --find-copies --name-status HEAD --")) {
+        return { stdout: committed ? "" : "M\tLegApp.Common.Models/Api/Request.cs\n", stderr: "" };
+      }
+      if (command.includes("diff --find-renames --find-copies --numstat HEAD --")) {
+        return { stdout: committed ? "" : "3\t1\tLegApp.Common.Models/Api/Request.cs\n", stderr: "" };
+      }
+      if (command.includes("diff --find-renames --find-copies --patch --no-color HEAD --")) {
+        return {
+          stdout: committed
+            ? ""
+            : "diff --git a/LegApp.Common.Models/Api/Request.cs b/LegApp.Common.Models/Api/Request.cs\n--- a/LegApp.Common.Models/Api/Request.cs\n+++ b/LegApp.Common.Models/Api/Request.cs\n@@ -1 +1 @@\n-old\n+new\n",
+          stderr: "",
+        };
+      }
+      if (command === "rev-list --count HEAD --not --remotes=origin") {
+        return { stdout: committed ? "1\n" : "0\n", stderr: "" };
+      }
+      if (command === "rev-parse HEAD") {
+        return {
+          stdout: committed
+            ? "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n"
+            : "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+          stderr: "",
+        };
+      }
+      if (command === "branch --show-current") {
+        return { stdout: committed ? `${branchName}\n` : "", stderr: "" };
+      }
+      if (command === `checkout -B ${branchName}`) {
+        return { stdout: "", stderr: "" };
+      }
+      if (command === "add -A") {
+        return { stdout: "", stderr: "" };
+      }
+      if (command.includes("commit --author=Shinra <shinra@example.com>")) {
+        committed = true;
+        return { stdout: "[feat/spi-201 1234567] Commit\n", stderr: "" };
+      }
+      throw new Error(`Unexpected git command in ${cwd}: ${command}`);
+    });
+    const service = new TicketRunService({
+      memoryDb: database,
+      logger: createLogger(),
+      projectRegistry: { getSnapshot: async () => ({ workspaceRoot: null, repos: [], mappings: [] }) },
+      youTrackService: null,
+      runGitCommand: gitRunner,
+      resolveMissionGitIdentity: vi.fn().mockResolvedValue({
+        name: "Shinra",
+        email: "shinra@example.com",
+      }),
+      now: () => 500,
+    });
+    vi.spyOn(service as unknown as EnsureRunSubmodulesTarget, "ensureRunSubmodules").mockImplementation(
+      async (run) => run,
+    );
+
+    const result = await service.commitSubmodule("run-1", canonicalUrl, "feat(SPI-201): update shared common models");
+
+    expect(result.commitSha).toBe("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+    expect(result.run.submodules[0]?.commitMessageDraft).toBeNull();
+    expect(result.gitState.pushAction).toBe("publish");
+    expect(gitRunner).toHaveBeenCalledWith(submoduleWorktreePath, ["add", "-A"]);
+  });
+
+  it("publishes a managed submodule once and aligns every parent repo to the same commit", async () => {
+    const database = createTestDatabase();
+    const branchName = "feat/spi-202-sync-shared-common";
+    const canonicalUrl = "github.com/example/legapp-common";
+    const primaryParentWorktreePath = "C:\\Repos\\.spira-worktrees\\spi-202\\service-api";
+    const secondaryParentWorktreePath = "C:\\Repos\\.spira-worktrees\\spi-202\\web-app";
+    const primarySubmodulePath = `${primaryParentWorktreePath}\\Submodules\\LegAppCommon`;
+    const secondarySubmodulePath = `${secondaryParentWorktreePath}\\Submodules\\LegAppCommon`;
+    const ancestorSha = "1111111111111111111111111111111111111111";
+    const canonicalSha = "2222222222222222222222222222222222222222";
+    let published = false;
+    let secondaryAligned = false;
+
+    database.upsertTicketRun({
+      runId: "run-1",
+      ticketId: "SPI-202",
+      ticketSummary: "Publish shared common once",
+      ticketUrl: "https://example.youtrack.cloud/issue/SPI-202",
+      projectKey: "SPI",
+      status: "awaiting-review",
+      createdAt: 100,
+      startedAt: 100,
+      worktrees: [
+        {
+          repoRelativePath: "service-api",
+          repoAbsolutePath: "C:\\Repos\\service-api",
+          worktreePath: primaryParentWorktreePath,
+          branchName,
+        },
+        {
+          repoRelativePath: "web-app",
+          repoAbsolutePath: "C:\\Repos\\web-app",
+          worktreePath: secondaryParentWorktreePath,
+          branchName,
+        },
+      ],
+      submodules: [
+        {
+          canonicalUrl,
+          name: "LegAppCommon",
+          branchName,
+          commitMessageDraft: null,
+          parentRefs: [
+            {
+              parentRepoRelativePath: "service-api",
+              submodulePath: "Submodules\\LegAppCommon",
+              submoduleWorktreePath: primarySubmodulePath,
+            },
+            {
+              parentRepoRelativePath: "web-app",
+              submodulePath: "Submodules\\LegAppCommon",
+              submoduleWorktreePath: secondarySubmodulePath,
+            },
+          ],
+        },
+      ],
+    });
+
+    const gitRunner = vi.fn().mockImplementation(async (cwd: string, args: readonly string[]) => {
+      const command = args.join(" ");
+      if (
+        (cwd === primaryParentWorktreePath || cwd === secondaryParentWorktreePath) &&
+        command === "config --file .gitmodules --get-regexp ^submodule\\..*\\.(path|url)$"
+      ) {
+        return {
+          stdout:
+            "submodule.LegAppCommon.path Submodules\\LegAppCommon\nsubmodule.LegAppCommon.url https://github.com/example/legapp-common.git\n",
+          stderr: "",
+        };
+      }
+      if (cwd === primarySubmodulePath || cwd === secondarySubmodulePath) {
+        if (command === "remote get-url origin") {
+          return { stdout: "https://github.com/example/legapp-common.git\n", stderr: "" };
+        }
+        if (command === "symbolic-ref --short refs/remotes/origin/HEAD") {
+          return { stdout: "origin/main\n", stderr: "" };
+        }
+        if (command.includes("rev-parse --abbrev-ref --symbolic-full-name @{upstream}")) {
+          if (published && cwd === primarySubmodulePath) {
+            return { stdout: `origin/${branchName}\n`, stderr: "" };
+          }
+          throw new Error("no upstream");
+        }
+        if (command.includes("diff --find-renames --find-copies --name-status HEAD --")) {
+          return { stdout: "", stderr: "" };
+        }
+        if (command.includes("diff --find-renames --find-copies --numstat HEAD --")) {
+          return { stdout: "", stderr: "" };
+        }
+        if (command.includes("diff --find-renames --find-copies --patch --no-color HEAD --")) {
+          return { stdout: "", stderr: "" };
+        }
+        if (command === "rev-list --count HEAD --not --remotes=origin") {
+          return { stdout: cwd === primarySubmodulePath && !published ? "1\n" : "0\n", stderr: "" };
+        }
+        if (command.startsWith("rev-list --left-right --count")) {
+          return { stdout: "0 0\n", stderr: "" };
+        }
+        if (command === "rev-parse HEAD") {
+          return {
+            stdout: cwd === primarySubmodulePath || secondaryAligned ? `${canonicalSha}\n` : `${ancestorSha}\n`,
+            stderr: "",
+          };
+        }
+        if (command === "branch --show-current") {
+          return { stdout: cwd === primarySubmodulePath ? `${branchName}\n` : "", stderr: "" };
+        }
+        if (command.includes(`push --set-upstream origin ${branchName}`)) {
+          published = true;
+          return { stdout: "", stderr: "" };
+        }
+        if (command === `fetch origin ${branchName}`) {
+          return { stdout: "", stderr: "" };
+        }
+        if (command === `checkout --detach ${canonicalSha}`) {
+          secondaryAligned = true;
+          return { stdout: "", stderr: "" };
+        }
+        if (
+          command === `rev-parse --verify ${ancestorSha}^{commit}` ||
+          command === `rev-parse --verify ${canonicalSha}^{commit}`
+        ) {
+          return { stdout: `${command.includes(canonicalSha) ? canonicalSha : ancestorSha}\n`, stderr: "" };
+        }
+        if (command === `merge-base --is-ancestor ${ancestorSha} ${canonicalSha}`) {
+          return { stdout: "", stderr: "" };
+        }
+      }
+
+      if (cwd === primaryParentWorktreePath || cwd === secondaryParentWorktreePath) {
+        if (command === "add Submodules\\LegAppCommon") {
+          return { stdout: "", stderr: "" };
+        }
+      }
+
+      throw new Error(`Unexpected git command in ${cwd}: ${command}`);
+    });
+    const service = new TicketRunService({
+      memoryDb: database,
+      logger: createLogger(),
+      projectRegistry: { getSnapshot: async () => ({ workspaceRoot: null, repos: [], mappings: [] }) },
+      youTrackService: null,
+      runGitCommand: gitRunner,
+      getMissionGitToken: () => "github-pat",
+      now: () => 500,
+    });
+    vi.spyOn(service as unknown as EnsureRunSubmodulesTarget, "ensureRunSubmodules").mockImplementation(
+      async (run) => run,
+    );
+
+    const result = await service.publishSubmodule("run-1", canonicalUrl);
+
+    expect(result.action).toBe("publish");
+    expect(result.gitState.pushAction).toBe("none");
+    expect(result.gitState.parents.every((parent) => parent.isAligned)).toBe(true);
+    expect(gitRunner).toHaveBeenCalledWith(secondarySubmodulePath, ["fetch", "origin", branchName]);
+    expect(gitRunner).toHaveBeenCalledWith(secondarySubmodulePath, ["checkout", "--detach", canonicalSha]);
+    expect(gitRunner).toHaveBeenCalledWith(primaryParentWorktreePath, ["add", "Submodules\\LegAppCommon"]);
+    expect(gitRunner).toHaveBeenCalledWith(secondaryParentWorktreePath, ["add", "Submodules\\LegAppCommon"]);
+  });
+
+  it("retries managed submodule parent alignment after the remote is already up to date", async () => {
+    const database = createTestDatabase();
+    const branchName = "feat/spi-203-realign-shared-common";
+    const canonicalUrl = "github.com/example/legapp-common";
+    const primaryParentWorktreePath = "C:\\Repos\\.spira-worktrees\\spi-203\\service-api";
+    const secondaryParentWorktreePath = "C:\\Repos\\.spira-worktrees\\spi-203\\web-app";
+    const primarySubmodulePath = `${primaryParentWorktreePath}\\Submodules\\LegAppCommon`;
+    const secondarySubmodulePath = `${secondaryParentWorktreePath}\\Submodules\\LegAppCommon`;
+    const canonicalSha = "3333333333333333333333333333333333333333";
+    const previousSha = "2222222222222222222222222222222222222222";
+    let secondaryAligned = false;
+
+    database.upsertTicketRun({
+      runId: "run-1",
+      ticketId: "SPI-203",
+      ticketSummary: "Retry shared common alignment",
+      ticketUrl: "https://example.youtrack.cloud/issue/SPI-203",
+      projectKey: "SPI",
+      status: "awaiting-review",
+      createdAt: 100,
+      startedAt: 100,
+      worktrees: [
+        {
+          repoRelativePath: "service-api",
+          repoAbsolutePath: "C:\\Repos\\service-api",
+          worktreePath: primaryParentWorktreePath,
+          branchName,
+        },
+        {
+          repoRelativePath: "web-app",
+          repoAbsolutePath: "C:\\Repos\\web-app",
+          worktreePath: secondaryParentWorktreePath,
+          branchName,
+        },
+      ],
+      submodules: [
+        {
+          canonicalUrl,
+          name: "LegAppCommon",
+          branchName,
+          commitMessageDraft: null,
+          parentRefs: [
+            {
+              parentRepoRelativePath: "service-api",
+              submodulePath: "Submodules\\LegAppCommon",
+              submoduleWorktreePath: primarySubmodulePath,
+            },
+            {
+              parentRepoRelativePath: "web-app",
+              submodulePath: "Submodules\\LegAppCommon",
+              submoduleWorktreePath: secondarySubmodulePath,
+            },
+          ],
+        },
+      ],
+    });
+
+    const gitRunner = vi.fn().mockImplementation(async (cwd: string, args: readonly string[]) => {
+      const command = args.join(" ");
+      if (
+        (cwd === primaryParentWorktreePath || cwd === secondaryParentWorktreePath) &&
+        command === "config --file .gitmodules --get-regexp ^submodule\\..*\\.(path|url)$"
+      ) {
+        return {
+          stdout:
+            "submodule.LegAppCommon.path Submodules\\LegAppCommon\nsubmodule.LegAppCommon.url https://github.com/example/legapp-common.git\n",
+          stderr: "",
+        };
+      }
+      if (cwd === primarySubmodulePath || cwd === secondarySubmodulePath) {
+        if (command === "remote get-url origin") {
+          return { stdout: "https://github.com/example/legapp-common.git\n", stderr: "" };
+        }
+        if (command === "symbolic-ref --short refs/remotes/origin/HEAD") {
+          return { stdout: "origin/main\n", stderr: "" };
+        }
+        if (command.includes("rev-parse --abbrev-ref --symbolic-full-name @{upstream}")) {
+          return { stdout: `origin/${branchName}\n`, stderr: "" };
+        }
+        if (command.includes("diff --find-renames --find-copies --name-status HEAD --")) {
+          return { stdout: "", stderr: "" };
+        }
+        if (command.includes("diff --find-renames --find-copies --numstat HEAD --")) {
+          return { stdout: "", stderr: "" };
+        }
+        if (command.includes("diff --find-renames --find-copies --patch --no-color HEAD --")) {
+          return { stdout: "", stderr: "" };
+        }
+        if (command === "ls-files --others --exclude-standard -z") {
+          return { stdout: "", stderr: "" };
+        }
+        if (command.startsWith("rev-list --left-right --count")) {
+          return { stdout: "0 0\n", stderr: "" };
+        }
+        if (command === "rev-parse HEAD") {
+          return {
+            stdout: cwd === primarySubmodulePath || secondaryAligned ? `${canonicalSha}\n` : `${previousSha}\n`,
+            stderr: "",
+          };
+        }
+        if (command === "branch --show-current") {
+          return { stdout: cwd === primarySubmodulePath ? `${branchName}\n` : "", stderr: "" };
+        }
+        if (command === `fetch origin ${branchName}`) {
+          return { stdout: "", stderr: "" };
+        }
+        if (command === `checkout --detach ${canonicalSha}`) {
+          secondaryAligned = true;
+          return { stdout: "", stderr: "" };
+        }
+        if (
+          command === `rev-parse --verify ${previousSha}^{commit}` ||
+          command === `rev-parse --verify ${canonicalSha}^{commit}`
+        ) {
+          return { stdout: `${command.includes(canonicalSha) ? canonicalSha : previousSha}\n`, stderr: "" };
+        }
+        if (command === `merge-base --is-ancestor ${previousSha} ${canonicalSha}`) {
+          return { stdout: "", stderr: "" };
+        }
+      }
+
+      if (cwd === primaryParentWorktreePath || cwd === secondaryParentWorktreePath) {
+        if (command === "add Submodules\\LegAppCommon") {
+          return { stdout: "", stderr: "" };
+        }
+      }
+
+      throw new Error(`Unexpected git command in ${cwd}: ${command}`);
+    });
+    const service = new TicketRunService({
+      memoryDb: database,
+      logger: createLogger(),
+      projectRegistry: { getSnapshot: async () => ({ workspaceRoot: null, repos: [], mappings: [] }) },
+      youTrackService: null,
+      runGitCommand: gitRunner,
+      getMissionGitToken: () => "github-pat",
+      now: () => 500,
+    });
+    vi.spyOn(service as unknown as EnsureRunSubmodulesTarget, "ensureRunSubmodules").mockImplementation(
+      async (run) => run,
+    );
+
+    const result = await service.pushSubmodule("run-1", canonicalUrl);
+
+    expect(result.action).toBe("push");
+    expect(result.gitState.pushAction).toBe("none");
+    expect(result.gitState.parents.every((parent) => parent.isAligned)).toBe(true);
+    expect(gitRunner).not.toHaveBeenCalledWith(primarySubmodulePath, expect.arrayContaining(["push"]));
+    expect(gitRunner).toHaveBeenCalledWith(secondarySubmodulePath, ["fetch", "origin", branchName]);
+    expect(gitRunner).toHaveBeenCalledWith(secondarySubmodulePath, ["checkout", "--detach", canonicalSha]);
+    expect(gitRunner).toHaveBeenCalledWith(primaryParentWorktreePath, ["add", "Submodules\\LegAppCommon"]);
+    expect(gitRunner).toHaveBeenCalledWith(secondaryParentWorktreePath, ["add", "Submodules\\LegAppCommon"]);
   });
 });

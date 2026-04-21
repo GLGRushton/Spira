@@ -1,4 +1,10 @@
-import { createMissionView, type MissionUiRoom, type SpiraUiRootView, type SpiraUiView } from "@spira/shared";
+import {
+  type MissionUiRoom,
+  type SpiraUiRootView,
+  type SpiraUiView,
+  createMissionView,
+  getMissionRunIdFromView,
+} from "@spira/shared";
 import { create } from "zustand";
 
 interface MissionFlashMessage {
@@ -82,13 +88,17 @@ export const useNavigationStore = create<NavigationStore>((set) => ({
   },
   pruneMissionRooms: (activeRunIds) => {
     const activeRunIdSet = new Set(activeRunIds);
-    set((state) => ({
-      missionRooms: Object.fromEntries(
-        Object.entries(state.missionRooms).filter(([runId]) => activeRunIdSet.has(runId)),
-      ),
-      missionFlashByRun: Object.fromEntries(
-        Object.entries(state.missionFlashByRun).filter(([runId]) => activeRunIdSet.has(runId)),
-      ),
-    }));
+    set((state) => {
+      const activeMissionRunId = getMissionRunIdFromView(state.activeView);
+      return {
+        activeView: activeMissionRunId && !activeRunIdSet.has(activeMissionRunId) ? "ship" : state.activeView,
+        missionRooms: Object.fromEntries(
+          Object.entries(state.missionRooms).filter(([runId]) => activeRunIdSet.has(runId)),
+        ),
+        missionFlashByRun: Object.fromEntries(
+          Object.entries(state.missionFlashByRun).filter(([runId]) => activeRunIdSet.has(runId)),
+        ),
+      };
+    });
   },
 }));

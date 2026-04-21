@@ -381,7 +381,7 @@ export function SettingsPanel() {
               <div className={styles.groupHeader}>
                 <span className={styles.label}>Mission git credentials</span>
                 <span className={styles.caption}>
-                  This PAT is dedicated to mission commits, publish, push, and GitHub author lookup.
+                  This PAT is dedicated to mission submodule cloning, commits, publish, push, and GitHub author lookup.
                 </span>
               </div>
               <div className={styles.keyGrid}>{renderRuntimeConfigCards(MISSION_GIT_RUNTIME_CONFIG_KEYS)}</div>

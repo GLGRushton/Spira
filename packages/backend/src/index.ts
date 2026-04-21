@@ -233,13 +233,20 @@ const buildCommitDraftPrompt = ({ run, gitState }: GenerateCommitDraftInput): st
     .join("\n\n")
     .slice(0, 24_000);
   const latestAttempt = run.attempts.at(-1)?.summary?.trim();
+  const targetDescription =
+    "repoRelativePath" in gitState ? `Repository: ${gitState.repoRelativePath}` : `Managed submodule: ${gitState.name}`;
+  const parentSummary =
+    "parents" in gitState
+      ? `Parent repos: ${gitState.parents.map((parent) => parent.parentRepoRelativePath).join(", ")}`
+      : null;
   return [
     `Write only a git commit message for ticket ${run.ticketId}: ${run.ticketSummary}.`,
     "Return plain text only. No code fences. No commentary.",
     `Format exactly as: feat(${run.ticketId}): summary, then a blank line, then up to 6 '- bullet' detail lines.`,
     "Keep the summary concise and the bullets concrete.",
-    `Repository: ${gitState.repoRelativePath}`,
+    targetDescription,
     `Branch: ${gitState.branchName}`,
+    parentSummary,
     latestAttempt ? `Last mission summary: ${latestAttempt}` : "Last mission summary: unavailable.",
     "Changed files:",
     fileSummary || "- No tracked file changes were detected.",
@@ -1047,6 +1054,78 @@ const handleClientMessage = async (message: ClientMessage): Promise<void> => {
     return;
   }
 
+  if (message.type === "missions:ticket-run:delete") {
+    if (!ticketRunService) {
+      transport?.send({
+        type: "missions:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(
+          new Error("Ticket run service is unavailable."),
+          "MISSIONS_UNAVAILABLE",
+          "Missions ticket runs are unavailable.",
+          "missions",
+        ),
+      });
+      return;
+    }
+
+    try {
+      transport?.send({
+        type: "missions:ticket-run:delete:result",
+        requestId: message.requestId,
+        result: await ticketRunService.deleteRun(message.runId),
+      });
+    } catch (error) {
+      logger.error({ err: error, requestId: message.requestId, runId: message.runId }, "Failed to delete mission");
+      transport?.send({
+        type: "missions:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(error, "MISSIONS_DELETE_FAILED", "Failed to delete this mission.", "missions"),
+      });
+    }
+    return;
+  }
+
+  if (message.type === "missions:ticket-run:review-snapshot:get") {
+    if (!ticketRunService) {
+      transport?.send({
+        type: "missions:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(
+          new Error("Ticket run service is unavailable."),
+          "MISSIONS_UNAVAILABLE",
+          "Missions ticket runs are unavailable.",
+          "missions",
+        ),
+      });
+      return;
+    }
+
+    try {
+      transport?.send({
+        type: "missions:ticket-run:review-snapshot:result",
+        requestId: message.requestId,
+        result: await ticketRunService.getReviewSnapshot(message.runId),
+      });
+    } catch (error) {
+      logger.error(
+        { err: error, requestId: message.requestId, runId: message.runId },
+        "Failed to load mission review snapshot",
+      );
+      transport?.send({
+        type: "missions:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(
+          error,
+          "MISSIONS_REVIEW_SNAPSHOT_FAILED",
+          "Failed to load mission review snapshot.",
+          "missions",
+        ),
+      });
+    }
+    return;
+  }
+
   if (message.type === "missions:ticket-run:git-state:get") {
     if (!ticketRunService) {
       transport?.send({
@@ -1077,6 +1156,46 @@ const handleClientMessage = async (message: ClientMessage): Promise<void> => {
         type: "missions:request-error",
         requestId: message.requestId,
         ...toErrorPayload(error, "MISSIONS_GIT_STATE_FAILED", "Failed to load mission git state.", "missions"),
+      });
+    }
+    return;
+  }
+
+  if (message.type === "missions:ticket-run:submodule-git-state:get") {
+    if (!ticketRunService) {
+      transport?.send({
+        type: "missions:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(
+          new Error("Ticket run service is unavailable."),
+          "MISSIONS_UNAVAILABLE",
+          "Missions ticket runs are unavailable.",
+          "missions",
+        ),
+      });
+      return;
+    }
+
+    try {
+      transport?.send({
+        type: "missions:ticket-run:submodule-git-state:result",
+        requestId: message.requestId,
+        result: await ticketRunService.getSubmoduleGitState(message.runId, message.canonicalUrl),
+      });
+    } catch (error) {
+      logger.error(
+        { err: error, requestId: message.requestId, runId: message.runId, canonicalUrl: message.canonicalUrl },
+        "Failed to load managed submodule git state",
+      );
+      transport?.send({
+        type: "missions:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(
+          error,
+          "MISSIONS_SUBMODULE_GIT_STATE_FAILED",
+          "Failed to load managed submodule git state.",
+          "missions",
+        ),
       });
     }
     return;
@@ -1122,6 +1241,46 @@ const handleClientMessage = async (message: ClientMessage): Promise<void> => {
     return;
   }
 
+  if (message.type === "missions:ticket-run:submodule:commit-draft:generate") {
+    if (!ticketRunService) {
+      transport?.send({
+        type: "missions:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(
+          new Error("Ticket run service is unavailable."),
+          "MISSIONS_UNAVAILABLE",
+          "Missions ticket runs are unavailable.",
+          "missions",
+        ),
+      });
+      return;
+    }
+
+    try {
+      transport?.send({
+        type: "missions:ticket-run:submodule:commit-draft:generate:result",
+        requestId: message.requestId,
+        result: await ticketRunService.generateSubmoduleCommitDraft(message.runId, message.canonicalUrl),
+      });
+    } catch (error) {
+      logger.error(
+        { err: error, requestId: message.requestId, runId: message.runId, canonicalUrl: message.canonicalUrl },
+        "Failed to generate managed submodule commit draft",
+      );
+      transport?.send({
+        type: "missions:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(
+          error,
+          "MISSIONS_SUBMODULE_COMMIT_DRAFT_FAILED",
+          "Failed to generate a managed submodule commit draft.",
+          "missions",
+        ),
+      });
+    }
+    return;
+  }
+
   if (message.type === "missions:ticket-run:commit-draft:set") {
     if (!ticketRunService) {
       transport?.send({
@@ -1152,6 +1311,46 @@ const handleClientMessage = async (message: ClientMessage): Promise<void> => {
           error,
           "MISSIONS_COMMIT_DRAFT_SAVE_FAILED",
           "Failed to save the mission commit draft.",
+          "missions",
+        ),
+      });
+    }
+    return;
+  }
+
+  if (message.type === "missions:ticket-run:submodule:commit-draft:set") {
+    if (!ticketRunService) {
+      transport?.send({
+        type: "missions:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(
+          new Error("Ticket run service is unavailable."),
+          "MISSIONS_UNAVAILABLE",
+          "Missions ticket runs are unavailable.",
+          "missions",
+        ),
+      });
+      return;
+    }
+
+    try {
+      transport?.send({
+        type: "missions:ticket-run:submodule:commit-draft:set:result",
+        requestId: message.requestId,
+        result: await ticketRunService.setSubmoduleCommitDraft(message.runId, message.canonicalUrl, message.message),
+      });
+    } catch (error) {
+      logger.error(
+        { err: error, requestId: message.requestId, runId: message.runId, canonicalUrl: message.canonicalUrl },
+        "Failed to save managed submodule commit draft",
+      );
+      transport?.send({
+        type: "missions:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(
+          error,
+          "MISSIONS_SUBMODULE_COMMIT_DRAFT_SAVE_FAILED",
+          "Failed to save the managed submodule commit draft.",
           "missions",
         ),
       });
@@ -1194,6 +1393,46 @@ const handleClientMessage = async (message: ClientMessage): Promise<void> => {
     return;
   }
 
+  if (message.type === "missions:ticket-run:submodule:commit") {
+    if (!ticketRunService) {
+      transport?.send({
+        type: "missions:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(
+          new Error("Ticket run service is unavailable."),
+          "MISSIONS_UNAVAILABLE",
+          "Missions ticket runs are unavailable.",
+          "missions",
+        ),
+      });
+      return;
+    }
+
+    try {
+      transport?.send({
+        type: "missions:ticket-run:submodule:commit:result",
+        requestId: message.requestId,
+        result: await ticketRunService.commitSubmodule(message.runId, message.canonicalUrl, message.message),
+      });
+    } catch (error) {
+      logger.error(
+        { err: error, requestId: message.requestId, runId: message.runId, canonicalUrl: message.canonicalUrl },
+        "Failed to commit managed submodule changes",
+      );
+      transport?.send({
+        type: "missions:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(
+          error,
+          "MISSIONS_SUBMODULE_COMMIT_FAILED",
+          "Failed to commit this managed submodule.",
+          "missions",
+        ),
+      });
+    }
+    return;
+  }
+
   if (message.type === "missions:ticket-run:publish") {
     if (!ticketRunService) {
       transport?.send({
@@ -1229,6 +1468,46 @@ const handleClientMessage = async (message: ClientMessage): Promise<void> => {
     return;
   }
 
+  if (message.type === "missions:ticket-run:submodule:publish") {
+    if (!ticketRunService) {
+      transport?.send({
+        type: "missions:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(
+          new Error("Ticket run service is unavailable."),
+          "MISSIONS_UNAVAILABLE",
+          "Missions ticket runs are unavailable.",
+          "missions",
+        ),
+      });
+      return;
+    }
+
+    try {
+      transport?.send({
+        type: "missions:ticket-run:submodule:publish:result",
+        requestId: message.requestId,
+        result: await ticketRunService.publishSubmodule(message.runId, message.canonicalUrl),
+      });
+    } catch (error) {
+      logger.error(
+        { err: error, requestId: message.requestId, runId: message.runId, canonicalUrl: message.canonicalUrl },
+        "Failed to publish managed submodule branch",
+      );
+      transport?.send({
+        type: "missions:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(
+          error,
+          "MISSIONS_SUBMODULE_PUBLISH_FAILED",
+          "Failed to publish this managed submodule branch.",
+          "missions",
+        ),
+      });
+    }
+    return;
+  }
+
   if (message.type === "missions:ticket-run:push") {
     if (!ticketRunService) {
       transport?.send({
@@ -1256,6 +1535,46 @@ const handleClientMessage = async (message: ClientMessage): Promise<void> => {
         type: "missions:request-error",
         requestId: message.requestId,
         ...toErrorPayload(error, "MISSIONS_PUSH_FAILED", "Failed to push this mission branch.", "missions"),
+      });
+    }
+    return;
+  }
+
+  if (message.type === "missions:ticket-run:submodule:push") {
+    if (!ticketRunService) {
+      transport?.send({
+        type: "missions:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(
+          new Error("Ticket run service is unavailable."),
+          "MISSIONS_UNAVAILABLE",
+          "Missions ticket runs are unavailable.",
+          "missions",
+        ),
+      });
+      return;
+    }
+
+    try {
+      transport?.send({
+        type: "missions:ticket-run:submodule:push:result",
+        requestId: message.requestId,
+        result: await ticketRunService.pushSubmodule(message.runId, message.canonicalUrl),
+      });
+    } catch (error) {
+      logger.error(
+        { err: error, requestId: message.requestId, runId: message.runId, canonicalUrl: message.canonicalUrl },
+        "Failed to push managed submodule branch",
+      );
+      transport?.send({
+        type: "missions:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(
+          error,
+          "MISSIONS_SUBMODULE_PUSH_FAILED",
+          "Failed to push this managed submodule branch.",
+          "missions",
+        ),
       });
     }
     return;
@@ -1294,6 +1613,46 @@ const handleClientMessage = async (message: ClientMessage): Promise<void> => {
           error,
           "MISSIONS_PULL_REQUEST_FAILED",
           "Failed to open this mission pull request.",
+          "missions",
+        ),
+      });
+    }
+    return;
+  }
+
+  if (message.type === "missions:ticket-run:submodule:pull-request:create") {
+    if (!ticketRunService) {
+      transport?.send({
+        type: "missions:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(
+          new Error("Ticket run service is unavailable."),
+          "MISSIONS_UNAVAILABLE",
+          "Missions ticket runs are unavailable.",
+          "missions",
+        ),
+      });
+      return;
+    }
+
+    try {
+      transport?.send({
+        type: "missions:ticket-run:submodule:pull-request:create:result",
+        requestId: message.requestId,
+        result: await ticketRunService.createSubmodulePullRequest(message.runId, message.canonicalUrl),
+      });
+    } catch (error) {
+      logger.error(
+        { err: error, requestId: message.requestId, runId: message.runId, canonicalUrl: message.canonicalUrl },
+        "Failed to open managed submodule pull request",
+      );
+      transport?.send({
+        type: "missions:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(
+          error,
+          "MISSIONS_SUBMODULE_PULL_REQUEST_FAILED",
+          "Failed to open this managed submodule pull request.",
           "missions",
         ),
       });

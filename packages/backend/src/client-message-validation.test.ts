@@ -78,6 +78,44 @@ describe("parseClientMessagePayload", () => {
     });
   });
 
+  it("accepts mission review snapshot and submodule git messages", () => {
+    expect(
+      parseClientMessagePayload(
+        JSON.stringify({
+          type: "missions:ticket-run:review-snapshot:get",
+          requestId: "req-1",
+          runId: "run-1",
+        }),
+      ),
+    ).toEqual({
+      message: {
+        type: "missions:ticket-run:review-snapshot:get",
+        requestId: "req-1",
+        runId: "run-1",
+      },
+    });
+
+    expect(
+      parseClientMessagePayload(
+        JSON.stringify({
+          type: "missions:ticket-run:submodule:commit",
+          requestId: "req-2",
+          runId: "run-1",
+          canonicalUrl: "github.com/example/legapp-common",
+          message: "feat(SPI-101): update shared module",
+        }),
+      ),
+    ).toEqual({
+      message: {
+        type: "missions:ticket-run:submodule:commit",
+        requestId: "req-2",
+        runId: "run-1",
+        canonicalUrl: "github.com/example/legapp-common",
+        message: "feat(SPI-101): update shared module",
+      },
+    });
+  });
+
   it("rejects unknown message types", () => {
     expect(
       parseClientMessagePayload(
