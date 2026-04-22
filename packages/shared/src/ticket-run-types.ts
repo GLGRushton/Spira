@@ -15,6 +15,23 @@ export type TicketRunCleanupState = (typeof TICKET_RUN_CLEANUP_STATES)[number];
 export const TICKET_RUN_ATTEMPT_STATUSES = ["running", "completed", "failed", "cancelled"] as const;
 export type TicketRunAttemptStatus = (typeof TICKET_RUN_ATTEMPT_STATUSES)[number];
 
+export const TICKET_RUN_PROOF_STATUSES = ["not-run", "running", "passed", "failed", "stale"] as const;
+export type TicketRunProofStatus = (typeof TICKET_RUN_PROOF_STATUSES)[number];
+
+export const TICKET_RUN_PROOF_RUN_STATUSES = ["running", "passed", "failed"] as const;
+export type TicketRunProofRunStatus = (typeof TICKET_RUN_PROOF_RUN_STATUSES)[number];
+
+export const TICKET_RUN_PROOF_ARTIFACT_KINDS = [
+  "folder",
+  "report",
+  "trace",
+  "video",
+  "screenshot",
+  "log",
+  "other",
+] as const;
+export type TicketRunProofArtifactKind = (typeof TICKET_RUN_PROOF_ARTIFACT_KINDS)[number];
+
 export interface StartTicketRunRequest {
   ticketId: string;
   ticketSummary: string;
@@ -64,6 +81,47 @@ export interface TicketRunAttemptSummary {
   completedAt: number | null;
 }
 
+export interface TicketRunProofArtifact {
+  artifactId: string;
+  kind: TicketRunProofArtifactKind;
+  label: string;
+  path: string;
+  fileUrl: string;
+}
+
+export interface TicketRunProofRunSummary {
+  proofRunId: string;
+  runId: string;
+  profileId: string;
+  profileLabel: string;
+  status: TicketRunProofRunStatus;
+  summary: string | null;
+  startedAt: number;
+  completedAt: number | null;
+  exitCode: number | null;
+  command: string | null;
+  artifacts: TicketRunProofArtifact[];
+}
+
+export interface TicketRunProofSummary {
+  status: TicketRunProofStatus;
+  lastProofRunId: string | null;
+  lastProofProfileId: string | null;
+  lastProofAt: number | null;
+  lastProofSummary: string | null;
+  staleReason: string | null;
+}
+
+export interface TicketRunProofProfileSummary {
+  profileId: string;
+  label: string;
+  description: string;
+  kind: "playwright-dotnet-nunit";
+  repoRelativePath: string;
+  projectRelativePath: string;
+  runSettingsRelativePath: string | null;
+}
+
 export interface TicketRunSummary {
   runId: string;
   stationId: string | null;
@@ -80,6 +138,8 @@ export interface TicketRunSummary {
   worktrees: TicketRunWorktreeSummary[];
   submodules: TicketRunSubmoduleSummary[];
   attempts: TicketRunAttemptSummary[];
+  proof: TicketRunProofSummary;
+  proofRuns: TicketRunProofRunSummary[];
 }
 
 export interface TicketRunSnapshot {
@@ -116,6 +176,26 @@ export interface CancelTicketRunWorkResult {
 export interface CompleteTicketRunResult {
   run: TicketRunSummary;
   snapshot: TicketRunSnapshot;
+}
+
+export interface TicketRunProofSnapshot {
+  runId: string;
+  proof: TicketRunProofSummary;
+  profiles: TicketRunProofProfileSummary[];
+  proofRuns: TicketRunProofRunSummary[];
+}
+
+export interface TicketRunProofSnapshotResult {
+  run: TicketRunSummary;
+  snapshot: TicketRunSnapshot;
+  proofSnapshot: TicketRunProofSnapshot;
+}
+
+export interface RunTicketRunProofResult {
+  run: TicketRunSummary;
+  snapshot: TicketRunSnapshot;
+  proofSnapshot: TicketRunProofSnapshot;
+  proofRun: TicketRunProofRunSummary;
 }
 
 export interface DeleteTicketRunResult {

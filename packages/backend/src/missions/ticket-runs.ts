@@ -16,6 +16,7 @@ import type {
   GenerateTicketRunCommitDraftResult,
   GenerateTicketRunSubmoduleCommitDraftResult,
   RetryTicketRunSyncResult,
+  RunTicketRunProofResult,
   SetTicketRunCommitDraftResult,
   SetTicketRunSubmoduleCommitDraftResult,
   StartTicketRunRequest,
@@ -29,6 +30,12 @@ import type {
   TicketRunDiffFileSummary,
   TicketRunGitState,
   TicketRunGitStateResult,
+  TicketRunProofArtifact,
+  TicketRunProofProfileSummary,
+  TicketRunProofRunSummary,
+  TicketRunProofSnapshot,
+  TicketRunProofSnapshotResult,
+  TicketRunProofSummary,
   TicketRunPullRequestLinks,
   TicketRunPushAction,
   TicketRunReviewRepoEntry,
@@ -48,6 +55,8 @@ import type {
 import { normalizeProjectKey } from "@spira/shared";
 import fetch from "node-fetch";
 import type { Logger } from "pino";
+import { discoverMissionProofProfiles, toMissionProofProfileSummary, type ResolvedMissionProofProfile } from "./proof-registry.js";
+import { runMissionProof, type RunMissionProofInput, type RunMissionProofOutput } from "./proof-runner.js";
 import type { ProjectRegistry } from "../projects/registry.js";
 import { ConfigError, SpiraError } from "../util/errors.js";
 import type { SpiraEventBus } from "../util/event-bus.js";
@@ -187,6 +196,8 @@ export interface TicketRunServiceOptions {
   closeMissionStation?: (stationId: string) => Promise<void>;
   stopRunServices?: (runId: string) => Promise<void>;
   generateCommitDraft?: (input: GenerateCommitDraftInput) => Promise<string>;
+  discoverMissionProofProfiles?: (run: TicketRunSummary) => Promise<ResolvedMissionProofProfile[]>;
+  runMissionProof?: (input: RunMissionProofInput) => Promise<RunMissionProofOutput>;
   resolveMissionGitIdentity?: () => Promise<MissionGitIdentity>;
   getMissionGitToken?: () => string | null;
 }
@@ -714,6 +725,24 @@ const describeTicketRunWorkspace = (worktrees: ReadonlyArray<TicketRunSummary["w
 const formatTicketRunWorktreeList = (worktrees: ReadonlyArray<TicketRunSummary["worktrees"][number]>): string =>
   worktrees.map((worktree) => `- ${worktree.repoRelativePath}: ${worktree.worktreePath}`).join("\n");
 
+const buildDefaultProofSummary = (): TicketRunProofSummary => ({
+  status: "not-run",
+  lastProofRunId: null,
+  lastProofProfileId: null,
+  lastProofAt: null,
+  lastProofSummary: null,
+  staleReason: null,
+});
+
+const buildStaleProofSummary = (run: TicketRunSummary, staleReason: string): TicketRunProofSummary =>
+  run.proof.lastProofRunId
+    ? {
+        ...run.proof,
+        status: "stale",
+        staleReason,
+      }
+    : buildDefaultProofSummary();
+
 export class TicketRunService {
   private readonly now: () => number;
   private readonly runIdFactory: () => string;
@@ -946,6 +975,8 @@ export class TicketRunService {
       worktrees: startingWorktrees,
       submodules: recoverableRun?.submodules ?? [],
       attempts: recoverableRun?.attempts ?? [],
+      proof: recoverableRun?.proof ?? buildDefaultProofSummary(),
+      proofRuns: recoverableRun?.proofRuns ?? [],
     });
     this.emitSnapshot();
 
@@ -1038,6 +1069,8 @@ export class TicketRunService {
         worktrees: failedWorktrees,
         submodules: recoverableRun?.submodules ?? [],
         attempts: recoverableRun?.attempts ?? [],
+        proof: recoverableRun?.proof ?? buildDefaultProofSummary(),
+        proofRuns: recoverableRun?.proofRuns ?? [],
       });
       const failedSnapshot = memoryDb.getTicketRunSnapshot();
       this.emitSnapshot(failedSnapshot);
@@ -1061,6 +1094,8 @@ export class TicketRunService {
       worktrees: startingWorktrees,
       submodules: recoverableRun?.submodules ?? [],
       attempts: recoverableRun?.attempts ?? [],
+      proof: recoverableRun?.proof ?? buildDefaultProofSummary(),
+      proofRuns: recoverableRun?.proofRuns ?? [],
     });
     this.emitSnapshot();
 
@@ -1201,6 +1236,9 @@ export class TicketRunService {
       if (run.status !== "awaiting-review") {
         throw new ConfigError(`Ticket ${run.ticketId} must be awaiting review before it can be closed.`);
       }
+      if (run.proof.status === "running") {
+        throw new ConfigError(`Wait for the active proof run to finish before closing ${run.ticketId}.`);
+      }
 
       const reviewSnapshot = await this.buildReviewSnapshot(run);
       if (!reviewSnapshot.canClose) {
@@ -1229,6 +1267,120 @@ export class TicketRunService {
       return {
         run: completedRun,
         snapshot,
+      };
+    });
+  }
+
+  async getProofSnapshot(runId: string): Promise<TicketRunProofSnapshotResult> {
+    const run = await this.ensureRunSubmodules(this.getFreshRun(runId));
+    return {
+      run,
+      snapshot: this.requireMemoryDb().getTicketRunSnapshot(),
+      proofSnapshot: await this.buildProofSnapshot(run),
+    };
+  }
+
+  async runProof(runId: string, profileId: string): Promise<RunTicketRunProofResult> {
+    return this.withRunLock(runId, async () => {
+      const memoryDb = this.requireMemoryDb();
+      let run = await this.ensureRunSubmodules(this.getFreshRun(runId));
+      if (run.status !== "awaiting-review") {
+        throw new ConfigError(`Ticket ${run.ticketId} must be awaiting review before proof can be run.`);
+      }
+
+      const profiles = await this.discoverMissionProofProfiles(run);
+      const profile = profiles.find((candidate) => candidate.profileId === profileId);
+      if (!profile) {
+        throw new ConfigError(`Mission ${run.ticketId} does not expose a proof profile named ${profileId}.`);
+      }
+
+      const proofRunId = this.runIdFactory();
+      const runningProofRun: TicketRunProofRunSummary = {
+        proofRunId,
+        runId: run.runId,
+        profileId: profile.profileId,
+        profileLabel: profile.label,
+        status: "running",
+        summary: null,
+        startedAt: this.now(),
+        completedAt: null,
+        exitCode: null,
+        command: null,
+        artifacts: [],
+      };
+      run = this.persistRun(run, {
+        proof: {
+          status: "running",
+          lastProofRunId: proofRunId,
+          lastProofProfileId: profile.profileId,
+          lastProofAt: null,
+          lastProofSummary: null,
+          staleReason: null,
+        },
+        proofRuns: [
+          runningProofRun,
+          ...run.proofRuns.filter((candidate) => candidate.proofRunId !== proofRunId),
+        ],
+      });
+      this.emitSnapshot(memoryDb.getTicketRunSnapshot());
+
+      let proofOutput: RunMissionProofOutput;
+      try {
+        proofOutput = await this.executeMissionProof({
+          run,
+          profile,
+          proofRunId,
+          logger: this.options.logger,
+          now: this.now,
+        });
+      } catch (error) {
+        proofOutput = {
+          status: "failed",
+          summary: error instanceof Error ? error.message : "Mission proof failed before it completed.",
+          startedAt: runningProofRun.startedAt,
+          completedAt: this.now(),
+          exitCode: null,
+          command: profile.command,
+          artifacts: [],
+        };
+      }
+
+      const completedProofRun: TicketRunProofRunSummary = {
+        ...runningProofRun,
+        status: proofOutput.status,
+        summary: proofOutput.summary,
+        startedAt: proofOutput.startedAt,
+        completedAt: proofOutput.completedAt,
+        exitCode: proofOutput.exitCode,
+        command: proofOutput.command,
+        artifacts: proofOutput.artifacts,
+      };
+      run = this.persistRun(run, {
+        proof: {
+          status: proofOutput.status,
+          lastProofRunId: proofRunId,
+          lastProofProfileId: profile.profileId,
+          lastProofAt: proofOutput.completedAt,
+          lastProofSummary: proofOutput.summary,
+          staleReason: null,
+        },
+        proofRuns: [
+          completedProofRun,
+          ...run.proofRuns.filter((candidate) => candidate.proofRunId !== proofRunId),
+        ],
+      });
+      const snapshot = memoryDb.getTicketRunSnapshot();
+      this.emitSnapshot(snapshot);
+      return {
+        run,
+        snapshot,
+        proofSnapshot: {
+          runId: run.runId,
+          proof: run.proof,
+          profiles: profiles.map((candidate) => toMissionProofProfileSummary(candidate)),
+          proofRuns: run.proofRuns,
+        },
+        proofRun: completedProofRun,
       };
     });
   }
@@ -1790,6 +1942,26 @@ export class TicketRunService {
     }
   }
 
+  private async discoverMissionProofProfiles(run: TicketRunSummary): Promise<ResolvedMissionProofProfile[]> {
+    return this.options.discoverMissionProofProfiles
+      ? this.options.discoverMissionProofProfiles(run)
+      : discoverMissionProofProfiles(run);
+  }
+
+  private async executeMissionProof(input: RunMissionProofInput): Promise<RunMissionProofOutput> {
+    return this.options.runMissionProof ? this.options.runMissionProof(input) : runMissionProof(input);
+  }
+
+  private async buildProofSnapshot(run: TicketRunSummary): Promise<TicketRunProofSnapshot> {
+    const profiles = await this.discoverMissionProofProfiles(run);
+    return {
+      runId: run.runId,
+      proof: run.proof,
+      profiles: profiles.map((profile) => toMissionProofProfileSummary(profile)),
+      proofRuns: run.proofRuns,
+    };
+  }
+
   private async launchMissionPass(run: TicketRunSummary, prompt: string): Promise<MissionPassHandle> {
     if (!this.options.launchMissionPass) {
       throw new ConfigError("Mission work execution is unavailable.");
@@ -1837,6 +2009,7 @@ export class TicketRunService {
         workspace.noun === "worktree"
           ? `Attempt ${nextSequence} is working in ${workspace.path}.`
           : `Attempt ${nextSequence} is working from ${workspace.path} across ${run.worktrees.length} repos.`,
+      proof: buildStaleProofSummary(run, "A new mission work pass started after the last proof run."),
       attempts: [...run.attempts, attempt],
     });
     this.emitSnapshot(this.requireMemoryDb().getTicketRunSnapshot());
@@ -3060,13 +3233,23 @@ export class TicketRunService {
     overrides: Partial<
       Pick<
         TicketRunSummary,
-        "stationId" | "status" | "statusMessage" | "commitMessageDraft" | "attempts" | "worktrees" | "submodules"
+        | "stationId"
+        | "status"
+        | "statusMessage"
+        | "commitMessageDraft"
+        | "attempts"
+        | "worktrees"
+        | "submodules"
+        | "proof"
+        | "proofRuns"
       >
     >,
   ): TicketRunSummary {
     const memoryDb = this.requireMemoryDb();
     const worktrees = overrides.worktrees ?? run.worktrees;
     const submodules = overrides.submodules ?? run.submodules;
+    const proof = overrides.proof ?? run.proof;
+    const proofRuns = overrides.proofRuns ?? run.proofRuns;
     return memoryDb.upsertTicketRun({
       runId: run.runId,
       stationId: overrides.stationId !== undefined ? overrides.stationId : run.stationId,
@@ -3113,6 +3296,19 @@ export class TicketRunService {
         createdAt: attempt.createdAt,
         updatedAt: attempt.updatedAt,
         completedAt: attempt.completedAt,
+      })),
+      proof,
+      proofRuns: proofRuns.map((proofRun) => ({
+        proofRunId: proofRun.proofRunId,
+        profileId: proofRun.profileId,
+        profileLabel: proofRun.profileLabel,
+        status: proofRun.status,
+        summary: proofRun.summary,
+        startedAt: proofRun.startedAt,
+        completedAt: proofRun.completedAt,
+        exitCode: proofRun.exitCode,
+        command: proofRun.command,
+        artifacts: proofRun.artifacts,
       })),
     });
   }
@@ -3199,6 +3395,8 @@ export class TicketRunService {
         updatedAt: this.now(),
       })),
       attempts: previousRun?.attempts ?? [],
+      proof: previousRun?.proof ?? buildDefaultProofSummary(),
+      proofRuns: previousRun?.proofRuns ?? [],
     });
     this.emitSnapshot(memoryDb.getTicketRunSnapshot());
     return updatedRun;

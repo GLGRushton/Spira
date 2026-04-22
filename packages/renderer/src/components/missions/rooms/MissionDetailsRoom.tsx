@@ -17,12 +17,14 @@ export function MissionDetailsRoom({ run, controller }: MissionDetailsRoomProps)
     run.stationId ? (store.stations[run.stationId]?.label ?? run.stationId) : null,
   );
   const latestAttempt = run.attempts[run.attempts.length - 1] ?? null;
+  const latestProofRun = [...run.proofRuns].sort((left, right) => right.startedAt - left.startedAt)[0] ?? null;
   const canRecoverErroredRun = run.status === "error" && run.attempts.length > 0;
   const canCloseMission = controller.reviewSnapshot?.canClose ?? false;
   const canDeleteMission = controller.reviewSnapshot?.canDelete ?? false;
   const deleteBlockersText =
     controller.reviewSnapshot?.deleteBlockers.map((blocker) => `${blocker.label}: ${blocker.reason}`).join("; ") ??
     null;
+  const canRunProof = run.status === "awaiting-review";
 
   return (
     <section className={shellStyles.roomSection}>
@@ -80,6 +82,8 @@ export function MissionDetailsRoom({ run, controller }: MissionDetailsRoomProps)
         {controller.runNotice ? <div className={projectStyles.notice}>{controller.runNotice}</div> : null}
         {controller.runError ? <div className={projectStyles.error}>{controller.runError}</div> : null}
         {controller.gitError ? <div className={projectStyles.error}>{controller.gitError}</div> : null}
+        {controller.proofNotice ? <div className={projectStyles.notice}>{controller.proofNotice}</div> : null}
+        {controller.proofError ? <div className={projectStyles.error}>{controller.proofError}</div> : null}
 
         {run.status === "blocked" ? (
           <div className={projectStyles.workActions}>
@@ -204,6 +208,99 @@ export function MissionDetailsRoom({ run, controller }: MissionDetailsRoomProps)
             </div>
           )
         ) : null}
+
+        <div className={projectStyles.reviewPanel}>
+          <div className={projectStyles.sectionHeader}>
+            <div>
+              <div className={projectStyles.sectionLabel}>Proof of completion</div>
+              <div className={projectStyles.sectionCaption}>
+                Project-native UI proof runs live here: Playwright, artifacts, and a little evidence instead of wishful
+                thinking.
+              </div>
+            </div>
+            <button
+              type="button"
+              className={projectStyles.secondaryButton}
+              onClick={() => void controller.refreshMissionProofs()}
+              disabled={controller.isProofLoading}
+            >
+              {controller.isProofLoading ? "Refreshing..." : "Refresh proofs"}
+            </button>
+          </div>
+
+          <div className={projectStyles.workHint}>
+            Status: <strong>{run.proof.status}</strong>
+            {run.proof.lastProofAt ? ` · Last run ${new Date(run.proof.lastProofAt).toLocaleString()}` : ""}
+            {run.proof.staleReason ? ` · ${run.proof.staleReason}` : ""}
+          </div>
+          {run.proof.lastProofSummary ? (
+            <div className={projectStyles.workHint}>{run.proof.lastProofSummary}</div>
+          ) : null}
+
+          {controller.proofProfiles.length > 0 ? (
+            <div className={projectStyles.attemptList}>
+              {controller.proofProfiles.map((profile) => {
+                const isRunning = controller.runningProofProfileId === profile.profileId;
+                return (
+                  <div key={profile.profileId} className={projectStyles.attemptCard}>
+                    <div className={projectStyles.workHeader}>
+                      <strong>{profile.label}</strong>
+                      <span className={projectStyles.statusBadge}>{profile.kind}</span>
+                    </div>
+                    <div className={projectStyles.workHint}>{profile.repoRelativePath}</div>
+                    {profile.description ? <div className={projectStyles.workHint}>{profile.description}</div> : null}
+                    <div className={projectStyles.inlineActions}>
+                      <button
+                        type="button"
+                        className={projectStyles.actionButton}
+                        onClick={() => void controller.runMissionProof(profile.profileId)}
+                        disabled={!canRunProof || isRunning || controller.runningProofProfileId !== null}
+                      >
+                        {isRunning ? "Running proof..." : "Run proof"}
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className={projectStyles.workHint}>
+              {controller.isProofLoading
+                ? "Discovering proof profiles."
+                : "No proof profiles are currently discoverable for this mission."}
+            </div>
+          )}
+
+          {latestProofRun ? (
+            <div className={projectStyles.attemptCard}>
+              <div className={projectStyles.workHeader}>
+                <strong>Latest proof run</strong>
+                <span className={projectStyles.statusBadge}>{latestProofRun.status}</span>
+              </div>
+              <div className={projectStyles.workHint}>
+                {latestProofRun.profileLabel} · Started {new Date(latestProofRun.startedAt).toLocaleString()}
+                {latestProofRun.completedAt
+                  ? ` · Finished ${new Date(latestProofRun.completedAt).toLocaleString()}`
+                  : ""}
+              </div>
+              {latestProofRun.summary ? <div className={projectStyles.workHint}>{latestProofRun.summary}</div> : null}
+              {latestProofRun.artifacts.length > 0 ? (
+                <div className={projectStyles.inlineActions}>
+                  {latestProofRun.artifacts.map((artifact) => (
+                    <button
+                      key={artifact.artifactId}
+                      type="button"
+                      className={projectStyles.secondaryButton}
+                      onClick={() => void window.electronAPI.openExternal(artifact.fileUrl)}
+                    >
+                      Open {artifact.label}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
 
         <div className={projectStyles.reviewPanel}>
           <div className={projectStyles.sectionLabel}>Local teardown</div>

@@ -6,11 +6,13 @@ import type {
   ITransport,
   McpServerStatus,
   MissionServiceSnapshot,
+  RunTicketRunProofResult,
   StationId,
   StationSummary,
   SubagentDelegationArgs,
   SubagentDomain,
   SubagentRunSnapshot,
+  TicketRunProofSnapshotResult,
   UpgradeProposal,
 } from "@spira/shared";
 import type { McpToolAggregator } from "../mcp/tool-aggregator.js";
@@ -74,6 +76,8 @@ interface StationRegistryOptions {
   listMissionServices?: (runId: string) => Promise<MissionServiceSnapshot>;
   startMissionService?: (runId: string, profileId: string) => Promise<MissionServiceSnapshot>;
   stopMissionService?: (runId: string, serviceId: string) => Promise<MissionServiceSnapshot>;
+  listMissionProofs?: (runId: string) => Promise<TicketRunProofSnapshotResult>;
+  runMissionProof?: (runId: string, profileId: string) => Promise<RunTicketRunProofResult>;
   requestUpgradeProposal?: (proposal: UpgradeProposal) => Promise<void> | void;
   applyHotCapabilityUpgrade?: () => Promise<void> | void;
   createSessionManager?: (
@@ -89,6 +93,8 @@ interface StationRegistryOptions {
       listMissionServices?: (runId: string) => Promise<MissionServiceSnapshot>;
       startMissionService?: (runId: string, profileId: string) => Promise<MissionServiceSnapshot>;
       stopMissionService?: (runId: string, serviceId: string) => Promise<MissionServiceSnapshot>;
+      listMissionProofs?: (runId: string) => Promise<TicketRunProofSnapshotResult>;
+      runMissionProof?: (runId: string, profileId: string) => Promise<RunTicketRunProofResult>;
     },
   ) => CopilotSessionManager;
 }
@@ -162,6 +168,8 @@ export class StationRegistry {
           listMissionServices: this.options.listMissionServices,
           startMissionService: this.options.startMissionService,
           stopMissionService: this.options.stopMissionService,
+          listMissionProofs: this.options.listMissionProofs,
+          runMissionProof: this.options.runMissionProof,
         })
       : new CopilotSessionManager(
           bus,
@@ -175,12 +183,14 @@ export class StationRegistry {
             subagentRegistry: this.options.subagentRegistry ?? null,
             additionalInstructions: createOptions.additionalInstructions ?? null,
             workingDirectory: createOptions.workingDirectory ?? null,
-            allowUpgradeTools: createOptions.allowUpgradeTools,
-            listMissionServices: this.options.listMissionServices,
-            startMissionService: this.options.startMissionService,
-            stopMissionService: this.options.stopMissionService,
-          },
-        );
+             allowUpgradeTools: createOptions.allowUpgradeTools,
+             listMissionServices: this.options.listMissionServices,
+             startMissionService: this.options.startMissionService,
+             stopMissionService: this.options.stopMissionService,
+             listMissionProofs: this.options.listMissionProofs,
+             runMissionProof: this.options.runMissionProof,
+           },
+         );
     const station: StationContext = {
       stationId,
       label,

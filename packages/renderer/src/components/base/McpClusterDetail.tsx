@@ -1,5 +1,6 @@
 import type { McpServerStatus } from "@spira/shared";
 import { useState } from "react";
+import { getMcpServerStateLabel, getMcpServerStateTone } from "./mcp-server-status.js";
 import styles from "./McpClusterDetail.module.css";
 
 interface McpClusterDetailProps {
@@ -99,8 +100,8 @@ export function McpClusterDetail({ servers, onSelectServer }: McpClusterDetailPr
         </div>
         <div className={styles.headerActions}>
           <p className={styles.caption}>
-            Grouped access to attached MCP servers. Built-ins stay welded in place; custom racks can be added or retired
-            from the deck without a restart.
+            Grouped access to attached MCP servers. Built-ins can be disabled but not removed; custom racks can be added
+            or retired from the deck without a restart.
           </p>
           <button type="button" className={styles.actionButton} onClick={() => setIsFormOpen(true)}>
             Add MCP server
@@ -218,38 +219,53 @@ export function McpClusterDetail({ servers, onSelectServer }: McpClusterDetailPr
       ) : null}
 
       <div className={styles.roster}>
-        {servers.map((server) => (
-          <article key={server.id} className={styles.serverCard}>
-            <div className={styles.serverTopline}>
-              <div className={styles.serverStatus}>
-                <span className={`${styles.stateDot} ${styles[server.state]}`} />
-                <span className={styles.serverState}>{server.state}</span>
+        {servers.map((server) => {
+          const stateTone = getMcpServerStateTone(server);
+          const stateLabel = getMcpServerStateLabel(server);
+
+          return (
+            <article key={server.id} className={styles.serverCard}>
+              <div className={styles.serverTopline}>
+                <div className={styles.serverStatus}>
+                  <span className={`${styles.stateDot} ${styles[stateTone]}`} />
+                  <span className={styles.serverState}>{stateLabel}</span>
+                </div>
+                <div className={styles.cardActions}>
+                  <button
+                    type="button"
+                    className={`${styles.toggleButton} ${server.enabled ? styles.toggleButtonActive : ""}`}
+                    disabled={server.state === "starting"}
+                    onClick={() => window.electronAPI.setMcpServerEnabled(server.id, !server.enabled)}
+                  >
+                    {server.enabled ? "Enabled" : "Disabled"}
+                  </button>
+                  {server.source === "builtin" ? (
+                    <span className={styles.cardBadge}>Built-in</span>
+                  ) : (
+                    <button
+                      type="button"
+                      className={styles.dangerButton}
+                      onClick={() => window.electronAPI.removeMcpServer(server.id)}
+                    >
+                      Remove
+                    </button>
+                  )}
+                </div>
               </div>
-              {server.source === "builtin" ? (
-                <span className={styles.cardBadge}>Built-in</span>
-              ) : (
-                <button
-                  type="button"
-                  className={styles.dangerButton}
-                  onClick={() => window.electronAPI.removeMcpServer(server.id)}
-                >
-                  Remove
-                </button>
-              )}
-            </div>
-            <div className={styles.serverName}>{server.name}</div>
-            <div className={styles.serverDescription}>
-              {server.description ?? "Attached MCP surface for delegated tools and live operational data."}
-            </div>
-            <div className={styles.serverMeta}>
-              <span>{server.toolCount} tools</span>
-              <span>{server.tools.slice(0, 2).join(" · ") || "No tools"}</span>
-            </div>
-            <button type="button" className={styles.inspectButton} onClick={() => onSelectServer(server.id)}>
-              Inspect rack
-            </button>
-          </article>
-        ))}
+              <div className={styles.serverName}>{server.name}</div>
+              <div className={styles.serverDescription}>
+                {server.description ?? "Attached MCP surface for delegated tools and live operational data."}
+              </div>
+              <div className={styles.serverMeta}>
+                <span>{server.toolCount} tools</span>
+                <span>{server.tools.slice(0, 2).join(" · ") || "No tools"}</span>
+              </div>
+              <button type="button" className={styles.inspectButton} onClick={() => onSelectServer(server.id)}>
+                Inspect rack
+              </button>
+            </article>
+          );
+        })}
       </div>
     </div>
   );

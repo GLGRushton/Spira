@@ -186,6 +186,15 @@ const ClientMessageSchema = z.discriminatedUnion("type", [
     requestId: z.string(),
     runId: z.string(),
   }),
+  messageSchema("missions:ticket-run:proofs:get", {
+    requestId: z.string(),
+    runId: z.string(),
+  }),
+  messageSchema("missions:ticket-run:proof:run", {
+    requestId: z.string(),
+    runId: z.string(),
+    profileId: z.string(),
+  }),
   messageSchema("missions:ticket-run:delete", {
     requestId: z.string(),
     runId: z.string(),

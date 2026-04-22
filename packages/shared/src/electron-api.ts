@@ -28,6 +28,7 @@ import type {
   GenerateTicketRunCommitDraftResult,
   GenerateTicketRunSubmoduleCommitDraftResult,
   RetryTicketRunSyncResult,
+  RunTicketRunProofResult,
   SetTicketRunCommitDraftResult,
   SetTicketRunSubmoduleCommitDraftResult,
   StartTicketRunRequest,
@@ -36,6 +37,7 @@ import type {
   SyncTicketRunRemoteResult,
   SyncTicketRunSubmoduleRemoteResult,
   TicketRunGitStateResult,
+  TicketRunProofSnapshotResult,
   TicketRunReviewSnapshotResult,
   TicketRunSnapshot,
   TicketRunSubmoduleGitStateResult,
@@ -106,6 +108,8 @@ export interface ElectronApi {
   continueTicketRunWork(runId: string, prompt?: string): Promise<ContinueTicketRunWorkResult>;
   cancelTicketRunWork(runId: string): Promise<CancelTicketRunWorkResult>;
   completeTicketRun(runId: string): Promise<CompleteTicketRunResult>;
+  getTicketRunProofSnapshot(runId: string): Promise<TicketRunProofSnapshotResult>;
+  runTicketRunProof(runId: string, profileId: string): Promise<RunTicketRunProofResult>;
   deleteTicketRun(runId: string): Promise<DeleteTicketRunResult>;
   getTicketRunReviewSnapshot(runId: string): Promise<TicketRunReviewSnapshotResult>;
   getTicketRunGitState(runId: string, repoRelativePath?: string): Promise<TicketRunGitStateResult>;

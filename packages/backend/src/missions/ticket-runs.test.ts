@@ -1395,6 +1395,172 @@ describe("TicketRunService", () => {
     expect(closeMissionStation).not.toHaveBeenCalled();
   });
 
+  it("blocks closing while a proof run is still active", async () => {
+    const database = createTestDatabase();
+    database.upsertTicketRun({
+      runId: "run-1",
+      stationId: "mission:run-1",
+      ticketId: "SPI-110",
+      ticketSummary: "Wait for proof completion",
+      ticketUrl: "https://example.youtrack.cloud/issue/SPI-110",
+      projectKey: "SPI",
+      status: "awaiting-review",
+      createdAt: 100,
+      startedAt: 100,
+      worktrees: [],
+      proof: {
+        status: "running",
+        lastProofRunId: "proof-1",
+        lastProofProfileId: "builtin:legapp-admin-ui-proof:run-1:web-app",
+        lastProofAt: null,
+        lastProofSummary: null,
+        staleReason: null,
+      },
+      proofRuns: [
+        {
+          proofRunId: "proof-1",
+          profileId: "builtin:legapp-admin-ui-proof:run-1:web-app",
+          profileLabel: "LegApp Admin UI proof",
+          status: "running",
+          summary: "Proof is in flight.",
+          startedAt: 150,
+          completedAt: null,
+          exitCode: null,
+          command: "dotnet test .\\LegApp.Admin.UI.Tests\\LegApp.Admin.UI.Tests.csproj",
+          artifacts: [],
+        },
+      ],
+    });
+    const closeMissionStation = vi.fn().mockResolvedValue(undefined);
+    const service = new TicketRunService({
+      memoryDb: database,
+      logger: createLogger(),
+      projectRegistry: { getSnapshot: async () => ({ workspaceRoot: null, repos: [], mappings: [] }) },
+      youTrackService: null,
+      closeMissionStation,
+      now: () => 500,
+    });
+
+    await expect(service.completeRun("run-1")).rejects.toThrow(
+      "Wait for the active proof run to finish before closing SPI-110.",
+    );
+    expect(closeMissionStation).not.toHaveBeenCalled();
+  });
+
+  it("runs a discovered mission proof and persists the result", async () => {
+    const database = createTestDatabase();
+    database.upsertTicketRun({
+      runId: "run-1",
+      ticketId: "SPI-111",
+      ticketSummary: "Prove mission completion",
+      ticketUrl: "https://example.youtrack.cloud/issue/SPI-111",
+      projectKey: "SPI",
+      status: "awaiting-review",
+      createdAt: 100,
+      startedAt: 100,
+      worktrees: [
+        {
+          repoRelativePath: "web-app",
+          repoAbsolutePath: "C:\\Repos\\web-app",
+          worktreePath: "C:\\Repos\\.spira-worktrees\\spi-111\\web-app",
+          branchName: "feat/spi-111-prove-mission-completion",
+        },
+      ],
+    });
+    const discoverMissionProofProfiles = vi.fn().mockResolvedValue([
+      {
+        profileId: "builtin:legapp-admin-ui-proof:run-1:web-app",
+        label: "LegApp Admin UI proof",
+        description: "Runs the discovered Playwright harness.",
+        kind: "playwright-dotnet-nunit" as const,
+        repoRelativePath: "web-app",
+        projectRelativePath: "LegApp.Admin.UI.Tests\\LegApp.Admin.UI.Tests.csproj",
+        runSettingsRelativePath: "LegApp.Admin.UI.Tests\\TestConfiguration.runsettings",
+        command: "dotnet",
+        args: ["test", ".\\LegApp.Admin.UI.Tests\\LegApp.Admin.UI.Tests.csproj"],
+        workingDirectory: "C:\\Repos\\.spira-worktrees\\spi-111\\web-app",
+      },
+    ]);
+    const runMissionProof = vi.fn().mockResolvedValue({
+      status: "passed" as const,
+      summary: "UI proof passed.",
+      startedAt: 200,
+      completedAt: 260,
+      exitCode: 0,
+      command: "dotnet test .\\LegApp.Admin.UI.Tests\\LegApp.Admin.UI.Tests.csproj",
+      artifacts: [
+        {
+          artifactId: "artifact-1",
+          label: "Proof report",
+          kind: "report" as const,
+          path: "C:\\Repos\\.spira-worktrees\\spi-111\\.spira-proof\\proof-1\\summary.json",
+          fileUrl: "file:///C:/Repos/.spira-worktrees/spi-111/.spira-proof/proof-1/summary.json",
+        },
+      ],
+    });
+    const service = new TicketRunService({
+      memoryDb: database,
+      logger: createLogger(),
+      projectRegistry: { getSnapshot: async () => ({ workspaceRoot: null, repos: [], mappings: [] }) },
+      youTrackService: null,
+      discoverMissionProofProfiles,
+      runMissionProof,
+      runIdFactory: () => "proof-1",
+      now: () => 200,
+    });
+
+    const result = await service.runProof("run-1", "builtin:legapp-admin-ui-proof:run-1:web-app");
+
+    expect(discoverMissionProofProfiles).toHaveBeenCalledTimes(1);
+    expect(runMissionProof).toHaveBeenCalledWith(
+      expect.objectContaining({
+        proofRunId: "proof-1",
+      }),
+    );
+    expect(result.run.proof).toMatchObject({
+      status: "passed",
+      lastProofRunId: "proof-1",
+      lastProofProfileId: "builtin:legapp-admin-ui-proof:run-1:web-app",
+      lastProofAt: 260,
+      lastProofSummary: "UI proof passed.",
+    });
+    expect(result.proofSnapshot).toMatchObject({
+      profiles: [
+        {
+          profileId: "builtin:legapp-admin-ui-proof:run-1:web-app",
+          repoRelativePath: "web-app",
+        },
+      ],
+      proof: {
+        status: "passed",
+      },
+      proofRuns: [
+        {
+          proofRunId: "proof-1",
+          status: "passed",
+        },
+      ],
+    });
+    expect(database.getTicketRun("run-1")).toMatchObject({
+      proof: {
+        status: "passed",
+        lastProofRunId: "proof-1",
+      },
+      proofRuns: [
+        {
+          proofRunId: "proof-1",
+          status: "passed",
+          artifacts: [
+            {
+              artifactId: "artifact-1",
+              kind: "report",
+            },
+          ],
+        },
+      ],
+    });
+  });
+
   it("commits an awaiting-review run with the resolved mission git identity and clears the draft", async () => {
     const database = createTestDatabase();
     database.upsertTicketRun({

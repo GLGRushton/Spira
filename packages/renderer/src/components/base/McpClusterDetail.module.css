@@ -67,7 +67,8 @@
 .actionButton,
 .secondaryButton,
 .dangerButton,
-.inspectButton {
+.inspectButton,
+.toggleButton {
   padding: 9px 12px;
   border-radius: var(--radius-sm);
   font-size: 12px;
@@ -81,10 +82,16 @@
   color: var(--text-primary);
 }
 
-.secondaryButton {
+.secondaryButton,
+.toggleButton {
   border: 1px solid rgba(255, 255, 255, 0.12);
   background: rgba(255, 255, 255, 0.04);
   color: var(--text-primary);
+}
+
+.toggleButtonActive {
+  border-color: rgba(0, 212, 170, 0.4);
+  color: var(--accent-teal);
 }
 
 .dangerButton {
@@ -181,6 +188,14 @@
   gap: 8px;
 }
 
+.cardActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 .cardBadge {
   padding: 6px 10px;
   border: 1px solid rgba(0, 229, 255, 0.14);
@@ -208,8 +223,12 @@
   background: var(--accent-cyan);
 }
 
-.error,
 .disconnected {
+  color: var(--text-secondary);
+  background: var(--text-secondary);
+}
+
+.error {
   color: #ef4444;
   background: #ef4444;
 }

@@ -469,6 +469,78 @@ describe("SpiraMemoryDatabase", () => {
     expect(database.getTicketRunSnapshot().runs).toHaveLength(1);
   });
 
+  it("round-trips mission proof summaries and proof run artifacts", () => {
+    const database = createTestDatabase();
+
+    database.upsertTicketRun({
+      runId: "run-proof",
+      ticketId: "SPI-150",
+      ticketSummary: "Prove UI completion",
+      ticketUrl: "https://example.youtrack.cloud/issue/SPI-150",
+      projectKey: "SPI",
+      status: "awaiting-review",
+      createdAt: 1_000,
+      startedAt: 1_000,
+      worktrees: [],
+      proof: {
+        status: "passed",
+        lastProofRunId: "proof-1",
+        lastProofProfileId: "builtin:legapp-admin-ui-proof:run-proof:web-app",
+        lastProofAt: 1_500,
+        lastProofSummary: "UI proof passed.",
+        staleReason: null,
+      },
+      proofRuns: [
+        {
+          proofRunId: "proof-1",
+          profileId: "builtin:legapp-admin-ui-proof:run-proof:web-app",
+          profileLabel: "LegApp Admin UI proof",
+          status: "passed",
+          summary: "UI proof passed.",
+          startedAt: 1_200,
+          completedAt: 1_500,
+          exitCode: 0,
+          command: "dotnet test .\\LegApp.Admin.UI.Tests\\LegApp.Admin.UI.Tests.csproj",
+          artifacts: [
+            {
+              artifactId: "artifact-1",
+              label: "Proof report",
+              kind: "report",
+              path: "C:\\Repos\\.spira-worktrees\\spi-150\\.spira-proof\\proof-1\\summary.json",
+              fileUrl: "file:///C:/Repos/.spira-worktrees/spi-150/.spira-proof/proof-1/summary.json",
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(database.getTicketRun("run-proof")).toMatchObject({
+      proof: {
+        status: "passed",
+        lastProofRunId: "proof-1",
+        lastProofProfileId: "builtin:legapp-admin-ui-proof:run-proof:web-app",
+        lastProofAt: 1_500,
+        lastProofSummary: "UI proof passed.",
+        staleReason: null,
+      },
+      proofRuns: [
+        {
+          proofRunId: "proof-1",
+          profileLabel: "LegApp Admin UI proof",
+          status: "passed",
+          summary: "UI proof passed.",
+          artifacts: [
+            {
+              artifactId: "artifact-1",
+              kind: "report",
+              path: "C:\\Repos\\.spira-worktrees\\spi-150\\.spira-proof\\proof-1\\summary.json",
+            },
+          ],
+        },
+      ],
+    });
+  });
+
   it("deletes ticket runs and cascades child mission records", () => {
     const database = createTestDatabase();
 

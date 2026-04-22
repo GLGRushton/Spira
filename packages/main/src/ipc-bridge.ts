@@ -16,6 +16,7 @@ import type {
   MissionServiceSnapshot,
   ProjectRepoMappingsSnapshot,
   RetryTicketRunSyncResult,
+  RunTicketRunProofResult,
   ServerMessage,
   SetTicketRunCommitDraftResult,
   SetTicketRunSubmoduleCommitDraftResult,
@@ -27,6 +28,7 @@ import type {
   SyncTicketRunRemoteResult,
   SyncTicketRunSubmoduleRemoteResult,
   TicketRunGitStateResult,
+  TicketRunProofSnapshotResult,
   TicketRunReviewSnapshotResult,
   TicketRunSnapshot,
   TicketRunSubmoduleGitStateResult,
@@ -60,6 +62,7 @@ const MISSION_PREPARATION_REQUEST_TIMEOUT_MS = 5 * MINUTE_MS;
 const MISSION_WORK_REQUEST_TIMEOUT_MS = 5 * MINUTE_MS;
 const MISSION_GIT_REQUEST_TIMEOUT_MS = 5 * MINUTE_MS;
 const MISSION_REVIEW_REQUEST_TIMEOUT_MS = 3 * MINUTE_MS;
+const MISSION_PROOF_REQUEST_TIMEOUT_MS = 20 * MINUTE_MS;
 const MISSION_DELETE_REQUEST_TIMEOUT_MS = 3 * MINUTE_MS;
 const MISSION_SERVICE_REQUEST_TIMEOUT_MS = 2 * MINUTE_MS;
 const MAX_PENDING_MESSAGES = 200;
@@ -99,6 +102,8 @@ type MissionsRequestMessage =
   | Extract<ClientMessage, { type: "missions:ticket-run:work:continue" }>
   | Extract<ClientMessage, { type: "missions:ticket-run:work:cancel" }>
   | Extract<ClientMessage, { type: "missions:ticket-run:complete" }>
+  | Extract<ClientMessage, { type: "missions:ticket-run:proofs:get" }>
+  | Extract<ClientMessage, { type: "missions:ticket-run:proof:run" }>
   | Extract<ClientMessage, { type: "missions:ticket-run:delete" }>
   | Extract<ClientMessage, { type: "missions:ticket-run:review-snapshot:get" }>
   | Extract<ClientMessage, { type: "missions:ticket-run:git-state:get" }>
@@ -126,6 +131,8 @@ type MissionsResponseMessage =
   | Extract<ServerMessage, { type: "missions:ticket-run:work:continue:result" }>
   | Extract<ServerMessage, { type: "missions:ticket-run:work:cancel:result" }>
   | Extract<ServerMessage, { type: "missions:ticket-run:complete:result" }>
+  | Extract<ServerMessage, { type: "missions:ticket-run:proofs:get:result" }>
+  | Extract<ServerMessage, { type: "missions:ticket-run:proof:run:result" }>
   | Extract<ServerMessage, { type: "missions:ticket-run:delete:result" }>
   | Extract<ServerMessage, { type: "missions:ticket-run:review-snapshot:result" }>
   | Extract<ServerMessage, { type: "missions:ticket-run:git-state:result" }>
@@ -192,6 +199,8 @@ export interface IpcBridgeHandle {
   continueTicketRunWork(runId: string, prompt?: string): Promise<ContinueTicketRunWorkResult>;
   cancelTicketRunWork(runId: string): Promise<CancelTicketRunWorkResult>;
   completeTicketRun(runId: string): Promise<CompleteTicketRunResult>;
+  getTicketRunProofSnapshot(runId: string): Promise<TicketRunProofSnapshotResult>;
+  runTicketRunProof(runId: string, profileId: string): Promise<RunTicketRunProofResult>;
   deleteTicketRun(runId: string): Promise<DeleteTicketRunResult>;
   getTicketRunReviewSnapshot(runId: string): Promise<TicketRunReviewSnapshotResult>;
   getTicketRunGitState(runId: string, repoRelativePath?: string): Promise<TicketRunGitStateResult>;
@@ -254,6 +263,8 @@ const isBackendResponseMessage = (message: ServerMessage): message is BackendRes
     message.type === "missions:ticket-run:work:continue:result" ||
     message.type === "missions:ticket-run:work:cancel:result" ||
     message.type === "missions:ticket-run:complete:result" ||
+    message.type === "missions:ticket-run:proofs:get:result" ||
+    message.type === "missions:ticket-run:proof:run:result" ||
     message.type === "missions:ticket-run:delete:result" ||
     message.type === "missions:ticket-run:review-snapshot:result" ||
     message.type === "missions:ticket-run:git-state:result" ||
@@ -730,6 +741,27 @@ export function setupIpcBridge(
         },
         "missions:ticket-run:complete:result",
         MISSION_REVIEW_REQUEST_TIMEOUT_MS,
+      ).then((response) => response.result),
+    getTicketRunProofSnapshot: (runId) =>
+      requestBackend(
+        {
+          type: "missions:ticket-run:proofs:get",
+          requestId: randomUUID(),
+          runId,
+        },
+        "missions:ticket-run:proofs:get:result",
+        MISSION_REVIEW_REQUEST_TIMEOUT_MS,
+      ).then((response) => response.result),
+    runTicketRunProof: (runId, profileId) =>
+      requestBackend(
+        {
+          type: "missions:ticket-run:proof:run",
+          requestId: randomUUID(),
+          runId,
+          profileId,
+        },
+        "missions:ticket-run:proof:run:result",
+        MISSION_PROOF_REQUEST_TIMEOUT_MS,
       ).then((response) => response.result),
     deleteTicketRun: (runId) =>
       requestBackend(

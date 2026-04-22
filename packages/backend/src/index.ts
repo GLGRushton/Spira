@@ -1055,6 +1055,73 @@ const handleClientMessage = async (message: ClientMessage): Promise<void> => {
     return;
   }
 
+  if (message.type === "missions:ticket-run:proofs:get") {
+    if (!ticketRunService) {
+      transport?.send({
+        type: "missions:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(
+          new Error("Ticket run service is unavailable."),
+          "MISSIONS_UNAVAILABLE",
+          "Missions ticket runs are unavailable.",
+          "missions",
+        ),
+      });
+      return;
+    }
+
+    try {
+      transport?.send({
+        type: "missions:ticket-run:proofs:get:result",
+        requestId: message.requestId,
+        result: await ticketRunService.getProofSnapshot(message.runId),
+      });
+    } catch (error) {
+      logger.error({ err: error, requestId: message.requestId, runId: message.runId }, "Failed to get mission proofs");
+      transport?.send({
+        type: "missions:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(error, "MISSIONS_PROOFS_GET_FAILED", "Failed to load mission proofs.", "missions"),
+      });
+    }
+    return;
+  }
+
+  if (message.type === "missions:ticket-run:proof:run") {
+    if (!ticketRunService) {
+      transport?.send({
+        type: "missions:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(
+          new Error("Ticket run service is unavailable."),
+          "MISSIONS_UNAVAILABLE",
+          "Missions ticket runs are unavailable.",
+          "missions",
+        ),
+      });
+      return;
+    }
+
+    try {
+      transport?.send({
+        type: "missions:ticket-run:proof:run:result",
+        requestId: message.requestId,
+        result: await ticketRunService.runProof(message.runId, message.profileId),
+      });
+    } catch (error) {
+      logger.error(
+        { err: error, requestId: message.requestId, runId: message.runId, profileId: message.profileId },
+        "Failed to run mission proof",
+      );
+      transport?.send({
+        type: "missions:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(error, "MISSIONS_PROOF_RUN_FAILED", "Failed to run mission proof.", "missions"),
+      });
+    }
+    return;
+  }
+
   if (message.type === "missions:ticket-run:delete") {
     if (!ticketRunService) {
       transport?.send({
@@ -2240,6 +2307,18 @@ const bootstrap = async () => {
         throw new ConfigError("Mission services are unavailable.");
       }
       return missionServiceRegistry.stopService(runId, serviceId);
+    },
+    listMissionProofs: async (runId) => {
+      if (!ticketRunService) {
+        throw new ConfigError("Mission proofs are unavailable.");
+      }
+      return ticketRunService.getProofSnapshot(runId);
+    },
+    runMissionProof: async (runId, profileId) => {
+      if (!ticketRunService) {
+        throw new ConfigError("Mission proofs are unavailable.");
+      }
+      return ticketRunService.runProof(runId, profileId);
     },
     requestUpgradeProposal,
     applyHotCapabilityUpgrade: async () => {

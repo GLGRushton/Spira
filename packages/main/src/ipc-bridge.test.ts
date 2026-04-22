@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import type { ServerMessage, StoredConversation } from "@spira/shared";
+import type { ServerMessage, StoredConversation, TicketRunSummary } from "@spira/shared";
 import { PROTOCOL_VERSION } from "@spira/shared";
 import type { BrowserWindow } from "electron";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -73,6 +73,34 @@ const getLastSentPayload = (socket: FakeWebSocket): Record<string, unknown> => {
 
   return JSON.parse(payload) as Record<string, unknown>;
 };
+
+const createTicketRunSummary = (overrides: Partial<TicketRunSummary> = {}): TicketRunSummary => ({
+  runId: "run-1",
+  stationId: null,
+  ticketId: "SPI-101",
+  ticketSummary: "Start Missions pickup",
+  ticketUrl: "https://example.youtrack.cloud/issue/SPI-101",
+  projectKey: "SPI",
+  status: "ready",
+  statusMessage: "Worktree ready.",
+  commitMessageDraft: null,
+  createdAt: 1,
+  updatedAt: 2,
+  startedAt: 1,
+  worktrees: [],
+  submodules: [],
+  attempts: [],
+  proof: {
+    status: "not-run",
+    lastProofAt: null,
+    lastProofRunId: null,
+    lastProofProfileId: null,
+    lastProofSummary: null,
+    staleReason: null,
+  },
+  proofRuns: [],
+  ...overrides,
+});
 
 describe("setupIpcBridge", () => {
   afterEach(() => {
@@ -374,23 +402,7 @@ describe("setupIpcBridge", () => {
         snapshot: {
           runs: [],
         },
-        run: {
-          runId: "run-1",
-          stationId: null,
-          ticketId: "SPI-101",
-          ticketSummary: "Start Missions pickup",
-          ticketUrl: "https://example.youtrack.cloud/issue/SPI-101",
-          projectKey: "SPI",
-          status: "ready",
-          statusMessage: "Worktree ready.",
-          commitMessageDraft: null,
-          createdAt: 1,
-          updatedAt: 2,
-          startedAt: 1,
-          worktrees: [],
-          submodules: [],
-          attempts: [],
-        },
+        run: createTicketRunSummary(),
       },
     });
 
@@ -571,23 +583,9 @@ describe("setupIpcBridge", () => {
       requestId: String(syncRequest.requestId),
       result: {
         snapshot: { runs: [] },
-        run: {
-          runId: "run-1",
-          stationId: null,
-          ticketId: "SPI-101",
-          ticketSummary: "Start Missions pickup",
-          ticketUrl: "https://example.youtrack.cloud/issue/SPI-101",
-          projectKey: "SPI",
-          status: "ready",
+        run: createTicketRunSummary({
           statusMessage: "Synced",
-          commitMessageDraft: null,
-          createdAt: 1,
-          updatedAt: 2,
-          startedAt: 1,
-          worktrees: [],
-          submodules: [],
-          attempts: [],
-        },
+        }),
       },
     });
 
@@ -630,23 +628,10 @@ describe("setupIpcBridge", () => {
       requestId: String(gitStateRequest.requestId),
       result: {
         snapshot: { runs: [] },
-        run: {
-          runId: "run-1",
-          stationId: null,
-          ticketId: "SPI-101",
-          ticketSummary: "Start Missions pickup",
-          ticketUrl: "https://example.youtrack.cloud/issue/SPI-101",
-          projectKey: "SPI",
+        run: createTicketRunSummary({
           status: "done",
           statusMessage: "Ready to ship.",
-          commitMessageDraft: null,
-          createdAt: 1,
-          updatedAt: 2,
-          startedAt: 1,
-          worktrees: [],
-          submodules: [],
-          attempts: [],
-        },
+        }),
         gitState: {
           runId: "run-1",
           repoRelativePath: "web-app",
@@ -689,23 +674,10 @@ describe("setupIpcBridge", () => {
       requestId: String(commitRequest.requestId),
       result: {
         snapshot: { runs: [] },
-        run: {
-          runId: "run-1",
-          stationId: null,
-          ticketId: "SPI-101",
-          ticketSummary: "Start Missions pickup",
-          ticketUrl: "https://example.youtrack.cloud/issue/SPI-101",
-          projectKey: "SPI",
+        run: createTicketRunSummary({
           status: "done",
           statusMessage: "Ready to ship.",
-          commitMessageDraft: null,
-          createdAt: 1,
-          updatedAt: 2,
-          startedAt: 1,
-          worktrees: [],
-          submodules: [],
-          attempts: [],
-        },
+        }),
         gitState: {
           runId: "run-1",
           repoRelativePath: "web-app",
@@ -767,23 +739,10 @@ describe("setupIpcBridge", () => {
       requestId: String(reviewRequest.requestId),
       result: {
         snapshot: { runs: [] },
-        run: {
-          runId: "run-1",
-          stationId: null,
-          ticketId: "SPI-101",
-          ticketSummary: "Start Missions pickup",
-          ticketUrl: "https://example.youtrack.cloud/issue/SPI-101",
-          projectKey: "SPI",
+        run: createTicketRunSummary({
           status: "awaiting-review",
           statusMessage: "Ready for review.",
-          commitMessageDraft: null,
-          createdAt: 1,
-          updatedAt: 2,
-          startedAt: 1,
-          worktrees: [],
-          submodules: [],
-          attempts: [],
-        },
+        }),
         reviewSnapshot: {
           runId: "run-1",
           repoEntries: [
@@ -863,23 +822,10 @@ describe("setupIpcBridge", () => {
       requestId: String(gitStateRequest.requestId),
       result: {
         snapshot: { runs: [] },
-        run: {
-          runId: "run-1",
-          stationId: null,
-          ticketId: "SPI-101",
-          ticketSummary: "Start Missions pickup",
-          ticketUrl: "https://example.youtrack.cloud/issue/SPI-101",
-          projectKey: "SPI",
+        run: createTicketRunSummary({
           status: "done",
           statusMessage: "Ready to ship.",
-          commitMessageDraft: null,
-          createdAt: 1,
-          updatedAt: 2,
-          startedAt: 1,
-          worktrees: [],
-          submodules: [],
-          attempts: [],
-        },
+        }),
         gitState: {
           runId: "run-1",
           canonicalUrl,
@@ -927,23 +873,10 @@ describe("setupIpcBridge", () => {
       requestId: String(commitRequest.requestId),
       result: {
         snapshot: { runs: [] },
-        run: {
-          runId: "run-1",
-          stationId: null,
-          ticketId: "SPI-101",
-          ticketSummary: "Start Missions pickup",
-          ticketUrl: "https://example.youtrack.cloud/issue/SPI-101",
-          projectKey: "SPI",
+        run: createTicketRunSummary({
           status: "done",
           statusMessage: "Ready to ship.",
-          commitMessageDraft: null,
-          createdAt: 1,
-          updatedAt: 2,
-          startedAt: 1,
-          worktrees: [],
-          submodules: [],
-          attempts: [],
-        },
+        }),
         gitState: {
           runId: "run-1",
           canonicalUrl,

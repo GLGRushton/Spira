@@ -29,6 +29,15 @@ const createRun = (ticketId: string, status: TicketRunSummary["status"]): Ticket
   worktrees: [],
   submodules: [],
   attempts: [],
+  proof: {
+    status: "not-run",
+    lastProofRunId: null,
+    lastProofProfileId: null,
+    lastProofAt: null,
+    lastProofSummary: null,
+    staleReason: null,
+  },
+  proofRuns: [],
 });
 
 describe("resolveRunTab", () => {

@@ -3,6 +3,7 @@ import type {
   MissionServiceProfileSummary,
   MissionServiceSnapshot,
   TicketRunGitState,
+  TicketRunProofProfileSummary,
   TicketRunReviewRepoState,
   TicketRunReviewSnapshot,
   TicketRunReviewSubmoduleState,
@@ -20,8 +21,13 @@ export interface MissionRunController {
   gitError: string | null;
   serviceNotice: string | null;
   serviceError: string | null;
+  proofNotice: string | null;
+  proofError: string | null;
   reviewSnapshot: TicketRunReviewSnapshot | null;
   isReviewSnapshotLoading: boolean;
+  proofProfiles: TicketRunProofProfileSummary[];
+  isProofLoading: boolean;
+  runningProofProfileId: string | null;
   continueDraft: string;
   setContinueDraft: (value: string) => void;
   isRetryingSync: boolean;
@@ -30,6 +36,8 @@ export interface MissionRunController {
   isCancellingWork: boolean;
   isCompletingRun: boolean;
   isDeletingRun: boolean;
+  refreshMissionProofs: () => Promise<void>;
+  runMissionProof: (profileId: string) => Promise<void>;
   retryTicketRunSync: () => Promise<void>;
   startRunWork: () => Promise<void>;
   continueRunWork: () => Promise<void>;
@@ -132,8 +140,13 @@ export function useMissionRunController(run: TicketRunSummary): MissionRunContro
   const [gitError, setGitError] = useState<string | null>(null);
   const [serviceNotice, setServiceNotice] = useState<string | null>(null);
   const [serviceError, setServiceError] = useState<string | null>(null);
+  const [proofNotice, setProofNotice] = useState<string | null>(null);
+  const [proofError, setProofError] = useState<string | null>(null);
   const [reviewSnapshot, setReviewSnapshot] = useState<TicketRunReviewSnapshot | null>(null);
   const [isReviewSnapshotLoading, setIsReviewSnapshotLoading] = useState(false);
+  const [proofProfiles, setProofProfiles] = useState<TicketRunProofProfileSummary[]>([]);
+  const [isProofLoading, setIsProofLoading] = useState(false);
+  const [runningProofProfileId, setRunningProofProfileId] = useState<string | null>(null);
   const [continueDraft, setContinueDraft] = useState("");
   const [isRetryingSync, setIsRetryingSync] = useState(false);
   const [isStartingWork, setIsStartingWork] = useState(false);
@@ -170,6 +183,7 @@ export function useMissionRunController(run: TicketRunSummary): MissionRunContro
   const dirtyCommitDraftsRef = useRef<Record<string, boolean>>({});
   const dirtySubmoduleCommitDraftsRef = useRef<Record<string, boolean>>({});
   const reviewSnapshotRequestIdRef = useRef(0);
+  const proofSnapshotRequestIdRef = useRef(0);
   const detailRequestGenerationRef = useRef(0);
   const gitStatesByRepoRef = useRef<Record<string, TicketRunGitState | null>>({});
   const gitErrorsByRepoRef = useRef<Record<string, string | null>>({});
@@ -363,6 +377,41 @@ export function useMissionRunController(run: TicketRunSummary): MissionRunContro
       }
     });
   }, [run.runId]);
+
+  const refreshMissionProofs = useCallback(async () => {
+    const requestId = proofSnapshotRequestIdRef.current + 1;
+    proofSnapshotRequestIdRef.current = requestId;
+    setIsProofLoading(true);
+    setProofError(null);
+
+    try {
+      const result = await window.electronAPI.getTicketRunProofSnapshot(run.runId);
+      if (proofSnapshotRequestIdRef.current !== requestId) {
+        return;
+      }
+
+      setRunSnapshot(result.snapshot);
+      setProofProfiles(result.proofSnapshot.profiles);
+    } catch (error) {
+      if (proofSnapshotRequestIdRef.current !== requestId) {
+        return;
+      }
+
+      console.error("Failed to load mission proofs", error);
+      setProofError(error instanceof Error ? error.message : "Failed to load mission proofs.");
+    } finally {
+      if (proofSnapshotRequestIdRef.current === requestId) {
+        setIsProofLoading(false);
+      }
+    }
+  }, [run.runId, setRunSnapshot]);
+
+  useEffect(() => {
+    setProofProfiles([]);
+    setProofNotice(null);
+    setProofError(null);
+    void refreshMissionProofs();
+  }, [refreshMissionProofs]);
 
   const resetDetailGitState = useCallback(() => {
     detailRequestGenerationRef.current += 1;
@@ -960,6 +1009,33 @@ export function useMissionRunController(run: TicketRunSummary): MissionRunContro
     }
   }, [resetDetailGitState, run.runId, setRunSnapshot]);
 
+  const runMissionProof = useCallback(
+    async (profileId: string) => {
+      setRunningProofProfileId(profileId);
+      setProofNotice(null);
+      setProofError(null);
+      setRunNotice(null);
+      setRunError(null);
+
+      try {
+        const result = await window.electronAPI.runTicketRunProof(run.runId, profileId);
+        setRunSnapshot(result.snapshot);
+        setProofNotice(
+          result.proofRun.status === "passed"
+            ? `${result.run.ticketId} proof passed.`
+            : `${result.run.ticketId} proof finished with ${result.proofRun.status}.`,
+        );
+        await refreshMissionProofs();
+      } catch (error) {
+        console.error("Failed to run mission proof", error);
+        setProofError(error instanceof Error ? error.message : "Failed to run mission proof.");
+      } finally {
+        setRunningProofProfileId(null);
+      }
+    },
+    [refreshMissionProofs, run.runId, run.ticketId, setRunSnapshot],
+  );
+
   const completeRun = useCallback(async () => {
     setIsCompletingRun(true);
     setRunNotice(null);
@@ -1055,8 +1131,13 @@ export function useMissionRunController(run: TicketRunSummary): MissionRunContro
     gitError,
     serviceNotice,
     serviceError,
+    proofNotice,
+    proofError,
     reviewSnapshot,
     isReviewSnapshotLoading,
+    proofProfiles,
+    isProofLoading,
+    runningProofProfileId,
     continueDraft,
     setContinueDraft,
     isRetryingSync,
@@ -1065,6 +1146,8 @@ export function useMissionRunController(run: TicketRunSummary): MissionRunContro
     isCancellingWork,
     isCompletingRun,
     isDeletingRun,
+    refreshMissionProofs,
+    runMissionProof,
     retryTicketRunSync,
     startRunWork,
     continueRunWork,

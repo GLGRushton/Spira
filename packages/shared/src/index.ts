@@ -23,6 +23,7 @@ export type {
   CreateTicketRunPullRequestResult,
   CreateTicketRunSubmodulePullRequestResult,
   ContinueTicketRunWorkResult,
+  RunTicketRunProofResult,
   TicketRunDeleteBlocker,
   GenerateTicketRunCommitDraftResult,
   GenerateTicketRunSubmoduleCommitDraftResult,
@@ -48,6 +49,15 @@ export type {
   TicketRunAttemptStatus,
   TicketRunAttemptSummary,
   TicketRunCleanupState,
+  TicketRunProofArtifact,
+  TicketRunProofArtifactKind,
+  TicketRunProofProfileSummary,
+  TicketRunProofRunStatus,
+  TicketRunProofRunSummary,
+  TicketRunProofSnapshot,
+  TicketRunProofSnapshotResult,
+  TicketRunProofStatus,
+  TicketRunProofSummary,
   TicketRunPullRequestLinks,
   TicketRunPushAction,
   TicketRunSnapshot,
@@ -196,7 +206,14 @@ export {
 } from "./service-profile-types.js";
 export { SUBAGENT_DOMAIN_IDS, SUBAGENT_SCOPE_IDS } from "./subagent-types.js";
 export { SUBAGENT_DOMAINS } from "./subagent-types.js";
-export { TICKET_RUN_ATTEMPT_STATUSES, TICKET_RUN_CLEANUP_STATES, TICKET_RUN_STATUSES } from "./ticket-run-types.js";
+export {
+  TICKET_RUN_ATTEMPT_STATUSES,
+  TICKET_RUN_CLEANUP_STATES,
+  TICKET_RUN_PROOF_ARTIFACT_KINDS,
+  TICKET_RUN_PROOF_RUN_STATUSES,
+  TICKET_RUN_PROOF_STATUSES,
+  TICKET_RUN_STATUSES,
+} from "./ticket-run-types.js";
 export {
   createMissionView,
   getMissionRunIdFromView,

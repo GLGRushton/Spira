@@ -1,4 +1,5 @@
 import type { McpServerStatus } from "@spira/shared";
+import { getMcpServerStateLabel, getMcpServerStateTone } from "./mcp-server-status.js";
 import styles from "./McpRoomDetail.module.css";
 
 interface McpRoomDetailProps {
@@ -65,6 +66,9 @@ const describeLinkStatus = (server: McpServerStatus): string => {
 };
 
 export function McpRoomDetail({ server }: McpRoomDetailProps) {
+  const stateTone = getMcpServerStateTone(server);
+  const stateLabel = getMcpServerStateLabel(server);
+
   return (
     <div className={styles.panel}>
       <div className={styles.header}>
@@ -72,7 +76,7 @@ export function McpRoomDetail({ server }: McpRoomDetailProps) {
           <div className={styles.eyebrow}>MCP room</div>
           <h2 className={styles.title}>{server.name}</h2>
         </div>
-        <div className={`${styles.statePill} ${styles[server.state]}`}>{server.state}</div>
+        <div className={`${styles.statePill} ${styles[stateTone]}`}>{stateLabel}</div>
       </div>
 
       <div className={styles.metrics}>

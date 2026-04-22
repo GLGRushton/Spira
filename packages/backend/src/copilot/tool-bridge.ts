@@ -3,11 +3,13 @@ import { type Tool, type ToolResultObject, defineTool } from "@github/copilot-sd
 import {
   type McpTool,
   type MissionServiceSnapshot,
+  type RunTicketRunProofResult,
   type SubagentDelegationArgs,
   type SubagentDomain,
   type SubagentEnvelope,
   type SubagentRunHandle,
   type SubagentRunSnapshot,
+  type TicketRunProofSnapshotResult,
   type UpgradeProposal,
   classifyUpgradeScope,
   getRelevantUpgradeFiles,
@@ -38,6 +40,8 @@ export interface ToolBridgeOptions {
   listMissionServices?: (runId: string) => Promise<MissionServiceSnapshot>;
   startMissionService?: (runId: string, profileId: string) => Promise<MissionServiceSnapshot>;
   stopMissionService?: (runId: string, serviceId: string) => Promise<MissionServiceSnapshot>;
+  listMissionProofs?: (runId: string) => Promise<TicketRunProofSnapshotResult>;
+  runMissionProof?: (runId: string, profileId: string) => Promise<RunTicketRunProofResult>;
   wrapToolExecution?: (tool: McpTool, args: unknown, execute: () => Promise<unknown>) => Promise<unknown>;
 }
 
@@ -459,6 +463,72 @@ const buildStopMissionServiceTool = (stopMissionService: NonNullable<ToolBridgeO
     },
   });
 
+const buildListMissionProofsTool = (listMissionProofs: NonNullable<ToolBridgeOptions["listMissionProofs"]>) =>
+  defineTool("spira_list_mission_proofs", {
+    description: "List discovered proof profiles and recent proof runs for a mission run by run_id.",
+    parameters: {
+      type: "object",
+      properties: {
+        run_id: {
+          type: "string",
+          description: "The mission run ID that owns the proof-capable worktrees.",
+        },
+      },
+      required: ["run_id"],
+      additionalProperties: false,
+    },
+    skipPermission: true,
+    handler: async (args) => {
+      try {
+        const payload = isRecord(args) ? args : {};
+        const runId = typeof payload.run_id === "string" ? payload.run_id.trim() : "";
+        if (!runId) {
+          throw new Error("spira_list_mission_proofs requires a non-empty run_id");
+        }
+
+        return toSuccessResult(await listMissionProofs(runId));
+      } catch (error) {
+        logger.error({ error }, "Failed to list mission proofs");
+        return toFailureResult("spira_list_mission_proofs", error);
+      }
+    },
+  });
+
+const buildRunMissionProofTool = (runMissionProof: NonNullable<ToolBridgeOptions["runMissionProof"]>) =>
+  defineTool("spira_run_mission_proof", {
+    description: "Run a discovered mission proof profile by run_id and profile_id.",
+    parameters: {
+      type: "object",
+      properties: {
+        run_id: {
+          type: "string",
+          description: "The mission run ID that owns the proof-capable worktrees.",
+        },
+        profile_id: {
+          type: "string",
+          description: "The proof profile ID returned by spira_list_mission_proofs.",
+        },
+      },
+      required: ["run_id", "profile_id"],
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      try {
+        const payload = isRecord(args) ? args : {};
+        const runId = typeof payload.run_id === "string" ? payload.run_id.trim() : "";
+        const profileId = typeof payload.profile_id === "string" ? payload.profile_id.trim() : "";
+        if (!runId || !profileId) {
+          throw new Error("spira_run_mission_proof requires non-empty run_id and profile_id");
+        }
+
+        return toSuccessResult(await runMissionProof(runId, profileId));
+      } catch (error) {
+        logger.error({ error }, "Failed to run mission proof");
+        return toFailureResult("spira_run_mission_proof", error);
+      }
+    },
+  });
+
 export function getCopilotTools(aggregator: McpToolAggregator, options: ToolBridgeOptions = {}): Tool[] {
   let mcpTools = options.includeServerIds?.length
     ? aggregator.getToolsForServerIds(options.includeServerIds)
@@ -496,6 +566,12 @@ export function getCopilotTools(aggregator: McpToolAggregator, options: ToolBrid
   }
   if (options.stopMissionService) {
     tools.push(buildStopMissionServiceTool(options.stopMissionService));
+  }
+  if (options.listMissionProofs) {
+    tools.push(buildListMissionProofsTool(options.listMissionProofs));
+  }
+  if (options.runMissionProof) {
+    tools.push(buildRunMissionProofTool(options.runMissionProof));
   }
   logger.info({ toolCount: tools.length }, "Registered MCP tools with Copilot session");
   return tools;

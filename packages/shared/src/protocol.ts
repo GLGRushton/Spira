@@ -31,6 +31,7 @@ import type {
   GenerateTicketRunCommitDraftResult,
   GenerateTicketRunSubmoduleCommitDraftResult,
   RetryTicketRunSyncResult,
+  RunTicketRunProofResult,
   SetTicketRunCommitDraftResult,
   SetTicketRunSubmoduleCommitDraftResult,
   StartTicketRunRequest,
@@ -39,6 +40,7 @@ import type {
   SyncTicketRunRemoteResult,
   SyncTicketRunSubmoduleRemoteResult,
   TicketRunGitStateResult,
+  TicketRunProofSnapshotResult,
   TicketRunReviewSnapshotResult,
   TicketRunSnapshot,
   TicketRunSubmoduleGitStateResult,
@@ -123,6 +125,8 @@ export type ClientMessage =
   | { type: "missions:ticket-run:work:continue"; requestId: string; runId: string; prompt?: string }
   | { type: "missions:ticket-run:work:cancel"; requestId: string; runId: string }
   | { type: "missions:ticket-run:complete"; requestId: string; runId: string }
+  | { type: "missions:ticket-run:proofs:get"; requestId: string; runId: string }
+  | { type: "missions:ticket-run:proof:run"; requestId: string; runId: string; profileId: string }
   | { type: "missions:ticket-run:delete"; requestId: string; runId: string }
   | { type: "missions:ticket-run:review-snapshot:get"; requestId: string; runId: string }
   | { type: "missions:ticket-run:git-state:get"; requestId: string; runId: string; repoRelativePath?: string }
@@ -253,6 +257,16 @@ export type ServerMessage =
       type: "missions:ticket-run:complete:result";
       requestId: string;
       result: CompleteTicketRunResult;
+    }
+  | {
+      type: "missions:ticket-run:proofs:get:result";
+      requestId: string;
+      result: TicketRunProofSnapshotResult;
+    }
+  | {
+      type: "missions:ticket-run:proof:run:result";
+      requestId: string;
+      result: RunTicketRunProofResult;
     }
   | {
       type: "missions:ticket-run:delete:result";

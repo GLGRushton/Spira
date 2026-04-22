@@ -9,6 +9,12 @@ import type {
   TicketRunAttemptStatus,
   TicketRunAttemptSummary,
   TicketRunCleanupState,
+  TicketRunProofArtifact,
+  TicketRunProofArtifactKind,
+  TicketRunProofRunStatus,
+  TicketRunProofRunSummary,
+  TicketRunProofStatus,
+  TicketRunProofSummary,
   TicketRunSnapshot,
   TicketRunStatus,
   TicketRunSubmoduleParentRef,
@@ -20,6 +26,9 @@ import type {
 import {
   TICKET_RUN_ATTEMPT_STATUSES,
   TICKET_RUN_CLEANUP_STATES,
+  TICKET_RUN_PROOF_ARTIFACT_KINDS,
+  TICKET_RUN_PROOF_RUN_STATUSES,
+  TICKET_RUN_PROOF_STATUSES,
   TICKET_RUN_STATUSES,
   normalizeMcpToolAccessPolicy,
   normalizeYouTrackStateMapping,
@@ -198,6 +207,8 @@ export interface UpsertTicketRunInput {
   worktrees: readonly UpsertTicketRunWorktreeInput[];
   submodules?: readonly UpsertTicketRunSubmoduleInput[];
   attempts?: readonly UpsertTicketRunAttemptInput[];
+  proof?: UpsertTicketRunProofInput;
+  proofRuns?: readonly UpsertTicketRunProofRunInput[];
 }
 
 export interface UpsertTicketRunAttemptInput {
@@ -212,6 +223,36 @@ export interface UpsertTicketRunAttemptInput {
   createdAt?: number;
   updatedAt?: number;
   completedAt?: number | null;
+}
+
+export interface UpsertTicketRunProofInput {
+  status?: TicketRunProofStatus;
+  lastProofRunId?: string | null;
+  lastProofProfileId?: string | null;
+  lastProofAt?: number | null;
+  lastProofSummary?: string | null;
+  staleReason?: string | null;
+}
+
+export interface UpsertTicketRunProofArtifactInput {
+  artifactId: string;
+  kind: TicketRunProofArtifactKind;
+  label: string;
+  path: string;
+  fileUrl: string;
+}
+
+export interface UpsertTicketRunProofRunInput {
+  proofRunId: string;
+  profileId: string;
+  profileLabel: string;
+  status: TicketRunProofRunStatus;
+  summary?: string | null;
+  startedAt?: number;
+  completedAt?: number | null;
+  exitCode?: number | null;
+  command?: string | null;
+  artifacts?: readonly UpsertTicketRunProofArtifactInput[];
 }
 
 interface MigrationDefinition {
@@ -299,6 +340,12 @@ interface TicketRunRow {
   status: string;
   statusMessage: string | null;
   commitMessageDraft: string | null;
+  proofStatus: string;
+  lastProofRunId: string | null;
+  lastProofProfileId: string | null;
+  lastProofAt: number | null;
+  lastProofSummary: string | null;
+  proofStaleReason: string | null;
   startedAt: number;
   createdAt: number;
   updatedAt: number;
@@ -347,6 +394,20 @@ interface TicketRunSubmoduleParentRow {
   parentRepoRelativePath: string;
   submodulePath: string;
   submoduleWorktreePath: string;
+}
+
+interface TicketRunProofRunRow {
+  proofRunId: string;
+  runId: string;
+  profileId: string;
+  profileLabel: string;
+  status: string;
+  summary: string | null;
+  startedAt: number;
+  completedAt: number | null;
+  exitCode: number | null;
+  command: string | null;
+  artifactsJson: string | null;
 }
 
 interface McpServerConfigRow {
@@ -790,6 +851,32 @@ const MIGRATIONS: MigrationDefinition[] = [
       "CREATE INDEX idx_ticket_run_submodule_parents_parent_v15 ON ticket_run_submodule_parents(parent_repo_relative_path)",
     ],
   },
+  {
+    version: 16,
+    statements: [
+      "ALTER TABLE ticket_runs ADD COLUMN proof_status TEXT NOT NULL DEFAULT 'not-run' CHECK(proof_status IN ('not-run', 'running', 'passed', 'failed', 'stale'))",
+      "ALTER TABLE ticket_runs ADD COLUMN last_proof_run_id TEXT",
+      "ALTER TABLE ticket_runs ADD COLUMN last_proof_profile_id TEXT",
+      "ALTER TABLE ticket_runs ADD COLUMN last_proof_at INTEGER",
+      "ALTER TABLE ticket_runs ADD COLUMN last_proof_summary TEXT",
+      "ALTER TABLE ticket_runs ADD COLUMN proof_stale_reason TEXT",
+      `CREATE TABLE ticket_run_proof_runs (
+        proof_run_id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL,
+        profile_id TEXT NOT NULL,
+        profile_label TEXT NOT NULL,
+        status TEXT NOT NULL CHECK(status IN ('running', 'passed', 'failed')),
+        summary TEXT,
+        started_at INTEGER NOT NULL,
+        completed_at INTEGER,
+        exit_code INTEGER,
+        command TEXT,
+        artifacts_json TEXT,
+        FOREIGN KEY(run_id) REFERENCES ticket_runs(run_id) ON DELETE CASCADE
+      )`,
+      "CREATE INDEX idx_ticket_run_proof_runs_run_id_v16 ON ticket_run_proof_runs(run_id, started_at DESC)",
+    ],
+  },
 ];
 
 type SqliteDatabase = InstanceType<typeof BetterSqlite3>;
@@ -896,6 +983,24 @@ function assertTicketRunAttemptStatus(status: string): asserts status is TicketR
 function assertTicketRunCleanupState(state: string): asserts state is TicketRunCleanupState {
   if (!TICKET_RUN_CLEANUP_STATES.includes(state as TicketRunCleanupState)) {
     throw new Error(`Unsupported ticket run cleanup state: ${state}`);
+  }
+}
+
+function assertTicketRunProofStatus(status: string): asserts status is TicketRunProofStatus {
+  if (!TICKET_RUN_PROOF_STATUSES.includes(status as TicketRunProofStatus)) {
+    throw new Error(`Unsupported ticket run proof status: ${status}`);
+  }
+}
+
+function assertTicketRunProofRunStatus(status: string): asserts status is TicketRunProofRunStatus {
+  if (!TICKET_RUN_PROOF_RUN_STATUSES.includes(status as TicketRunProofRunStatus)) {
+    throw new Error(`Unsupported ticket run proof run status: ${status}`);
+  }
+}
+
+function assertTicketRunProofArtifactKind(kind: string): asserts kind is TicketRunProofArtifactKind {
+  if (!TICKET_RUN_PROOF_ARTIFACT_KINDS.includes(kind as TicketRunProofArtifactKind)) {
+    throw new Error(`Unsupported ticket run proof artifact kind: ${kind}`);
   }
 }
 
@@ -1018,6 +1123,64 @@ const mapTicketRunAttemptRow = (row: TicketRunAttemptRow): TicketRunAttemptSumma
   };
 };
 
+const mapTicketRunProofSummary = (row: TicketRunRow): TicketRunProofSummary => {
+  assertTicketRunProofStatus(row.proofStatus);
+  return {
+    status: row.proofStatus,
+    lastProofRunId: row.lastProofRunId === null ? null : String(row.lastProofRunId),
+    lastProofProfileId: row.lastProofProfileId === null ? null : String(row.lastProofProfileId),
+    lastProofAt: row.lastProofAt === null ? null : Number(row.lastProofAt),
+    lastProofSummary: row.lastProofSummary === null ? null : String(row.lastProofSummary),
+    staleReason: row.proofStaleReason === null ? null : String(row.proofStaleReason),
+  };
+};
+
+const mapTicketRunProofArtifact = (value: unknown): TicketRunProofArtifact | null => {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const artifactId = typeof value.artifactId === "string" ? value.artifactId.trim() : "";
+  const kind = typeof value.kind === "string" ? value.kind.trim() : "";
+  const label = typeof value.label === "string" ? value.label.trim() : "";
+  const artifactPath = typeof value.path === "string" ? value.path.trim() : "";
+  const fileUrl = typeof value.fileUrl === "string" ? value.fileUrl.trim() : "";
+  if (!artifactId || !kind || !label || !artifactPath || !fileUrl) {
+    return null;
+  }
+  assertTicketRunProofArtifactKind(kind);
+  return {
+    artifactId,
+    kind,
+    label,
+    path: artifactPath,
+    fileUrl,
+  };
+};
+
+const mapTicketRunProofRunRow = (row: TicketRunProofRunRow): TicketRunProofRunSummary => {
+  assertTicketRunProofRunStatus(row.status);
+  const parsedArtifacts = tryParseJson(row.artifactsJson);
+  const artifacts = Array.isArray(parsedArtifacts)
+    ? parsedArtifacts.flatMap((entry) => {
+        const artifact = mapTicketRunProofArtifact(entry);
+        return artifact ? [artifact] : [];
+      })
+    : [];
+  return {
+    proofRunId: String(row.proofRunId),
+    runId: String(row.runId),
+    profileId: String(row.profileId),
+    profileLabel: String(row.profileLabel),
+    status: row.status,
+    summary: row.summary === null ? null : String(row.summary),
+    startedAt: Number(row.startedAt),
+    completedAt: row.completedAt === null ? null : Number(row.completedAt),
+    exitCode: row.exitCode === null ? null : Number(row.exitCode),
+    command: row.command === null ? null : String(row.command),
+    artifacts,
+  };
+};
+
 const mapTicketRunSubmoduleParentRow = (row: TicketRunSubmoduleParentRow): TicketRunSubmoduleParentRef => ({
   parentRepoRelativePath: String(row.parentRepoRelativePath),
   submodulePath: String(row.submodulePath),
@@ -1042,6 +1205,7 @@ const mapTicketRunRow = (
   worktrees: readonly TicketRunWorktreeSummary[],
   attempts: readonly TicketRunAttemptSummary[],
   submodules: readonly TicketRunSubmoduleSummary[],
+  proofRuns: readonly TicketRunProofRunSummary[],
 ): TicketRunSummary => {
   assertTicketRunStatus(row.status);
   return {
@@ -1061,6 +1225,8 @@ const mapTicketRunRow = (
     worktrees: [...worktrees],
     submodules: [...submodules],
     attempts: [...attempts],
+    proof: mapTicketRunProofSummary(row),
+    proofRuns: [...proofRuns],
   };
 };
 
@@ -1684,6 +1850,12 @@ export class SpiraMemoryDatabase {
            status,
            status_message AS statusMessage,
            commit_message_draft AS commitMessageDraft,
+           proof_status AS proofStatus,
+           last_proof_run_id AS lastProofRunId,
+           last_proof_profile_id AS lastProofProfileId,
+           last_proof_at AS lastProofAt,
+           last_proof_summary AS lastProofSummary,
+           proof_stale_reason AS proofStaleReason,
            started_at AS startedAt,
            created_at AS createdAt,
            updated_at AS updatedAt
@@ -1743,6 +1915,32 @@ export class SpiraMemoryDatabase {
       attemptsByRun.set(row.runId, attempts);
     }
 
+    const proofRunRows = this.db
+      .prepare(
+        `SELECT
+           proof_run_id AS proofRunId,
+           run_id AS runId,
+           profile_id AS profileId,
+           profile_label AS profileLabel,
+           status,
+           summary,
+           started_at AS startedAt,
+           completed_at AS completedAt,
+           exit_code AS exitCode,
+           command,
+           artifacts_json AS artifactsJson
+         FROM ticket_run_proof_runs
+         ORDER BY run_id ASC, started_at DESC`,
+      )
+      .all() as unknown as TicketRunProofRunRow[];
+
+    const proofRunsByRun = new Map<string, TicketRunProofRunSummary[]>();
+    for (const row of proofRunRows) {
+      const proofRuns = proofRunsByRun.get(row.runId) ?? [];
+      proofRuns.push(mapTicketRunProofRunRow(row));
+      proofRunsByRun.set(row.runId, proofRuns);
+    }
+
     const submoduleRows = this.db
       .prepare(
         `SELECT
@@ -1793,6 +1991,7 @@ export class SpiraMemoryDatabase {
         worktreesByRun.get(row.runId) ?? [],
         attemptsByRun.get(row.runId) ?? [],
         submodulesByRun.get(row.runId) ?? [],
+        proofRunsByRun.get(row.runId) ?? [],
       ),
     );
   }
@@ -1810,6 +2009,12 @@ export class SpiraMemoryDatabase {
            status,
            status_message AS statusMessage,
            commit_message_draft AS commitMessageDraft,
+           proof_status AS proofStatus,
+           last_proof_run_id AS lastProofRunId,
+           last_proof_profile_id AS lastProofProfileId,
+           last_proof_at AS lastProofAt,
+           last_proof_summary AS lastProofSummary,
+           proof_stale_reason AS proofStaleReason,
            started_at AS startedAt,
            created_at AS createdAt,
            updated_at AS updatedAt
@@ -1861,6 +2066,26 @@ export class SpiraMemoryDatabase {
       )
       .all({ runId }) as unknown as TicketRunAttemptRow[];
 
+    const proofRuns = this.db
+      .prepare(
+        `SELECT
+           proof_run_id AS proofRunId,
+           run_id AS runId,
+           profile_id AS profileId,
+           profile_label AS profileLabel,
+           status,
+           summary,
+           started_at AS startedAt,
+           completed_at AS completedAt,
+           exit_code AS exitCode,
+           command,
+           artifacts_json AS artifactsJson
+         FROM ticket_run_proof_runs
+         WHERE run_id = @runId
+         ORDER BY started_at DESC`,
+      )
+      .all({ runId }) as unknown as TicketRunProofRunRow[];
+
     const submodules = this.db
       .prepare(
         `SELECT
@@ -1905,6 +2130,7 @@ export class SpiraMemoryDatabase {
       submodules.map((submodule) =>
         mapTicketRunSubmoduleRow(submodule, submoduleParentRefsByCanonicalUrl.get(submodule.canonicalUrl) ?? []),
       ),
+      proofRuns.map((proofRun) => mapTicketRunProofRunRow(proofRun)),
     );
   }
 
@@ -2024,6 +2250,56 @@ export class SpiraMemoryDatabase {
         completedAt: attempt.completedAt ?? null,
       };
     });
+    const proofInput = input.proof ?? {};
+    const proofStatus = proofInput.status ?? "not-run";
+    assertTicketRunProofStatus(proofStatus);
+    const normalizedProof = {
+      status: proofStatus,
+      lastProofRunId: normalizeTitle(proofInput.lastProofRunId),
+      lastProofProfileId: normalizeTitle(proofInput.lastProofProfileId),
+      lastProofAt: proofInput.lastProofAt ?? null,
+      lastProofSummary: normalizeTitle(proofInput.lastProofSummary),
+      staleReason: normalizeTitle(proofInput.staleReason),
+    };
+    const normalizedProofRuns = (input.proofRuns ?? []).map((proofRun) => {
+      const proofRunId = proofRun.proofRunId.trim();
+      const profileId = proofRun.profileId.trim();
+      const profileLabel = proofRun.profileLabel.trim();
+      if (!proofRunId || !profileId || !profileLabel) {
+        throw new Error("Ticket run proof runs require non-empty proof run, profile id, and profile label values.");
+      }
+      assertTicketRunProofRunStatus(proofRun.status);
+      const artifacts = (proofRun.artifacts ?? []).map((artifact) => {
+        const artifactId = artifact.artifactId.trim();
+        const kind = artifact.kind;
+        const label = artifact.label.trim();
+        const artifactPath = artifact.path.trim();
+        const fileUrl = artifact.fileUrl.trim();
+        if (!artifactId || !label || !artifactPath || !fileUrl) {
+          throw new Error("Ticket run proof artifacts require non-empty id, label, path, and file URL values.");
+        }
+        assertTicketRunProofArtifactKind(kind);
+        return {
+          artifactId,
+          kind,
+          label,
+          path: artifactPath,
+          fileUrl,
+        };
+      });
+      return {
+        proofRunId,
+        profileId,
+        profileLabel,
+        status: proofRun.status,
+        summary: normalizeTitle(proofRun.summary),
+        startedAt: proofRun.startedAt ?? now,
+        completedAt: proofRun.completedAt ?? null,
+        exitCode: proofRun.exitCode ?? null,
+        command: normalizeTitle(proofRun.command),
+        artifacts,
+      };
+    });
 
     const replace = this.db.transaction(() => {
       this.db
@@ -2038,6 +2314,12 @@ export class SpiraMemoryDatabase {
              status,
              status_message,
              commit_message_draft,
+             proof_status,
+             last_proof_run_id,
+             last_proof_profile_id,
+             last_proof_at,
+             last_proof_summary,
+             proof_stale_reason,
              started_at,
              created_at,
              updated_at
@@ -2051,6 +2333,12 @@ export class SpiraMemoryDatabase {
              @status,
              @statusMessage,
              @commitMessageDraft,
+             @proofStatus,
+             @lastProofRunId,
+             @lastProofProfileId,
+             @lastProofAt,
+             @lastProofSummary,
+             @proofStaleReason,
              @startedAt,
              @createdAt,
              @updatedAt
@@ -2060,12 +2348,18 @@ export class SpiraMemoryDatabase {
               station_id = excluded.station_id,
               ticket_summary = excluded.ticket_summary,
              ticket_url = excluded.ticket_url,
-              project_key = excluded.project_key,
-              status = excluded.status,
-              status_message = excluded.status_message,
-              commit_message_draft = excluded.commit_message_draft,
-              started_at = excluded.started_at,
-              updated_at = excluded.updated_at`,
+               project_key = excluded.project_key,
+               status = excluded.status,
+               status_message = excluded.status_message,
+               commit_message_draft = excluded.commit_message_draft,
+               proof_status = excluded.proof_status,
+               last_proof_run_id = excluded.last_proof_run_id,
+               last_proof_profile_id = excluded.last_proof_profile_id,
+               last_proof_at = excluded.last_proof_at,
+               last_proof_summary = excluded.last_proof_summary,
+               proof_stale_reason = excluded.proof_stale_reason,
+               started_at = excluded.started_at,
+               updated_at = excluded.updated_at`,
         )
         .run({
           runId,
@@ -2077,6 +2371,12 @@ export class SpiraMemoryDatabase {
           status,
           statusMessage,
           commitMessageDraft,
+          proofStatus: normalizedProof.status,
+          lastProofRunId: normalizedProof.lastProofRunId,
+          lastProofProfileId: normalizedProof.lastProofProfileId,
+          lastProofAt: normalizedProof.lastProofAt,
+          lastProofSummary: normalizedProof.lastProofSummary,
+          proofStaleReason: normalizedProof.staleReason,
           startedAt,
           createdAt,
           updatedAt: now,
@@ -2224,6 +2524,57 @@ export class SpiraMemoryDatabase {
         insertAttempt.run({
           runId,
           ...attempt,
+        });
+      }
+
+      this.db
+        .prepare(
+          `DELETE FROM ticket_run_proof_runs
+           WHERE run_id = @runId`,
+        )
+        .run({ runId });
+
+      const insertProofRun = this.db.prepare(
+        `INSERT INTO ticket_run_proof_runs (
+           proof_run_id,
+           run_id,
+           profile_id,
+           profile_label,
+           status,
+           summary,
+           started_at,
+           completed_at,
+           exit_code,
+           command,
+           artifacts_json
+         ) VALUES (
+           @proofRunId,
+           @runId,
+           @profileId,
+           @profileLabel,
+           @status,
+           @summary,
+           @startedAt,
+           @completedAt,
+           @exitCode,
+           @command,
+           @artifactsJson
+         )`,
+      );
+
+      for (const proofRun of normalizedProofRuns) {
+        insertProofRun.run({
+          runId,
+          proofRunId: proofRun.proofRunId,
+          profileId: proofRun.profileId,
+          profileLabel: proofRun.profileLabel,
+          status: proofRun.status,
+          summary: proofRun.summary,
+          startedAt: proofRun.startedAt,
+          completedAt: proofRun.completedAt,
+          exitCode: proofRun.exitCode,
+          command: proofRun.command,
+          artifactsJson: serializeJson(proofRun.artifacts),
         });
       }
     });

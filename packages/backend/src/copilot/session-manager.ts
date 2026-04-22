@@ -64,6 +64,8 @@ interface SessionManagerOptions {
   listMissionServices?: ToolBridgeOptions["listMissionServices"];
   startMissionService?: ToolBridgeOptions["startMissionService"];
   stopMissionService?: ToolBridgeOptions["stopMissionService"];
+  listMissionProofs?: ToolBridgeOptions["listMissionProofs"];
+  runMissionProof?: ToolBridgeOptions["runMissionProof"];
 }
 
 export interface ManagedSubagentLaunch {
@@ -92,12 +94,14 @@ const isMissionServicePermissionRequest = (
   request: PermissionRequest,
 ): request is PermissionRequest & {
   kind: "custom-tool";
-  toolName: "spira_start_mission_service" | "spira_stop_mission_service";
+  toolName: "spira_start_mission_service" | "spira_stop_mission_service" | "spira_run_mission_proof";
   toolCallId?: string;
   args?: Record<string, unknown>;
 } =>
   request.kind === "custom-tool" &&
-  (request.toolName === "spira_start_mission_service" || request.toolName === "spira_stop_mission_service");
+  (request.toolName === "spira_start_mission_service" ||
+    request.toolName === "spira_stop_mission_service" ||
+    request.toolName === "spira_run_mission_proof");
 
 const getMissionServiceToolTitle = (toolName: string): string => {
   switch (toolName) {
@@ -105,6 +109,8 @@ const getMissionServiceToolTitle = (toolName: string): string => {
       return "Start mission service";
     case "spira_stop_mission_service":
       return "Stop mission service";
+    case "spira_run_mission_proof":
+      return "Run mission proof";
     default:
       return toolName;
   }
@@ -137,6 +143,8 @@ export class CopilotSessionManager {
   private readonly listMissionServices: ToolBridgeOptions["listMissionServices"];
   private readonly startMissionService: ToolBridgeOptions["startMissionService"];
   private readonly stopMissionService: ToolBridgeOptions["stopMissionService"];
+  private readonly listMissionProofs: ToolBridgeOptions["listMissionProofs"];
+  private readonly runMissionProof: ToolBridgeOptions["runMissionProof"];
 
   constructor(
     private readonly bus: SpiraEventBus,
@@ -156,6 +164,8 @@ export class CopilotSessionManager {
     this.listMissionServices = options.listMissionServices;
     this.startMissionService = options.startMissionService;
     this.stopMissionService = options.stopMissionService;
+    this.listMissionProofs = options.listMissionProofs;
+    this.runMissionProof = options.runMissionProof;
     this.activeSessionId = this.sessionPersistence?.load() ?? null;
     this.bus.on("mcp:servers-changed", () => {
       void this.refreshSessionForToolChanges();
@@ -729,6 +739,8 @@ export class CopilotSessionManager {
       ...(this.listMissionServices ? { listMissionServices: this.listMissionServices } : {}),
       ...(this.startMissionService ? { startMissionService: this.startMissionService } : {}),
       ...(this.stopMissionService ? { stopMissionService: this.stopMissionService } : {}),
+      ...(this.listMissionProofs ? { listMissionProofs: this.listMissionProofs } : {}),
+      ...(this.runMissionProof ? { runMissionProof: this.runMissionProof } : {}),
       ...(subagentsEnabled
         ? {
             excludeServerIds: this.getDelegatedServerIds(),
