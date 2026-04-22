@@ -1,0 +1,407 @@
+.room {
+  display: grid;
+  gap: 16px;
+}
+
+.surface {
+  padding: 16px;
+  border: 1px solid rgba(115, 141, 220, 0.14);
+  border-radius: 18px;
+  background: linear-gradient(180deg, rgba(12, 18, 38, 0.82), rgba(8, 12, 30, 0.8));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.commandCard {
+  display: grid;
+  gap: 14px;
+}
+
+.commandTopline,
+.sectionTopline,
+.phaseHeader,
+.phaseHeaderStatic,
+.subCardHeader,
+.profileRow,
+.worktreeToggle,
+.worktreeRow,
+.deleteRow,
+.inlineActions,
+.metricRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.commandTopline,
+.sectionTopline,
+.worktreeRow,
+.deleteRow {
+  align-items: flex-start;
+}
+
+.commandHeader,
+.commandTitleStack,
+.phaseHeaderCopy,
+.worktreeCopy,
+.profileCopy {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.commandTitleRow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.commandDot {
+  width: 12px;
+  height: 12px;
+  border-radius: 999px;
+  box-shadow: 0 0 0 6px rgba(141, 214, 234, 0.08);
+}
+
+.commandDotready {
+  background: #8dd6ea;
+}
+
+.commandDotworking {
+  background: #8b9dff;
+  box-shadow: 0 0 0 6px rgba(139, 157, 255, 0.12), 0 0 18px rgba(139, 157, 255, 0.26);
+}
+
+.commandDotblocked {
+  background: #f5ce78;
+}
+
+.commandDoterror {
+  background: #f08a8a;
+}
+
+.commandDotdone {
+  background: #74d8a1;
+}
+
+.commandTitle,
+.sectionTitle {
+  margin: 0;
+  color: var(--text-display);
+}
+
+.commandTitle {
+  font-size: 18px;
+}
+
+.sectionTitle {
+  font-size: 20px;
+}
+
+.commandLead,
+.sectionLead,
+.commandHint,
+.phaseSubtitle,
+.subCardMeta,
+.profileCopy span,
+.deleteHint,
+.phaseTimestamp {
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.commandFlow,
+.phaseContent,
+.profileList,
+.worktreeList,
+.messageStack {
+  display: grid;
+  gap: 10px;
+}
+
+.commandSummary,
+.phaseCopy {
+  margin: 0;
+  color: var(--text-primary);
+  line-height: 1.6;
+}
+
+.commandField {
+  display: grid;
+  gap: 8px;
+}
+
+.commandField span {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.phaseList {
+  display: grid;
+  gap: 12px;
+}
+
+.phaseCard {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  gap: 14px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(115, 141, 220, 0.12);
+  background: rgba(4, 8, 22, 0.4);
+  transition: border-color 160ms ease, background 160ms ease, opacity 160ms ease, box-shadow 160ms ease;
+}
+
+.phaseCardcomplete {
+  border-color: rgba(116, 216, 161, 0.24);
+}
+
+.phaseCardactive {
+  border-color: rgba(139, 157, 255, 0.42);
+  background: linear-gradient(180deg, rgba(24, 33, 66, 0.92), rgba(10, 16, 34, 0.88));
+  box-shadow: 0 0 0 1px rgba(139, 157, 255, 0.14);
+}
+
+.phaseCardpending {
+  opacity: 0.55;
+}
+
+.phaseRail {
+  display: grid;
+  justify-items: center;
+  grid-template-rows: minmax(8px, 1fr) auto minmax(8px, 1fr);
+}
+
+.phaseLine {
+  width: 2px;
+  height: 100%;
+  border-radius: 999px;
+  background: rgba(115, 141, 220, 0.22);
+}
+
+.phaseLineHidden {
+  opacity: 0;
+}
+
+.phaseIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 999px;
+  border: 1px solid rgba(115, 141, 220, 0.24);
+  background: rgba(12, 18, 40, 0.88);
+  font-size: 15px;
+}
+
+.phaseIconcomplete {
+  border-color: rgba(116, 216, 161, 0.32);
+  color: #d6ffe6;
+  background: rgba(18, 44, 34, 0.8);
+}
+
+.phaseIconactive {
+  border-color: rgba(139, 157, 255, 0.44);
+  color: #eef1ff;
+  background: rgba(36, 49, 102, 0.86);
+  box-shadow: 0 0 16px rgba(139, 157, 255, 0.2);
+}
+
+.phaseIconpending {
+  color: rgba(223, 232, 255, 0.72);
+}
+
+.phaseMain {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.phaseHeader,
+.worktreeToggle {
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+}
+
+.phaseHeaderStatic {
+  min-width: 0;
+}
+
+.phaseTitle {
+  color: var(--text-display);
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.phaseHeaderMeta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.phaseStateBadge,
+.metricBadge,
+.metricBadgeMuted,
+.chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.phaseStateBadge,
+.metricBadge {
+  background: rgba(141, 214, 234, 0.12);
+  color: var(--text-primary);
+}
+
+.metricBadgeMuted,
+.chip {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-secondary);
+}
+
+.phaseChevron {
+  min-width: 1ch;
+  color: var(--text-secondary);
+  font-size: 16px;
+  line-height: 1;
+  text-align: center;
+}
+
+.phaseBody {
+  display: grid;
+  gap: 12px;
+}
+
+.chipRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.subCard,
+.warningPanel {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.warningPanel {
+  border: 1px solid rgba(245, 206, 120, 0.22);
+  color: #ffe3ad;
+}
+
+.subCardHeader strong,
+.profileCopy strong,
+.worktreeCopy strong {
+  color: var(--text-primary);
+}
+
+.placeholder {
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.profileRow {
+  align-items: flex-start;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.nextStepStrip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 0 4px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.nextStepStrip strong {
+  color: var(--text-primary);
+}
+
+.footerCard {
+  display: grid;
+  gap: 12px;
+}
+
+.worktreeToggleCopy {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.worktreeCopy span {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.worktreeMeta {
+  display: flex;
+  align-items: flex-start;
+}
+
+.deleteButton {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: rgba(240, 138, 138, 0.84);
+  font-size: 12px;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.deleteButton:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.subsection {
+  display: grid;
+  gap: 10px;
+}
+
+.subsectionSummary {
+  cursor: pointer;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+@media (max-width: 900px) {
+  .phaseCard {
+    grid-template-columns: 28px minmax(0, 1fr);
+    gap: 12px;
+  }
+
+  .commandTopline,
+  .sectionTopline,
+  .phaseHeader,
+  .phaseHeaderStatic,
+  .profileRow,
+  .worktreeRow,
+  .deleteRow {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .phaseHeaderMeta {
+    justify-content: flex-start;
+  }
+}

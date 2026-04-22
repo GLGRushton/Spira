@@ -21,6 +21,28 @@ export type TicketRunProofStatus = (typeof TICKET_RUN_PROOF_STATUSES)[number];
 export const TICKET_RUN_PROOF_RUN_STATUSES = ["running", "passed", "failed"] as const;
 export type TicketRunProofRunStatus = (typeof TICKET_RUN_PROOF_RUN_STATUSES)[number];
 
+export const TICKET_RUN_MISSION_PHASES = [
+  "classification",
+  "plan",
+  "implement",
+  "validate",
+  "proof",
+  "summarize",
+] as const;
+export type TicketRunMissionPhase = (typeof TICKET_RUN_MISSION_PHASES)[number];
+
+export const TICKET_RUN_MISSION_CLASSIFICATIONS = ["backend", "frontend", "ui", "infra", "mixed", "unknown"] as const;
+export type TicketRunMissionClassificationKind = (typeof TICKET_RUN_MISSION_CLASSIFICATIONS)[number];
+
+export const TICKET_RUN_MISSION_PROOF_ARTIFACT_MODES = ["none", "screenshot", "video"] as const;
+export type TicketRunMissionProofArtifactMode = (typeof TICKET_RUN_MISSION_PROOF_ARTIFACT_MODES)[number];
+
+export const TICKET_RUN_MISSION_VALIDATION_KINDS = ["build", "unit-test"] as const;
+export type TicketRunMissionValidationKind = (typeof TICKET_RUN_MISSION_VALIDATION_KINDS)[number];
+
+export const TICKET_RUN_MISSION_VALIDATION_STATUSES = ["pending", "passed", "failed", "skipped"] as const;
+export type TicketRunMissionValidationStatus = (typeof TICKET_RUN_MISSION_VALIDATION_STATUSES)[number];
+
 export const TICKET_RUN_PROOF_ARTIFACT_KINDS = [
   "folder",
   "report",
@@ -122,6 +144,84 @@ export interface TicketRunProofProfileSummary {
   runSettingsRelativePath: string | null;
 }
 
+export interface TicketRunMissionClassification {
+  kind: TicketRunMissionClassificationKind;
+  scopeSummary: string;
+  acceptanceCriteria: string[];
+  impactedRepoRelativePaths: string[];
+  risks: string[];
+  uiChange: boolean;
+  proofRequired: boolean;
+  proofArtifactMode: TicketRunMissionProofArtifactMode;
+  rationale: string | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface TicketRunMissionPlan {
+  steps: string[];
+  touchedRepoRelativePaths: string[];
+  validationPlan: string[];
+  proofIntent: string | null;
+  blockers: string[];
+  assumptions: string[];
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface TicketRunMissionValidationRecord {
+  validationId: string;
+  runId: string;
+  kind: TicketRunMissionValidationKind;
+  command: string;
+  cwd: string;
+  status: TicketRunMissionValidationStatus;
+  summary: string | null;
+  artifacts: TicketRunProofArtifact[];
+  startedAt: number;
+  completedAt: number | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface TicketRunMissionProofStrategy {
+  runId: string;
+  adapterId: string;
+  repoRelativePath: string;
+  scenarioPath: string | null;
+  scenarioName: string | null;
+  command: string;
+  artifactMode: TicketRunMissionProofArtifactMode;
+  rationale: string;
+  metadata: Record<string, unknown> | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface TicketRunMissionSummary {
+  completedWork: string;
+  changedRepoRelativePaths: string[];
+  validationSummary: string | null;
+  proofSummary: string | null;
+  openQuestions: string[];
+  followUps: string[];
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface TicketRunPreviousPassContext {
+  attemptId: string;
+  sequence: number;
+  completedAt: number;
+  summary: string | null;
+  classification: TicketRunMissionClassification | null;
+  plan: TicketRunMissionPlan | null;
+  validations: TicketRunMissionValidationRecord[];
+  proofStrategy: TicketRunMissionProofStrategy | null;
+  missionSummary: TicketRunMissionSummary | null;
+  proof: TicketRunProofSummary;
+}
+
 export interface TicketRunSummary {
   runId: string;
   stationId: string | null;
@@ -138,6 +238,14 @@ export interface TicketRunSummary {
   worktrees: TicketRunWorktreeSummary[];
   submodules: TicketRunSubmoduleSummary[];
   attempts: TicketRunAttemptSummary[];
+  missionPhase: TicketRunMissionPhase;
+  missionPhaseUpdatedAt: number;
+  classification: TicketRunMissionClassification | null;
+  plan: TicketRunMissionPlan | null;
+  validations: TicketRunMissionValidationRecord[];
+  proofStrategy: TicketRunMissionProofStrategy | null;
+  missionSummary: TicketRunMissionSummary | null;
+  previousPassContext: TicketRunPreviousPassContext | null;
   proof: TicketRunProofSummary;
   proofRuns: TicketRunProofRunSummary[];
 }

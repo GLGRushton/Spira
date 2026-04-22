@@ -9,6 +9,17 @@ import type {
   TicketRunAttemptStatus,
   TicketRunAttemptSummary,
   TicketRunCleanupState,
+  TicketRunMissionClassification,
+  TicketRunMissionClassificationKind,
+  TicketRunMissionPhase,
+  TicketRunMissionPlan,
+  TicketRunMissionProofArtifactMode,
+  TicketRunMissionProofStrategy,
+  TicketRunMissionSummary,
+  TicketRunMissionValidationKind,
+  TicketRunMissionValidationRecord,
+  TicketRunMissionValidationStatus,
+  TicketRunPreviousPassContext,
   TicketRunProofArtifact,
   TicketRunProofArtifactKind,
   TicketRunProofRunStatus,
@@ -26,6 +37,11 @@ import type {
 import {
   TICKET_RUN_ATTEMPT_STATUSES,
   TICKET_RUN_CLEANUP_STATES,
+  TICKET_RUN_MISSION_CLASSIFICATIONS,
+  TICKET_RUN_MISSION_PHASES,
+  TICKET_RUN_MISSION_PROOF_ARTIFACT_MODES,
+  TICKET_RUN_MISSION_VALIDATION_KINDS,
+  TICKET_RUN_MISSION_VALIDATION_STATUSES,
   TICKET_RUN_PROOF_ARTIFACT_KINDS,
   TICKET_RUN_PROOF_RUN_STATUSES,
   TICKET_RUN_PROOF_STATUSES,
@@ -207,6 +223,14 @@ export interface UpsertTicketRunInput {
   worktrees: readonly UpsertTicketRunWorktreeInput[];
   submodules?: readonly UpsertTicketRunSubmoduleInput[];
   attempts?: readonly UpsertTicketRunAttemptInput[];
+  missionPhase?: TicketRunMissionPhase;
+  missionPhaseUpdatedAt?: number;
+  classification?: TicketRunMissionClassification | null;
+  plan?: TicketRunMissionPlan | null;
+  validations?: readonly UpsertTicketRunValidationInput[];
+  proofStrategy?: UpsertTicketRunProofStrategyInput | null;
+  missionSummary?: UpsertTicketRunMissionSummaryInput | null;
+  previousPassContext?: TicketRunPreviousPassContext | null;
   proof?: UpsertTicketRunProofInput;
   proofRuns?: readonly UpsertTicketRunProofRunInput[];
 }
@@ -232,6 +256,44 @@ export interface UpsertTicketRunProofInput {
   lastProofAt?: number | null;
   lastProofSummary?: string | null;
   staleReason?: string | null;
+}
+
+export interface UpsertTicketRunValidationInput {
+  validationId: string;
+  kind: TicketRunMissionValidationKind;
+  command: string;
+  cwd: string;
+  status: TicketRunMissionValidationStatus;
+  summary?: string | null;
+  artifacts?: readonly UpsertTicketRunProofArtifactInput[];
+  startedAt?: number;
+  completedAt?: number | null;
+  createdAt?: number;
+  updatedAt?: number;
+}
+
+export interface UpsertTicketRunProofStrategyInput {
+  adapterId: string;
+  repoRelativePath: string;
+  scenarioPath?: string | null;
+  scenarioName?: string | null;
+  command: string;
+  artifactMode: TicketRunMissionProofArtifactMode;
+  rationale: string;
+  metadata?: Record<string, unknown> | null;
+  createdAt?: number;
+  updatedAt?: number;
+}
+
+export interface UpsertTicketRunMissionSummaryInput {
+  completedWork: string;
+  changedRepoRelativePaths: readonly string[];
+  validationSummary?: string | null;
+  proofSummary?: string | null;
+  openQuestions?: readonly string[];
+  followUps?: readonly string[];
+  createdAt?: number;
+  updatedAt?: number;
 }
 
 export interface UpsertTicketRunProofArtifactInput {
@@ -340,6 +402,12 @@ interface TicketRunRow {
   status: string;
   statusMessage: string | null;
   commitMessageDraft: string | null;
+  missionPhase: string;
+  missionPhaseUpdatedAt: number;
+  classificationJson: string | null;
+  planJson: string | null;
+  summaryJson: string | null;
+  previousPassContextJson: string | null;
   proofStatus: string;
   lastProofRunId: string | null;
   lastProofProfileId: string | null;
@@ -347,6 +415,35 @@ interface TicketRunRow {
   lastProofSummary: string | null;
   proofStaleReason: string | null;
   startedAt: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+interface TicketRunValidationRow {
+  validationId: string;
+  runId: string;
+  kind: string;
+  command: string;
+  cwd: string;
+  status: string;
+  summary: string | null;
+  artifactsJson: string | null;
+  startedAt: number;
+  completedAt: number | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+interface TicketRunProofStrategyRow {
+  runId: string;
+  adapterId: string;
+  repoRelativePath: string;
+  scenarioPath: string | null;
+  scenarioName: string | null;
+  command: string;
+  artifactMode: string;
+  rationale: string;
+  metadataJson: string | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -877,6 +974,104 @@ const MIGRATIONS: MigrationDefinition[] = [
       "CREATE INDEX idx_ticket_run_proof_runs_run_id_v16 ON ticket_run_proof_runs(run_id, started_at DESC)",
     ],
   },
+  {
+    version: 17,
+    statements: [
+      "ALTER TABLE ticket_runs ADD COLUMN mission_phase TEXT NOT NULL DEFAULT 'classification' CHECK(mission_phase IN ('classification', 'plan', 'implement', 'validate', 'proof', 'summarize'))",
+      "ALTER TABLE ticket_runs ADD COLUMN mission_phase_updated_at INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE ticket_runs ADD COLUMN classification_json TEXT",
+      "ALTER TABLE ticket_runs ADD COLUMN plan_json TEXT",
+      "ALTER TABLE ticket_runs ADD COLUMN summary_json TEXT",
+      "UPDATE ticket_runs SET mission_phase_updated_at = updated_at WHERE mission_phase_updated_at = 0",
+      `CREATE TABLE ticket_run_validations (
+        validation_id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK(kind IN ('build', 'unit-test')),
+        command TEXT NOT NULL,
+        cwd TEXT NOT NULL,
+        status TEXT NOT NULL CHECK(status IN ('pending', 'passed', 'failed', 'skipped')),
+        summary TEXT,
+        artifacts_json TEXT,
+        started_at INTEGER NOT NULL,
+        completed_at INTEGER,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        FOREIGN KEY(run_id) REFERENCES ticket_runs(run_id) ON DELETE CASCADE
+      )`,
+      "CREATE INDEX idx_ticket_run_validations_run_id_v17 ON ticket_run_validations(run_id, started_at DESC)",
+      `CREATE TABLE ticket_run_proof_strategy (
+        run_id TEXT PRIMARY KEY,
+        adapter_id TEXT NOT NULL,
+        repo_relative_path TEXT NOT NULL,
+        scenario_path TEXT,
+        scenario_name TEXT,
+        command TEXT NOT NULL,
+        artifact_mode TEXT NOT NULL CHECK(artifact_mode IN ('none', 'screenshot', 'video')),
+        rationale TEXT NOT NULL,
+        metadata_json TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        FOREIGN KEY(run_id) REFERENCES ticket_runs(run_id) ON DELETE CASCADE
+      )`,
+      "CREATE INDEX idx_ticket_run_proof_strategy_adapter_id_v17 ON ticket_run_proof_strategy(adapter_id, updated_at DESC)",
+    ],
+  },
+  {
+    version: 18,
+    statements: [
+      "ALTER TABLE ticket_run_validations RENAME TO ticket_run_validations_v17",
+      "DROP INDEX IF EXISTS idx_ticket_run_validations_run_id_v17",
+      `CREATE TABLE ticket_run_validations (
+        validation_id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK(kind IN ('build', 'unit-test')),
+        command TEXT NOT NULL,
+        cwd TEXT NOT NULL,
+        status TEXT NOT NULL CHECK(status IN ('pending', 'passed', 'failed', 'skipped')),
+        summary TEXT,
+        artifacts_json TEXT,
+        started_at INTEGER NOT NULL,
+        completed_at INTEGER,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        FOREIGN KEY(run_id) REFERENCES ticket_runs(run_id) ON DELETE CASCADE
+      )`,
+      `INSERT INTO ticket_run_validations (
+        validation_id,
+        run_id,
+        kind,
+        command,
+        cwd,
+        status,
+        summary,
+        artifacts_json,
+        started_at,
+        completed_at,
+        created_at,
+        updated_at
+      )
+      SELECT
+        validation_id,
+        run_id,
+        kind,
+        command,
+        cwd,
+        CASE WHEN status = 'running' THEN 'pending' ELSE status END,
+        summary,
+        artifacts_json,
+        started_at,
+        completed_at,
+        created_at,
+        updated_at
+      FROM ticket_run_validations_v17`,
+      "DROP TABLE ticket_run_validations_v17",
+      "CREATE INDEX idx_ticket_run_validations_run_id_v18 ON ticket_run_validations(run_id, started_at DESC)",
+    ],
+  },
+  {
+    version: 19,
+    statements: ["ALTER TABLE ticket_runs ADD COLUMN previous_pass_context_json TEXT"],
+  },
 ];
 
 type SqliteDatabase = InstanceType<typeof BetterSqlite3>;
@@ -989,6 +1184,36 @@ function assertTicketRunCleanupState(state: string): asserts state is TicketRunC
 function assertTicketRunProofStatus(status: string): asserts status is TicketRunProofStatus {
   if (!TICKET_RUN_PROOF_STATUSES.includes(status as TicketRunProofStatus)) {
     throw new Error(`Unsupported ticket run proof status: ${status}`);
+  }
+}
+
+function assertTicketRunMissionPhase(phase: string): asserts phase is TicketRunMissionPhase {
+  if (!TICKET_RUN_MISSION_PHASES.includes(phase as TicketRunMissionPhase)) {
+    throw new Error(`Unsupported ticket run mission phase: ${phase}`);
+  }
+}
+
+function assertTicketRunMissionClassificationKind(kind: string): asserts kind is TicketRunMissionClassificationKind {
+  if (!TICKET_RUN_MISSION_CLASSIFICATIONS.includes(kind as TicketRunMissionClassificationKind)) {
+    throw new Error(`Unsupported ticket run mission classification kind: ${kind}`);
+  }
+}
+
+function assertTicketRunMissionProofArtifactMode(mode: string): asserts mode is TicketRunMissionProofArtifactMode {
+  if (!TICKET_RUN_MISSION_PROOF_ARTIFACT_MODES.includes(mode as TicketRunMissionProofArtifactMode)) {
+    throw new Error(`Unsupported ticket run mission proof artifact mode: ${mode}`);
+  }
+}
+
+function assertTicketRunMissionValidationKind(kind: string): asserts kind is TicketRunMissionValidationKind {
+  if (!TICKET_RUN_MISSION_VALIDATION_KINDS.includes(kind as TicketRunMissionValidationKind)) {
+    throw new Error(`Unsupported ticket run mission validation kind: ${kind}`);
+  }
+}
+
+function assertTicketRunMissionValidationStatus(status: string): asserts status is TicketRunMissionValidationStatus {
+  if (!TICKET_RUN_MISSION_VALIDATION_STATUSES.includes(status as TicketRunMissionValidationStatus)) {
+    throw new Error(`Unsupported ticket run mission validation status: ${status}`);
   }
 }
 
@@ -1135,6 +1360,191 @@ const mapTicketRunProofSummary = (row: TicketRunRow): TicketRunProofSummary => {
   };
 };
 
+const mapTicketRunMissionClassification = (value: unknown): TicketRunMissionClassification | null => {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const kind = typeof value.kind === "string" ? value.kind.trim() : "";
+  const scopeSummary = typeof value.scopeSummary === "string" ? value.scopeSummary : "";
+  if (!kind || !scopeSummary) {
+    return null;
+  }
+  assertTicketRunMissionClassificationKind(kind);
+  return {
+    kind,
+    scopeSummary,
+    acceptanceCriteria: Array.isArray(value.acceptanceCriteria)
+      ? value.acceptanceCriteria.filter((entry): entry is string => typeof entry === "string")
+      : [],
+    impactedRepoRelativePaths: Array.isArray(value.impactedRepoRelativePaths)
+      ? value.impactedRepoRelativePaths.filter((entry): entry is string => typeof entry === "string")
+      : [],
+    risks: Array.isArray(value.risks) ? value.risks.filter((entry): entry is string => typeof entry === "string") : [],
+    uiChange: value.uiChange === true,
+    proofRequired: value.proofRequired === true,
+    proofArtifactMode:
+      typeof value.proofArtifactMode === "string" &&
+      TICKET_RUN_MISSION_PROOF_ARTIFACT_MODES.includes(value.proofArtifactMode as TicketRunMissionProofArtifactMode)
+        ? (value.proofArtifactMode as TicketRunMissionProofArtifactMode)
+        : "none",
+    rationale: typeof value.rationale === "string" ? value.rationale : null,
+    createdAt: typeof value.createdAt === "number" ? value.createdAt : 0,
+    updatedAt: typeof value.updatedAt === "number" ? value.updatedAt : 0,
+  };
+};
+
+const mapTicketRunMissionPlan = (value: unknown): TicketRunMissionPlan | null => {
+  if (!isRecord(value)) {
+    return null;
+  }
+  return {
+    steps: Array.isArray(value.steps) ? value.steps.filter((entry): entry is string => typeof entry === "string") : [],
+    touchedRepoRelativePaths: Array.isArray(value.touchedRepoRelativePaths)
+      ? value.touchedRepoRelativePaths.filter((entry): entry is string => typeof entry === "string")
+      : [],
+    validationPlan: Array.isArray(value.validationPlan)
+      ? value.validationPlan.filter((entry): entry is string => typeof entry === "string")
+      : [],
+    proofIntent: typeof value.proofIntent === "string" ? value.proofIntent : null,
+    blockers: Array.isArray(value.blockers)
+      ? value.blockers.filter((entry): entry is string => typeof entry === "string")
+      : [],
+    assumptions: Array.isArray(value.assumptions)
+      ? value.assumptions.filter((entry): entry is string => typeof entry === "string")
+      : [],
+    createdAt: typeof value.createdAt === "number" ? value.createdAt : 0,
+    updatedAt: typeof value.updatedAt === "number" ? value.updatedAt : 0,
+  };
+};
+
+const mapTicketRunMissionSummary = (value: unknown): TicketRunMissionSummary | null => {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const completedWork = typeof value.completedWork === "string" ? value.completedWork : "";
+  if (!completedWork) {
+    return null;
+  }
+  return {
+    completedWork,
+    changedRepoRelativePaths: Array.isArray(value.changedRepoRelativePaths)
+      ? value.changedRepoRelativePaths.filter((entry): entry is string => typeof entry === "string")
+      : [],
+    validationSummary: typeof value.validationSummary === "string" ? value.validationSummary : null,
+    proofSummary: typeof value.proofSummary === "string" ? value.proofSummary : null,
+    openQuestions: Array.isArray(value.openQuestions)
+      ? value.openQuestions.filter((entry): entry is string => typeof entry === "string")
+      : [],
+    followUps: Array.isArray(value.followUps)
+      ? value.followUps.filter((entry): entry is string => typeof entry === "string")
+      : [],
+    createdAt: typeof value.createdAt === "number" ? value.createdAt : 0,
+    updatedAt: typeof value.updatedAt === "number" ? value.updatedAt : 0,
+  };
+};
+
+const mapTicketRunPreviousPassContext = (value: unknown): TicketRunPreviousPassContext | null => {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const attemptId = typeof value.attemptId === "string" ? value.attemptId.trim() : "";
+  const sequence = typeof value.sequence === "number" ? value.sequence : Number.NaN;
+  const completedAt = typeof value.completedAt === "number" ? value.completedAt : Number.NaN;
+  if (!attemptId || !Number.isFinite(sequence) || !Number.isFinite(completedAt)) {
+    return null;
+  }
+
+  const proof = isRecord(value.proof)
+    ? {
+        status:
+          typeof value.proof.status === "string" &&
+          TICKET_RUN_PROOF_STATUSES.includes(value.proof.status as TicketRunProofStatus)
+            ? (value.proof.status as TicketRunProofStatus)
+            : "not-run",
+        lastProofRunId: typeof value.proof.lastProofRunId === "string" ? value.proof.lastProofRunId : null,
+        lastProofProfileId: typeof value.proof.lastProofProfileId === "string" ? value.proof.lastProofProfileId : null,
+        lastProofAt: typeof value.proof.lastProofAt === "number" ? value.proof.lastProofAt : null,
+        lastProofSummary: typeof value.proof.lastProofSummary === "string" ? value.proof.lastProofSummary : null,
+        staleReason: typeof value.proof.staleReason === "string" ? value.proof.staleReason : null,
+      }
+    : {
+        status: "not-run" as const,
+        lastProofRunId: null,
+        lastProofProfileId: null,
+        lastProofAt: null,
+        lastProofSummary: null,
+        staleReason: null,
+      };
+
+  return {
+    attemptId,
+    sequence,
+    completedAt,
+    summary: typeof value.summary === "string" ? value.summary : null,
+    classification: mapTicketRunMissionClassification(value.classification),
+    plan: mapTicketRunMissionPlan(value.plan),
+    validations: Array.isArray(value.validations)
+      ? value.validations.flatMap((entry) => {
+          if (!isRecord(entry)) {
+            return [];
+          }
+          const validationId = typeof entry.validationId === "string" ? entry.validationId.trim() : "";
+          const runId = typeof entry.runId === "string" ? entry.runId.trim() : "";
+          const kind = typeof entry.kind === "string" ? entry.kind.trim() : "";
+          const command = typeof entry.command === "string" ? entry.command.trim() : "";
+          const cwd = typeof entry.cwd === "string" ? entry.cwd.trim() : "";
+          const status = typeof entry.status === "string" ? entry.status.trim() : "";
+          if (!validationId || !runId || !kind || !command || !cwd || !status) {
+            return [];
+          }
+          assertTicketRunMissionValidationKind(kind);
+          assertTicketRunMissionValidationStatus(status);
+          return [
+            {
+              validationId,
+              runId,
+              kind,
+              command,
+              cwd,
+              status,
+              summary: typeof entry.summary === "string" ? entry.summary : null,
+              artifacts: Array.isArray(entry.artifacts)
+                ? entry.artifacts.flatMap((artifact) => {
+                    const mapped = mapTicketRunProofArtifact(artifact);
+                    return mapped ? [mapped] : [];
+                  })
+                : [],
+              startedAt: typeof entry.startedAt === "number" ? entry.startedAt : 0,
+              completedAt: typeof entry.completedAt === "number" ? entry.completedAt : null,
+              createdAt: typeof entry.createdAt === "number" ? entry.createdAt : 0,
+              updatedAt: typeof entry.updatedAt === "number" ? entry.updatedAt : 0,
+            } satisfies TicketRunMissionValidationRecord,
+          ];
+        })
+      : [],
+    proofStrategy: isRecord(value.proofStrategy)
+      ? mapTicketRunProofStrategyRow({
+          runId: typeof value.proofStrategy.runId === "string" ? value.proofStrategy.runId : "",
+          adapterId: typeof value.proofStrategy.adapterId === "string" ? value.proofStrategy.adapterId : "",
+          repoRelativePath:
+            typeof value.proofStrategy.repoRelativePath === "string" ? value.proofStrategy.repoRelativePath : "",
+          scenarioPath: typeof value.proofStrategy.scenarioPath === "string" ? value.proofStrategy.scenarioPath : null,
+          scenarioName: typeof value.proofStrategy.scenarioName === "string" ? value.proofStrategy.scenarioName : null,
+          command: typeof value.proofStrategy.command === "string" ? value.proofStrategy.command : "",
+          artifactMode:
+            typeof value.proofStrategy.artifactMode === "string" ? value.proofStrategy.artifactMode : "none",
+          rationale: typeof value.proofStrategy.rationale === "string" ? value.proofStrategy.rationale : "",
+          metadataJson: serializeJson(value.proofStrategy.metadata ?? null),
+          createdAt: typeof value.proofStrategy.createdAt === "number" ? value.proofStrategy.createdAt : 0,
+          updatedAt: typeof value.proofStrategy.updatedAt === "number" ? value.proofStrategy.updatedAt : 0,
+        })
+      : null,
+    missionSummary: mapTicketRunMissionSummary(value.missionSummary),
+    proof,
+  };
+};
+
 const mapTicketRunProofArtifact = (value: unknown): TicketRunProofArtifact | null => {
   if (!isRecord(value)) {
     return null;
@@ -1181,6 +1591,50 @@ const mapTicketRunProofRunRow = (row: TicketRunProofRunRow): TicketRunProofRunSu
   };
 };
 
+const mapTicketRunValidationRow = (row: TicketRunValidationRow): TicketRunMissionValidationRecord => {
+  assertTicketRunMissionValidationKind(row.kind);
+  assertTicketRunMissionValidationStatus(row.status);
+  const parsedArtifacts = tryParseJson(row.artifactsJson);
+  const artifacts = Array.isArray(parsedArtifacts)
+    ? parsedArtifacts.flatMap((entry) => {
+        const artifact = mapTicketRunProofArtifact(entry);
+        return artifact ? [artifact] : [];
+      })
+    : [];
+  return {
+    validationId: String(row.validationId),
+    runId: String(row.runId),
+    kind: row.kind,
+    command: String(row.command),
+    cwd: String(row.cwd),
+    status: row.status,
+    summary: row.summary === null ? null : String(row.summary),
+    artifacts,
+    startedAt: Number(row.startedAt),
+    completedAt: row.completedAt === null ? null : Number(row.completedAt),
+    createdAt: Number(row.createdAt),
+    updatedAt: Number(row.updatedAt),
+  };
+};
+
+const mapTicketRunProofStrategyRow = (row: TicketRunProofStrategyRow): TicketRunMissionProofStrategy => {
+  assertTicketRunMissionProofArtifactMode(row.artifactMode);
+  const metadata = tryParseJson(row.metadataJson);
+  return {
+    runId: String(row.runId),
+    adapterId: String(row.adapterId),
+    repoRelativePath: String(row.repoRelativePath),
+    scenarioPath: row.scenarioPath === null ? null : String(row.scenarioPath),
+    scenarioName: row.scenarioName === null ? null : String(row.scenarioName),
+    command: String(row.command),
+    artifactMode: row.artifactMode,
+    rationale: String(row.rationale),
+    metadata: isRecord(metadata) ? metadata : null,
+    createdAt: Number(row.createdAt),
+    updatedAt: Number(row.updatedAt),
+  };
+};
+
 const mapTicketRunSubmoduleParentRow = (row: TicketRunSubmoduleParentRow): TicketRunSubmoduleParentRef => ({
   parentRepoRelativePath: String(row.parentRepoRelativePath),
   submodulePath: String(row.submodulePath),
@@ -1205,9 +1659,12 @@ const mapTicketRunRow = (
   worktrees: readonly TicketRunWorktreeSummary[],
   attempts: readonly TicketRunAttemptSummary[],
   submodules: readonly TicketRunSubmoduleSummary[],
+  validations: readonly TicketRunMissionValidationRecord[],
+  proofStrategy: TicketRunMissionProofStrategy | null,
   proofRuns: readonly TicketRunProofRunSummary[],
 ): TicketRunSummary => {
   assertTicketRunStatus(row.status);
+  assertTicketRunMissionPhase(row.missionPhase);
   return {
     runId: String(row.runId),
     stationId: row.stationId === null ? null : String(row.stationId),
@@ -1225,6 +1682,14 @@ const mapTicketRunRow = (
     worktrees: [...worktrees],
     submodules: [...submodules],
     attempts: [...attempts],
+    missionPhase: row.missionPhase,
+    missionPhaseUpdatedAt: Number(row.missionPhaseUpdatedAt),
+    classification: mapTicketRunMissionClassification(tryParseJson(row.classificationJson)),
+    plan: mapTicketRunMissionPlan(tryParseJson(row.planJson)),
+    validations: [...validations],
+    proofStrategy,
+    missionSummary: mapTicketRunMissionSummary(tryParseJson(row.summaryJson)),
+    previousPassContext: mapTicketRunPreviousPassContext(tryParseJson(row.previousPassContextJson)),
     proof: mapTicketRunProofSummary(row),
     proofRuns: [...proofRuns],
   };
@@ -1846,13 +2311,19 @@ export class SpiraMemoryDatabase {
            ticket_id AS ticketId,
            ticket_summary AS ticketSummary,
            ticket_url AS ticketUrl,
-           project_key AS projectKey,
-           status,
-           status_message AS statusMessage,
-           commit_message_draft AS commitMessageDraft,
+            project_key AS projectKey,
+            status,
+            status_message AS statusMessage,
+            commit_message_draft AS commitMessageDraft,
+            mission_phase AS missionPhase,
+            mission_phase_updated_at AS missionPhaseUpdatedAt,
+           classification_json AS classificationJson,
+           plan_json AS planJson,
+           summary_json AS summaryJson,
+           previous_pass_context_json AS previousPassContextJson,
            proof_status AS proofStatus,
-           last_proof_run_id AS lastProofRunId,
-           last_proof_profile_id AS lastProofProfileId,
+            last_proof_run_id AS lastProofRunId,
+            last_proof_profile_id AS lastProofProfileId,
            last_proof_at AS lastProofAt,
            last_proof_summary AS lastProofSummary,
            proof_stale_reason AS proofStaleReason,
@@ -1913,6 +2384,56 @@ export class SpiraMemoryDatabase {
       const attempts = attemptsByRun.get(row.runId) ?? [];
       attempts.push(mapTicketRunAttemptRow(row));
       attemptsByRun.set(row.runId, attempts);
+    }
+
+    const validationRows = this.db
+      .prepare(
+        `SELECT
+           validation_id AS validationId,
+           run_id AS runId,
+           kind,
+           command,
+           cwd,
+           status,
+           summary,
+           artifacts_json AS artifactsJson,
+           started_at AS startedAt,
+           completed_at AS completedAt,
+           created_at AS createdAt,
+           updated_at AS updatedAt
+         FROM ticket_run_validations
+         ORDER BY run_id ASC, started_at DESC, created_at DESC`,
+      )
+      .all() as unknown as TicketRunValidationRow[];
+
+    const validationsByRun = new Map<string, TicketRunMissionValidationRecord[]>();
+    for (const row of validationRows) {
+      const validations = validationsByRun.get(row.runId) ?? [];
+      validations.push(mapTicketRunValidationRow(row));
+      validationsByRun.set(row.runId, validations);
+    }
+
+    const proofStrategyRows = this.db
+      .prepare(
+        `SELECT
+           run_id AS runId,
+           adapter_id AS adapterId,
+           repo_relative_path AS repoRelativePath,
+           scenario_path AS scenarioPath,
+           scenario_name AS scenarioName,
+           command,
+           artifact_mode AS artifactMode,
+           rationale,
+           metadata_json AS metadataJson,
+           created_at AS createdAt,
+           updated_at AS updatedAt
+         FROM ticket_run_proof_strategy`,
+      )
+      .all() as unknown as TicketRunProofStrategyRow[];
+
+    const proofStrategyByRun = new Map<string, TicketRunMissionProofStrategy>();
+    for (const row of proofStrategyRows) {
+      proofStrategyByRun.set(row.runId, mapTicketRunProofStrategyRow(row));
     }
 
     const proofRunRows = this.db
@@ -1991,6 +2512,8 @@ export class SpiraMemoryDatabase {
         worktreesByRun.get(row.runId) ?? [],
         attemptsByRun.get(row.runId) ?? [],
         submodulesByRun.get(row.runId) ?? [],
+        validationsByRun.get(row.runId) ?? [],
+        proofStrategyByRun.get(row.runId) ?? null,
         proofRunsByRun.get(row.runId) ?? [],
       ),
     );
@@ -2005,13 +2528,18 @@ export class SpiraMemoryDatabase {
            ticket_id AS ticketId,
            ticket_summary AS ticketSummary,
            ticket_url AS ticketUrl,
-           project_key AS projectKey,
-           status,
-           status_message AS statusMessage,
-           commit_message_draft AS commitMessageDraft,
-           proof_status AS proofStatus,
-           last_proof_run_id AS lastProofRunId,
-           last_proof_profile_id AS lastProofProfileId,
+            project_key AS projectKey,
+            status,
+            status_message AS statusMessage,
+            commit_message_draft AS commitMessageDraft,
+            mission_phase AS missionPhase,
+            mission_phase_updated_at AS missionPhaseUpdatedAt,
+            classification_json AS classificationJson,
+            plan_json AS planJson,
+            summary_json AS summaryJson,
+            proof_status AS proofStatus,
+            last_proof_run_id AS lastProofRunId,
+            last_proof_profile_id AS lastProofProfileId,
            last_proof_at AS lastProofAt,
            last_proof_summary AS lastProofSummary,
            proof_stale_reason AS proofStaleReason,
@@ -2065,6 +2593,46 @@ export class SpiraMemoryDatabase {
          ORDER BY sequence ASC`,
       )
       .all({ runId }) as unknown as TicketRunAttemptRow[];
+
+    const validations = this.db
+      .prepare(
+        `SELECT
+           validation_id AS validationId,
+           run_id AS runId,
+           kind,
+           command,
+           cwd,
+           status,
+           summary,
+           artifacts_json AS artifactsJson,
+           started_at AS startedAt,
+           completed_at AS completedAt,
+           created_at AS createdAt,
+           updated_at AS updatedAt
+         FROM ticket_run_validations
+         WHERE run_id = @runId
+         ORDER BY started_at DESC, created_at DESC`,
+      )
+      .all({ runId }) as unknown as TicketRunValidationRow[];
+
+    const proofStrategy = this.db
+      .prepare(
+        `SELECT
+           run_id AS runId,
+           adapter_id AS adapterId,
+           repo_relative_path AS repoRelativePath,
+           scenario_path AS scenarioPath,
+           scenario_name AS scenarioName,
+           command,
+           artifact_mode AS artifactMode,
+           rationale,
+           metadata_json AS metadataJson,
+           created_at AS createdAt,
+           updated_at AS updatedAt
+         FROM ticket_run_proof_strategy
+         WHERE run_id = @runId`,
+      )
+      .get({ runId }) as TicketRunProofStrategyRow | undefined;
 
     const proofRuns = this.db
       .prepare(
@@ -2130,6 +2698,8 @@ export class SpiraMemoryDatabase {
       submodules.map((submodule) =>
         mapTicketRunSubmoduleRow(submodule, submoduleParentRefsByCanonicalUrl.get(submodule.canonicalUrl) ?? []),
       ),
+      validations.map((validation) => mapTicketRunValidationRow(validation)),
+      proofStrategy ? mapTicketRunProofStrategyRow(proofStrategy) : null,
       proofRuns.map((proofRun) => mapTicketRunProofRunRow(proofRun)),
     );
   }
@@ -2250,6 +2820,147 @@ export class SpiraMemoryDatabase {
         completedAt: attempt.completedAt ?? null,
       };
     });
+    const missionPhase = input.missionPhase ?? "classification";
+    assertTicketRunMissionPhase(missionPhase);
+    const missionPhaseUpdatedAt = input.missionPhaseUpdatedAt ?? now;
+    const normalizedClassification = input.classification
+      ? {
+          kind: input.classification.kind,
+          scopeSummary: input.classification.scopeSummary.trim(),
+          acceptanceCriteria: normalizeStringArray(input.classification.acceptanceCriteria),
+          impactedRepoRelativePaths: normalizeStringArray(input.classification.impactedRepoRelativePaths),
+          risks: normalizeStringArray(input.classification.risks),
+          uiChange: input.classification.uiChange,
+          proofRequired: input.classification.proofRequired,
+          proofArtifactMode: input.classification.proofArtifactMode,
+          rationale: normalizeTitle(input.classification.rationale),
+          createdAt: input.classification.createdAt ?? now,
+          updatedAt: input.classification.updatedAt ?? now,
+        }
+      : null;
+    if (normalizedClassification) {
+      assertTicketRunMissionClassificationKind(normalizedClassification.kind);
+      assertTicketRunMissionProofArtifactMode(normalizedClassification.proofArtifactMode);
+      if (!normalizedClassification.scopeSummary) {
+        throw new Error("Ticket run classification requires a non-empty scope summary.");
+      }
+    }
+    const normalizedPlan = input.plan
+      ? {
+          steps: normalizeStringArray(input.plan.steps),
+          touchedRepoRelativePaths: normalizeStringArray(input.plan.touchedRepoRelativePaths),
+          validationPlan: normalizeStringArray(input.plan.validationPlan),
+          proofIntent: normalizeTitle(input.plan.proofIntent),
+          blockers: normalizeStringArray(input.plan.blockers),
+          assumptions: normalizeStringArray(input.plan.assumptions),
+          createdAt: input.plan.createdAt ?? now,
+          updatedAt: input.plan.updatedAt ?? now,
+        }
+      : null;
+    const normalizedValidations = (input.validations ?? []).map((validation) => {
+      const validationId = validation.validationId.trim();
+      const command = validation.command.trim();
+      const cwd = validation.cwd.trim();
+      if (!validationId || !command || !cwd) {
+        throw new Error("Ticket run validations require non-empty id, command, and cwd values.");
+      }
+      assertTicketRunMissionValidationKind(validation.kind);
+      assertTicketRunMissionValidationStatus(validation.status);
+      const artifacts = (validation.artifacts ?? []).map((artifact) => {
+        const artifactId = artifact.artifactId.trim();
+        const label = artifact.label.trim();
+        const artifactPath = artifact.path.trim();
+        const fileUrl = artifact.fileUrl.trim();
+        if (!artifactId || !label || !artifactPath || !fileUrl) {
+          throw new Error("Ticket run validation artifacts require non-empty id, label, path, and file URL values.");
+        }
+        assertTicketRunProofArtifactKind(artifact.kind);
+        return {
+          artifactId,
+          kind: artifact.kind,
+          label,
+          path: artifactPath,
+          fileUrl,
+        };
+      });
+      return {
+        validationId,
+        kind: validation.kind,
+        command,
+        cwd,
+        status: validation.status,
+        summary: normalizeTitle(validation.summary),
+        artifacts,
+        startedAt: validation.startedAt ?? now,
+        completedAt: validation.completedAt ?? null,
+        createdAt: validation.createdAt ?? now,
+        updatedAt: validation.updatedAt ?? now,
+      };
+    });
+    const normalizedProofStrategy = input.proofStrategy
+      ? {
+          adapterId: input.proofStrategy.adapterId.trim(),
+          repoRelativePath: input.proofStrategy.repoRelativePath.trim(),
+          scenarioPath: normalizeTitle(input.proofStrategy.scenarioPath),
+          scenarioName: normalizeTitle(input.proofStrategy.scenarioName),
+          command: input.proofStrategy.command.trim(),
+          artifactMode: input.proofStrategy.artifactMode,
+          rationale: input.proofStrategy.rationale.trim(),
+          metadata: input.proofStrategy.metadata ?? null,
+          createdAt: input.proofStrategy.createdAt ?? now,
+          updatedAt: input.proofStrategy.updatedAt ?? now,
+        }
+      : null;
+    if (normalizedProofStrategy) {
+      assertTicketRunMissionProofArtifactMode(normalizedProofStrategy.artifactMode);
+      if (
+        !normalizedProofStrategy.adapterId ||
+        !normalizedProofStrategy.repoRelativePath ||
+        !normalizedProofStrategy.command ||
+        !normalizedProofStrategy.rationale
+      ) {
+        throw new Error(
+          "Ticket run proof strategy requires non-empty adapter, repo path, command, and rationale values.",
+        );
+      }
+    }
+    const normalizedMissionSummary = input.missionSummary
+      ? {
+          completedWork: input.missionSummary.completedWork.trim(),
+          changedRepoRelativePaths: normalizeStringArray(input.missionSummary.changedRepoRelativePaths),
+          validationSummary: normalizeTitle(input.missionSummary.validationSummary),
+          proofSummary: normalizeTitle(input.missionSummary.proofSummary),
+          openQuestions: normalizeStringArray(input.missionSummary.openQuestions),
+          followUps: normalizeStringArray(input.missionSummary.followUps),
+          createdAt: input.missionSummary.createdAt ?? now,
+          updatedAt: input.missionSummary.updatedAt ?? now,
+        }
+      : null;
+    if (normalizedMissionSummary && !normalizedMissionSummary.completedWork) {
+      throw new Error("Ticket run mission summary requires non-empty completed work text.");
+    }
+    const normalizedPreviousPassContext = input.previousPassContext
+      ? {
+          attemptId: input.previousPassContext.attemptId.trim(),
+          sequence: input.previousPassContext.sequence,
+          completedAt: input.previousPassContext.completedAt,
+          summary: normalizeTitle(input.previousPassContext.summary),
+          classification: input.previousPassContext.classification,
+          plan: input.previousPassContext.plan,
+          validations: input.previousPassContext.validations ?? [],
+          proofStrategy: input.previousPassContext.proofStrategy,
+          missionSummary: input.previousPassContext.missionSummary,
+          proof: input.previousPassContext.proof,
+        }
+      : null;
+    if (
+      normalizedPreviousPassContext &&
+      (!normalizedPreviousPassContext.attemptId ||
+        !Number.isFinite(normalizedPreviousPassContext.sequence) ||
+        !Number.isFinite(normalizedPreviousPassContext.completedAt))
+    ) {
+      throw new Error("Ticket run previous pass context requires attemptId, sequence, and completedAt.");
+    }
     const proofInput = input.proof ?? {};
     const proofStatus = proofInput.status ?? "not-run";
     assertTicketRunProofStatus(proofStatus);
@@ -2310,13 +3021,19 @@ export class SpiraMemoryDatabase {
              ticket_id,
              ticket_summary,
              ticket_url,
-             project_key,
-             status,
-             status_message,
-             commit_message_draft,
-             proof_status,
-             last_proof_run_id,
-             last_proof_profile_id,
+              project_key,
+              status,
+              status_message,
+              commit_message_draft,
+              mission_phase,
+              mission_phase_updated_at,
+              classification_json,
+              plan_json,
+              summary_json,
+              previous_pass_context_json,
+              proof_status,
+              last_proof_run_id,
+              last_proof_profile_id,
              last_proof_at,
              last_proof_summary,
              proof_stale_reason,
@@ -2329,13 +3046,19 @@ export class SpiraMemoryDatabase {
              @ticketId,
              @ticketSummary,
              @ticketUrl,
-             @projectKey,
-             @status,
-             @statusMessage,
-             @commitMessageDraft,
-             @proofStatus,
-             @lastProofRunId,
-             @lastProofProfileId,
+              @projectKey,
+              @status,
+              @statusMessage,
+              @commitMessageDraft,
+              @missionPhase,
+              @missionPhaseUpdatedAt,
+              @classificationJson,
+              @planJson,
+              @summaryJson,
+              @previousPassContextJson,
+              @proofStatus,
+              @lastProofRunId,
+              @lastProofProfileId,
              @lastProofAt,
              @lastProofSummary,
              @proofStaleReason,
@@ -2348,13 +3071,19 @@ export class SpiraMemoryDatabase {
               station_id = excluded.station_id,
               ticket_summary = excluded.ticket_summary,
              ticket_url = excluded.ticket_url,
-               project_key = excluded.project_key,
-               status = excluded.status,
-               status_message = excluded.status_message,
-               commit_message_draft = excluded.commit_message_draft,
-               proof_status = excluded.proof_status,
-               last_proof_run_id = excluded.last_proof_run_id,
-               last_proof_profile_id = excluded.last_proof_profile_id,
+                project_key = excluded.project_key,
+                status = excluded.status,
+                status_message = excluded.status_message,
+                commit_message_draft = excluded.commit_message_draft,
+                mission_phase = excluded.mission_phase,
+                mission_phase_updated_at = excluded.mission_phase_updated_at,
+                classification_json = excluded.classification_json,
+                plan_json = excluded.plan_json,
+                summary_json = excluded.summary_json,
+                previous_pass_context_json = excluded.previous_pass_context_json,
+                proof_status = excluded.proof_status,
+                last_proof_run_id = excluded.last_proof_run_id,
+                last_proof_profile_id = excluded.last_proof_profile_id,
                last_proof_at = excluded.last_proof_at,
                last_proof_summary = excluded.last_proof_summary,
                proof_stale_reason = excluded.proof_stale_reason,
@@ -2371,6 +3100,12 @@ export class SpiraMemoryDatabase {
           status,
           statusMessage,
           commitMessageDraft,
+          missionPhase,
+          missionPhaseUpdatedAt,
+          classificationJson: serializeJson(normalizedClassification),
+          planJson: serializeJson(normalizedPlan),
+          summaryJson: serializeJson(normalizedMissionSummary),
+          previousPassContextJson: serializeJson(normalizedPreviousPassContext),
           proofStatus: normalizedProof.status,
           lastProofRunId: normalizedProof.lastProofRunId,
           lastProofProfileId: normalizedProof.lastProofProfileId,
@@ -2490,6 +3225,20 @@ export class SpiraMemoryDatabase {
         )
         .run({ runId });
 
+      this.db
+        .prepare(
+          `DELETE FROM ticket_run_validations
+           WHERE run_id = @runId`,
+        )
+        .run({ runId });
+
+      this.db
+        .prepare(
+          `DELETE FROM ticket_run_proof_strategy
+           WHERE run_id = @runId`,
+        )
+        .run({ runId });
+
       const insertAttempt = this.db.prepare(
         `INSERT INTO ticket_run_attempts (
            attempt_id,
@@ -2525,6 +3274,97 @@ export class SpiraMemoryDatabase {
           runId,
           ...attempt,
         });
+      }
+
+      const insertValidation = this.db.prepare(
+        `INSERT INTO ticket_run_validations (
+           validation_id,
+           run_id,
+           kind,
+           command,
+           cwd,
+           status,
+           summary,
+           artifacts_json,
+           started_at,
+           completed_at,
+           created_at,
+           updated_at
+         ) VALUES (
+           @validationId,
+           @runId,
+           @kind,
+           @command,
+           @cwd,
+           @status,
+           @summary,
+           @artifactsJson,
+           @startedAt,
+           @completedAt,
+           @createdAt,
+           @updatedAt
+         )`,
+      );
+
+      for (const validation of normalizedValidations) {
+        insertValidation.run({
+          validationId: validation.validationId,
+          runId,
+          kind: validation.kind,
+          command: validation.command,
+          cwd: validation.cwd,
+          status: validation.status,
+          summary: validation.summary,
+          artifactsJson: serializeJson(validation.artifacts),
+          startedAt: validation.startedAt,
+          completedAt: validation.completedAt,
+          createdAt: validation.createdAt,
+          updatedAt: validation.updatedAt,
+        });
+      }
+
+      if (normalizedProofStrategy) {
+        this.db
+          .prepare(
+            `INSERT INTO ticket_run_proof_strategy (
+               run_id,
+               adapter_id,
+               repo_relative_path,
+               scenario_path,
+               scenario_name,
+               command,
+               artifact_mode,
+               rationale,
+               metadata_json,
+               created_at,
+               updated_at
+             ) VALUES (
+               @runId,
+               @adapterId,
+               @repoRelativePath,
+               @scenarioPath,
+               @scenarioName,
+               @command,
+               @artifactMode,
+               @rationale,
+               @metadataJson,
+               @createdAt,
+               @updatedAt
+             )`,
+          )
+          .run({
+            runId,
+            adapterId: normalizedProofStrategy.adapterId,
+            repoRelativePath: normalizedProofStrategy.repoRelativePath,
+            scenarioPath: normalizedProofStrategy.scenarioPath,
+            scenarioName: normalizedProofStrategy.scenarioName,
+            command: normalizedProofStrategy.command,
+            artifactMode: normalizedProofStrategy.artifactMode,
+            rationale: normalizedProofStrategy.rationale,
+            metadataJson: serializeJson(normalizedProofStrategy.metadata),
+            createdAt: normalizedProofStrategy.createdAt,
+            updatedAt: normalizedProofStrategy.updatedAt,
+          });
       }
 
       this.db

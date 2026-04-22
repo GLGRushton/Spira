@@ -1,4 +1,4 @@
-import type { McpTool } from "@spira/shared";
+import type { McpTool, TicketRunSummary } from "@spira/shared";
 import { describe, expect, it, vi } from "vitest";
 import { getCopilotTools } from "./tool-bridge.js";
 
@@ -11,6 +11,63 @@ const createTool = (serverId: string, name: string): McpTool => ({
     type: "object",
     properties: {},
     additionalProperties: false,
+  },
+});
+
+const createRunSummary = (): TicketRunSummary => ({
+  runId: "run-1",
+  stationId: "mission:run-1",
+  ticketId: "SPI-101",
+  ticketSummary: "Mission lifecycle",
+  ticketUrl: "https://example.test/issue/SPI-101",
+  projectKey: "SPI",
+  status: "working",
+  statusMessage: null,
+  commitMessageDraft: null,
+  missionPhase: "classification",
+  missionPhaseUpdatedAt: 1,
+  classification: null,
+  plan: null,
+  validations: [],
+  proofStrategy: null,
+  missionSummary: null,
+  previousPassContext: null,
+  createdAt: 1,
+  updatedAt: 1,
+  startedAt: 1,
+  worktrees: [],
+  submodules: [],
+  attempts: [],
+  proof: {
+    status: "not-run",
+    lastProofRunId: null,
+    lastProofProfileId: null,
+    lastProofAt: null,
+    lastProofSummary: null,
+    staleReason: null,
+  },
+  proofRuns: [],
+});
+
+const createMissionContext = () => ({
+  run: createRunSummary(),
+  availableProofs: [],
+  latestAttemptSummary: null,
+  previousPassContext: null,
+  workflow: {
+    kickoffComplete: false,
+    classificationSaved: false,
+    planSaved: false,
+    hasPassingValidation: false,
+    hasFailingValidation: false,
+    hasPendingValidation: false,
+    proofRequired: false,
+    proofStrategySaved: true,
+    proofPassed: true,
+    summarySaved: false,
+    nextAction: "load-context" as const,
+    nextActionLabel: "Load mission context",
+    blockedReason: "Call get_mission_context before taking mission actions.",
   },
 });
 
@@ -166,6 +223,165 @@ describe("getCopilotTools", () => {
       mode: "background",
     });
     expect(result.textResultForLlm).toContain('"agent_id":"run-1"');
+  });
+
+  it("registers mission lifecycle tools only for mission-scoped sessions", () => {
+    const aggregator = createAggregator();
+
+    const globalToolNames = getCopilotTools(aggregator as never, {
+      getMissionContext: async () => createMissionContext(),
+    }).map((tool) => tool.name);
+    const missionToolNames = getCopilotTools(aggregator as never, {
+      missionRunId: "run-1",
+      getMissionContext: async () => createMissionContext(),
+      saveMissionClassification: async () => ({}),
+      saveMissionPlan: async () => ({}),
+      setMissionPhase: async () => ({}),
+      recordMissionValidation: async () => ({}),
+      setMissionProofStrategy: async () => ({}),
+      recordMissionProofResult: async () => ({}),
+      saveMissionSummary: async () => ({}),
+    }).map((tool) => tool.name);
+
+    expect(globalToolNames).not.toContain("get_mission_context");
+    expect(missionToolNames).toEqual(
+      expect.arrayContaining([
+        "get_mission_context",
+        "save_classification",
+        "save_plan",
+        "record_validation",
+        "set_proof_strategy",
+        "record_proof_result",
+        "save_summary",
+      ]),
+    );
+  });
+
+  it("keeps mission tools available during a fresh pass and relies on runtime guards for ordering", () => {
+    const aggregator = createAggregator();
+
+    const missionToolNames = getCopilotTools(aggregator as never, {
+      missionRunId: "run-1",
+      missionWorkflowState: createMissionContext().workflow,
+      getMissionContext: async () => createMissionContext(),
+      saveMissionClassification: async () => ({}),
+      saveMissionPlan: async () => ({}),
+      recordMissionValidation: async () => ({}),
+      setMissionProofStrategy: async () => ({}),
+      recordMissionProofResult: async () => ({}),
+      saveMissionSummary: async () => ({}),
+      delegationDomains: [
+        {
+          id: "windows",
+          label: "Windows Agent",
+          serverIds: ["windows-system"],
+          delegationToolName: "delegate_to_windows",
+          allowWrites: true,
+          systemPrompt: "",
+        },
+      ],
+      delegateToDomain: async () => ({
+        runId: "run-1",
+        domain: "windows",
+        task: "inspect",
+        status: "completed",
+        retryCount: 0,
+        startedAt: 0,
+        completedAt: 1,
+        durationMs: 1,
+        followupNeeded: false,
+        summary: "done",
+        artifacts: [],
+        stateChanges: [],
+        toolCalls: [],
+        errors: [],
+        payload: null,
+      }),
+    }).map((tool) => tool.name);
+
+    expect(missionToolNames).toEqual(
+      expect.arrayContaining([
+        "system_get_volume",
+        "spira_ui_get_snapshot",
+        "spira_memory_list_entries",
+        "delegate_to_windows",
+        "get_mission_context",
+        "save_classification",
+        "save_plan",
+        "record_validation",
+        "set_proof_strategy",
+        "record_proof_result",
+        "save_summary",
+      ]),
+    );
+  });
+
+  it("binds mission lifecycle handlers to the configured mission run id", async () => {
+    const aggregator = createAggregator();
+    const saveMissionClassification = vi.fn().mockResolvedValue({ ok: true });
+    const tool = getCopilotTools(aggregator as never, {
+      missionRunId: "run-77",
+      saveMissionClassification,
+    }).find((candidate) => candidate.name === "save_classification");
+
+    const result = await (
+      tool as unknown as {
+        handler: (args: Record<string, unknown>, ...rest: unknown[]) => Promise<{ textResultForLlm: string }>;
+      }
+    ).handler({
+      kind: "ui",
+      scopeSummary: "Adds a new proof panel",
+      acceptanceCriteria: ["Panel appears in mission details"],
+      impactedRepoRelativePaths: ["packages/renderer"],
+      risks: [],
+      uiChange: true,
+      proofRequired: true,
+      proofArtifactMode: "screenshot",
+      rationale: "UI change requires visible proof.",
+    });
+
+    expect(saveMissionClassification).toHaveBeenCalledWith(
+      "run-77",
+      expect.objectContaining({
+        kind: "ui",
+        scopeSummary: "Adds a new proof panel",
+        proofRequired: true,
+      }),
+    );
+    expect(result.textResultForLlm).toContain('"ok":true');
+  });
+
+  it("binds mission proof tools to the configured mission run id", async () => {
+    const aggregator = createAggregator();
+    const runMissionProof = vi.fn().mockResolvedValue({ ok: true });
+    const tool = getCopilotTools(aggregator as never, {
+      missionRunId: "run-77",
+      runMissionProof,
+    }).find((candidate) => candidate.name === "spira_run_mission_proof");
+
+    await (
+      tool as unknown as {
+        handler: (args: Record<string, unknown>, ...rest: unknown[]) => Promise<{ textResultForLlm: string }>;
+      }
+    ).handler({
+      run_id: "run-77",
+      profile_id: "profile-1",
+    });
+
+    expect(runMissionProof).toHaveBeenCalledWith("run-77", "profile-1");
+
+    await expect(
+      (
+        tool as unknown as {
+          handler: (args: Record<string, unknown>, ...rest: unknown[]) => Promise<{ error?: string | undefined }>;
+        }
+      ).handler({
+        run_id: "run-88",
+        profile_id: "profile-1",
+      }),
+    ).resolves.toMatchObject({
+      error: "This mission station is bound to run_id run-77.",
+    });
   });
 
   it("reads delegated subagent snapshots", async () => {

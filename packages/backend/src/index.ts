@@ -26,6 +26,7 @@ import { McpClientPool } from "./mcp/client-pool.js";
 import { McpRegistry } from "./mcp/registry.js";
 import { McpToolAggregator } from "./mcp/tool-aggregator.js";
 import { fetchGitHubIdentity } from "./missions/github-identity.js";
+import { MissionLifecycleService } from "./missions/mission-lifecycle.js";
 import { MissionServiceRegistry } from "./missions/service-registry.js";
 import { type GenerateCommitDraftInput, TicketRunService } from "./missions/ticket-runs.js";
 import { ProjectRegistry } from "./projects/registry.js";
@@ -73,6 +74,7 @@ let youTrackService: YouTrackService | null = null;
 let projectRegistry: ProjectRegistry | null = null;
 let ticketRunService: TicketRunService | null = null;
 let missionServiceRegistry: MissionServiceRegistry | null = null;
+let missionLifecycleService: MissionLifecycleService | null = null;
 
 const BACKEND_BUILD_ID = process.env.SPIRA_BUILD_ID?.trim() || "dev";
 const BACKEND_GENERATION = Number(process.env.SPIRA_GENERATION ?? "0");
@@ -213,6 +215,9 @@ const buildMissionStationInstructions = (
     `You are operating as the dedicated Missions command station for ticket ${ticketId}.`,
     `The working directory for this station is the mission workspace at ${workingDirectory}. Stay inside it unless the user explicitly asks otherwise.`,
     `Repositories in scope:\n${formatMissionStationWorktrees(worktrees)}`,
+    `Mission lifecycle tools are mandatory for this station and are already bound to run_id "${runId}". Start by calling get_mission_context before making changes.`,
+    "Save classification before planning, save the plan before implementing, record validations before claiming completion, and save the final summary before finishing.",
+    "If the ticket changes UI, set a targeted proof strategy and record the resulting proof. Do not treat a generic harness run as sufficient proof.",
     `Mission services are managed through Spira. Use spira_list_mission_services with run_id "${runId}" to inspect profiles, spira_start_mission_service to launch tracked services, and spira_stop_mission_service to stop them.`,
     "Treat this as an iterative coding mission: preserve context between prompts, keep the mission workspace reviewable, and report unfinished edges plainly.",
   ].join("\n");
@@ -277,6 +282,7 @@ const restoreMissionStations = (registry: StationRegistry, database: SpiraMemory
     registry.createStation({
       stationId: run.stationId,
       label: `Mission ${run.ticketId}`,
+      missionRunId: run.runId,
       additionalInstructions: buildMissionStationInstructions(run.runId, run.ticketId, run.worktrees),
       workingDirectory,
       allowUpgradeTools: false,
@@ -2160,6 +2166,12 @@ const bootstrap = async () => {
   const builtInYouTrackServers = buildYouTrackBuiltinMcpServers(env);
   const builtInYouTrackSubagents = buildYouTrackBuiltinSubagents(env);
   projectRegistry = new ProjectRegistry(memoryDb);
+  missionLifecycleService = new MissionLifecycleService(memoryDb, bus, async (runId) => {
+    if (!ticketRunService) {
+      throw new ConfigError("Mission proofs are unavailable.");
+    }
+    return ticketRunService.getProofSnapshot(runId);
+  });
   ticketRunService = new TicketRunService({
     memoryDb,
     projectRegistry,
@@ -2191,6 +2203,7 @@ const bootstrap = async () => {
       stationRegistry.createStation({
         stationId,
         label: `Mission ${run.ticketId}`,
+        missionRunId: run.runId,
         additionalInstructions: buildMissionStationInstructions(run.runId, run.ticketId, run.worktrees),
         workingDirectory,
         allowUpgradeTools: false,
@@ -2203,6 +2216,25 @@ const bootstrap = async () => {
           status: "completed" as const,
           summary: response.text.trim() || "Mission pass completed.",
         })),
+      };
+    },
+    repairMissionPass: async ({ run, prompt }) => {
+      if (!stationRegistry) {
+        throw new ConfigError("Mission station manager is unavailable.");
+      }
+      const stationId = run.stationId ?? buildMissionStationId(run.runId);
+      stationRegistry.createStation({
+        stationId,
+        label: `Mission ${run.ticketId}`,
+        missionRunId: run.runId,
+        additionalInstructions: buildMissionStationInstructions(run.runId, run.ticketId, run.worktrees),
+        workingDirectory: resolveMissionStationWorkingDirectory(run.worktrees) ?? undefined,
+        allowUpgradeTools: false,
+      });
+      const response = await stationRegistry.sendMessageAndAwaitResponse(prompt, { stationId });
+      return {
+        status: "completed",
+        summary: response.text.trim() || "Mission repair turn completed.",
       };
     },
     cancelMissionPass: async (stationId) => {
@@ -2319,6 +2351,60 @@ const bootstrap = async () => {
         throw new ConfigError("Mission proofs are unavailable.");
       }
       return ticketRunService.runProof(runId, profileId);
+    },
+    getMissionContext: async (runId) => {
+      if (!missionLifecycleService) {
+        throw new ConfigError("Mission lifecycle is unavailable.");
+      }
+      return missionLifecycleService.getMissionContext(runId);
+    },
+    getMissionWorkflowState: (runId) => {
+      if (!missionLifecycleService) {
+        throw new ConfigError("Mission lifecycle is unavailable.");
+      }
+      return missionLifecycleService.getWorkflowState(runId);
+    },
+    saveMissionClassification: (runId, classification) => {
+      if (!missionLifecycleService) {
+        throw new ConfigError("Mission lifecycle is unavailable.");
+      }
+      return missionLifecycleService.saveClassification(runId, classification);
+    },
+    saveMissionPlan: (runId, plan) => {
+      if (!missionLifecycleService) {
+        throw new ConfigError("Mission lifecycle is unavailable.");
+      }
+      return missionLifecycleService.savePlan(runId, plan);
+    },
+    setMissionPhase: (runId, phase) => {
+      if (!missionLifecycleService) {
+        throw new ConfigError("Mission lifecycle is unavailable.");
+      }
+      return missionLifecycleService.setPhase(runId, phase);
+    },
+    recordMissionValidation: (runId, validation) => {
+      if (!missionLifecycleService) {
+        throw new ConfigError("Mission lifecycle is unavailable.");
+      }
+      return missionLifecycleService.recordValidation(runId, validation);
+    },
+    setMissionProofStrategy: (runId, proofStrategy) => {
+      if (!missionLifecycleService) {
+        throw new ConfigError("Mission lifecycle is unavailable.");
+      }
+      return missionLifecycleService.setProofStrategy(runId, proofStrategy);
+    },
+    recordMissionProofResult: (runId, result) => {
+      if (!missionLifecycleService) {
+        throw new ConfigError("Mission lifecycle is unavailable.");
+      }
+      return missionLifecycleService.recordProofResult(runId, result);
+    },
+    saveMissionSummary: (runId, missionSummary) => {
+      if (!missionLifecycleService) {
+        throw new ConfigError("Mission lifecycle is unavailable.");
+      }
+      return missionLifecycleService.saveSummary(runId, missionSummary);
     },
     requestUpgradeProposal,
     applyHotCapabilityUpgrade: async () => {

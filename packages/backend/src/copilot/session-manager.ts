@@ -24,6 +24,11 @@ import { SubagentLockManager } from "../subagent/lock-manager.js";
 import type { SubagentRegistry } from "../subagent/registry.js";
 import { SubagentRunRegistry } from "../subagent/run-registry.js";
 import { SubagentRunner } from "../subagent/subagent-runner.js";
+import {
+  assertMissionMcpToolAllowedForState,
+  assertMissionWorkflowStateActionAllowed,
+  type MissionWorkflowState,
+} from "../missions/mission-workflow-guard.js";
 import { CopilotError, formatErrorDetails } from "../util/errors.js";
 import type { SpiraEventBus } from "../util/event-bus.js";
 import { createLogger } from "../util/logger.js";
@@ -61,11 +66,21 @@ interface SessionManagerOptions {
   additionalInstructions?: string | null;
   workingDirectory?: string | null;
   allowUpgradeTools?: boolean;
+  missionRunId?: string;
   listMissionServices?: ToolBridgeOptions["listMissionServices"];
   startMissionService?: ToolBridgeOptions["startMissionService"];
   stopMissionService?: ToolBridgeOptions["stopMissionService"];
   listMissionProofs?: ToolBridgeOptions["listMissionProofs"];
   runMissionProof?: ToolBridgeOptions["runMissionProof"];
+  getMissionContext?: ToolBridgeOptions["getMissionContext"];
+  getMissionWorkflowState?: (runId: string) => MissionWorkflowState;
+  saveMissionClassification?: ToolBridgeOptions["saveMissionClassification"];
+  saveMissionPlan?: ToolBridgeOptions["saveMissionPlan"];
+  setMissionPhase?: ToolBridgeOptions["setMissionPhase"];
+  recordMissionValidation?: ToolBridgeOptions["recordMissionValidation"];
+  setMissionProofStrategy?: ToolBridgeOptions["setMissionProofStrategy"];
+  recordMissionProofResult?: ToolBridgeOptions["recordMissionProofResult"];
+  saveMissionSummary?: ToolBridgeOptions["saveMissionSummary"];
 }
 
 export interface ManagedSubagentLaunch {
@@ -140,11 +155,21 @@ export class CopilotSessionManager {
   private readonly additionalInstructions: string | null;
   private readonly workingDirectory: string | null;
   private readonly allowUpgradeTools: boolean;
+  private readonly missionRunId: string | null;
   private readonly listMissionServices: ToolBridgeOptions["listMissionServices"];
   private readonly startMissionService: ToolBridgeOptions["startMissionService"];
   private readonly stopMissionService: ToolBridgeOptions["stopMissionService"];
   private readonly listMissionProofs: ToolBridgeOptions["listMissionProofs"];
   private readonly runMissionProof: ToolBridgeOptions["runMissionProof"];
+  private readonly getMissionContext: ToolBridgeOptions["getMissionContext"];
+  private readonly getMissionWorkflowState: SessionManagerOptions["getMissionWorkflowState"];
+  private readonly saveMissionClassification: ToolBridgeOptions["saveMissionClassification"];
+  private readonly saveMissionPlan: ToolBridgeOptions["saveMissionPlan"];
+  private readonly setMissionPhase: ToolBridgeOptions["setMissionPhase"];
+  private readonly recordMissionValidation: ToolBridgeOptions["recordMissionValidation"];
+  private readonly setMissionProofStrategy: ToolBridgeOptions["setMissionProofStrategy"];
+  private readonly recordMissionProofResult: ToolBridgeOptions["recordMissionProofResult"];
+  private readonly saveMissionSummary: ToolBridgeOptions["saveMissionSummary"];
 
   constructor(
     private readonly bus: SpiraEventBus,
@@ -161,17 +186,33 @@ export class CopilotSessionManager {
     this.additionalInstructions = options.additionalInstructions?.trim() || null;
     this.workingDirectory = options.workingDirectory?.trim() || null;
     this.allowUpgradeTools = options.allowUpgradeTools ?? true;
+    this.missionRunId = options.missionRunId?.trim() || null;
     this.listMissionServices = options.listMissionServices;
     this.startMissionService = options.startMissionService;
     this.stopMissionService = options.stopMissionService;
     this.listMissionProofs = options.listMissionProofs;
     this.runMissionProof = options.runMissionProof;
+    this.getMissionContext = options.getMissionContext;
+    this.getMissionWorkflowState = options.getMissionWorkflowState;
+    this.saveMissionClassification = options.saveMissionClassification;
+    this.saveMissionPlan = options.saveMissionPlan;
+    this.setMissionPhase = options.setMissionPhase;
+    this.recordMissionValidation = options.recordMissionValidation;
+    this.setMissionProofStrategy = options.setMissionProofStrategy;
+    this.recordMissionProofResult = options.recordMissionProofResult;
+    this.saveMissionSummary = options.saveMissionSummary;
     this.activeSessionId = this.sessionPersistence?.load() ?? null;
     this.bus.on("mcp:servers-changed", () => {
       void this.refreshSessionForToolChanges();
     });
     this.bus.on("subagent:catalog-changed", () => {
       this.subagentRunners.clear();
+      void this.refreshSessionForToolChanges();
+    });
+    this.bus.on("missions:runs-changed", (snapshot) => {
+      if (!this.missionRunId || !snapshot.runs.some((run) => run.runId === this.missionRunId)) {
+        return;
+      }
       void this.refreshSessionForToolChanges();
     });
   }
@@ -725,10 +766,30 @@ export class CopilotSessionManager {
 
   private getToolBridgeOptions(): ToolBridgeOptions {
     const subagentsEnabled = this.env.SPIRA_SUBAGENTS_ENABLED;
+    const missionWorkflowState = this.missionRunId ? (this.getMissionWorkflowState?.(this.missionRunId) ?? null) : null;
+    const withMissionAction =
+      <TArgs extends unknown[], TResult>(
+        action: Parameters<typeof assertMissionWorkflowStateActionAllowed>[1],
+        handler: ((...args: TArgs) => TResult) | undefined,
+      ) =>
+      (...args: TArgs): TResult => {
+        if (this.missionRunId && this.getMissionWorkflowState) {
+          const workflowState = this.getMissionWorkflowState(this.missionRunId);
+          if (workflowState) {
+            assertMissionWorkflowStateActionAllowed(workflowState, action);
+          }
+        }
+        if (!handler) {
+          throw new CopilotError(`Mission action ${action} is unavailable.`);
+        }
+        return handler(...args);
+      };
     const readyDelegationDomains = this.getDelegationDomains();
     const connectedDelegationDomains = readyDelegationDomains.filter(
       (domain) => this.getDelegationDomainTools(domain.id, this.toolAggregator.getTools()).length,
     );
+    const missionScoped = this.missionRunId !== null;
+    const delegationEnabled = connectedDelegationDomains.length > 0;
     return {
       ...(this.allowUpgradeTools
         ? {
@@ -736,12 +797,40 @@ export class CopilotSessionManager {
             applyHotCapabilityUpgrade: this.applyHotCapabilityUpgrade,
           }
         : {}),
-      ...(this.listMissionServices ? { listMissionServices: this.listMissionServices } : {}),
-      ...(this.startMissionService ? { startMissionService: this.startMissionService } : {}),
-      ...(this.stopMissionService ? { stopMissionService: this.stopMissionService } : {}),
-      ...(this.listMissionProofs ? { listMissionProofs: this.listMissionProofs } : {}),
-      ...(this.runMissionProof ? { runMissionProof: this.runMissionProof } : {}),
-      ...(subagentsEnabled
+      ...(missionScoped && this.listMissionServices
+        ? { listMissionServices: withMissionAction("service-read", this.listMissionServices) }
+        : {}),
+      ...(missionScoped && this.startMissionService
+        ? { startMissionService: withMissionAction("service-write", this.startMissionService) }
+        : {}),
+      ...(missionScoped && this.stopMissionService
+        ? { stopMissionService: withMissionAction("service-write", this.stopMissionService) }
+        : {}),
+      ...(missionScoped && this.listMissionProofs
+        ? { listMissionProofs: withMissionAction("proof-read", this.listMissionProofs) }
+        : {}),
+      ...(missionScoped && this.runMissionProof
+        ? { runMissionProof: withMissionAction("record-proof-result", this.runMissionProof) }
+        : {}),
+      ...(missionScoped && this.missionRunId ? { missionRunId: this.missionRunId } : {}),
+      ...(missionScoped ? { missionWorkflowState } : {}),
+      ...(missionScoped && this.getMissionContext ? { getMissionContext: this.getMissionContext } : {}),
+      ...(missionScoped && this.saveMissionClassification
+        ? { saveMissionClassification: this.saveMissionClassification }
+        : {}),
+      ...(missionScoped && this.saveMissionPlan ? { saveMissionPlan: this.saveMissionPlan } : {}),
+      ...(missionScoped && this.setMissionPhase ? { setMissionPhase: this.setMissionPhase } : {}),
+      ...(missionScoped && this.recordMissionValidation
+        ? { recordMissionValidation: this.recordMissionValidation }
+        : {}),
+      ...(missionScoped && this.setMissionProofStrategy
+        ? { setMissionProofStrategy: this.setMissionProofStrategy }
+        : {}),
+      ...(missionScoped && this.recordMissionProofResult
+        ? { recordMissionProofResult: this.recordMissionProofResult }
+        : {}),
+      ...(missionScoped && this.saveMissionSummary ? { saveMissionSummary: this.saveMissionSummary } : {}),
+      ...(subagentsEnabled && delegationEnabled
         ? {
             excludeServerIds: this.getDelegatedServerIds(),
             delegationDomains: connectedDelegationDomains,
@@ -749,6 +838,12 @@ export class CopilotSessionManager {
               domainId: string,
               args: SubagentDelegationArgs,
             ): Promise<SubagentEnvelope | SubagentRunHandle> => {
+              if (missionScoped && this.missionRunId && this.getMissionWorkflowState) {
+                const workflowState = this.getMissionWorkflowState(this.missionRunId);
+                if (workflowState) {
+                  assertMissionWorkflowStateActionAllowed(workflowState, "delegate");
+                }
+              }
               if (args.mode === "background") {
                 return this.subagentRunRegistry.track(domainId, args, this.getSubagentRunner(domainId).launch(args));
               }
@@ -762,6 +857,17 @@ export class CopilotSessionManager {
             listSubagents: (options) => this.subagentRunRegistry.list(options),
             writeSubagent: (agentId, input) => this.subagentRunRegistry.write(agentId, input),
             stopSubagent: (agentId) => this.subagentRunRegistry.stop(agentId),
+          }
+        : {}),
+      ...(missionScoped && this.missionRunId && this.getMissionWorkflowState
+        ? {
+            wrapToolExecution: async (tool, args, execute) => {
+              const workflowState = this.getMissionWorkflowState?.(this.missionRunId!);
+              if (workflowState) {
+                assertMissionMcpToolAllowedForState(workflowState, tool);
+              }
+              return execute();
+            },
           }
         : {}),
     };

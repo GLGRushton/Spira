@@ -1048,6 +1048,69 @@ describe("TicketRunService", () => {
           resolveCompletion = resolve;
         }),
       })),
+      repairMissionPass: vi.fn().mockImplementation(async ({ run }) => {
+        const currentRun = database.getTicketRun(run.runId);
+        if (!currentRun) {
+          throw new Error("Expected the mission run to exist.");
+        }
+        database.upsertTicketRun({
+          ...currentRun,
+          classification: {
+            kind: "backend",
+            scopeSummary: "Workflow repaired",
+            acceptanceCriteria: [],
+            impactedRepoRelativePaths: ["service-api"],
+            risks: [],
+            uiChange: false,
+            proofRequired: false,
+            proofArtifactMode: "none",
+            rationale: null,
+            createdAt: 1234,
+            updatedAt: 1234,
+          },
+          plan: {
+            steps: ["Repair lifecycle state"],
+            touchedRepoRelativePaths: ["service-api"],
+            validationPlan: ["pnpm test"],
+            proofIntent: null,
+            blockers: [],
+            assumptions: [],
+            createdAt: 1234,
+            updatedAt: 1234,
+          },
+          validations: [
+            {
+              validationId: "validation-1",
+              kind: "build",
+              command: "pnpm test",
+              cwd: "C:\\Repos\\service-api",
+              status: "passed",
+              summary: "Validation passed.",
+              artifacts: [],
+              startedAt: 1234,
+              completedAt: 1234,
+              createdAt: 1234,
+              updatedAt: 1234,
+            },
+          ],
+          missionSummary: {
+            completedWork: "Lifecycle repaired and code reviewed.",
+            changedRepoRelativePaths: ["service-api"],
+            validationSummary: "pnpm test passed",
+            proofSummary: null,
+            openQuestions: [],
+            followUps: [],
+            createdAt: 1234,
+            updatedAt: 1234,
+          },
+          missionPhase: "summarize",
+          missionPhaseUpdatedAt: 1234,
+        });
+        return {
+          status: "completed",
+          summary: "Lifecycle repaired and ready for review.",
+        };
+      }),
       now: () => 1234,
     });
 
@@ -1062,15 +1125,14 @@ describe("TicketRunService", () => {
     expect(started.run.stationId).toBe("mission:run-1");
 
     resolveCompletion?.({ status: "completed", summary: "Code updated and ready for review." });
-    await Promise.resolve();
-    await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 25));
 
     expect(database.getTicketRun("run-1")).toMatchObject({
       status: "awaiting-review",
       attempts: [
         {
           status: "completed",
-          summary: "Code updated and ready for review.",
+          summary: "Lifecycle repaired and ready for review.",
         },
       ],
     });
@@ -1085,6 +1147,68 @@ describe("TicketRunService", () => {
       ticketUrl: "https://example.youtrack.cloud/issue/SPI-108",
       projectKey: "SPI",
       status: "awaiting-review",
+      missionPhase: "summarize",
+      missionPhaseUpdatedAt: 175,
+      classification: {
+        kind: "ui",
+        scopeSummary: "UI mission already classified.",
+        acceptanceCriteria: [],
+        impactedRepoRelativePaths: ["service-api"],
+        risks: [],
+        uiChange: true,
+        proofRequired: true,
+        proofArtifactMode: "screenshot",
+        rationale: null,
+        createdAt: 125,
+        updatedAt: 125,
+      },
+      plan: {
+        steps: ["Follow up after review"],
+        touchedRepoRelativePaths: ["service-api"],
+        validationPlan: ["Run unit tests"],
+        proofIntent: "Capture the UI.",
+        blockers: [],
+        assumptions: [],
+        createdAt: 130,
+        updatedAt: 130,
+      },
+      validations: [
+        {
+          validationId: "validation-1",
+          kind: "build",
+          command: "pnpm test",
+          cwd: "C:\\Repos\\.spira-worktrees\\spi-108-service-api",
+          status: "passed",
+          summary: "Tests passed.",
+          artifacts: [],
+          startedAt: 150,
+          completedAt: 160,
+          createdAt: 150,
+          updatedAt: 160,
+        },
+      ],
+      proofStrategy: {
+        adapterId: "playwright-dotnet-nunit",
+        repoRelativePath: "service-api",
+        scenarioPath: "Tests\\MissionProof.spec.ts",
+        scenarioName: "Mission proof",
+        command: "dotnet test",
+        artifactMode: "screenshot",
+        rationale: "Show the UI change.",
+        metadata: null,
+        createdAt: 170,
+        updatedAt: 170,
+      },
+      missionSummary: {
+        completedWork: "Previous pass finished.",
+        changedRepoRelativePaths: ["service-api"],
+        validationSummary: "Tests passed.",
+        proofSummary: "Screenshot captured.",
+        openQuestions: [],
+        followUps: [],
+        createdAt: 180,
+        updatedAt: 180,
+      },
       createdAt: 100,
       startedAt: 100,
       worktrees: [
@@ -1132,6 +1256,14 @@ describe("TicketRunService", () => {
       sequence: 2,
       prompt: "Tighten the final error handling.",
       status: "running",
+    });
+    expect(result.run).toMatchObject({
+      missionPhase: "classification",
+      classification: null,
+      plan: null,
+      validations: [],
+      proofStrategy: null,
+      missionSummary: null,
     });
   });
 
@@ -1258,6 +1390,68 @@ describe("TicketRunService", () => {
       ticketUrl: "https://example.youtrack.cloud/issue/SPI-110",
       projectKey: "SPI",
       status: "awaiting-review",
+      missionPhase: "summarize",
+      missionPhaseUpdatedAt: 400,
+      classification: {
+        kind: "backend",
+        scopeSummary: "Backend-only workflow cleanup",
+        acceptanceCriteria: [],
+        impactedRepoRelativePaths: ["service-api"],
+        risks: [],
+        uiChange: false,
+        proofRequired: false,
+        proofArtifactMode: "none",
+        rationale: null,
+        createdAt: 200,
+        updatedAt: 200,
+      },
+      plan: {
+        steps: ["Update the ticket workflow"],
+        touchedRepoRelativePaths: ["service-api"],
+        validationPlan: ["Run unit tests"],
+        proofIntent: null,
+        blockers: [],
+        assumptions: [],
+        createdAt: 250,
+        updatedAt: 250,
+      },
+      validations: [
+        {
+          validationId: "validation-1",
+          kind: "build",
+          command: "pnpm test",
+          cwd: "C:\\Repos\\.spira-worktrees\\spi-110-service-api",
+          status: "passed",
+          summary: "Tests passed.",
+          artifacts: [],
+          startedAt: 275,
+          completedAt: 280,
+          createdAt: 275,
+          updatedAt: 280,
+        },
+      ],
+      proofStrategy: {
+        adapterId: "playwright-dotnet-nunit",
+        repoRelativePath: "service-api",
+        scenarioPath: "Tests\\MissionProof.spec.ts",
+        scenarioName: "Mission proof",
+        command: "dotnet test",
+        artifactMode: "screenshot",
+        rationale: "Show the UI change.",
+        metadata: null,
+        createdAt: 290,
+        updatedAt: 290,
+      },
+      missionSummary: {
+        completedWork: "Closed out the workflow cleanup.",
+        changedRepoRelativePaths: ["service-api"],
+        validationSummary: "Unit tests passed.",
+        proofSummary: null,
+        openQuestions: [],
+        followUps: [],
+        createdAt: 300,
+        updatedAt: 300,
+      },
       createdAt: 100,
       startedAt: 100,
       worktrees: [
@@ -1323,6 +1517,322 @@ describe("TicketRunService", () => {
       statusMessage: "Mission closed.",
       commitMessageDraft: null,
     });
+  });
+
+  it("blocks closing until the lifecycle reaches summarize", async () => {
+    const database = createTestDatabase();
+    database.upsertTicketRun({
+      runId: "run-1",
+      stationId: "mission:run-1",
+      ticketId: "SPI-110",
+      ticketSummary: "Prepare manual commit flow",
+      ticketUrl: "https://example.youtrack.cloud/issue/SPI-110",
+      projectKey: "SPI",
+      status: "awaiting-review",
+      missionPhase: "validate",
+      missionPhaseUpdatedAt: 400,
+      classification: {
+        kind: "backend",
+        scopeSummary: "Backend-only workflow cleanup",
+        acceptanceCriteria: [],
+        impactedRepoRelativePaths: ["service-api"],
+        risks: [],
+        uiChange: false,
+        proofRequired: false,
+        proofArtifactMode: "none",
+        rationale: null,
+        createdAt: 200,
+        updatedAt: 200,
+      },
+      plan: {
+        steps: ["Update the ticket workflow"],
+        touchedRepoRelativePaths: ["service-api"],
+        validationPlan: ["Run unit tests"],
+        proofIntent: null,
+        blockers: [],
+        assumptions: [],
+        createdAt: 250,
+        updatedAt: 250,
+      },
+      worktrees: [],
+    });
+    const service = new TicketRunService({
+      memoryDb: database,
+      logger: createLogger(),
+      projectRegistry: { getSnapshot: async () => ({ workspaceRoot: null, repos: [], mappings: [] }) },
+      youTrackService: null,
+      now: () => 500,
+    });
+
+    await expect(service.completeRun("run-1")).rejects.toThrow(
+      "Ticket SPI-110 must reach the summarize phase before it can be closed.",
+    );
+  });
+
+  it("blocks closing when a required proof has not passed", async () => {
+    const database = createTestDatabase();
+    database.upsertTicketRun({
+      runId: "run-1",
+      stationId: "mission:run-1",
+      ticketId: "SPI-110",
+      ticketSummary: "Prepare manual commit flow",
+      ticketUrl: "https://example.youtrack.cloud/issue/SPI-110",
+      projectKey: "SPI",
+      status: "awaiting-review",
+      missionPhase: "summarize",
+      missionPhaseUpdatedAt: 400,
+      classification: {
+        kind: "ui",
+        scopeSummary: "UI workflow cleanup",
+        acceptanceCriteria: [],
+        impactedRepoRelativePaths: ["service-api"],
+        risks: [],
+        uiChange: true,
+        proofRequired: true,
+        proofArtifactMode: "screenshot",
+        rationale: null,
+        createdAt: 200,
+        updatedAt: 200,
+      },
+      plan: {
+        steps: ["Update the ticket workflow"],
+        touchedRepoRelativePaths: ["service-api"],
+        validationPlan: ["Run unit tests"],
+        proofIntent: "Capture the new workflow panel",
+        blockers: [],
+        assumptions: [],
+        createdAt: 250,
+        updatedAt: 250,
+      },
+      validations: [
+        {
+          validationId: "validation-1",
+          kind: "build",
+          command: "pnpm test",
+          cwd: "C:\\Repos\\.spira-worktrees\\spi-110-service-api",
+          status: "passed",
+          summary: "Tests passed.",
+          artifacts: [],
+          startedAt: 275,
+          completedAt: 280,
+          createdAt: 275,
+          updatedAt: 280,
+        },
+      ],
+      proofStrategy: {
+        adapterId: "playwright-dotnet-nunit",
+        repoRelativePath: "service-api",
+        scenarioPath: "Tests\\MissionProof.spec.ts",
+        scenarioName: "Mission proof",
+        command: "dotnet test",
+        artifactMode: "screenshot",
+        rationale: "Show the UI change.",
+        metadata: null,
+        createdAt: 290,
+        updatedAt: 290,
+      },
+      missionSummary: {
+        completedWork: "Closed out the workflow cleanup.",
+        changedRepoRelativePaths: ["service-api"],
+        validationSummary: "Unit tests passed.",
+        proofSummary: null,
+        openQuestions: [],
+        followUps: [],
+        createdAt: 300,
+        updatedAt: 300,
+      },
+      proof: {
+        status: "failed",
+        lastProofRunId: "proof-1",
+        lastProofProfileId: "profile-1",
+        lastProofAt: 450,
+        lastProofSummary: "Proof failed.",
+        staleReason: null,
+      },
+      worktrees: [],
+    });
+    const service = new TicketRunService({
+      memoryDb: database,
+      logger: createLogger(),
+      projectRegistry: { getSnapshot: async () => ({ workspaceRoot: null, repos: [], mappings: [] }) },
+      youTrackService: null,
+      now: () => 500,
+    });
+
+    await expect(service.completeRun("run-1")).rejects.toThrow(
+      "Ticket SPI-110 requires a passing proof result before it can be closed.",
+    );
+  });
+
+  it("blocks closing when a required proof strategy has not been stored", async () => {
+    const database = createTestDatabase();
+    database.upsertTicketRun({
+      runId: "run-1",
+      stationId: "mission:run-1",
+      ticketId: "SPI-110",
+      ticketSummary: "Prepare manual commit flow",
+      ticketUrl: "https://example.youtrack.cloud/issue/SPI-110",
+      projectKey: "SPI",
+      status: "awaiting-review",
+      missionPhase: "summarize",
+      missionPhaseUpdatedAt: 400,
+      classification: {
+        kind: "ui",
+        scopeSummary: "UI workflow cleanup",
+        acceptanceCriteria: [],
+        impactedRepoRelativePaths: ["service-api"],
+        risks: [],
+        uiChange: true,
+        proofRequired: true,
+        proofArtifactMode: "screenshot",
+        rationale: null,
+        createdAt: 200,
+        updatedAt: 200,
+      },
+      plan: {
+        steps: ["Update the ticket workflow"],
+        touchedRepoRelativePaths: ["service-api"],
+        validationPlan: ["Run unit tests"],
+        proofIntent: "Capture the new workflow panel",
+        blockers: [],
+        assumptions: [],
+        createdAt: 250,
+        updatedAt: 250,
+      },
+      validations: [
+        {
+          validationId: "validation-1",
+          kind: "build",
+          command: "pnpm test",
+          cwd: "C:\\Repos\\.spira-worktrees\\spi-110-service-api",
+          status: "passed",
+          summary: "Tests passed.",
+          artifacts: [],
+          startedAt: 275,
+          completedAt: 280,
+          createdAt: 275,
+          updatedAt: 280,
+        },
+      ],
+      missionSummary: {
+        completedWork: "Closed out the workflow cleanup.",
+        changedRepoRelativePaths: ["service-api"],
+        validationSummary: "Unit tests passed.",
+        proofSummary: "Screenshot captured.",
+        openQuestions: [],
+        followUps: [],
+        createdAt: 300,
+        updatedAt: 300,
+      },
+      proof: {
+        status: "passed",
+        lastProofRunId: "proof-1",
+        lastProofProfileId: "profile-1",
+        lastProofAt: 450,
+        lastProofSummary: "Proof passed.",
+        staleReason: null,
+      },
+      worktrees: [],
+    });
+    const service = new TicketRunService({
+      memoryDb: database,
+      logger: createLogger(),
+      projectRegistry: { getSnapshot: async () => ({ workspaceRoot: null, repos: [], mappings: [] }) },
+      youTrackService: null,
+      now: () => 500,
+    });
+
+    await expect(service.completeRun("run-1")).rejects.toThrow(
+      "Ticket SPI-110 requires a stored proof strategy before it can be closed.",
+    );
+  });
+
+  it("blocks closing when any recorded validation has failed", async () => {
+    const database = createTestDatabase();
+    database.upsertTicketRun({
+      runId: "run-1",
+      stationId: "mission:run-1",
+      ticketId: "SPI-110",
+      ticketSummary: "Prepare manual commit flow",
+      ticketUrl: "https://example.youtrack.cloud/issue/SPI-110",
+      projectKey: "SPI",
+      status: "awaiting-review",
+      missionPhase: "summarize",
+      missionPhaseUpdatedAt: 400,
+      classification: {
+        kind: "backend",
+        scopeSummary: "Workflow cleanup",
+        acceptanceCriteria: [],
+        impactedRepoRelativePaths: ["service-api"],
+        risks: [],
+        uiChange: false,
+        proofRequired: false,
+        proofArtifactMode: "none",
+        rationale: null,
+        createdAt: 200,
+        updatedAt: 200,
+      },
+      plan: {
+        steps: ["Update the ticket workflow"],
+        touchedRepoRelativePaths: ["service-api"],
+        validationPlan: ["Run unit tests"],
+        proofIntent: null,
+        blockers: [],
+        assumptions: [],
+        createdAt: 250,
+        updatedAt: 250,
+      },
+      validations: [
+        {
+          validationId: "validation-1",
+          kind: "build",
+          command: "pnpm test",
+          cwd: "C:\\Repos\\.spira-worktrees\\spi-110-service-api",
+          status: "passed",
+          summary: "Build passed.",
+          artifacts: [],
+          startedAt: 275,
+          completedAt: 280,
+          createdAt: 275,
+          updatedAt: 280,
+        },
+        {
+          validationId: "validation-2",
+          kind: "unit-test",
+          command: "pnpm vitest run",
+          cwd: "C:\\Repos\\.spira-worktrees\\spi-110-service-api",
+          status: "failed",
+          summary: "Unit tests failed.",
+          artifacts: [],
+          startedAt: 281,
+          completedAt: 285,
+          createdAt: 281,
+          updatedAt: 285,
+        },
+      ],
+      missionSummary: {
+        completedWork: "Closed out the workflow cleanup.",
+        changedRepoRelativePaths: ["service-api"],
+        validationSummary: "One validation still failing.",
+        proofSummary: null,
+        openQuestions: [],
+        followUps: [],
+        createdAt: 300,
+        updatedAt: 300,
+      },
+      worktrees: [],
+    });
+    const service = new TicketRunService({
+      memoryDb: database,
+      logger: createLogger(),
+      projectRegistry: { getSnapshot: async () => ({ workspaceRoot: null, repos: [], mappings: [] }) },
+      youTrackService: null,
+      now: () => 500,
+    });
+
+    await expect(service.completeRun("run-1")).rejects.toThrow(
+      "Ticket SPI-110 has failing validation results that must be resolved before closing.",
+    );
   });
 
   it("blocks closing when review work remains", async () => {
@@ -1447,7 +1957,7 @@ describe("TicketRunService", () => {
     expect(closeMissionStation).not.toHaveBeenCalled();
   });
 
-  it("runs a discovered mission proof and persists the result", async () => {
+  it("runs a discovered mission proof during an active pass and persists the result", async () => {
     const database = createTestDatabase();
     database.upsertTicketRun({
       runId: "run-1",
@@ -1455,7 +1965,7 @@ describe("TicketRunService", () => {
       ticketSummary: "Prove mission completion",
       ticketUrl: "https://example.youtrack.cloud/issue/SPI-111",
       projectKey: "SPI",
-      status: "awaiting-review",
+      status: "working",
       createdAt: 100,
       startedAt: 100,
       worktrees: [

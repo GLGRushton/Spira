@@ -13,6 +13,7 @@ import type {
   SubagentDomain,
   SubagentRunSnapshot,
   TicketRunProofSnapshotResult,
+  TicketRunSnapshot,
   UpgradeProposal,
 } from "@spira/shared";
 import type { McpToolAggregator } from "../mcp/tool-aggregator.js";
@@ -23,6 +24,7 @@ import { type EventMap, SpiraEventBus } from "../util/event-bus.js";
 import { setUnrefTimeout } from "../util/timers.js";
 import { buildContinuityPreamble, buildConversationMemoryContent } from "./continuity.js";
 import { CopilotSessionManager, type SessionPersistence } from "./session-manager.js";
+import type { ToolBridgeOptions } from "./tool-bridge.js";
 
 export const DEFAULT_STATION_ID = "primary";
 const DEFAULT_STATION_RESPONSE_TIMEOUT_MS = 30 * 60 * 1000;
@@ -50,6 +52,7 @@ interface CreateStationOptions {
   additionalInstructions?: string;
   workingDirectory?: string;
   allowUpgradeTools?: boolean;
+  missionRunId?: string;
 }
 
 export interface AwaitStationResponseResult {
@@ -78,6 +81,15 @@ interface StationRegistryOptions {
   stopMissionService?: (runId: string, serviceId: string) => Promise<MissionServiceSnapshot>;
   listMissionProofs?: (runId: string) => Promise<TicketRunProofSnapshotResult>;
   runMissionProof?: (runId: string, profileId: string) => Promise<RunTicketRunProofResult>;
+  getMissionContext?: ToolBridgeOptions["getMissionContext"];
+  getMissionWorkflowState?: (runId: string) => NonNullable<ToolBridgeOptions["missionWorkflowState"]>;
+  saveMissionClassification?: ToolBridgeOptions["saveMissionClassification"];
+  saveMissionPlan?: ToolBridgeOptions["saveMissionPlan"];
+  setMissionPhase?: ToolBridgeOptions["setMissionPhase"];
+  recordMissionValidation?: ToolBridgeOptions["recordMissionValidation"];
+  setMissionProofStrategy?: ToolBridgeOptions["setMissionProofStrategy"];
+  recordMissionProofResult?: ToolBridgeOptions["recordMissionProofResult"];
+  saveMissionSummary?: ToolBridgeOptions["saveMissionSummary"];
   requestUpgradeProposal?: (proposal: UpgradeProposal) => Promise<void> | void;
   applyHotCapabilityUpgrade?: () => Promise<void> | void;
   createSessionManager?: (
@@ -90,11 +102,21 @@ interface StationRegistryOptions {
       additionalInstructions?: string | null;
       workingDirectory?: string | null;
       allowUpgradeTools?: boolean;
+      missionRunId?: string | null;
       listMissionServices?: (runId: string) => Promise<MissionServiceSnapshot>;
       startMissionService?: (runId: string, profileId: string) => Promise<MissionServiceSnapshot>;
       stopMissionService?: (runId: string, serviceId: string) => Promise<MissionServiceSnapshot>;
       listMissionProofs?: (runId: string) => Promise<TicketRunProofSnapshotResult>;
       runMissionProof?: (runId: string, profileId: string) => Promise<RunTicketRunProofResult>;
+      getMissionContext?: ToolBridgeOptions["getMissionContext"];
+      getMissionWorkflowState?: (runId: string) => NonNullable<ToolBridgeOptions["missionWorkflowState"]>;
+      saveMissionClassification?: ToolBridgeOptions["saveMissionClassification"];
+      saveMissionPlan?: ToolBridgeOptions["saveMissionPlan"];
+      setMissionPhase?: ToolBridgeOptions["setMissionPhase"];
+      recordMissionValidation?: ToolBridgeOptions["recordMissionValidation"];
+      setMissionProofStrategy?: ToolBridgeOptions["setMissionProofStrategy"];
+      recordMissionProofResult?: ToolBridgeOptions["recordMissionProofResult"];
+      saveMissionSummary?: ToolBridgeOptions["saveMissionSummary"];
     },
   ) => CopilotSessionManager;
 }
@@ -118,15 +140,24 @@ export class StationRegistry {
         station.bus.emit("subagent:catalog-changed", agents);
       }
     };
+    const handleMissionRunsChanged = (snapshot: TicketRunSnapshot) => {
+      for (const station of this.stations.values()) {
+        station.bus.emit("missions:runs-changed", snapshot);
+      }
+    };
 
     this.options.rootBus.on("mcp:servers-changed", handleMcpServersChanged);
     this.options.rootBus.on("subagent:catalog-changed", handleSubagentCatalogChanged);
+    this.options.rootBus.on("missions:runs-changed", handleMissionRunsChanged);
     this.rootBusDisposers = [
       () => {
         this.options.rootBus.off("mcp:servers-changed", handleMcpServersChanged);
       },
       () => {
         this.options.rootBus.off("subagent:catalog-changed", handleSubagentCatalogChanged);
+      },
+      () => {
+        this.options.rootBus.off("missions:runs-changed", handleMissionRunsChanged);
       },
     ];
   }
@@ -165,11 +196,21 @@ export class StationRegistry {
           additionalInstructions: createOptions.additionalInstructions ?? null,
           workingDirectory: createOptions.workingDirectory ?? null,
           allowUpgradeTools: createOptions.allowUpgradeTools,
+          missionRunId: createOptions.missionRunId,
           listMissionServices: this.options.listMissionServices,
           startMissionService: this.options.startMissionService,
           stopMissionService: this.options.stopMissionService,
           listMissionProofs: this.options.listMissionProofs,
           runMissionProof: this.options.runMissionProof,
+          getMissionContext: this.options.getMissionContext,
+          getMissionWorkflowState: this.options.getMissionWorkflowState,
+          saveMissionClassification: this.options.saveMissionClassification,
+          saveMissionPlan: this.options.saveMissionPlan,
+          setMissionPhase: this.options.setMissionPhase,
+          recordMissionValidation: this.options.recordMissionValidation,
+          setMissionProofStrategy: this.options.setMissionProofStrategy,
+          recordMissionProofResult: this.options.recordMissionProofResult,
+          saveMissionSummary: this.options.saveMissionSummary,
         })
       : new CopilotSessionManager(
           bus,
@@ -183,14 +224,24 @@ export class StationRegistry {
             subagentRegistry: this.options.subagentRegistry ?? null,
             additionalInstructions: createOptions.additionalInstructions ?? null,
             workingDirectory: createOptions.workingDirectory ?? null,
-             allowUpgradeTools: createOptions.allowUpgradeTools,
-             listMissionServices: this.options.listMissionServices,
-             startMissionService: this.options.startMissionService,
-             stopMissionService: this.options.stopMissionService,
-             listMissionProofs: this.options.listMissionProofs,
-             runMissionProof: this.options.runMissionProof,
-           },
-         );
+            allowUpgradeTools: createOptions.allowUpgradeTools,
+            missionRunId: createOptions.missionRunId,
+            listMissionServices: this.options.listMissionServices,
+            startMissionService: this.options.startMissionService,
+            stopMissionService: this.options.stopMissionService,
+            listMissionProofs: this.options.listMissionProofs,
+            runMissionProof: this.options.runMissionProof,
+            getMissionContext: this.options.getMissionContext,
+            getMissionWorkflowState: this.options.getMissionWorkflowState,
+            saveMissionClassification: this.options.saveMissionClassification,
+            saveMissionPlan: this.options.saveMissionPlan,
+            setMissionPhase: this.options.setMissionPhase,
+            recordMissionValidation: this.options.recordMissionValidation,
+            setMissionProofStrategy: this.options.setMissionProofStrategy,
+            recordMissionProofResult: this.options.recordMissionProofResult,
+            saveMissionSummary: this.options.saveMissionSummary,
+          },
+        );
     const station: StationContext = {
       stationId,
       label,

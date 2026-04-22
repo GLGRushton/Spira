@@ -2,6 +2,17 @@ import { randomUUID } from "node:crypto";
 import { type Tool, type ToolResultObject, defineTool } from "@github/copilot-sdk";
 import {
   type McpTool,
+  type TicketRunMissionClassification,
+  type TicketRunMissionPhase,
+  type TicketRunMissionPlan,
+  type TicketRunMissionProofStrategy,
+  type TicketRunMissionSummary,
+  type TicketRunMissionValidationRecord,
+  type TicketRunProofArtifact,
+  type TicketRunProofArtifactKind,
+  type TicketRunProofRunStatus,
+  type TicketRunProofRunSummary,
+  type TicketRunProofStatus,
   type MissionServiceSnapshot,
   type RunTicketRunProofResult,
   type SubagentDelegationArgs,
@@ -14,6 +25,17 @@ import {
   classifyUpgradeScope,
   getRelevantUpgradeFiles,
 } from "@spira/shared";
+import {
+  TICKET_RUN_MISSION_CLASSIFICATIONS,
+  TICKET_RUN_MISSION_PROOF_ARTIFACT_MODES,
+  TICKET_RUN_MISSION_VALIDATION_KINDS,
+  TICKET_RUN_MISSION_VALIDATION_STATUSES,
+  TICKET_RUN_PROOF_ARTIFACT_KINDS,
+  TICKET_RUN_PROOF_RUN_STATUSES,
+  TICKET_RUN_PROOF_STATUSES,
+} from "@spira/shared";
+import type { MissionContextSnapshot, MissionProofResultInput } from "../missions/mission-lifecycle.js";
+import type { MissionWorkflowState } from "../missions/mission-workflow-guard.js";
 import type { McpToolAggregator } from "../mcp/tool-aggregator.js";
 import { createLogger } from "../util/logger.js";
 
@@ -42,13 +64,270 @@ export interface ToolBridgeOptions {
   stopMissionService?: (runId: string, serviceId: string) => Promise<MissionServiceSnapshot>;
   listMissionProofs?: (runId: string) => Promise<TicketRunProofSnapshotResult>;
   runMissionProof?: (runId: string, profileId: string) => Promise<RunTicketRunProofResult>;
+  missionRunId?: string;
+  getMissionContext?: (runId: string) => Promise<MissionContextSnapshot>;
+  saveMissionClassification?: (
+    runId: string,
+    classification: TicketRunMissionClassification,
+  ) => Promise<unknown> | unknown;
+  saveMissionPlan?: (runId: string, plan: TicketRunMissionPlan) => Promise<unknown> | unknown;
+  setMissionPhase?: (runId: string, phase: TicketRunMissionPhase) => Promise<unknown> | unknown;
+  recordMissionValidation?: (runId: string, validation: TicketRunMissionValidationRecord) => Promise<unknown> | unknown;
+  setMissionProofStrategy?: (runId: string, proofStrategy: TicketRunMissionProofStrategy) => Promise<unknown> | unknown;
+  recordMissionProofResult?: (runId: string, result: MissionProofResultInput) => Promise<unknown> | unknown;
+  saveMissionSummary?: (runId: string, missionSummary: TicketRunMissionSummary) => Promise<unknown> | unknown;
+  missionWorkflowState?: MissionWorkflowState | null;
   wrapToolExecution?: (tool: McpTool, args: unknown, execute: () => Promise<unknown>) => Promise<unknown>;
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null;
 
+const isStringArray = (value: unknown): value is string[] =>
+  Array.isArray(value) && value.every((entry) => typeof entry === "string");
+
+const asStringArray = (value: unknown): string[] =>
+  Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : [];
+
+const assertEnumValue = <T extends string>(value: string, values: readonly T[], label: string): T => {
+  if (!values.includes(value as T)) {
+    throw new Error(`Invalid ${label}: ${value}`);
+  }
+  return value as T;
+};
+
+const parseProofArtifact = (value: unknown): TicketRunProofArtifact => {
+  if (!isRecord(value)) {
+    throw new Error("Proof artifacts require an object payload.");
+  }
+  const artifactId = typeof value.artifactId === "string" ? value.artifactId.trim() : "";
+  const label = typeof value.label === "string" ? value.label.trim() : "";
+  const artifactPath = typeof value.path === "string" ? value.path.trim() : "";
+  const fileUrl = typeof value.fileUrl === "string" ? value.fileUrl.trim() : "";
+  const kind = assertEnumValue(
+    typeof value.kind === "string" ? value.kind : "",
+    TICKET_RUN_PROOF_ARTIFACT_KINDS,
+    "proof artifact kind",
+  );
+  if (!artifactId || !label || !artifactPath || !fileUrl) {
+    throw new Error("Proof artifacts require non-empty artifactId, label, path, and fileUrl values.");
+  }
+  return {
+    artifactId,
+    kind,
+    label,
+    path: artifactPath,
+    fileUrl,
+  };
+};
+
+const parseMissionClassification = (value: unknown): TicketRunMissionClassification => {
+  if (!isRecord(value)) {
+    throw new Error("save_classification requires a classification object.");
+  }
+  const kind = assertEnumValue(
+    typeof value.kind === "string" ? value.kind : "",
+    TICKET_RUN_MISSION_CLASSIFICATIONS,
+    "classification kind",
+  );
+  const scopeSummary = typeof value.scopeSummary === "string" ? value.scopeSummary.trim() : "";
+  if (!scopeSummary) {
+    throw new Error("Classification requires a non-empty scopeSummary.");
+  }
+  return {
+    kind,
+    scopeSummary,
+    acceptanceCriteria: asStringArray(value.acceptanceCriteria),
+    impactedRepoRelativePaths: asStringArray(value.impactedRepoRelativePaths),
+    risks: asStringArray(value.risks),
+    uiChange: value.uiChange === true,
+    proofRequired: value.proofRequired === true,
+    proofArtifactMode: assertEnumValue(
+      typeof value.proofArtifactMode === "string" ? value.proofArtifactMode : "none",
+      TICKET_RUN_MISSION_PROOF_ARTIFACT_MODES,
+      "proof artifact mode",
+    ),
+    rationale: typeof value.rationale === "string" ? value.rationale.trim() || null : null,
+    createdAt: typeof value.createdAt === "number" ? value.createdAt : Date.now(),
+    updatedAt: typeof value.updatedAt === "number" ? value.updatedAt : Date.now(),
+  };
+};
+
+const parseMissionPlan = (value: unknown): TicketRunMissionPlan => {
+  if (!isRecord(value)) {
+    throw new Error("save_plan requires a plan object.");
+  }
+  return {
+    steps: asStringArray(value.steps),
+    touchedRepoRelativePaths: asStringArray(value.touchedRepoRelativePaths),
+    validationPlan: asStringArray(value.validationPlan),
+    proofIntent: typeof value.proofIntent === "string" ? value.proofIntent.trim() || null : null,
+    blockers: asStringArray(value.blockers),
+    assumptions: asStringArray(value.assumptions),
+    createdAt: typeof value.createdAt === "number" ? value.createdAt : Date.now(),
+    updatedAt: typeof value.updatedAt === "number" ? value.updatedAt : Date.now(),
+  };
+};
+
+const parseMissionValidation = (runId: string, value: unknown): TicketRunMissionValidationRecord => {
+  if (!isRecord(value)) {
+    throw new Error("record_validation requires a validation object.");
+  }
+  const validationId = typeof value.validationId === "string" ? value.validationId.trim() : "";
+  const command = typeof value.command === "string" ? value.command.trim() : "";
+  const cwd = typeof value.cwd === "string" ? value.cwd.trim() : "";
+  if (!validationId || !command || !cwd) {
+    throw new Error("Validation requires non-empty validationId, command, and cwd values.");
+  }
+  return {
+    validationId,
+    runId,
+    kind: assertEnumValue(
+      typeof value.kind === "string" ? value.kind : "",
+      TICKET_RUN_MISSION_VALIDATION_KINDS,
+      "validation kind",
+    ),
+    command,
+    cwd,
+    status: assertEnumValue(
+      typeof value.status === "string" ? value.status : "",
+      TICKET_RUN_MISSION_VALIDATION_STATUSES,
+      "validation status",
+    ),
+    summary: typeof value.summary === "string" ? value.summary.trim() || null : null,
+    artifacts: Array.isArray(value.artifacts) ? value.artifacts.map((artifact) => parseProofArtifact(artifact)) : [],
+    startedAt: typeof value.startedAt === "number" ? value.startedAt : Date.now(),
+    completedAt: typeof value.completedAt === "number" ? value.completedAt : null,
+    createdAt: typeof value.createdAt === "number" ? value.createdAt : Date.now(),
+    updatedAt: typeof value.updatedAt === "number" ? value.updatedAt : Date.now(),
+  };
+};
+
+const parseMissionProofStrategy = (runId: string, value: unknown): TicketRunMissionProofStrategy => {
+  if (!isRecord(value)) {
+    throw new Error("set_proof_strategy requires a proof strategy object.");
+  }
+  const adapterId = typeof value.adapterId === "string" ? value.adapterId.trim() : "";
+  const repoRelativePath = typeof value.repoRelativePath === "string" ? value.repoRelativePath.trim() : "";
+  const command = typeof value.command === "string" ? value.command.trim() : "";
+  const rationale = typeof value.rationale === "string" ? value.rationale.trim() : "";
+  if (!adapterId || !repoRelativePath || !command || !rationale) {
+    throw new Error("Proof strategy requires non-empty adapterId, repoRelativePath, command, and rationale values.");
+  }
+  return {
+    runId,
+    adapterId,
+    repoRelativePath,
+    scenarioPath: typeof value.scenarioPath === "string" ? value.scenarioPath.trim() || null : null,
+    scenarioName: typeof value.scenarioName === "string" ? value.scenarioName.trim() || null : null,
+    command,
+    artifactMode: assertEnumValue(
+      typeof value.artifactMode === "string" ? value.artifactMode : "",
+      TICKET_RUN_MISSION_PROOF_ARTIFACT_MODES,
+      "proof artifact mode",
+    ),
+    rationale,
+    metadata: isRecord(value.metadata) ? value.metadata : null,
+    createdAt: typeof value.createdAt === "number" ? value.createdAt : Date.now(),
+    updatedAt: typeof value.updatedAt === "number" ? value.updatedAt : Date.now(),
+  };
+};
+
+const parseMissionProofRun = (runId: string, value: unknown): TicketRunProofRunSummary => {
+  if (!isRecord(value)) {
+    throw new Error("record_proof_result proofRun must be an object.");
+  }
+  const proofRunId = typeof value.proofRunId === "string" ? value.proofRunId.trim() : "";
+  const profileId = typeof value.profileId === "string" ? value.profileId.trim() : "";
+  const profileLabel = typeof value.profileLabel === "string" ? value.profileLabel.trim() : "";
+  if (!proofRunId || !profileId || !profileLabel) {
+    throw new Error("Proof runs require non-empty proofRunId, profileId, and profileLabel values.");
+  }
+  return {
+    proofRunId,
+    runId,
+    profileId,
+    profileLabel,
+    status: assertEnumValue(
+      typeof value.status === "string" ? value.status : "",
+      TICKET_RUN_PROOF_RUN_STATUSES,
+      "proof run status",
+    ),
+    summary: typeof value.summary === "string" ? value.summary.trim() || null : null,
+    startedAt: typeof value.startedAt === "number" ? value.startedAt : Date.now(),
+    completedAt: typeof value.completedAt === "number" ? value.completedAt : null,
+    exitCode: typeof value.exitCode === "number" ? value.exitCode : null,
+    command: typeof value.command === "string" ? value.command.trim() || null : null,
+    artifacts: Array.isArray(value.artifacts) ? value.artifacts.map((artifact) => parseProofArtifact(artifact)) : [],
+  };
+};
+
+const parseMissionProofResult = (runId: string, value: unknown): MissionProofResultInput => {
+  if (!isRecord(value) || !isRecord(value.proof)) {
+    throw new Error("record_proof_result requires a proof result object with a proof payload.");
+  }
+  return {
+    proof: {
+      status: assertEnumValue(
+        typeof value.proof.status === "string" ? value.proof.status : "",
+        TICKET_RUN_PROOF_STATUSES,
+        "proof status",
+      ),
+      lastProofRunId: typeof value.proof.lastProofRunId === "string" ? value.proof.lastProofRunId.trim() || null : null,
+      lastProofProfileId:
+        typeof value.proof.lastProofProfileId === "string" ? value.proof.lastProofProfileId.trim() || null : null,
+      lastProofAt: typeof value.proof.lastProofAt === "number" ? value.proof.lastProofAt : null,
+      lastProofSummary:
+        typeof value.proof.lastProofSummary === "string" ? value.proof.lastProofSummary.trim() || null : null,
+      staleReason: typeof value.proof.staleReason === "string" ? value.proof.staleReason.trim() || null : null,
+    },
+    proofRun:
+      value.proofRun === null || value.proofRun === undefined ? null : parseMissionProofRun(runId, value.proofRun),
+  };
+};
+
+const parseMissionSummary = (value: unknown): TicketRunMissionSummary => {
+  if (!isRecord(value)) {
+    throw new Error("save_summary requires a summary object.");
+  }
+  const completedWork = typeof value.completedWork === "string" ? value.completedWork.trim() : "";
+  if (!completedWork) {
+    throw new Error("Mission summary requires non-empty completedWork text.");
+  }
+  return {
+    completedWork,
+    changedRepoRelativePaths: asStringArray(value.changedRepoRelativePaths),
+    validationSummary: typeof value.validationSummary === "string" ? value.validationSummary.trim() || null : null,
+    proofSummary: typeof value.proofSummary === "string" ? value.proofSummary.trim() || null : null,
+    openQuestions: asStringArray(value.openQuestions),
+    followUps: asStringArray(value.followUps),
+    createdAt: typeof value.createdAt === "number" ? value.createdAt : Date.now(),
+    updatedAt: typeof value.updatedAt === "number" ? value.updatedAt : Date.now(),
+  };
+};
+
+const resolveScopedMissionRunId = (payload: Record<string, unknown>, missionRunId?: string): string => {
+  const requestedRunId = typeof payload.run_id === "string" ? payload.run_id.trim() : "";
+  if (missionRunId) {
+    if (requestedRunId && requestedRunId !== missionRunId) {
+      throw new Error(`This mission station is bound to run_id ${missionRunId}.`);
+    }
+    return missionRunId;
+  }
+  if (!requestedRunId) {
+    throw new Error("A non-empty run_id is required.");
+  }
+  return requestedRunId;
+};
+
 const isPermissionlessTool = (tool: McpTool): boolean =>
   !tool.name.startsWith("vision_") && tool.access?.mode === "read";
+
+const filterMissionScopedMcpTools = (
+  tools: readonly McpTool[],
+  workflow: MissionWorkflowState | null | undefined,
+): McpTool[] => {
+  return [...tools];
+};
 
 const toSuccessResult = (result: unknown): ToolResultObject => ({
   textResultForLlm: typeof result === "string" ? result : JSON.stringify(result ?? null),
@@ -362,7 +641,10 @@ const buildStopSubagentTool = (stopSubagent: NonNullable<ToolBridgeOptions["stop
     },
   });
 
-const buildListMissionServicesTool = (listMissionServices: NonNullable<ToolBridgeOptions["listMissionServices"]>) =>
+const buildListMissionServicesTool = (
+  listMissionServices: NonNullable<ToolBridgeOptions["listMissionServices"]>,
+  missionRunId?: string,
+) =>
   defineTool("spira_list_mission_services", {
     description: "List launchable and active mission services for a mission run by run_id.",
     parameters: {
@@ -380,10 +662,7 @@ const buildListMissionServicesTool = (listMissionServices: NonNullable<ToolBridg
     handler: async (args) => {
       try {
         const payload = isRecord(args) ? args : {};
-        const runId = typeof payload.run_id === "string" ? payload.run_id.trim() : "";
-        if (!runId) {
-          throw new Error("spira_list_mission_services requires a non-empty run_id");
-        }
+        const runId = resolveScopedMissionRunId(payload, missionRunId);
 
         return toSuccessResult(await listMissionServices(runId));
       } catch (error) {
@@ -393,7 +672,10 @@ const buildListMissionServicesTool = (listMissionServices: NonNullable<ToolBridg
     },
   });
 
-const buildStartMissionServiceTool = (startMissionService: NonNullable<ToolBridgeOptions["startMissionService"]>) =>
+const buildStartMissionServiceTool = (
+  startMissionService: NonNullable<ToolBridgeOptions["startMissionService"]>,
+  missionRunId?: string,
+) =>
   defineTool("spira_start_mission_service", {
     description: "Start a tracked mission service profile by run_id and profile_id.",
     parameters: {
@@ -414,10 +696,10 @@ const buildStartMissionServiceTool = (startMissionService: NonNullable<ToolBridg
     handler: async (args) => {
       try {
         const payload = isRecord(args) ? args : {};
-        const runId = typeof payload.run_id === "string" ? payload.run_id.trim() : "";
+        const runId = resolveScopedMissionRunId(payload, missionRunId);
         const profileId = typeof payload.profile_id === "string" ? payload.profile_id.trim() : "";
-        if (!runId || !profileId) {
-          throw new Error("spira_start_mission_service requires non-empty run_id and profile_id");
+        if (!profileId) {
+          throw new Error("spira_start_mission_service requires a non-empty profile_id");
         }
 
         return toSuccessResult(await startMissionService(runId, profileId));
@@ -428,7 +710,10 @@ const buildStartMissionServiceTool = (startMissionService: NonNullable<ToolBridg
     },
   });
 
-const buildStopMissionServiceTool = (stopMissionService: NonNullable<ToolBridgeOptions["stopMissionService"]>) =>
+const buildStopMissionServiceTool = (
+  stopMissionService: NonNullable<ToolBridgeOptions["stopMissionService"]>,
+  missionRunId?: string,
+) =>
   defineTool("spira_stop_mission_service", {
     description: "Stop a tracked mission service process by run_id and service_id.",
     parameters: {
@@ -449,10 +734,10 @@ const buildStopMissionServiceTool = (stopMissionService: NonNullable<ToolBridgeO
     handler: async (args) => {
       try {
         const payload = isRecord(args) ? args : {};
-        const runId = typeof payload.run_id === "string" ? payload.run_id.trim() : "";
+        const runId = resolveScopedMissionRunId(payload, missionRunId);
         const serviceId = typeof payload.service_id === "string" ? payload.service_id.trim() : "";
-        if (!runId || !serviceId) {
-          throw new Error("spira_stop_mission_service requires non-empty run_id and service_id");
+        if (!serviceId) {
+          throw new Error("spira_stop_mission_service requires a non-empty service_id");
         }
 
         return toSuccessResult(await stopMissionService(runId, serviceId));
@@ -463,7 +748,10 @@ const buildStopMissionServiceTool = (stopMissionService: NonNullable<ToolBridgeO
     },
   });
 
-const buildListMissionProofsTool = (listMissionProofs: NonNullable<ToolBridgeOptions["listMissionProofs"]>) =>
+const buildListMissionProofsTool = (
+  listMissionProofs: NonNullable<ToolBridgeOptions["listMissionProofs"]>,
+  missionRunId?: string,
+) =>
   defineTool("spira_list_mission_proofs", {
     description: "List discovered proof profiles and recent proof runs for a mission run by run_id.",
     parameters: {
@@ -481,10 +769,7 @@ const buildListMissionProofsTool = (listMissionProofs: NonNullable<ToolBridgeOpt
     handler: async (args) => {
       try {
         const payload = isRecord(args) ? args : {};
-        const runId = typeof payload.run_id === "string" ? payload.run_id.trim() : "";
-        if (!runId) {
-          throw new Error("spira_list_mission_proofs requires a non-empty run_id");
-        }
+        const runId = resolveScopedMissionRunId(payload, missionRunId);
 
         return toSuccessResult(await listMissionProofs(runId));
       } catch (error) {
@@ -494,7 +779,10 @@ const buildListMissionProofsTool = (listMissionProofs: NonNullable<ToolBridgeOpt
     },
   });
 
-const buildRunMissionProofTool = (runMissionProof: NonNullable<ToolBridgeOptions["runMissionProof"]>) =>
+const buildRunMissionProofTool = (
+  runMissionProof: NonNullable<ToolBridgeOptions["runMissionProof"]>,
+  missionRunId?: string,
+) =>
   defineTool("spira_run_mission_proof", {
     description: "Run a discovered mission proof profile by run_id and profile_id.",
     parameters: {
@@ -515,16 +803,272 @@ const buildRunMissionProofTool = (runMissionProof: NonNullable<ToolBridgeOptions
     handler: async (args) => {
       try {
         const payload = isRecord(args) ? args : {};
-        const runId = typeof payload.run_id === "string" ? payload.run_id.trim() : "";
+        const runId = resolveScopedMissionRunId(payload, missionRunId);
         const profileId = typeof payload.profile_id === "string" ? payload.profile_id.trim() : "";
-        if (!runId || !profileId) {
-          throw new Error("spira_run_mission_proof requires non-empty run_id and profile_id");
+        if (!profileId) {
+          throw new Error("spira_run_mission_proof requires a non-empty profile_id");
         }
 
         return toSuccessResult(await runMissionProof(runId, profileId));
       } catch (error) {
         logger.error({ error }, "Failed to run mission proof");
         return toFailureResult("spira_run_mission_proof", error);
+      }
+    },
+  });
+
+const buildGetMissionContextTool = (
+  missionRunId: string,
+  getMissionContext: NonNullable<ToolBridgeOptions["getMissionContext"]>,
+) =>
+  defineTool("get_mission_context", {
+    description: "Load the authoritative stored mission lifecycle state for the active mission station.",
+    parameters: {
+      type: "object",
+      properties: {},
+      additionalProperties: false,
+    },
+    handler: async () => {
+      try {
+        return toSuccessResult(await getMissionContext(missionRunId));
+      } catch (error) {
+        logger.error({ error, missionRunId }, "Failed to load mission context");
+        return toFailureResult("get_mission_context", error);
+      }
+    },
+  });
+
+const buildSaveClassificationTool = (
+  missionRunId: string,
+  saveMissionClassification: NonNullable<ToolBridgeOptions["saveMissionClassification"]>,
+) =>
+  defineTool("save_classification", {
+    description: "Persist the mission classification, acceptance criteria, risks, and UI proof decision.",
+    parameters: {
+      type: "object",
+      properties: {
+        kind: { type: "string", enum: [...TICKET_RUN_MISSION_CLASSIFICATIONS] },
+        scopeSummary: { type: "string" },
+        acceptanceCriteria: { type: "array", items: { type: "string" } },
+        impactedRepoRelativePaths: { type: "array", items: { type: "string" } },
+        risks: { type: "array", items: { type: "string" } },
+        uiChange: { type: "boolean" },
+        proofRequired: { type: "boolean" },
+        proofArtifactMode: { type: "string", enum: [...TICKET_RUN_MISSION_PROOF_ARTIFACT_MODES] },
+        rationale: { type: "string" },
+      },
+      required: ["kind", "scopeSummary", "uiChange", "proofRequired", "proofArtifactMode"],
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      try {
+        return toSuccessResult(await saveMissionClassification(missionRunId, parseMissionClassification(args)));
+      } catch (error) {
+        logger.error({ error, missionRunId }, "Failed to save mission classification");
+        return toFailureResult("save_classification", error);
+      }
+    },
+  });
+
+const buildSavePlanTool = (missionRunId: string, saveMissionPlan: NonNullable<ToolBridgeOptions["saveMissionPlan"]>) =>
+  defineTool("save_plan", {
+    description: "Persist the ordered implementation plan, validation plan, blockers, and proof intent.",
+    parameters: {
+      type: "object",
+      properties: {
+        steps: { type: "array", items: { type: "string" } },
+        touchedRepoRelativePaths: { type: "array", items: { type: "string" } },
+        validationPlan: { type: "array", items: { type: "string" } },
+        proofIntent: { type: "string" },
+        blockers: { type: "array", items: { type: "string" } },
+        assumptions: { type: "array", items: { type: "string" } },
+      },
+      required: ["steps", "touchedRepoRelativePaths", "validationPlan"],
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      try {
+        return toSuccessResult(await saveMissionPlan(missionRunId, parseMissionPlan(args)));
+      } catch (error) {
+        logger.error({ error, missionRunId }, "Failed to save mission plan");
+        return toFailureResult("save_plan", error);
+      }
+    },
+  });
+
+const buildRecordValidationTool = (
+  missionRunId: string,
+  recordMissionValidation: NonNullable<ToolBridgeOptions["recordMissionValidation"]>,
+) =>
+  defineTool("record_validation", {
+    description: "Append a build or unit-test validation record for the active mission.",
+    parameters: {
+      type: "object",
+      properties: {
+        validationId: { type: "string" },
+        kind: { type: "string", enum: [...TICKET_RUN_MISSION_VALIDATION_KINDS] },
+        command: { type: "string" },
+        cwd: { type: "string" },
+        status: { type: "string", enum: [...TICKET_RUN_MISSION_VALIDATION_STATUSES] },
+        summary: { type: "string" },
+        artifacts: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              artifactId: { type: "string" },
+              kind: { type: "string", enum: [...TICKET_RUN_PROOF_ARTIFACT_KINDS] },
+              label: { type: "string" },
+              path: { type: "string" },
+              fileUrl: { type: "string" },
+            },
+            required: ["artifactId", "kind", "label", "path", "fileUrl"],
+            additionalProperties: false,
+          },
+        },
+        startedAt: { type: "number" },
+        completedAt: { type: "number" },
+      },
+      required: ["validationId", "kind", "command", "cwd", "status"],
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      try {
+        return toSuccessResult(await recordMissionValidation(missionRunId, parseMissionValidation(missionRunId, args)));
+      } catch (error) {
+        logger.error({ error, missionRunId }, "Failed to record mission validation");
+        return toFailureResult("record_validation", error);
+      }
+    },
+  });
+
+const buildSetProofStrategyTool = (
+  missionRunId: string,
+  setMissionProofStrategy: NonNullable<ToolBridgeOptions["setMissionProofStrategy"]>,
+) =>
+  defineTool("set_proof_strategy", {
+    description: "Persist the targeted proof strategy for a UI mission, including scenario, command, and artifacts.",
+    parameters: {
+      type: "object",
+      properties: {
+        adapterId: { type: "string" },
+        repoRelativePath: { type: "string" },
+        scenarioPath: { type: "string" },
+        scenarioName: { type: "string" },
+        command: { type: "string" },
+        artifactMode: { type: "string", enum: [...TICKET_RUN_MISSION_PROOF_ARTIFACT_MODES] },
+        rationale: { type: "string" },
+        metadata: { type: "object" },
+      },
+      required: ["adapterId", "repoRelativePath", "command", "artifactMode", "rationale"],
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      try {
+        return toSuccessResult(
+          await setMissionProofStrategy(missionRunId, parseMissionProofStrategy(missionRunId, args)),
+        );
+      } catch (error) {
+        logger.error({ error, missionRunId }, "Failed to set mission proof strategy");
+        return toFailureResult("set_proof_strategy", error);
+      }
+    },
+  });
+
+const buildRecordProofResultTool = (
+  missionRunId: string,
+  recordMissionProofResult: NonNullable<ToolBridgeOptions["recordMissionProofResult"]>,
+) =>
+  defineTool("record_proof_result", {
+    description: "Persist the outcome of the targeted mission proof run and any captured artifacts.",
+    parameters: {
+      type: "object",
+      properties: {
+        proof: {
+          type: "object",
+          properties: {
+            status: { type: "string", enum: [...TICKET_RUN_PROOF_STATUSES] },
+            lastProofRunId: { type: "string" },
+            lastProofProfileId: { type: "string" },
+            lastProofAt: { type: "number" },
+            lastProofSummary: { type: "string" },
+            staleReason: { type: "string" },
+          },
+          required: ["status"],
+          additionalProperties: false,
+        },
+        proofRun: {
+          type: "object",
+          properties: {
+            proofRunId: { type: "string" },
+            profileId: { type: "string" },
+            profileLabel: { type: "string" },
+            status: { type: "string", enum: [...TICKET_RUN_PROOF_RUN_STATUSES] },
+            summary: { type: "string" },
+            startedAt: { type: "number" },
+            completedAt: { type: "number" },
+            exitCode: { type: "number" },
+            command: { type: "string" },
+            artifacts: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  artifactId: { type: "string" },
+                  kind: { type: "string", enum: [...TICKET_RUN_PROOF_ARTIFACT_KINDS] },
+                  label: { type: "string" },
+                  path: { type: "string" },
+                  fileUrl: { type: "string" },
+                },
+                required: ["artifactId", "kind", "label", "path", "fileUrl"],
+                additionalProperties: false,
+              },
+            },
+          },
+          required: ["proofRunId", "profileId", "profileLabel", "status"],
+          additionalProperties: false,
+        },
+      },
+      required: ["proof"],
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      try {
+        return toSuccessResult(
+          await recordMissionProofResult(missionRunId, parseMissionProofResult(missionRunId, args)),
+        );
+      } catch (error) {
+        logger.error({ error, missionRunId }, "Failed to record mission proof result");
+        return toFailureResult("record_proof_result", error);
+      }
+    },
+  });
+
+const buildSaveSummaryTool = (
+  missionRunId: string,
+  saveMissionSummary: NonNullable<ToolBridgeOptions["saveMissionSummary"]>,
+) =>
+  defineTool("save_summary", {
+    description: "Persist the final mission summary, validation outcome, proof outcome, and follow-ups.",
+    parameters: {
+      type: "object",
+      properties: {
+        completedWork: { type: "string" },
+        changedRepoRelativePaths: { type: "array", items: { type: "string" } },
+        validationSummary: { type: "string" },
+        proofSummary: { type: "string" },
+        openQuestions: { type: "array", items: { type: "string" } },
+        followUps: { type: "array", items: { type: "string" } },
+      },
+      required: ["completedWork", "changedRepoRelativePaths"],
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      try {
+        return toSuccessResult(await saveMissionSummary(missionRunId, parseMissionSummary(args)));
+      } catch (error) {
+        logger.error({ error, missionRunId }, "Failed to save mission summary");
+        return toFailureResult("save_summary", error);
       }
     },
   });
@@ -537,6 +1081,7 @@ export function getCopilotTools(aggregator: McpToolAggregator, options: ToolBrid
     const excludedServerIds = new Set(options.excludeServerIds);
     mcpTools = mcpTools.filter((tool) => !excludedServerIds.has(tool.serverId));
   }
+  mcpTools = filterMissionScopedMcpTools(mcpTools, options.missionWorkflowState);
 
   const tools = mcpTools.map((tool) => buildTool(tool, aggregator, options.wrapToolExecution));
   if (options.requestUpgradeProposal) {
@@ -559,19 +1104,40 @@ export function getCopilotTools(aggregator: McpToolAggregator, options: ToolBrid
     tools.push(buildStopSubagentTool(options.stopSubagent));
   }
   if (options.listMissionServices) {
-    tools.push(buildListMissionServicesTool(options.listMissionServices));
+    tools.push(buildListMissionServicesTool(options.listMissionServices, options.missionRunId));
   }
   if (options.startMissionService) {
-    tools.push(buildStartMissionServiceTool(options.startMissionService));
+    tools.push(buildStartMissionServiceTool(options.startMissionService, options.missionRunId));
   }
   if (options.stopMissionService) {
-    tools.push(buildStopMissionServiceTool(options.stopMissionService));
+    tools.push(buildStopMissionServiceTool(options.stopMissionService, options.missionRunId));
   }
   if (options.listMissionProofs) {
-    tools.push(buildListMissionProofsTool(options.listMissionProofs));
+    tools.push(buildListMissionProofsTool(options.listMissionProofs, options.missionRunId));
   }
   if (options.runMissionProof) {
-    tools.push(buildRunMissionProofTool(options.runMissionProof));
+    tools.push(buildRunMissionProofTool(options.runMissionProof, options.missionRunId));
+  }
+  if (options.missionRunId && options.getMissionContext) {
+    tools.push(buildGetMissionContextTool(options.missionRunId, options.getMissionContext));
+  }
+  if (options.missionRunId && options.saveMissionClassification) {
+    tools.push(buildSaveClassificationTool(options.missionRunId, options.saveMissionClassification));
+  }
+  if (options.missionRunId && options.saveMissionPlan) {
+    tools.push(buildSavePlanTool(options.missionRunId, options.saveMissionPlan));
+  }
+  if (options.missionRunId && options.recordMissionValidation) {
+    tools.push(buildRecordValidationTool(options.missionRunId, options.recordMissionValidation));
+  }
+  if (options.missionRunId && options.setMissionProofStrategy) {
+    tools.push(buildSetProofStrategyTool(options.missionRunId, options.setMissionProofStrategy));
+  }
+  if (options.missionRunId && options.recordMissionProofResult) {
+    tools.push(buildRecordProofResultTool(options.missionRunId, options.recordMissionProofResult));
+  }
+  if (options.missionRunId && options.saveMissionSummary) {
+    tools.push(buildSaveSummaryTool(options.missionRunId, options.saveMissionSummary));
   }
   logger.info({ toolCount: tools.length }, "Registered MCP tools with Copilot session");
   return tools;

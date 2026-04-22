@@ -55,8 +55,13 @@ import type {
 import { normalizeProjectKey } from "@spira/shared";
 import fetch from "node-fetch";
 import type { Logger } from "pino";
-import { discoverMissionProofProfiles, toMissionProofProfileSummary, type ResolvedMissionProofProfile } from "./proof-registry.js";
+import {
+  discoverMissionProofProfiles,
+  toMissionProofProfileSummary,
+  type ResolvedMissionProofProfile,
+} from "./proof-registry.js";
 import { runMissionProof, type RunMissionProofInput, type RunMissionProofOutput } from "./proof-runner.js";
+import { buildMissionWorkflowRepairPrompt, getMissionWorkflowState } from "./mission-workflow-guard.js";
 import type { ProjectRegistry } from "../projects/registry.js";
 import { ConfigError, SpiraError } from "../util/errors.js";
 import type { SpiraEventBus } from "../util/event-bus.js";
@@ -192,6 +197,7 @@ export interface TicketRunServiceOptions {
   attemptIdFactory?: () => string;
   runGitCommand?: GitCommandRunner;
   launchMissionPass?: (input: LaunchMissionPassInput) => Promise<MissionPassHandle>;
+  repairMissionPass?: (input: LaunchMissionPassInput) => Promise<MissionPassResult>;
   cancelMissionPass?: (stationId: string) => Promise<void>;
   closeMissionStation?: (stationId: string) => Promise<void>;
   stopRunServices?: (runId: string) => Promise<void>;
@@ -1246,22 +1252,23 @@ export class TicketRunService {
           `Finish the remaining mission review work before closing ${run.ticketId}: ${describeReviewBlockers(run, reviewSnapshot)}.`,
         );
       }
+      this.assertRunCanCloseWithLifecycle(run);
 
       if (this.options.stopRunServices) {
         await this.options.stopRunServices(run.runId);
       }
 
-      let completedRun = this.persistRun(run, {
+      let stationCleared = false;
+      const stationId = run.stationId;
+      if (stationId && this.options.closeMissionStation) {
+        await this.options.closeMissionStation(stationId);
+        stationCleared = true;
+      }
+      let completedRun = this.persistRun(this.getFreshRun(runId), {
+        ...(stationCleared ? { stationId: null } : {}),
         status: "done",
         statusMessage: "Mission closed.",
       });
-      const stationId = completedRun.stationId;
-      if (stationId && this.options.closeMissionStation) {
-        await this.options.closeMissionStation(stationId);
-        completedRun = this.persistRun(completedRun, {
-          stationId: null,
-        });
-      }
       const snapshot = memoryDb.getTicketRunSnapshot();
       this.emitSnapshot(snapshot);
       return {
@@ -1284,8 +1291,8 @@ export class TicketRunService {
     return this.withRunLock(runId, async () => {
       const memoryDb = this.requireMemoryDb();
       let run = await this.ensureRunSubmodules(this.getFreshRun(runId));
-      if (run.status !== "awaiting-review") {
-        throw new ConfigError(`Ticket ${run.ticketId} must be awaiting review before proof can be run.`);
+      if (run.status !== "awaiting-review" && run.status !== "working") {
+        throw new ConfigError(`Ticket ${run.ticketId} must be working or awaiting review before proof can be run.`);
       }
 
       const profiles = await this.discoverMissionProofProfiles(run);
@@ -1317,10 +1324,7 @@ export class TicketRunService {
           lastProofSummary: null,
           staleReason: null,
         },
-        proofRuns: [
-          runningProofRun,
-          ...run.proofRuns.filter((candidate) => candidate.proofRunId !== proofRunId),
-        ],
+        proofRuns: [runningProofRun, ...run.proofRuns.filter((candidate) => candidate.proofRunId !== proofRunId)],
       });
       this.emitSnapshot(memoryDb.getTicketRunSnapshot());
 
@@ -1355,7 +1359,7 @@ export class TicketRunService {
         command: proofOutput.command,
         artifacts: proofOutput.artifacts,
       };
-      run = this.persistRun(run, {
+      run = this.persistRun(this.getFreshRun(runId), {
         proof: {
           status: proofOutput.status,
           lastProofRunId: proofRunId,
@@ -1364,10 +1368,7 @@ export class TicketRunService {
           lastProofSummary: proofOutput.summary,
           staleReason: null,
         },
-        proofRuns: [
-          completedProofRun,
-          ...run.proofRuns.filter((candidate) => candidate.proofRunId !== proofRunId),
-        ],
+        proofRuns: [completedProofRun, ...run.proofRuns.filter((candidate) => candidate.proofRunId !== proofRunId)],
       });
       const snapshot = memoryDb.getTicketRunSnapshot();
       this.emitSnapshot(snapshot);
@@ -1383,6 +1384,38 @@ export class TicketRunService {
         proofRun: completedProofRun,
       };
     });
+  }
+
+  private assertRunCanCloseWithLifecycle(run: TicketRunSummary): void {
+    if (run.missionPhase !== "summarize") {
+      throw new ConfigError(`Ticket ${run.ticketId} must reach the summarize phase before it can be closed.`);
+    }
+    if (!run.classification) {
+      throw new ConfigError(`Ticket ${run.ticketId} is missing mission classification data.`);
+    }
+    if (!run.plan) {
+      throw new ConfigError(`Ticket ${run.ticketId} is missing a stored mission plan.`);
+    }
+    if (!run.missionSummary) {
+      throw new ConfigError(`Ticket ${run.ticketId} is missing a final mission summary.`);
+    }
+    if (run.validations.length === 0 || !run.validations.some((validation) => validation.status === "passed")) {
+      throw new ConfigError(`Ticket ${run.ticketId} requires recorded validation results before it can be closed.`);
+    }
+    if (run.validations.some((validation) => validation.status === "pending")) {
+      throw new ConfigError(`Ticket ${run.ticketId} has pending validation work that must finish before closing.`);
+    }
+    if (run.validations.some((validation) => validation.status === "failed")) {
+      throw new ConfigError(
+        `Ticket ${run.ticketId} has failing validation results that must be resolved before closing.`,
+      );
+    }
+    if (run.classification.proofRequired && !run.proofStrategy) {
+      throw new ConfigError(`Ticket ${run.ticketId} requires a stored proof strategy before it can be closed.`);
+    }
+    if (run.classification.proofRequired && run.proof.status !== "passed") {
+      throw new ConfigError(`Ticket ${run.ticketId} requires a passing proof result before it can be closed.`);
+    }
   }
 
   async deleteRun(runId: string): Promise<DeleteTicketRunResult> {
@@ -2009,6 +2042,13 @@ export class TicketRunService {
         workspace.noun === "worktree"
           ? `Attempt ${nextSequence} is working in ${workspace.path}.`
           : `Attempt ${nextSequence} is working from ${workspace.path} across ${run.worktrees.length} repos.`,
+      missionPhase: "classification",
+      missionPhaseUpdatedAt: now,
+      classification: null,
+      plan: null,
+      validations: [],
+      proofStrategy: null,
+      missionSummary: null,
       proof: buildStaleProofSummary(run, "A new mission work pass started after the last proof run."),
       attempts: [...run.attempts, attempt],
     });
@@ -2034,8 +2074,17 @@ export class TicketRunService {
     }
   }
 
-  private async applyAttemptCompletion(runId: string, attemptId: string, result: MissionPassResult): Promise<void> {
+  private async applyAttemptCompletion(
+    runId: string,
+    attemptId: string,
+    result: MissionPassResult,
+    repairCount = 0,
+  ): Promise<void> {
     if (this.disposed) {
+      return;
+    }
+    const repaired = await this.tryRepairAttemptCompletion(runId, attemptId, result, repairCount);
+    if (repaired) {
       return;
     }
     await this.withRunLock(runId, async () => {
@@ -2056,13 +2105,36 @@ export class TicketRunService {
         return;
       }
 
+      const workflow = getMissionWorkflowState(run);
+      const finalResult =
+        result.status === "completed" && workflow.nextAction !== "complete-pass"
+          ? {
+              status: "failed" as const,
+              summary: `Mission workflow incomplete: ${workflow.blockedReason ?? "record the missing lifecycle state before finishing."}`,
+            }
+          : result;
       const completedAt = this.now();
       const attemptStatus: TicketRunAttemptStatus =
-        result.status === "completed" ? "completed" : result.status === "cancelled" ? "cancelled" : "failed";
-      const summary = result.summary.trim() || "Mission work finished and is ready for review.";
+        finalResult.status === "completed" ? "completed" : finalResult.status === "cancelled" ? "cancelled" : "failed";
+      const summary = finalResult.summary.trim() || "Mission work finished and is ready for review.";
       const updatedRun = this.persistRun(run, {
         status: "awaiting-review",
         statusMessage: summary,
+        previousPassContext:
+          attemptStatus === "completed"
+            ? {
+                attemptId,
+                sequence: targetAttempt.sequence,
+                completedAt,
+                summary,
+                classification: run.classification,
+                plan: run.plan,
+                validations: run.validations,
+                proofStrategy: run.proofStrategy,
+                missionSummary: run.missionSummary,
+                proof: run.proof,
+              }
+            : run.previousPassContext,
         attempts: run.attempts.map((attempt) =>
           attempt.attemptId === attemptId
             ? {
@@ -2082,6 +2154,49 @@ export class TicketRunService {
         "Mission pass completed",
       );
     });
+  }
+
+  private async tryRepairAttemptCompletion(
+    runId: string,
+    attemptId: string,
+    result: MissionPassResult,
+    repairCount: number,
+  ): Promise<boolean> {
+    if (result.status !== "completed" || repairCount > 0 || !this.options.repairMissionPass) {
+      return false;
+    }
+
+    const memoryDb = this.options.memoryDb;
+    if (!memoryDb) {
+      return false;
+    }
+    const run = memoryDb.getTicketRun(runId);
+    if (!run) {
+      return false;
+    }
+
+    const targetAttempt = run.attempts.find((attempt) => attempt.attemptId === attemptId);
+    if (!targetAttempt || targetAttempt.status !== "running") {
+      return false;
+    }
+
+    const workflow = getMissionWorkflowState(run);
+    if (workflow.nextAction === "complete-pass") {
+      return false;
+    }
+
+    this.persistRun(run, {
+      status: "working",
+      statusMessage: `Mission workflow incomplete. Requesting corrective turn: ${workflow.nextActionLabel}.`,
+    });
+    this.emitSnapshot(memoryDb.getTicketRunSnapshot());
+
+    const repairedResult = await this.options.repairMissionPass({
+      run,
+      prompt: buildMissionWorkflowRepairPrompt(run),
+    });
+    await this.applyAttemptCompletion(runId, attemptId, repairedResult, repairCount + 1);
+    return true;
   }
 
   private recoverInterruptedWorkOnce(memoryDb: SpiraMemoryDatabase): void {
@@ -3240,6 +3355,14 @@ export class TicketRunService {
         | "attempts"
         | "worktrees"
         | "submodules"
+        | "missionPhase"
+        | "missionPhaseUpdatedAt"
+        | "classification"
+        | "plan"
+        | "validations"
+        | "proofStrategy"
+        | "missionSummary"
+        | "previousPassContext"
         | "proof"
         | "proofRuns"
       >
@@ -3263,6 +3386,15 @@ export class TicketRunService {
         overrides.commitMessageDraft !== undefined
           ? overrides.commitMessageDraft
           : (worktrees[0]?.commitMessageDraft ?? null),
+      missionPhase: overrides.missionPhase ?? run.missionPhase,
+      missionPhaseUpdatedAt: overrides.missionPhaseUpdatedAt ?? run.missionPhaseUpdatedAt,
+      classification: overrides.classification !== undefined ? overrides.classification : run.classification,
+      plan: overrides.plan !== undefined ? overrides.plan : run.plan,
+      validations: overrides.validations ?? run.validations,
+      proofStrategy: overrides.proofStrategy !== undefined ? overrides.proofStrategy : run.proofStrategy,
+      missionSummary: overrides.missionSummary !== undefined ? overrides.missionSummary : run.missionSummary,
+      previousPassContext:
+        overrides.previousPassContext !== undefined ? overrides.previousPassContext : run.previousPassContext,
       startedAt: run.startedAt,
       createdAt: run.createdAt,
       worktrees: worktrees.map((worktree) => ({
