@@ -26,6 +26,11 @@ import { McpClientPool } from "./mcp/client-pool.js";
 import { McpRegistry } from "./mcp/registry.js";
 import { McpToolAggregator } from "./mcp/tool-aggregator.js";
 import { fetchGitHubIdentity } from "./missions/github-identity.js";
+import {
+  BUILTIN_PROOF_RULES,
+  BUILTIN_REPO_INTELLIGENCE,
+  BUILTIN_VALIDATION_PROFILES,
+} from "./missions/mission-intelligence.js";
 import { MissionLifecycleService } from "./missions/mission-lifecycle.js";
 import { MissionServiceRegistry } from "./missions/service-registry.js";
 import { type GenerateCommitDraftInput, TicketRunService } from "./missions/ticket-runs.js";
@@ -79,6 +84,7 @@ let missionLifecycleService: MissionLifecycleService | null = null;
 const BACKEND_BUILD_ID = process.env.SPIRA_BUILD_ID?.trim() || "dev";
 const BACKEND_GENERATION = Number(process.env.SPIRA_GENERATION ?? "0");
 const FATAL_SHUTDOWN_TIMEOUT_MS = 10_000;
+const MISSION_WORKFLOW_RESPONSE_TIMEOUT_MS = 4 * 60 * 60 * 1000;
 let shuttingDown = false;
 let exitScheduled = false;
 const pendingUpgradeProposalResponses = new Map<
@@ -944,7 +950,7 @@ const handleClientMessage = async (message: ClientMessage): Promise<void> => {
       transport?.send({
         type: "missions:ticket-run:work:start:result",
         requestId: message.requestId,
-        result: await ticketRunService.startWork(message.runId),
+        result: await ticketRunService.startWork(message.runId, message.prompt),
       });
     } catch (error) {
       logger.error({ err: error, requestId: message.requestId, runId: message.runId }, "Failed to start mission work");
@@ -1088,6 +1094,118 @@ const handleClientMessage = async (message: ClientMessage): Promise<void> => {
         type: "missions:request-error",
         requestId: message.requestId,
         ...toErrorPayload(error, "MISSIONS_PROOFS_GET_FAILED", "Failed to load mission proofs.", "missions"),
+      });
+    }
+    return;
+  }
+
+  if (message.type === "missions:ticket-run:timeline:get") {
+    if (!ticketRunService) {
+      transport?.send({
+        type: "missions:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(
+          new Error("Ticket run service is unavailable."),
+          "MISSIONS_UNAVAILABLE",
+          "Missions ticket runs are unavailable.",
+          "missions",
+        ),
+      });
+      return;
+    }
+
+    try {
+      transport?.send({
+        type: "missions:ticket-run:timeline:get:result",
+        requestId: message.requestId,
+        result: await ticketRunService.getMissionTimeline(message.runId),
+      });
+    } catch (error) {
+      logger.error({ err: error, requestId: message.requestId, runId: message.runId }, "Failed to get mission timeline");
+      transport?.send({
+        type: "missions:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(error, "MISSIONS_TIMELINE_GET_FAILED", "Failed to load mission timeline.", "missions"),
+      });
+    }
+    return;
+  }
+
+  if (message.type === "missions:ticket-run:repo-intelligence:get") {
+    if (!ticketRunService) {
+      transport?.send({
+        type: "missions:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(
+          new Error("Ticket run service is unavailable."),
+          "MISSIONS_UNAVAILABLE",
+          "Missions ticket runs are unavailable.",
+          "missions",
+        ),
+      });
+      return;
+    }
+
+    try {
+      transport?.send({
+        type: "missions:ticket-run:repo-intelligence:get:result",
+        requestId: message.requestId,
+        result: await ticketRunService.getRepoIntelligenceCandidates(message.runId),
+      });
+    } catch (error) {
+      logger.error(
+        { err: error, requestId: message.requestId, runId: message.runId },
+        "Failed to get mission repo intelligence candidates",
+      );
+      transport?.send({
+        type: "missions:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(
+          error,
+          "MISSIONS_REPO_INTELLIGENCE_GET_FAILED",
+          "Failed to load mission repo intelligence candidates.",
+          "missions",
+        ),
+      });
+    }
+    return;
+  }
+
+  if (message.type === "missions:ticket-run:repo-intelligence:approve") {
+    if (!ticketRunService) {
+      transport?.send({
+        type: "missions:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(
+          new Error("Ticket run service is unavailable."),
+          "MISSIONS_UNAVAILABLE",
+          "Missions ticket runs are unavailable.",
+          "missions",
+        ),
+      });
+      return;
+    }
+
+    try {
+      transport?.send({
+        type: "missions:ticket-run:repo-intelligence:approve:result",
+        requestId: message.requestId,
+        result: await ticketRunService.approveRepoIntelligenceCandidate(message.runId, message.entryId),
+      });
+    } catch (error) {
+      logger.error(
+        { err: error, requestId: message.requestId, runId: message.runId, entryId: message.entryId },
+        "Failed to approve mission repo intelligence candidate",
+      );
+      transport?.send({
+        type: "missions:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(
+          error,
+          "MISSIONS_REPO_INTELLIGENCE_APPROVE_FAILED",
+          "Failed to approve this mission repo intelligence candidate.",
+          "missions",
+        ),
       });
     }
     return;
@@ -2165,6 +2283,9 @@ const bootstrap = async () => {
   const builtInSqlServerServers = buildSqlServerBuiltinMcpServers(env);
   const builtInYouTrackServers = buildYouTrackBuiltinMcpServers(env);
   const builtInYouTrackSubagents = buildYouTrackBuiltinSubagents(env);
+  memoryDb?.seedBuiltinRepoIntelligence(BUILTIN_REPO_INTELLIGENCE);
+  memoryDb?.seedBuiltinValidationProfiles(BUILTIN_VALIDATION_PROFILES);
+  memoryDb?.seedBuiltinProofRules(BUILTIN_PROOF_RULES);
   projectRegistry = new ProjectRegistry(memoryDb);
   missionLifecycleService = new MissionLifecycleService(memoryDb, bus, async (runId) => {
     if (!ticketRunService) {
@@ -2212,10 +2333,15 @@ const bootstrap = async () => {
       return {
         stationId,
         reusedLiveAttempt: run.stationId === stationId,
-        completion: stationRegistry.sendMessageAndAwaitResponse(prompt, { stationId }).then((response) => ({
-          status: "completed" as const,
-          summary: response.text.trim() || "Mission pass completed.",
-        })),
+        completion: stationRegistry
+          .sendMessageAndAwaitResponse(prompt, {
+            stationId,
+            timeoutMs: MISSION_WORKFLOW_RESPONSE_TIMEOUT_MS,
+          })
+          .then((response) => ({
+            status: "completed" as const,
+            summary: response.text.trim() || "Mission pass completed.",
+          })),
       };
     },
     repairMissionPass: async ({ run, prompt }) => {
@@ -2231,7 +2357,10 @@ const bootstrap = async () => {
         workingDirectory: resolveMissionStationWorkingDirectory(run.worktrees) ?? undefined,
         allowUpgradeTools: false,
       });
-      const response = await stationRegistry.sendMessageAndAwaitResponse(prompt, { stationId });
+      const response = await stationRegistry.sendMessageAndAwaitResponse(prompt, {
+        stationId,
+        timeoutMs: MISSION_WORKFLOW_RESPONSE_TIMEOUT_MS,
+      });
       return {
         status: "completed",
         summary: response.text.trim() || "Mission repair turn completed.",

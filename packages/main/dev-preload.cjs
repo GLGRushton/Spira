@@ -206,8 +206,8 @@ const electronAPI = {
   retryTicketRunSync(runId) {
     return ipcRenderer.invoke(TICKET_RUN_SYNC_CHANNEL, { runId });
   },
-  startTicketRunWork(runId) {
-    return ipcRenderer.invoke(TICKET_RUN_WORK_START_CHANNEL, { runId });
+  startTicketRunWork(runId, prompt) {
+    return ipcRenderer.invoke(TICKET_RUN_WORK_START_CHANNEL, { runId, prompt });
   },
   continueTicketRunWork(runId, prompt) {
     return ipcRenderer.invoke(TICKET_RUN_WORK_CONTINUE_CHANNEL, { runId, prompt });

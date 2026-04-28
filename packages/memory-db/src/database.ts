@@ -4,6 +4,8 @@ import path from "node:path";
 import type {
   McpServerConfig,
   McpServerSource,
+  TicketRunMissionProofLevel,
+  TicketRunMissionProofPreflightStatus,
   SubagentDomain,
   SubagentSource,
   TicketRunAttemptStatus,
@@ -40,6 +42,8 @@ import {
   TICKET_RUN_MISSION_CLASSIFICATIONS,
   TICKET_RUN_MISSION_PHASES,
   TICKET_RUN_MISSION_PROOF_ARTIFACT_MODES,
+  TICKET_RUN_MISSION_PROOF_LEVELS,
+  TICKET_RUN_MISSION_PROOF_PREFLIGHT_STATUSES,
   TICKET_RUN_MISSION_VALIDATION_KINDS,
   TICKET_RUN_MISSION_VALIDATION_STATUSES,
   TICKET_RUN_PROOF_ARTIFACT_KINDS,
@@ -55,9 +59,15 @@ import BetterSqlite3 from "better-sqlite3";
 const SQLITE_BUSY_TIMEOUT_MS = 5_000;
 
 const MEMORY_ENTRY_CATEGORIES = ["user-preference", "fact", "task-context", "correction"] as const;
+const REPO_INTELLIGENCE_ENTRY_TYPES = ["briefing", "pitfall", "example"] as const;
+const REPO_INTELLIGENCE_ENTRY_SOURCES = ["builtin", "user", "learned"] as const;
+const VALIDATION_PROFILE_KINDS = ["build", "unit-test", "lint", "typecheck"] as const;
 
 export type ConversationRole = "user" | "assistant" | "system";
 export type MemoryEntryCategory = (typeof MEMORY_ENTRY_CATEGORIES)[number];
+export type RepoIntelligenceEntryType = (typeof REPO_INTELLIGENCE_ENTRY_TYPES)[number];
+export type RepoIntelligenceEntrySource = (typeof REPO_INTELLIGENCE_ENTRY_SOURCES)[number];
+export type ValidationProfileKind = (typeof VALIDATION_PROFILE_KINDS)[number];
 
 export interface ConversationSummary {
   id: string;
@@ -185,6 +195,135 @@ export interface ProjectRepoMappingRecord {
   projectKey: string;
   repoRelativePaths: string[];
   updatedAt: number;
+}
+
+export interface RepoIntelligenceRecord {
+  id: string;
+  projectKey: string | null;
+  repoRelativePath: string | null;
+  type: RepoIntelligenceEntryType;
+  title: string;
+  content: string;
+  tags: string[];
+  source: RepoIntelligenceEntrySource;
+  approved: boolean;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface UpsertRepoIntelligenceInput {
+  id: string;
+  projectKey?: string | null;
+  repoRelativePath?: string | null;
+  type: RepoIntelligenceEntryType;
+  title: string;
+  content: string;
+  tags?: readonly string[];
+  source: RepoIntelligenceEntrySource;
+  approved?: boolean;
+  createdAt?: number;
+}
+
+export interface ValidationProfileRecord {
+  id: string;
+  projectKey: string | null;
+  repoRelativePath: string | null;
+  label: string;
+  kind: ValidationProfileKind;
+  command: string;
+  workingDirectory: string;
+  notes: string | null;
+  confidence: number;
+  expectedRuntimeMs: number | null;
+  prerequisites: string[];
+  source: "builtin" | "user";
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface UpsertValidationProfileInput {
+  id: string;
+  projectKey?: string | null;
+  repoRelativePath?: string | null;
+  label: string;
+  kind: ValidationProfileKind;
+  command: string;
+  workingDirectory: string;
+  notes?: string | null;
+  confidence?: number;
+  expectedRuntimeMs?: number | null;
+  prerequisites?: readonly string[];
+  source: "builtin" | "user";
+  createdAt?: number;
+}
+
+export interface ProofRuleRecord {
+  id: string;
+  projectKey: string | null;
+  repoRelativePath: string | null;
+  classificationKind: TicketRunMissionClassificationKind | null;
+  uiChange: boolean | null;
+  proofRequired: boolean | null;
+  summaryKeywords: string[];
+  recommendedLevel: TicketRunMissionProofLevel;
+  rationale: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface UpsertProofRuleInput {
+  id: string;
+  projectKey?: string | null;
+  repoRelativePath?: string | null;
+  classificationKind?: TicketRunMissionClassificationKind | null;
+  uiChange?: boolean | null;
+  proofRequired?: boolean | null;
+  summaryKeywords?: readonly string[];
+  recommendedLevel: TicketRunMissionProofLevel;
+  rationale: string;
+  createdAt?: number;
+}
+
+export interface ProofDecisionRecord {
+  runId: string;
+  attemptId: string | null;
+  recommendedLevel: TicketRunMissionProofLevel | null;
+  preflightStatus: TicketRunMissionProofPreflightStatus | null;
+  rationale: string | null;
+  evidence: string[];
+  repoRelativePaths: string[];
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface UpsertProofDecisionInput {
+  runId: string;
+  attemptId?: string | null;
+  recommendedLevel?: TicketRunMissionProofLevel | null;
+  preflightStatus?: TicketRunMissionProofPreflightStatus | null;
+  rationale?: string | null;
+  evidence?: readonly string[];
+  repoRelativePaths?: readonly string[];
+  createdAt?: number;
+}
+
+export interface MissionEventRecord {
+  id: number;
+  runId: string;
+  attemptId: string | null;
+  stage: string;
+  eventType: string;
+  metadata: Record<string, unknown> | null;
+  occurredAt: number;
+}
+
+export interface AppendMissionEventInput {
+  runId: string;
+  attemptId?: string | null;
+  stage: string;
+  eventType: string;
+  metadata?: Record<string, unknown> | null;
+  occurredAt?: number;
 }
 
 export interface UpsertTicketRunWorktreeInput {
@@ -384,6 +523,73 @@ interface ProjectRepoMappingRow {
   projectKey: string;
   repoRelativePath: string;
   updatedAt: number;
+}
+
+interface RepoIntelligenceRow {
+  id: string;
+  projectKey: string | null;
+  repoRelativePath: string | null;
+  type: string;
+  title: string;
+  content: string;
+  tagsJson: string;
+  source: string;
+  approved: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+interface ValidationProfileRow {
+  id: string;
+  projectKey: string | null;
+  repoRelativePath: string | null;
+  label: string;
+  kind: string;
+  command: string;
+  workingDirectory: string;
+  notes: string | null;
+  confidence: number;
+  expectedRuntimeMs: number | null;
+  prerequisitesJson: string;
+  source: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+interface ProofRuleRow {
+  id: string;
+  projectKey: string | null;
+  repoRelativePath: string | null;
+  classificationKind: string | null;
+  uiChange: number | null;
+  proofRequired: number | null;
+  summaryKeywordsJson: string;
+  recommendedLevel: string;
+  rationale: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+interface ProofDecisionRow {
+  runId: string;
+  attemptId: string | null;
+  recommendedLevel: string | null;
+  preflightStatus: string | null;
+  rationale: string | null;
+  evidenceJson: string | null;
+  repoRelativePathsJson: string | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+interface MissionEventRow {
+  id: number;
+  runId: string;
+  attemptId: string | null;
+  stage: string;
+  eventType: string;
+  metadataJson: string | null;
+  occurredAt: number;
 }
 
 interface YouTrackStateMappingRow {
@@ -1072,6 +1278,78 @@ const MIGRATIONS: MigrationDefinition[] = [
     version: 19,
     statements: ["ALTER TABLE ticket_runs ADD COLUMN previous_pass_context_json TEXT"],
   },
+  {
+    version: 20,
+    statements: [
+      `CREATE TABLE repo_intelligence_entries (
+        id TEXT PRIMARY KEY,
+        project_key TEXT,
+        repo_relative_path TEXT,
+        type TEXT NOT NULL CHECK(type IN ('briefing', 'pitfall', 'example')),
+        title TEXT NOT NULL,
+        content TEXT NOT NULL,
+        tags_json TEXT NOT NULL DEFAULT '[]',
+        source TEXT NOT NULL CHECK(source IN ('builtin', 'user', 'learned')),
+        approved INTEGER NOT NULL DEFAULT 1,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      )`,
+      "CREATE INDEX idx_repo_intelligence_scope_v20 ON repo_intelligence_entries(project_key, repo_relative_path, updated_at DESC)",
+      `CREATE TABLE validation_profiles (
+        id TEXT PRIMARY KEY,
+        project_key TEXT,
+        repo_relative_path TEXT,
+        label TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK(kind IN ('build', 'unit-test', 'lint', 'typecheck')),
+        command TEXT NOT NULL,
+        working_directory TEXT NOT NULL,
+        notes TEXT,
+        confidence REAL NOT NULL DEFAULT 0.5,
+        expected_runtime_ms INTEGER,
+        prerequisites_json TEXT NOT NULL DEFAULT '[]',
+        source TEXT NOT NULL CHECK(source IN ('builtin', 'user')),
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      )`,
+      "CREATE INDEX idx_validation_profiles_scope_v20 ON validation_profiles(project_key, repo_relative_path, updated_at DESC)",
+      `CREATE TABLE proof_rules (
+        id TEXT PRIMARY KEY,
+        project_key TEXT,
+        repo_relative_path TEXT,
+        classification_kind TEXT CHECK(classification_kind IN ('backend', 'frontend', 'ui', 'infra', 'mixed', 'unknown')),
+        ui_change INTEGER,
+        proof_required INTEGER,
+        summary_keywords_json TEXT NOT NULL DEFAULT '[]',
+        recommended_level TEXT NOT NULL CHECK(recommended_level IN ('none', 'light', 'targeted-screenshot', 'full-ui-proof', 'manual-review-only')),
+        rationale TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      )`,
+      "CREATE INDEX idx_proof_rules_scope_v20 ON proof_rules(project_key, repo_relative_path, updated_at DESC)",
+      `CREATE TABLE proof_decisions (
+        run_id TEXT PRIMARY KEY REFERENCES ticket_runs(run_id) ON DELETE CASCADE,
+        attempt_id TEXT,
+        recommended_level TEXT CHECK(recommended_level IN ('none', 'light', 'targeted-screenshot', 'full-ui-proof', 'manual-review-only')),
+        preflight_status TEXT CHECK(preflight_status IN ('runnable', 'blocked', 'degraded')),
+        rationale TEXT,
+        evidence_json TEXT,
+        repo_relative_paths_json TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      )`,
+      "CREATE INDEX idx_proof_decisions_updated_v20 ON proof_decisions(updated_at DESC)",
+      `CREATE TABLE mission_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id TEXT NOT NULL REFERENCES ticket_runs(run_id) ON DELETE CASCADE,
+        attempt_id TEXT,
+        stage TEXT NOT NULL,
+        event_type TEXT NOT NULL,
+        metadata_json TEXT,
+        occurred_at INTEGER NOT NULL
+      )`,
+      "CREATE INDEX idx_mission_events_run_v20 ON mission_events(run_id, occurred_at DESC)",
+    ],
+  },
 ];
 
 type SqliteDatabase = InstanceType<typeof BetterSqlite3>;
@@ -1151,6 +1429,24 @@ function assertMemoryEntryCategory(category: string): asserts category is Memory
   }
 }
 
+function assertRepoIntelligenceEntryType(type: string): asserts type is RepoIntelligenceEntryType {
+  if (!REPO_INTELLIGENCE_ENTRY_TYPES.includes(type as RepoIntelligenceEntryType)) {
+    throw new Error(`Unsupported repo intelligence entry type: ${type}`);
+  }
+}
+
+function assertRepoIntelligenceEntrySource(source: string): asserts source is RepoIntelligenceEntrySource {
+  if (!REPO_INTELLIGENCE_ENTRY_SOURCES.includes(source as RepoIntelligenceEntrySource)) {
+    throw new Error(`Unsupported repo intelligence entry source: ${source}`);
+  }
+}
+
+function assertValidationProfileKind(kind: string): asserts kind is ValidationProfileKind {
+  if (!VALIDATION_PROFILE_KINDS.includes(kind as ValidationProfileKind)) {
+    throw new Error(`Unsupported validation profile kind: ${kind}`);
+  }
+}
+
 function assertMcpServerSource(source: string): asserts source is McpServerSource {
   if (source !== "builtin" && source !== "user") {
     throw new Error(`Unsupported MCP server source: ${source}`);
@@ -1202,6 +1498,20 @@ function assertTicketRunMissionClassificationKind(kind: string): asserts kind is
 function assertTicketRunMissionProofArtifactMode(mode: string): asserts mode is TicketRunMissionProofArtifactMode {
   if (!TICKET_RUN_MISSION_PROOF_ARTIFACT_MODES.includes(mode as TicketRunMissionProofArtifactMode)) {
     throw new Error(`Unsupported ticket run mission proof artifact mode: ${mode}`);
+  }
+}
+
+function assertTicketRunMissionProofLevel(level: string): asserts level is TicketRunMissionProofLevel {
+  if (!TICKET_RUN_MISSION_PROOF_LEVELS.includes(level as TicketRunMissionProofLevel)) {
+    throw new Error(`Unsupported ticket run mission proof level: ${level}`);
+  }
+}
+
+function assertTicketRunMissionProofPreflightStatus(
+  status: string,
+): asserts status is TicketRunMissionProofPreflightStatus {
+  if (!TICKET_RUN_MISSION_PROOF_PREFLIGHT_STATUSES.includes(status as TicketRunMissionProofPreflightStatus)) {
+    throw new Error(`Unsupported ticket run mission proof preflight status: ${status}`);
   }
 }
 
@@ -1316,6 +1626,98 @@ const mapSubagentConfigRow = (row: SubagentConfigRow): SubagentConfigRecord => {
   };
 };
 
+const mapRepoIntelligenceRow = (row: RepoIntelligenceRow): RepoIntelligenceRecord => {
+  assertRepoIntelligenceEntryType(row.type);
+  assertRepoIntelligenceEntrySource(row.source);
+  return {
+    id: String(row.id),
+    projectKey: row.projectKey === null ? null : String(row.projectKey),
+    repoRelativePath: row.repoRelativePath === null ? null : String(row.repoRelativePath),
+    type: row.type,
+    title: String(row.title),
+    content: String(row.content),
+    tags: parseStringArray(row.tagsJson),
+    source: row.source,
+    approved: toBoolean(row.approved),
+    createdAt: Number(row.createdAt),
+    updatedAt: Number(row.updatedAt),
+  };
+};
+
+const mapValidationProfileRow = (row: ValidationProfileRow): ValidationProfileRecord => {
+  assertValidationProfileKind(row.kind);
+  assertMcpServerSource(row.source);
+  return {
+    id: String(row.id),
+    projectKey: row.projectKey === null ? null : String(row.projectKey),
+    repoRelativePath: row.repoRelativePath === null ? null : String(row.repoRelativePath),
+    label: String(row.label),
+    kind: row.kind,
+    command: String(row.command),
+    workingDirectory: String(row.workingDirectory),
+    notes: row.notes === null ? null : String(row.notes),
+    confidence: Number(row.confidence),
+    expectedRuntimeMs: row.expectedRuntimeMs === null ? null : Number(row.expectedRuntimeMs),
+    prerequisites: parseStringArray(row.prerequisitesJson),
+    source: row.source,
+    createdAt: Number(row.createdAt),
+    updatedAt: Number(row.updatedAt),
+  };
+};
+
+const mapProofRuleRow = (row: ProofRuleRow): ProofRuleRecord => {
+  if (row.classificationKind !== null) {
+    assertTicketRunMissionClassificationKind(row.classificationKind);
+  }
+  assertTicketRunMissionProofLevel(row.recommendedLevel);
+  return {
+    id: String(row.id),
+    projectKey: row.projectKey === null ? null : String(row.projectKey),
+    repoRelativePath: row.repoRelativePath === null ? null : String(row.repoRelativePath),
+    classificationKind: row.classificationKind === null ? null : row.classificationKind,
+    uiChange: row.uiChange === null ? null : toBoolean(row.uiChange),
+    proofRequired: row.proofRequired === null ? null : toBoolean(row.proofRequired),
+    summaryKeywords: parseStringArray(row.summaryKeywordsJson),
+    recommendedLevel: row.recommendedLevel,
+    rationale: String(row.rationale),
+    createdAt: Number(row.createdAt),
+    updatedAt: Number(row.updatedAt),
+  };
+};
+
+const mapProofDecisionRow = (row: ProofDecisionRow): ProofDecisionRecord => {
+  if (row.recommendedLevel !== null) {
+    assertTicketRunMissionProofLevel(row.recommendedLevel);
+  }
+  if (row.preflightStatus !== null) {
+    assertTicketRunMissionProofPreflightStatus(row.preflightStatus);
+  }
+  return {
+    runId: String(row.runId),
+    attemptId: row.attemptId === null ? null : String(row.attemptId),
+    recommendedLevel: row.recommendedLevel === null ? null : row.recommendedLevel,
+    preflightStatus: row.preflightStatus === null ? null : row.preflightStatus,
+    rationale: row.rationale === null ? null : String(row.rationale),
+    evidence: parseStringArray(row.evidenceJson),
+    repoRelativePaths: parseStringArray(row.repoRelativePathsJson),
+    createdAt: Number(row.createdAt),
+    updatedAt: Number(row.updatedAt),
+  };
+};
+
+const mapMissionEventRow = (row: MissionEventRow): MissionEventRecord => {
+  const metadata = tryParseJson(row.metadataJson);
+  return {
+    id: Number(row.id),
+    runId: String(row.runId),
+    attemptId: row.attemptId === null ? null : String(row.attemptId),
+    stage: String(row.stage),
+    eventType: String(row.eventType),
+    metadata: isRecord(metadata) ? metadata : null,
+    occurredAt: Number(row.occurredAt),
+  };
+};
+
 const mapTicketRunWorktreeRow = (row: TicketRunWorktreeRow): TicketRunWorktreeSummary => {
   assertTicketRunCleanupState(row.cleanupState);
   return {
@@ -1387,6 +1789,12 @@ const mapTicketRunMissionClassification = (value: unknown): TicketRunMissionClas
       TICKET_RUN_MISSION_PROOF_ARTIFACT_MODES.includes(value.proofArtifactMode as TicketRunMissionProofArtifactMode)
         ? (value.proofArtifactMode as TicketRunMissionProofArtifactMode)
         : "none",
+    advisoryProofLevel:
+      typeof value.advisoryProofLevel === "string" &&
+      TICKET_RUN_MISSION_PROOF_LEVELS.includes(value.advisoryProofLevel as TicketRunMissionProofLevel)
+        ? (value.advisoryProofLevel as TicketRunMissionProofLevel)
+        : null,
+    advisoryProofRationale: typeof value.advisoryProofRationale === "string" ? value.advisoryProofRationale : null,
     rationale: typeof value.rationale === "string" ? value.rationale : null,
     createdAt: typeof value.createdAt === "number" ? value.createdAt : 0,
     updatedAt: typeof value.updatedAt === "number" ? value.updatedAt : 0,
@@ -2302,6 +2710,653 @@ export class SpiraMemoryDatabase {
     };
   }
 
+  listRepoIntelligence(options: {
+    projectKey?: string | null;
+    repoRelativePaths?: readonly string[];
+    tags?: readonly string[];
+    includeUnapproved?: boolean;
+    limit?: number;
+  } = {}): RepoIntelligenceRecord[] {
+    const rows = this.db
+      .prepare(
+        `SELECT
+           id,
+           project_key AS projectKey,
+           repo_relative_path AS repoRelativePath,
+           type,
+           title,
+           content,
+           tags_json AS tagsJson,
+           source,
+           approved,
+           created_at AS createdAt,
+           updated_at AS updatedAt
+         FROM repo_intelligence_entries
+         ORDER BY approved DESC, updated_at DESC, created_at DESC`,
+      )
+      .all() as unknown as RepoIntelligenceRow[];
+
+    const normalizedProjectKey = normalizeTitle(options.projectKey) ?? null;
+    const repoPathSet = new Set(normalizeStringArray(options.repoRelativePaths));
+    const tagSet = new Set(normalizeStringArray(options.tags));
+    const includeUnapproved = options.includeUnapproved === true;
+    const limit = options.limit ?? 20;
+
+    return rows
+      .map((row) => mapRepoIntelligenceRow(row))
+      .filter(
+        (entry) =>
+          (includeUnapproved || entry.approved) &&
+          this.matchesScopedRecord(entry, normalizedProjectKey, repoPathSet) &&
+          (tagSet.size === 0 || [...tagSet].every((tag) => entry.tags.includes(tag))),
+      )
+      .slice(0, limit);
+  }
+
+  getRepoIntelligenceEntry(entryId: string): RepoIntelligenceRecord | null {
+    const row = this.db
+      .prepare(
+        `SELECT
+           id,
+           project_key AS projectKey,
+           repo_relative_path AS repoRelativePath,
+           type,
+           title,
+           content,
+           tags_json AS tagsJson,
+           source,
+           approved,
+           created_at AS createdAt,
+           updated_at AS updatedAt
+         FROM repo_intelligence_entries
+         WHERE id = @entryId`,
+      )
+      .get({ entryId }) as RepoIntelligenceRow | undefined;
+
+    return row ? mapRepoIntelligenceRow(row) : null;
+  }
+
+  upsertRepoIntelligence(input: UpsertRepoIntelligenceInput): RepoIntelligenceRecord {
+    this.assertWritable();
+    const now = input.createdAt ?? Date.now();
+    const existing = this.getRepoIntelligenceEntry(input.id);
+    const payload = {
+      id: input.id.trim(),
+      projectKey: normalizeTitle(input.projectKey),
+      repoRelativePath: normalizeTitle(input.repoRelativePath),
+      type: input.type,
+      title: input.title.trim(),
+      content: input.content.trim(),
+      tagsJson: serializeJson(normalizeStringArray(input.tags)) ?? "[]",
+      source: input.source,
+      approved: input.approved === false ? 0 : 1,
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+    };
+
+    assertRepoIntelligenceEntryType(payload.type);
+    assertRepoIntelligenceEntrySource(payload.source);
+    if (!payload.id || !payload.title || !payload.content) {
+      throw new Error("Repo intelligence entries require non-empty id, title, and content.");
+    }
+
+    this.db
+      .prepare(
+        `INSERT INTO repo_intelligence_entries (
+           id,
+           project_key,
+           repo_relative_path,
+           type,
+           title,
+           content,
+           tags_json,
+           source,
+           approved,
+           created_at,
+           updated_at
+         ) VALUES (
+           @id,
+           @projectKey,
+           @repoRelativePath,
+           @type,
+           @title,
+           @content,
+           @tagsJson,
+           @source,
+           @approved,
+           @createdAt,
+           @updatedAt
+         )
+         ON CONFLICT(id) DO UPDATE SET
+           project_key = excluded.project_key,
+           repo_relative_path = excluded.repo_relative_path,
+           type = excluded.type,
+           title = excluded.title,
+           content = excluded.content,
+           tags_json = excluded.tags_json,
+           source = excluded.source,
+           approved = excluded.approved,
+           updated_at = excluded.updated_at`,
+      )
+      .run(payload);
+
+    const saved = this.getRepoIntelligenceEntry(payload.id);
+    if (!saved) {
+      throw new Error(`Failed to load repo intelligence entry ${payload.id}.`);
+    }
+
+    return saved;
+  }
+
+  seedBuiltinRepoIntelligence(entries: readonly Omit<UpsertRepoIntelligenceInput, "source">[]): RepoIntelligenceRecord[] {
+    this.assertWritable();
+    const seed = this.db.transaction((items: readonly Omit<UpsertRepoIntelligenceInput, "source">[]) =>
+      items.map((entry) =>
+        this.upsertRepoIntelligence({
+          ...entry,
+          source: "builtin",
+          approved: this.getRepoIntelligenceEntry(entry.id)?.approved ?? true,
+        }),
+      ),
+    );
+
+    return seed(entries);
+  }
+
+  setRepoIntelligenceApproval(entryId: string, approved: boolean): RepoIntelligenceRecord {
+    this.assertWritable();
+    const existing = this.getRepoIntelligenceEntry(entryId);
+    if (!existing) {
+      throw new Error(`Repo intelligence entry ${entryId} does not exist.`);
+    }
+
+    return this.upsertRepoIntelligence({
+      id: existing.id,
+      projectKey: existing.projectKey,
+      repoRelativePath: existing.repoRelativePath,
+      type: existing.type,
+      title: existing.title,
+      content: existing.content,
+      tags: existing.tags,
+      source: existing.source,
+      approved,
+      createdAt: existing.createdAt,
+    });
+  }
+
+  listValidationProfiles(options: {
+    projectKey?: string | null;
+    repoRelativePaths?: readonly string[];
+    limit?: number;
+  } = {}): ValidationProfileRecord[] {
+    const rows = this.db
+      .prepare(
+        `SELECT
+           id,
+           project_key AS projectKey,
+           repo_relative_path AS repoRelativePath,
+           label,
+           kind,
+           command,
+           working_directory AS workingDirectory,
+           notes,
+           confidence,
+           expected_runtime_ms AS expectedRuntimeMs,
+           prerequisites_json AS prerequisitesJson,
+           source,
+           created_at AS createdAt,
+           updated_at AS updatedAt
+         FROM validation_profiles
+         ORDER BY updated_at DESC, created_at DESC`,
+      )
+      .all() as unknown as ValidationProfileRow[];
+
+    const normalizedProjectKey = normalizeTitle(options.projectKey) ?? null;
+    const repoPathSet = new Set(normalizeStringArray(options.repoRelativePaths));
+    const limit = options.limit ?? 20;
+
+    return rows
+      .map((row) => mapValidationProfileRow(row))
+      .filter((entry) => this.matchesScopedRecord(entry, normalizedProjectKey, repoPathSet))
+      .slice(0, limit);
+  }
+
+  getValidationProfile(profileId: string): ValidationProfileRecord | null {
+    const row = this.db
+      .prepare(
+        `SELECT
+           id,
+           project_key AS projectKey,
+           repo_relative_path AS repoRelativePath,
+           label,
+           kind,
+           command,
+           working_directory AS workingDirectory,
+           notes,
+           confidence,
+           expected_runtime_ms AS expectedRuntimeMs,
+           prerequisites_json AS prerequisitesJson,
+           source,
+           created_at AS createdAt,
+           updated_at AS updatedAt
+         FROM validation_profiles
+         WHERE id = @profileId`,
+      )
+      .get({ profileId }) as ValidationProfileRow | undefined;
+
+    return row ? mapValidationProfileRow(row) : null;
+  }
+
+  upsertValidationProfile(input: UpsertValidationProfileInput): ValidationProfileRecord {
+    this.assertWritable();
+    const now = input.createdAt ?? Date.now();
+    const existing = this.getValidationProfile(input.id);
+    const payload = {
+      id: input.id.trim(),
+      projectKey: normalizeTitle(input.projectKey),
+      repoRelativePath: normalizeTitle(input.repoRelativePath),
+      label: input.label.trim(),
+      kind: input.kind,
+      command: input.command.trim(),
+      workingDirectory: input.workingDirectory.trim(),
+      notes: normalizeTitle(input.notes),
+      confidence: Number.isFinite(input.confidence) ? Math.max(0, Math.min(1, input.confidence ?? 0.5)) : 0.5,
+      expectedRuntimeMs:
+        typeof input.expectedRuntimeMs === "number" && Number.isFinite(input.expectedRuntimeMs)
+          ? Math.max(0, input.expectedRuntimeMs)
+          : null,
+      prerequisitesJson: serializeJson(normalizeStringArray(input.prerequisites)) ?? "[]",
+      source: input.source,
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+    };
+
+    assertValidationProfileKind(payload.kind);
+    if (payload.source !== "builtin" && payload.source !== "user") {
+      throw new Error(`Unsupported validation profile source: ${payload.source}`);
+    }
+    if (!payload.id || !payload.label || !payload.command || !payload.workingDirectory) {
+      throw new Error("Validation profiles require non-empty id, label, command, and workingDirectory.");
+    }
+
+    this.db
+      .prepare(
+        `INSERT INTO validation_profiles (
+           id,
+           project_key,
+           repo_relative_path,
+           label,
+           kind,
+           command,
+           working_directory,
+           notes,
+           confidence,
+           expected_runtime_ms,
+           prerequisites_json,
+           source,
+           created_at,
+           updated_at
+         ) VALUES (
+           @id,
+           @projectKey,
+           @repoRelativePath,
+           @label,
+           @kind,
+           @command,
+           @workingDirectory,
+           @notes,
+           @confidence,
+           @expectedRuntimeMs,
+           @prerequisitesJson,
+           @source,
+           @createdAt,
+           @updatedAt
+         )
+         ON CONFLICT(id) DO UPDATE SET
+           project_key = excluded.project_key,
+           repo_relative_path = excluded.repo_relative_path,
+           label = excluded.label,
+           kind = excluded.kind,
+           command = excluded.command,
+           working_directory = excluded.working_directory,
+           notes = excluded.notes,
+           confidence = excluded.confidence,
+           expected_runtime_ms = excluded.expected_runtime_ms,
+           prerequisites_json = excluded.prerequisites_json,
+           source = excluded.source,
+           updated_at = excluded.updated_at`,
+      )
+      .run(payload);
+
+    const saved = this.getValidationProfile(payload.id);
+    if (!saved) {
+      throw new Error(`Failed to load validation profile ${payload.id}.`);
+    }
+
+    return saved;
+  }
+
+  seedBuiltinValidationProfiles(entries: readonly Omit<UpsertValidationProfileInput, "source">[]): ValidationProfileRecord[] {
+    this.assertWritable();
+    const seed = this.db.transaction((items: readonly Omit<UpsertValidationProfileInput, "source">[]) =>
+      items.map((entry) =>
+        this.upsertValidationProfile({
+          ...entry,
+          source: "builtin",
+        }),
+      ),
+    );
+
+    return seed(entries);
+  }
+
+  listProofRules(options: {
+    projectKey?: string | null;
+    repoRelativePaths?: readonly string[];
+    limit?: number;
+  } = {}): ProofRuleRecord[] {
+    const rows = this.db
+      .prepare(
+        `SELECT
+           id,
+           project_key AS projectKey,
+           repo_relative_path AS repoRelativePath,
+           classification_kind AS classificationKind,
+           ui_change AS uiChange,
+           proof_required AS proofRequired,
+           summary_keywords_json AS summaryKeywordsJson,
+           recommended_level AS recommendedLevel,
+           rationale,
+           created_at AS createdAt,
+           updated_at AS updatedAt
+         FROM proof_rules
+         ORDER BY updated_at DESC, created_at DESC`,
+      )
+      .all() as unknown as ProofRuleRow[];
+
+    const normalizedProjectKey = normalizeTitle(options.projectKey) ?? null;
+    const repoPathSet = new Set(normalizeStringArray(options.repoRelativePaths));
+    const limit = options.limit ?? 20;
+
+    return rows
+      .map((row) => mapProofRuleRow(row))
+      .filter((entry) => this.matchesScopedRecord(entry, normalizedProjectKey, repoPathSet))
+      .slice(0, limit);
+  }
+
+  getProofRule(ruleId: string): ProofRuleRecord | null {
+    const row = this.db
+      .prepare(
+        `SELECT
+           id,
+           project_key AS projectKey,
+           repo_relative_path AS repoRelativePath,
+           classification_kind AS classificationKind,
+           ui_change AS uiChange,
+           proof_required AS proofRequired,
+           summary_keywords_json AS summaryKeywordsJson,
+           recommended_level AS recommendedLevel,
+           rationale,
+           created_at AS createdAt,
+           updated_at AS updatedAt
+         FROM proof_rules
+         WHERE id = @ruleId`,
+      )
+      .get({ ruleId }) as ProofRuleRow | undefined;
+
+    return row ? mapProofRuleRow(row) : null;
+  }
+
+  upsertProofRule(input: UpsertProofRuleInput): ProofRuleRecord {
+    this.assertWritable();
+    const now = input.createdAt ?? Date.now();
+    const existing = this.getProofRule(input.id);
+    const payload = {
+      id: input.id.trim(),
+      projectKey: normalizeTitle(input.projectKey),
+      repoRelativePath: normalizeTitle(input.repoRelativePath),
+      classificationKind: input.classificationKind ?? null,
+      uiChange: typeof input.uiChange === "boolean" ? (input.uiChange ? 1 : 0) : null,
+      proofRequired: typeof input.proofRequired === "boolean" ? (input.proofRequired ? 1 : 0) : null,
+      summaryKeywordsJson: serializeJson(normalizeStringArray(input.summaryKeywords)) ?? "[]",
+      recommendedLevel: input.recommendedLevel,
+      rationale: input.rationale.trim(),
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+    };
+
+    if (payload.classificationKind !== null) {
+      assertTicketRunMissionClassificationKind(payload.classificationKind);
+    }
+    assertTicketRunMissionProofLevel(payload.recommendedLevel);
+    if (!payload.id || !payload.rationale) {
+      throw new Error("Proof rules require non-empty id and rationale.");
+    }
+
+    this.db
+      .prepare(
+        `INSERT INTO proof_rules (
+           id,
+           project_key,
+           repo_relative_path,
+           classification_kind,
+           ui_change,
+           proof_required,
+           summary_keywords_json,
+           recommended_level,
+           rationale,
+           created_at,
+           updated_at
+         ) VALUES (
+           @id,
+           @projectKey,
+           @repoRelativePath,
+           @classificationKind,
+           @uiChange,
+           @proofRequired,
+           @summaryKeywordsJson,
+           @recommendedLevel,
+           @rationale,
+           @createdAt,
+           @updatedAt
+         )
+         ON CONFLICT(id) DO UPDATE SET
+           project_key = excluded.project_key,
+           repo_relative_path = excluded.repo_relative_path,
+           classification_kind = excluded.classification_kind,
+           ui_change = excluded.ui_change,
+           proof_required = excluded.proof_required,
+           summary_keywords_json = excluded.summary_keywords_json,
+           recommended_level = excluded.recommended_level,
+           rationale = excluded.rationale,
+           updated_at = excluded.updated_at`,
+      )
+      .run(payload);
+
+    const saved = this.getProofRule(payload.id);
+    if (!saved) {
+      throw new Error(`Failed to load proof rule ${payload.id}.`);
+    }
+
+    return saved;
+  }
+
+  seedBuiltinProofRules(entries: readonly Omit<UpsertProofRuleInput, "createdAt">[]): ProofRuleRecord[] {
+    this.assertWritable();
+    const seed = this.db.transaction((items: readonly Omit<UpsertProofRuleInput, "createdAt">[]) =>
+      items.map((entry) => this.upsertProofRule(entry)),
+    );
+
+    return seed(entries);
+  }
+
+  getProofDecision(runId: string): ProofDecisionRecord | null {
+    const row = this.db
+      .prepare(
+        `SELECT
+           run_id AS runId,
+           attempt_id AS attemptId,
+           recommended_level AS recommendedLevel,
+           preflight_status AS preflightStatus,
+           rationale,
+           evidence_json AS evidenceJson,
+           repo_relative_paths_json AS repoRelativePathsJson,
+           created_at AS createdAt,
+           updated_at AS updatedAt
+         FROM proof_decisions
+         WHERE run_id = @runId`,
+      )
+      .get({ runId }) as ProofDecisionRow | undefined;
+
+    return row ? mapProofDecisionRow(row) : null;
+  }
+
+  upsertProofDecision(input: UpsertProofDecisionInput): ProofDecisionRecord {
+    this.assertWritable();
+    const normalizedRunId = input.runId.trim();
+    if (!normalizedRunId) {
+      throw new Error("Proof decisions require a non-empty run id.");
+    }
+    const existing = this.getProofDecision(normalizedRunId);
+    const now = input.createdAt ?? Date.now();
+    if (input.recommendedLevel !== null && input.recommendedLevel !== undefined) {
+      assertTicketRunMissionProofLevel(input.recommendedLevel);
+    }
+    if (input.preflightStatus !== null && input.preflightStatus !== undefined) {
+      assertTicketRunMissionProofPreflightStatus(input.preflightStatus);
+    }
+
+    this.db
+      .prepare(
+        `INSERT INTO proof_decisions (
+           run_id,
+           attempt_id,
+           recommended_level,
+           preflight_status,
+           rationale,
+           evidence_json,
+           repo_relative_paths_json,
+           created_at,
+           updated_at
+         ) VALUES (
+           @runId,
+           @attemptId,
+           @recommendedLevel,
+           @preflightStatus,
+           @rationale,
+           @evidenceJson,
+           @repoRelativePathsJson,
+           @createdAt,
+           @updatedAt
+         )
+         ON CONFLICT(run_id) DO UPDATE SET
+           attempt_id = excluded.attempt_id,
+           recommended_level = excluded.recommended_level,
+           preflight_status = excluded.preflight_status,
+           rationale = excluded.rationale,
+           evidence_json = excluded.evidence_json,
+           repo_relative_paths_json = excluded.repo_relative_paths_json,
+           updated_at = excluded.updated_at`,
+      )
+      .run({
+        runId: normalizedRunId,
+        attemptId: normalizeTitle(input.attemptId),
+        recommendedLevel: input.recommendedLevel ?? null,
+        preflightStatus: input.preflightStatus ?? null,
+        rationale: normalizeTitle(input.rationale),
+        evidenceJson: serializeJson(normalizeStringArray(input.evidence)),
+        repoRelativePathsJson: serializeJson(normalizeStringArray(input.repoRelativePaths)),
+        createdAt: existing?.createdAt ?? now,
+        updatedAt: now,
+      });
+
+    const saved = this.getProofDecision(normalizedRunId);
+    if (!saved) {
+      throw new Error(`Failed to load proof decision for ${normalizedRunId}.`);
+    }
+
+    return saved;
+  }
+
+  appendMissionEvent(input: AppendMissionEventInput): MissionEventRecord {
+    this.assertWritable();
+    const runId = input.runId.trim();
+    const stage = input.stage.trim();
+    const eventType = input.eventType.trim();
+    if (!runId || !stage || !eventType) {
+      throw new Error("Mission events require non-empty runId, stage, and eventType values.");
+    }
+
+    const result = this.db
+      .prepare(
+        `INSERT INTO mission_events (
+           run_id,
+           attempt_id,
+           stage,
+           event_type,
+           metadata_json,
+           occurred_at
+         ) VALUES (
+           @runId,
+           @attemptId,
+           @stage,
+           @eventType,
+           @metadataJson,
+           @occurredAt
+         )`,
+      )
+      .run({
+        runId,
+        attemptId: normalizeTitle(input.attemptId),
+        stage,
+        eventType,
+        metadataJson: serializeJson(input.metadata ?? null),
+        occurredAt: input.occurredAt ?? Date.now(),
+      });
+
+    const row = this.db
+      .prepare(
+        `SELECT
+           id,
+           run_id AS runId,
+           attempt_id AS attemptId,
+           stage,
+           event_type AS eventType,
+           metadata_json AS metadataJson,
+           occurred_at AS occurredAt
+         FROM mission_events
+         WHERE id = @id`,
+      )
+      .get({ id: result.lastInsertRowid }) as MissionEventRow | undefined;
+
+    if (!row) {
+      throw new Error(`Failed to load mission event for ${runId}.`);
+    }
+
+    return mapMissionEventRow(row);
+  }
+
+  listMissionEvents(runId: string, limit = 50): MissionEventRecord[] {
+    const rows = this.db
+      .prepare(
+        `SELECT
+           id,
+           run_id AS runId,
+           attempt_id AS attemptId,
+           stage,
+           event_type AS eventType,
+           metadata_json AS metadataJson,
+           occurred_at AS occurredAt
+         FROM mission_events
+         WHERE run_id = @runId
+         ORDER BY occurred_at DESC, id DESC
+         LIMIT @limit`,
+      )
+      .all({ runId, limit }) as unknown as MissionEventRow[];
+
+    return rows.map((row) => mapMissionEventRow(row));
+  }
+
   listTicketRuns(): TicketRunSummary[] {
     const runRows = this.db
       .prepare(
@@ -2833,6 +3888,9 @@ export class SpiraMemoryDatabase {
           uiChange: input.classification.uiChange,
           proofRequired: input.classification.proofRequired,
           proofArtifactMode: input.classification.proofArtifactMode,
+          advisoryProofLevel:
+            typeof input.classification.advisoryProofLevel === "string" ? input.classification.advisoryProofLevel : null,
+          advisoryProofRationale: normalizeTitle(input.classification.advisoryProofRationale),
           rationale: normalizeTitle(input.classification.rationale),
           createdAt: input.classification.createdAt ?? now,
           updatedAt: input.classification.updatedAt ?? now,
@@ -2841,6 +3899,9 @@ export class SpiraMemoryDatabase {
     if (normalizedClassification) {
       assertTicketRunMissionClassificationKind(normalizedClassification.kind);
       assertTicketRunMissionProofArtifactMode(normalizedClassification.proofArtifactMode);
+      if (normalizedClassification.advisoryProofLevel !== null) {
+        assertTicketRunMissionProofLevel(normalizedClassification.advisoryProofLevel);
+      }
       if (!normalizedClassification.scopeSummary) {
         throw new Error("Ticket run classification requires a non-empty scope summary.");
       }
@@ -4078,6 +5139,17 @@ export class SpiraMemoryDatabase {
       createdAt: Number(row.createdAt),
       updatedAt: Number(row.updatedAt),
     }));
+  }
+
+  private matchesScopedRecord(
+    entry: { projectKey: string | null; repoRelativePath: string | null },
+    projectKey: string | null,
+    repoPathSet: ReadonlySet<string>,
+  ): boolean {
+    const projectMatches = entry.projectKey === null || (projectKey !== null && entry.projectKey === projectKey);
+    const repoMatches =
+      entry.repoRelativePath === null || repoPathSet.size === 0 || repoPathSet.has(entry.repoRelativePath);
+    return projectMatches && repoMatches;
   }
 
   private assertWritable(): void {

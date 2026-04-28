@@ -541,6 +541,182 @@ describe("SpiraMemoryDatabase", () => {
     });
   });
 
+  it("stores repo intelligence and validation profiles with scoped retrieval", () => {
+    const database = createTestDatabase();
+
+    database.seedBuiltinRepoIntelligence([
+      {
+        id: "spira-root-briefing",
+        projectKey: "SPI",
+        repoRelativePath: ".",
+        type: "briefing",
+        title: "Root briefing",
+        content: "Mission workflow lives under packages/backend/src/missions.",
+        tags: ["missions"],
+      },
+    ]);
+    database.upsertRepoIntelligence({
+      id: "apps-web-pitfall",
+      projectKey: "SPI",
+      repoRelativePath: "apps/web",
+      type: "pitfall",
+      title: "Web pitfall",
+      content: "UI changes should check proof coverage early.",
+      tags: ["ui", "proof"],
+      source: "user",
+    });
+    database.seedBuiltinValidationProfiles([
+      {
+        id: "apps-web-test",
+        projectKey: "SPI",
+        repoRelativePath: "apps/web",
+        label: "Apps web tests",
+        kind: "unit-test",
+        command: "pnpm test --filter apps-web",
+        workingDirectory: "apps/web",
+        confidence: 0.9,
+      },
+    ]);
+
+    expect(
+      database
+        .listRepoIntelligence({
+          projectKey: "SPI",
+          repoRelativePaths: [".", "apps/web"],
+        })
+        .map((entry) => ({ id: entry.id, source: entry.source })),
+    ).toEqual(
+      expect.arrayContaining([
+        { id: "spira-root-briefing", source: "builtin" },
+        { id: "apps-web-pitfall", source: "user" },
+      ]),
+    );
+    expect(
+      database.listValidationProfiles({
+        projectKey: "SPI",
+        repoRelativePaths: ["apps/web"],
+      }),
+    ).toMatchObject([
+      {
+        id: "apps-web-test",
+        workingDirectory: "apps/web",
+      },
+    ]);
+
+    database.upsertRepoIntelligence({
+      id: "learned-apps-web-example",
+      projectKey: "SPI",
+      repoRelativePath: "apps/web",
+      type: "example",
+      title: "Observed mission pattern",
+      content: "Observed from a clean mission.",
+      tags: ["learned", "run:run-1"],
+      source: "learned",
+      approved: false,
+    });
+
+    expect(
+      database.listRepoIntelligence({
+        projectKey: "SPI",
+        repoRelativePaths: ["apps/web"],
+        tags: ["run:run-1"],
+        includeUnapproved: true,
+      }),
+    ).toMatchObject([
+      {
+        id: "learned-apps-web-example",
+        approved: false,
+        source: "learned",
+      },
+    ]);
+
+    expect(
+      database.listRepoIntelligence({
+        projectKey: "SPI",
+        repoRelativePaths: ["apps/web"],
+        tags: ["run:run-1"],
+      }),
+    ).toEqual([]);
+
+    expect(database.setRepoIntelligenceApproval("learned-apps-web-example", true)).toMatchObject({
+      id: "learned-apps-web-example",
+      approved: true,
+    });
+  });
+
+  it("persists proof decisions and mission events for a run", () => {
+    const database = createTestDatabase();
+
+    database.upsertTicketRun({
+      runId: "run-proofing",
+      stationId: "mission:run-proofing",
+      ticketId: "SPI-201",
+      ticketSummary: "Adjust UI labels",
+      ticketUrl: "https://example.youtrack.cloud/issue/SPI-201",
+      projectKey: "SPI",
+      status: "working",
+      createdAt: 1_000,
+      startedAt: 1_000,
+      worktrees: [
+        {
+          repoRelativePath: "apps/web",
+          repoAbsolutePath: "C:\\Repos\\apps\\web",
+          worktreePath: "C:\\Repos\\.spira-worktrees\\spi-201\\apps-web",
+          branchName: "feat/spi-201-adjust-ui-labels",
+          cleanupState: "retained",
+          createdAt: 1_000,
+          updatedAt: 1_000,
+        },
+      ],
+      attempts: [
+        {
+          attemptId: "attempt-1",
+          sequence: 1,
+          status: "running",
+          startedAt: 1_000,
+          createdAt: 1_000,
+          updatedAt: 1_000,
+        },
+      ],
+    });
+
+    const proofDecision = database.upsertProofDecision({
+      runId: "run-proofing",
+      attemptId: "attempt-1",
+      recommendedLevel: "light",
+      preflightStatus: "runnable",
+      rationale: "Copy-only UI change.",
+      evidence: ["ticket-summary-keywords"],
+      repoRelativePaths: ["apps/web"],
+      createdAt: 1_100,
+    });
+    const missionEvent = database.appendMissionEvent({
+      runId: "run-proofing",
+      attemptId: "attempt-1",
+      stage: "classification",
+      eventType: "context-loaded",
+      metadata: { recommendedLevel: "light" },
+      occurredAt: 1_200,
+    });
+
+    expect(database.getProofDecision("run-proofing")).toMatchObject({
+      runId: "run-proofing",
+      attemptId: "attempt-1",
+      recommendedLevel: "light",
+      preflightStatus: "runnable",
+      evidence: ["ticket-summary-keywords"],
+    });
+    expect(proofDecision.repoRelativePaths).toEqual(["apps/web"]);
+    expect(database.listMissionEvents("run-proofing")).toMatchObject([
+      {
+        id: missionEvent.id,
+        runId: "run-proofing",
+        eventType: "context-loaded",
+        metadata: { recommendedLevel: "light" },
+      },
+    ]);
+  });
+
   it("deletes ticket runs and cascades child mission records", () => {
     const database = createTestDatabase();
 

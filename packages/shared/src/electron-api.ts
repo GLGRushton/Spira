@@ -17,6 +17,7 @@ import type { MissionServiceSnapshot } from "./service-profile-types.js";
 import type { SubagentCreateConfig } from "./subagent-types.js";
 import type { SubagentDomain } from "./subagent-types.js";
 import type {
+  ApproveTicketRunRepoIntelligenceResult,
   CancelTicketRunWorkResult,
   CommitTicketRunResult,
   CommitTicketRunSubmoduleResult,
@@ -27,16 +28,18 @@ import type {
   DeleteTicketRunResult,
   GenerateTicketRunCommitDraftResult,
   GenerateTicketRunSubmoduleCommitDraftResult,
-  RetryTicketRunSyncResult,
-  RunTicketRunProofResult,
-  SetTicketRunCommitDraftResult,
-  SetTicketRunSubmoduleCommitDraftResult,
-  StartTicketRunRequest,
-  StartTicketRunResult,
-  StartTicketRunWorkResult,
+    RetryTicketRunSyncResult,
+    RunTicketRunProofResult,
+    SetTicketRunCommitDraftResult,
+    SetTicketRunSubmoduleCommitDraftResult,
+    StartTicketRunRequest,
+    StartTicketRunResult,
+    StartTicketRunWorkResult,
   SyncTicketRunRemoteResult,
   SyncTicketRunSubmoduleRemoteResult,
+  TicketRunMissionTimelineResult,
   TicketRunGitStateResult,
+  TicketRunRepoIntelligenceCandidatesResult,
   TicketRunProofSnapshotResult,
   TicketRunReviewSnapshotResult,
   TicketRunSnapshot,
@@ -104,11 +107,14 @@ export interface ElectronApi {
   getTicketRuns(): Promise<TicketRunSnapshot>;
   startTicketRun(ticket: StartTicketRunRequest): Promise<StartTicketRunResult>;
   retryTicketRunSync(runId: string): Promise<RetryTicketRunSyncResult>;
-  startTicketRunWork(runId: string): Promise<StartTicketRunWorkResult>;
+  startTicketRunWork(runId: string, prompt?: string): Promise<StartTicketRunWorkResult>;
   continueTicketRunWork(runId: string, prompt?: string): Promise<ContinueTicketRunWorkResult>;
   cancelTicketRunWork(runId: string): Promise<CancelTicketRunWorkResult>;
   completeTicketRun(runId: string): Promise<CompleteTicketRunResult>;
   getTicketRunProofSnapshot(runId: string): Promise<TicketRunProofSnapshotResult>;
+  getTicketRunMissionTimeline(runId: string): Promise<TicketRunMissionTimelineResult>;
+  getTicketRunRepoIntelligence(runId: string): Promise<TicketRunRepoIntelligenceCandidatesResult>;
+  approveTicketRunRepoIntelligence(runId: string, entryId: string): Promise<ApproveTicketRunRepoIntelligenceResult>;
   runTicketRunProof(runId: string, profileId: string): Promise<RunTicketRunProofResult>;
   deleteTicketRun(runId: string): Promise<DeleteTicketRunResult>;
   getTicketRunReviewSnapshot(runId: string): Promise<TicketRunReviewSnapshotResult>;

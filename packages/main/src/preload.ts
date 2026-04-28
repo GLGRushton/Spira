@@ -28,6 +28,9 @@ const TICKET_RUN_WORK_CONTINUE_CHANNEL = "missions:ticket-run:work:continue";
 const TICKET_RUN_WORK_CANCEL_CHANNEL = "missions:ticket-run:work:cancel";
 const TICKET_RUN_COMPLETE_CHANNEL = "missions:ticket-run:complete";
 const TICKET_RUN_PROOFS_GET_CHANNEL = "missions:ticket-run:proofs:get";
+const TICKET_RUN_TIMELINE_GET_CHANNEL = "missions:ticket-run:timeline:get";
+const TICKET_RUN_REPO_INTELLIGENCE_GET_CHANNEL = "missions:ticket-run:repo-intelligence:get";
+const TICKET_RUN_REPO_INTELLIGENCE_APPROVE_CHANNEL = "missions:ticket-run:repo-intelligence:approve";
 const TICKET_RUN_PROOF_RUN_CHANNEL = "missions:ticket-run:proof:run";
 const TICKET_RUN_DELETE_CHANNEL = "missions:ticket-run:delete";
 const TICKET_RUN_REVIEW_SNAPSHOT_CHANNEL = "missions:ticket-run:review-snapshot:get";
@@ -240,8 +243,8 @@ const electronAPI: ElectronApi = {
   retryTicketRunSync(runId) {
     return ipcRenderer.invoke(TICKET_RUN_SYNC_CHANNEL, { runId });
   },
-  startTicketRunWork(runId) {
-    return ipcRenderer.invoke(TICKET_RUN_WORK_START_CHANNEL, { runId });
+  startTicketRunWork(runId, prompt) {
+    return ipcRenderer.invoke(TICKET_RUN_WORK_START_CHANNEL, { runId, prompt });
   },
   continueTicketRunWork(runId, prompt) {
     return ipcRenderer.invoke(TICKET_RUN_WORK_CONTINUE_CHANNEL, { runId, prompt });
@@ -254,6 +257,15 @@ const electronAPI: ElectronApi = {
   },
   getTicketRunProofSnapshot(runId) {
     return ipcRenderer.invoke(TICKET_RUN_PROOFS_GET_CHANNEL, { runId });
+  },
+  getTicketRunMissionTimeline(runId) {
+    return ipcRenderer.invoke(TICKET_RUN_TIMELINE_GET_CHANNEL, { runId });
+  },
+  getTicketRunRepoIntelligence(runId) {
+    return ipcRenderer.invoke(TICKET_RUN_REPO_INTELLIGENCE_GET_CHANNEL, { runId });
+  },
+  approveTicketRunRepoIntelligence(runId, entryId) {
+    return ipcRenderer.invoke(TICKET_RUN_REPO_INTELLIGENCE_APPROVE_CHANNEL, { runId, entryId });
   },
   runTicketRunProof(runId, profileId) {
     return ipcRenderer.invoke(TICKET_RUN_PROOF_RUN_CHANNEL, { runId, profileId });

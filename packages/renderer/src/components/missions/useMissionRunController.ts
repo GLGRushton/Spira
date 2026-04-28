@@ -2,8 +2,10 @@ import type {
   MissionServiceProcessSummary,
   MissionServiceProfileSummary,
   MissionServiceSnapshot,
+  TicketRunMissionEventSummary,
   TicketRunGitState,
   TicketRunProofProfileSummary,
+  TicketRunRepoIntelligenceEntrySummary,
   TicketRunReviewRepoState,
   TicketRunReviewSnapshot,
   TicketRunReviewSubmoduleState,
@@ -27,6 +29,11 @@ export interface MissionRunController {
   isReviewSnapshotLoading: boolean;
   proofProfiles: TicketRunProofProfileSummary[];
   isProofLoading: boolean;
+  missionTimeline: TicketRunMissionEventSummary[];
+  isMissionTimelineLoading: boolean;
+  repoIntelligenceEntries: TicketRunRepoIntelligenceEntrySummary[];
+  isRepoIntelligenceLoading: boolean;
+  approvingRepoIntelligenceEntryId: string | null;
   runningProofProfileId: string | null;
   continueDraft: string;
   setContinueDraft: (value: string) => void;
@@ -37,6 +44,9 @@ export interface MissionRunController {
   isCompletingRun: boolean;
   isDeletingRun: boolean;
   refreshMissionProofs: () => Promise<void>;
+  refreshMissionTimeline: () => Promise<void>;
+  refreshRepoIntelligence: () => Promise<void>;
+  approveRepoIntelligence: (entryId: string) => Promise<void>;
   runMissionProof: (profileId: string) => Promise<void>;
   retryTicketRunSync: () => Promise<void>;
   startRunWork: () => Promise<void>;
@@ -146,6 +156,11 @@ export function useMissionRunController(run: TicketRunSummary): MissionRunContro
   const [isReviewSnapshotLoading, setIsReviewSnapshotLoading] = useState(false);
   const [proofProfiles, setProofProfiles] = useState<TicketRunProofProfileSummary[]>([]);
   const [isProofLoading, setIsProofLoading] = useState(false);
+  const [missionTimeline, setMissionTimeline] = useState<TicketRunMissionEventSummary[]>([]);
+  const [isMissionTimelineLoading, setIsMissionTimelineLoading] = useState(false);
+  const [repoIntelligenceEntries, setRepoIntelligenceEntries] = useState<TicketRunRepoIntelligenceEntrySummary[]>([]);
+  const [isRepoIntelligenceLoading, setIsRepoIntelligenceLoading] = useState(false);
+  const [approvingRepoIntelligenceEntryId, setApprovingRepoIntelligenceEntryId] = useState<string | null>(null);
   const [runningProofProfileId, setRunningProofProfileId] = useState<string | null>(null);
   const [continueDraft, setContinueDraft] = useState("");
   const [isRetryingSync, setIsRetryingSync] = useState(false);
@@ -184,6 +199,8 @@ export function useMissionRunController(run: TicketRunSummary): MissionRunContro
   const dirtySubmoduleCommitDraftsRef = useRef<Record<string, boolean>>({});
   const reviewSnapshotRequestIdRef = useRef(0);
   const proofSnapshotRequestIdRef = useRef(0);
+  const missionTimelineRequestIdRef = useRef(0);
+  const repoIntelligenceRequestIdRef = useRef(0);
   const detailRequestGenerationRef = useRef(0);
   const gitStatesByRepoRef = useRef<Record<string, TicketRunGitState | null>>({});
   const gitErrorsByRepoRef = useRef<Record<string, string | null>>({});
@@ -199,6 +216,14 @@ export function useMissionRunController(run: TicketRunSummary): MissionRunContro
   );
   const serviceProfilesByRepo = useMemo(() => groupProfilesByRepo(services?.profiles ?? []), [services?.profiles]);
   const serviceProcesses = services?.processes ?? [];
+  const latestAttemptUpdatedAt = useMemo(
+    () => Math.max(0, ...run.attempts.map((attempt) => attempt.updatedAt)),
+    [run.attempts],
+  );
+  const latestValidationUpdatedAt = useMemo(
+    () => Math.max(0, ...run.validations.map((validation) => validation.updatedAt)),
+    [run.validations],
+  );
   const activeServiceProfileIds = useMemo(
     () =>
       new Set(
@@ -412,6 +437,91 @@ export function useMissionRunController(run: TicketRunSummary): MissionRunContro
     setProofError(null);
     void refreshMissionProofs();
   }, [refreshMissionProofs]);
+
+  const refreshMissionTimeline = useCallback(async () => {
+    const requestId = missionTimelineRequestIdRef.current + 1;
+    missionTimelineRequestIdRef.current = requestId;
+    setIsMissionTimelineLoading(true);
+    setRunError(null);
+
+    try {
+      const result = await window.electronAPI.getTicketRunMissionTimeline(run.runId);
+      if (missionTimelineRequestIdRef.current !== requestId) {
+        return;
+      }
+
+      setRunSnapshot(result.snapshot);
+      setMissionTimeline(result.events);
+    } catch (error) {
+      if (missionTimelineRequestIdRef.current !== requestId) {
+        return;
+      }
+
+      console.error("Failed to load mission timeline", error);
+      setRunError(error instanceof Error ? error.message : "Failed to load mission timeline.");
+    } finally {
+      if (missionTimelineRequestIdRef.current === requestId) {
+        setIsMissionTimelineLoading(false);
+      }
+    }
+  }, [run.runId, setRunSnapshot]);
+
+  useEffect(() => {
+    setMissionTimeline([]);
+  }, [run.runId]);
+
+  useEffect(() => {
+    void refreshMissionTimeline();
+  }, [
+    refreshMissionTimeline,
+    run.runId,
+    run.status,
+    run.missionPhase,
+    run.missionPhaseUpdatedAt,
+    run.updatedAt,
+    latestAttemptUpdatedAt,
+    latestValidationUpdatedAt,
+    run.proof.status,
+    run.proof.lastProofAt,
+    run.proofRuns.length,
+    run.missionSummary?.updatedAt,
+  ]);
+
+  const refreshRepoIntelligence = useCallback(async () => {
+    const requestId = repoIntelligenceRequestIdRef.current + 1;
+    repoIntelligenceRequestIdRef.current = requestId;
+    setIsRepoIntelligenceLoading(true);
+    setRunError(null);
+
+    try {
+      const result = await window.electronAPI.getTicketRunRepoIntelligence(run.runId);
+      if (repoIntelligenceRequestIdRef.current !== requestId) {
+        return;
+      }
+
+      setRunSnapshot(result.snapshot);
+      setRepoIntelligenceEntries(result.entries);
+    } catch (error) {
+      if (repoIntelligenceRequestIdRef.current !== requestId) {
+        return;
+      }
+
+      console.error("Failed to load repo intelligence candidates", error);
+      setRunError(error instanceof Error ? error.message : "Failed to load repo intelligence candidates.");
+    } finally {
+      if (repoIntelligenceRequestIdRef.current === requestId) {
+        setIsRepoIntelligenceLoading(false);
+      }
+    }
+  }, [run.runId, setRunSnapshot]);
+
+  useEffect(() => {
+    setRepoIntelligenceEntries([]);
+  }, [run.runId]);
+
+  useEffect(() => {
+    void refreshRepoIntelligence();
+  }, [refreshRepoIntelligence, run.runId, run.status, run.updatedAt]);
 
   const resetDetailGitState = useCallback(() => {
     detailRequestGenerationRef.current += 1;
@@ -949,10 +1059,11 @@ export function useMissionRunController(run: TicketRunSummary): MissionRunContro
     setRunError(null);
 
     try {
-      const result = await window.electronAPI.startTicketRunWork(run.runId);
+      const result = await window.electronAPI.startTicketRunWork(run.runId, continueDraft.trim() || undefined);
       resetDetailGitState();
       setReviewSnapshot(null);
       setRunSnapshot(result.snapshot);
+      setContinueDraft("");
       setRunNotice(`${result.run.ticketId} is now actively working.`);
     } catch (error) {
       console.error("Failed to start mission work", error);
@@ -960,7 +1071,7 @@ export function useMissionRunController(run: TicketRunSummary): MissionRunContro
     } finally {
       setIsStartingWork(false);
     }
-  }, [resetDetailGitState, run.runId, setRunSnapshot]);
+  }, [continueDraft, resetDetailGitState, run.runId, setRunSnapshot]);
 
   const continueRunWork = useCallback(async () => {
     setIsContinuingWork(true);
@@ -1074,6 +1185,30 @@ export function useMissionRunController(run: TicketRunSummary): MissionRunContro
     }
   }, [backToShip, resetDetailGitState, run.runId, setRunSnapshot]);
 
+  const approveRepoIntelligence = useCallback(
+    async (entryId: string) => {
+      setApprovingRepoIntelligenceEntryId(entryId);
+      setRunNotice(null);
+      setRunError(null);
+
+      try {
+        const result = await window.electronAPI.approveTicketRunRepoIntelligence(run.runId, entryId);
+        setRunSnapshot(result.snapshot);
+        setRepoIntelligenceEntries((current) =>
+          current.map((entry) => (entry.id === result.entry.id ? result.entry : entry)),
+        );
+        void refreshMissionTimeline();
+        setRunNotice(`Repo intelligence candidate approved for ${result.entry.repoRelativePath ?? "the mission scope"}.`);
+      } catch (error) {
+        console.error("Failed to approve repo intelligence candidate", error);
+        setRunError(error instanceof Error ? error.message : "Failed to approve the repo intelligence candidate.");
+      } finally {
+        setApprovingRepoIntelligenceEntryId(null);
+      }
+    },
+    [refreshMissionTimeline, run.runId, setRunSnapshot],
+  );
+
   const startMissionService = useCallback(
     async (profile: MissionServiceProfileSummary) => {
       setStartingServiceProfileId(profile.profileId);
@@ -1137,6 +1272,11 @@ export function useMissionRunController(run: TicketRunSummary): MissionRunContro
     isReviewSnapshotLoading,
     proofProfiles,
     isProofLoading,
+    missionTimeline,
+    isMissionTimelineLoading,
+    repoIntelligenceEntries,
+    isRepoIntelligenceLoading,
+    approvingRepoIntelligenceEntryId,
     runningProofProfileId,
     continueDraft,
     setContinueDraft,
@@ -1147,6 +1287,9 @@ export function useMissionRunController(run: TicketRunSummary): MissionRunContro
     isCompletingRun,
     isDeletingRun,
     refreshMissionProofs,
+    refreshMissionTimeline,
+    refreshRepoIntelligence,
+    approveRepoIntelligence,
     runMissionProof,
     retryTicketRunSync,
     startRunWork,

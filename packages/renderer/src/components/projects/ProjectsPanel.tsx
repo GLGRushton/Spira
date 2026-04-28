@@ -546,7 +546,7 @@ export function ProjectsPanel() {
   const selectedMissionRunId = selectedMissionRun?.runId ?? null;
   const selectedMissionRunStatus = selectedMissionRun?.status ?? null;
   const isSelectedMissionReviewLoading = selectedMissionRunId !== null && loadingReviewRunId === selectedMissionRunId;
-  const canCloseSelectedMission = selectedMissionReviewSnapshot?.canClose ?? false;
+  const hasSelectedMissionReviewCloseBlockers = selectedMissionReviewSnapshot?.canClose === false;
   const canDeleteSelectedMission = selectedMissionReviewSnapshot?.canDelete ?? false;
   const selectedMissionDeleteBlockers =
     selectedMissionReviewSnapshot?.deleteBlockers.map((blocker) => `${blocker.label}: ${blocker.reason}`).join("; ") ??
@@ -1723,8 +1723,9 @@ export function ProjectsPanel() {
     setRunNotice(null);
     setRunError(null);
     try {
-      const result = await window.electronAPI.startTicketRunWork(runId);
+      const result = await window.electronAPI.startTicketRunWork(runId, continueDrafts[runId]?.trim() || undefined);
       setRunSnapshot(result.snapshot);
+      setContinueDrafts((current) => ({ ...current, [runId]: "" }));
       setMissionFlash(result.run.runId, {
         tone: "notice",
         message: `${result.run.ticketId} is now actively working.`,
@@ -1786,14 +1787,6 @@ export function ProjectsPanel() {
     setRunNotice(null);
     setRunError(null);
     try {
-      const reviewSnapshot = await refreshSelectedMissionReviewSnapshot(runId);
-      if (!reviewSnapshot) {
-        return;
-      }
-      if (!reviewSnapshot.canClose) {
-        setRunError("Finish the remaining repo and managed submodule review work before closing this mission.");
-        return;
-      }
       const result = await window.electronAPI.completeTicketRun(runId);
       setRunSnapshot(result.snapshot);
       setSelectedMissionReviewSnapshot(null);
@@ -2048,18 +2041,31 @@ export function ProjectsPanel() {
               ) : null}
 
               {selectedMissionRun?.status === "ready" ? (
-                <div className={styles.workActions}>
-                  <span className={styles.workMeta}>
+                <div className={styles.reviewPanel}>
+                  <div className={styles.workMeta}>
                     The mission workspace is prepared. Spira has not started coding yet.
-                  </span>
-                  <button
-                    type="button"
-                    className={styles.actionButton}
-                    onClick={() => void startRunWork(selectedMissionRun.runId)}
-                    disabled={startingWorkRunId === selectedMissionRun.runId}
-                  >
-                    {startingWorkRunId === selectedMissionRun.runId ? "Starting work..." : "Start work"}
-                  </button>
+                  </div>
+                  <label className={styles.field}>
+                    <span>Additional mission context</span>
+                    <textarea
+                      className={`${styles.input} ${styles.textarea}`}
+                      value={continueDrafts[selectedMissionRun.runId] ?? ""}
+                      onChange={(event) =>
+                        setContinueDrafts((current) => ({ ...current, [selectedMissionRun.runId]: event.target.value }))
+                      }
+                      placeholder="Anything not captured in the ticket that Shinra should know before the first pass."
+                    />
+                  </label>
+                  <div className={styles.inlineActions}>
+                    <button
+                      type="button"
+                      className={styles.actionButton}
+                      onClick={() => void startRunWork(selectedMissionRun.runId)}
+                      disabled={startingWorkRunId === selectedMissionRun.runId}
+                    >
+                      {startingWorkRunId === selectedMissionRun.runId ? "Starting work..." : "Start work"}
+                    </button>
+                  </div>
                 </div>
               ) : null}
 
@@ -2107,22 +2113,14 @@ export function ProjectsPanel() {
                       type="button"
                       className={styles.actionButton}
                       onClick={() => void completeRun(selectedMissionRun.runId)}
-                      disabled={
-                        completingRunId === selectedMissionRun.runId ||
-                        isSelectedMissionReviewLoading ||
-                        !canCloseSelectedMission
-                      }
+                      disabled={completingRunId === selectedMissionRun.runId}
                     >
-                      {completingRunId === selectedMissionRun.runId
-                        ? "Closing..."
-                        : isSelectedMissionReviewLoading
-                          ? "Checking..."
-                          : "Close mission"}
+                      {completingRunId === selectedMissionRun.runId ? "Closing..." : "Close mission"}
                     </button>
                   </div>
-                  {selectedMissionReviewSnapshot !== null && !canCloseSelectedMission ? (
+                  {hasSelectedMissionReviewCloseBlockers ? (
                     <div className={styles.workHint}>
-                      Finish the remaining repo and managed submodule review work before closing this mission.
+                      Repo or managed submodule review work remains, but you can still mark the mission done.
                     </div>
                   ) : null}
                 </div>

@@ -20,6 +20,7 @@ import type {
   SubagentToolResultEvent,
 } from "./subagent-types.js";
 import type {
+  ApproveTicketRunRepoIntelligenceResult,
   CancelTicketRunWorkResult,
   CommitTicketRunResult,
   CommitTicketRunSubmoduleResult,
@@ -40,6 +41,8 @@ import type {
   SyncTicketRunRemoteResult,
   SyncTicketRunSubmoduleRemoteResult,
   TicketRunGitStateResult,
+  TicketRunRepoIntelligenceCandidatesResult,
+  TicketRunMissionTimelineResult,
   TicketRunProofSnapshotResult,
   TicketRunReviewSnapshotResult,
   TicketRunSnapshot,
@@ -86,7 +89,7 @@ export interface StationSummary {
   isStreaming: boolean;
 }
 
-export const PROTOCOL_VERSION = 17;
+export const PROTOCOL_VERSION = 18;
 
 export const TTS_PROVIDERS = ["elevenlabs", "kokoro"] as const;
 export type TtsProvider = (typeof TTS_PROVIDERS)[number];
@@ -121,11 +124,14 @@ export type ClientMessage =
   | { type: "missions:runs:get"; requestId: string }
   | { type: "missions:ticket-run:start"; requestId: string; ticket: StartTicketRunRequest }
   | { type: "missions:ticket-run:sync"; requestId: string; runId: string }
-  | { type: "missions:ticket-run:work:start"; requestId: string; runId: string }
+  | { type: "missions:ticket-run:work:start"; requestId: string; runId: string; prompt?: string }
   | { type: "missions:ticket-run:work:continue"; requestId: string; runId: string; prompt?: string }
   | { type: "missions:ticket-run:work:cancel"; requestId: string; runId: string }
   | { type: "missions:ticket-run:complete"; requestId: string; runId: string }
   | { type: "missions:ticket-run:proofs:get"; requestId: string; runId: string }
+  | { type: "missions:ticket-run:timeline:get"; requestId: string; runId: string }
+  | { type: "missions:ticket-run:repo-intelligence:get"; requestId: string; runId: string }
+  | { type: "missions:ticket-run:repo-intelligence:approve"; requestId: string; runId: string; entryId: string }
   | { type: "missions:ticket-run:proof:run"; requestId: string; runId: string; profileId: string }
   | { type: "missions:ticket-run:delete"; requestId: string; runId: string }
   | { type: "missions:ticket-run:review-snapshot:get"; requestId: string; runId: string }
@@ -262,6 +268,21 @@ export type ServerMessage =
       type: "missions:ticket-run:proofs:get:result";
       requestId: string;
       result: TicketRunProofSnapshotResult;
+    }
+  | {
+      type: "missions:ticket-run:timeline:get:result";
+      requestId: string;
+      result: TicketRunMissionTimelineResult;
+    }
+  | {
+      type: "missions:ticket-run:repo-intelligence:get:result";
+      requestId: string;
+      result: TicketRunRepoIntelligenceCandidatesResult;
+    }
+  | {
+      type: "missions:ticket-run:repo-intelligence:approve:result";
+      requestId: string;
+      result: ApproveTicketRunRepoIntelligenceResult;
     }
   | {
       type: "missions:ticket-run:proof:run:result";

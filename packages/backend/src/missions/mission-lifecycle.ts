@@ -1,4 +1,9 @@
-import type { SpiraMemoryDatabase } from "@spira/memory-db";
+import type {
+  ProofDecisionRecord,
+  RepoIntelligenceRecord,
+  SpiraMemoryDatabase,
+  ValidationProfileRecord,
+} from "@spira/memory-db";
 import type {
   TicketRunMissionClassification,
   TicketRunMissionPhase,
@@ -18,6 +23,25 @@ import {
   getMissionWorkflowState,
   type MissionWorkflowState,
 } from "./mission-workflow-guard.js";
+import {
+  computeAdvisoryProofDecision,
+  type MissionRepoGuidanceSnapshot,
+  toPersistedProofDecisionInput,
+} from "./mission-intelligence.js";
+
+const buildRepoScopePaths = (run: TicketRunSummary): string[] =>
+  Array.from(
+    new Set(
+      [
+        ".",
+        ...run.worktrees.map((worktree) => worktree.repoRelativePath),
+        ...(run.classification?.impactedRepoRelativePaths ?? []),
+        ...(run.plan?.touchedRepoRelativePaths ?? []),
+        ...(run.missionSummary?.changedRepoRelativePaths ?? []),
+        ...(run.proofStrategy?.repoRelativePath ? [run.proofStrategy.repoRelativePath] : []),
+      ].filter((repoRelativePath): repoRelativePath is string => repoRelativePath.trim().length > 0),
+    ),
+  );
 
 const toPersistedRunInput = (run: TicketRunSummary) => ({
   ...run,
@@ -54,6 +78,8 @@ export interface MissionContextSnapshot {
   availableProofs: TicketRunProofSnapshotResult["proofSnapshot"]["profiles"];
   latestAttemptSummary: string | null;
   previousPassContext: TicketRunPreviousPassContext | null;
+  repoGuidance: MissionRepoGuidanceSnapshot;
+  advisoryProofDecision: ProofDecisionRecord | null;
   workflow: MissionWorkflowState;
 }
 
@@ -68,15 +94,26 @@ export class MissionLifecycleService {
     const run = this.requireRun(runId);
     const availableProofs = this.listMissionProofs ? (await this.listMissionProofs(runId)).proofSnapshot.profiles : [];
     const nextRun = this.markContextLoaded(run);
+    const repoGuidance = this.collectRepoGuidance(nextRun);
+    const advisoryProofDecision = this.refreshAdvisoryProofDecision(nextRun, availableProofs);
     const latestAttemptSummary =
       [...nextRun.attempts]
         .reverse()
         .find((attempt) => typeof attempt.summary === "string" && attempt.summary.trim().length > 0)?.summary ?? null;
+    this.recordMissionEvent(nextRun, nextRun.missionPhase, "context-loaded", {
+      proofProfileCount: availableProofs.length,
+      repoGuidanceCount: repoGuidance.entries.length,
+      validationProfileCount: repoGuidance.validationProfiles.length,
+      recommendedProofLevel: advisoryProofDecision?.recommendedLevel ?? null,
+      preflightStatus: advisoryProofDecision?.preflightStatus ?? null,
+    });
     return {
       run: nextRun,
       availableProofs,
       latestAttemptSummary,
       previousPassContext: nextRun.previousPassContext,
+      repoGuidance,
+      advisoryProofDecision,
       workflow: getMissionWorkflowState(nextRun),
     };
   }
@@ -85,24 +122,38 @@ export class MissionLifecycleService {
     const run = this.requireRun(runId);
     assertMissionWorkflowActionAllowed(run, "save-classification");
     const now = Date.now();
-    return this.persistRun({
+    const nextRun = this.persistRun({
       ...run,
-      classification,
+      classification: {
+        ...classification,
+        advisoryProofLevel: null,
+        advisoryProofRationale: null,
+      },
       missionPhase: "plan",
       missionPhaseUpdatedAt: now,
     });
+    this.recordMissionEvent(nextRun, "plan", "classification-saved", {
+      proofRequired: classification.proofRequired,
+      impactedRepoRelativePaths: classification.impactedRepoRelativePaths,
+    });
+    return nextRun;
   }
 
   savePlan(runId: string, plan: TicketRunMissionPlan): TicketRunSummary {
     const run = this.requireRun(runId);
     assertMissionWorkflowActionAllowed(run, "save-plan");
     const now = Date.now();
-    return this.persistRun({
+    const nextRun = this.persistRun({
       ...run,
       plan,
       missionPhase: "implement",
       missionPhaseUpdatedAt: now,
     });
+    this.recordMissionEvent(nextRun, "implement", "plan-saved", {
+      touchedRepoRelativePaths: plan.touchedRepoRelativePaths,
+      validationStepCount: plan.validationPlan.length,
+    });
+    return nextRun;
   }
 
   setPhase(runId: string, phase: TicketRunMissionPhase): TicketRunSummary {
@@ -122,23 +173,35 @@ export class MissionLifecycleService {
       ...run.validations.filter((entry) => entry.validationId !== validation.validationId),
       validation,
     ].sort((left, right) => right.startedAt - left.startedAt || right.createdAt - left.createdAt);
-    return this.persistRun({
+    const nextRun = this.persistRun({
       ...run,
       missionPhase: "validate",
       missionPhaseUpdatedAt: Date.now(),
       validations,
     });
+    this.recordMissionEvent(nextRun, "validate", "validation-recorded", {
+      validationId: validation.validationId,
+      status: validation.status,
+      kind: validation.kind,
+      command: validation.command,
+    });
+    return nextRun;
   }
 
   setProofStrategy(runId: string, proofStrategy: TicketRunMissionProofStrategy): TicketRunSummary {
     const run = this.requireRun(runId);
     assertMissionWorkflowActionAllowed(run, "save-proof-strategy");
-    return this.persistRun({
+    const nextRun = this.persistRun({
       ...run,
       missionPhase: "proof",
       missionPhaseUpdatedAt: Date.now(),
       proofStrategy,
     });
+    this.recordMissionEvent(nextRun, "proof", "proof-strategy-saved", {
+      adapterId: proofStrategy.adapterId,
+      repoRelativePath: proofStrategy.repoRelativePath,
+    });
+    return nextRun;
   }
 
   recordProofResult(runId: string, result: MissionProofResultInput): TicketRunSummary {
@@ -149,7 +212,7 @@ export class MissionLifecycleService {
           (left, right) => right.startedAt - left.startedAt,
         )
       : run.proofRuns;
-    return this.persistRun({
+    const nextRun = this.persistRun({
       ...run,
       missionPhase: "proof",
       missionPhaseUpdatedAt: Date.now(),
@@ -163,17 +226,27 @@ export class MissionLifecycleService {
       },
       proofRuns,
     });
+    this.recordMissionEvent(nextRun, "proof", "proof-result-recorded", {
+      status: result.proof.status,
+      lastProofRunId: result.proof.lastProofRunId ?? null,
+      lastProofProfileId: result.proof.lastProofProfileId ?? null,
+    });
+    return nextRun;
   }
 
   saveSummary(runId: string, missionSummary: TicketRunMissionSummary): TicketRunSummary {
     const run = this.requireRun(runId);
     assertMissionWorkflowActionAllowed(run, "save-summary");
-    return this.persistRun({
+    const nextRun = this.persistRun({
       ...run,
       missionPhase: "summarize",
       missionPhaseUpdatedAt: Date.now(),
       missionSummary,
     });
+    this.recordMissionEvent(nextRun, "summarize", "summary-saved", {
+      changedRepoRelativePaths: missionSummary.changedRepoRelativePaths,
+    });
+    return nextRun;
   }
 
   getWorkflowState(runId: string): MissionWorkflowState {
@@ -218,6 +291,90 @@ export class MissionLifecycleService {
       ...run,
       missionPhase: "classification",
       missionPhaseUpdatedAt: nextMissionPhaseUpdatedAt,
+    });
+  }
+
+  private collectRepoGuidance(run: TicketRunSummary): MissionRepoGuidanceSnapshot {
+    if (!this.memoryDb) {
+      return {
+        entries: [],
+        validationProfiles: [],
+      };
+    }
+
+    const repoRelativePaths = buildRepoScopePaths(run);
+    const storedEntries = this.memoryDb.listRepoIntelligence({
+      projectKey: run.projectKey,
+      repoRelativePaths,
+      limit: 6,
+    });
+    const entries =
+      storedEntries.length > 0
+        ? storedEntries
+        : ([
+            {
+              id: `fallback:${run.runId}`,
+              projectKey: run.projectKey,
+              repoRelativePath: repoRelativePaths[0] ?? null,
+              type: "briefing",
+              title: "Mission workspace",
+              content: `Mission scope currently includes: ${repoRelativePaths.length > 0 ? repoRelativePaths.join(", ") : "the managed worktrees"}.`,
+              tags: ["mission", "fallback"],
+              source: "builtin",
+              approved: true,
+              createdAt: Date.now(),
+              updatedAt: Date.now(),
+            } satisfies RepoIntelligenceRecord,
+          ] as RepoIntelligenceRecord[]);
+
+    return {
+      entries,
+      validationProfiles: this.memoryDb.listValidationProfiles({
+        projectKey: run.projectKey,
+        repoRelativePaths,
+        limit: 6,
+      }),
+    };
+  }
+
+  private refreshAdvisoryProofDecision(
+    run: TicketRunSummary,
+    availableProofs: TicketRunProofSnapshotResult["proofSnapshot"]["profiles"],
+  ): ProofDecisionRecord | null {
+    if (!this.memoryDb) {
+      return null;
+    }
+
+    const decision = computeAdvisoryProofDecision({
+      run,
+      classification: run.classification,
+      availableProofs,
+      proofRules: this.memoryDb.listProofRules({
+        projectKey: run.projectKey,
+        repoRelativePaths: buildRepoScopePaths(run),
+        limit: 10,
+      }),
+    });
+
+    return this.memoryDb.upsertProofDecision(toPersistedProofDecisionInput(run, decision, run.classification));
+  }
+
+  private recordMissionEvent(
+    run: TicketRunSummary,
+    stage: TicketRunMissionPhase,
+    eventType: string,
+    metadata: Record<string, unknown>,
+  ): void {
+    if (!this.memoryDb) {
+      return;
+    }
+    const currentAttempt = [...run.attempts].reverse().find((attempt) => attempt.status === "running") ?? run.attempts.at(-1) ?? null;
+    this.memoryDb.appendMissionEvent({
+      runId: run.runId,
+      attemptId: currentAttempt?.attemptId ?? null,
+      stage,
+      eventType,
+      metadata,
     });
   }
 }

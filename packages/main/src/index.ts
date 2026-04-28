@@ -8,6 +8,7 @@ import type {
 } from "@spira/memory-db";
 import { SPIRA_MEMORY_DB_PATH_ENV, getSpiraMemoryDbPath } from "@spira/memory-db/path";
 import {
+  type ApproveTicketRunRepoIntelligenceResult,
   type CancelTicketRunWorkResult,
   type CommitTicketRunResult,
   type CommitTicketRunSubmoduleResult,
@@ -41,6 +42,8 @@ import {
   type SyncTicketRunRemoteResult,
   type SyncTicketRunSubmoduleRemoteResult,
   type TicketRunGitStateResult,
+  type TicketRunMissionTimelineResult,
+  type TicketRunRepoIntelligenceCandidatesResult,
   type TicketRunProofSnapshotResult,
   type TicketRunReviewSnapshotResult,
   type TicketRunSnapshot,
@@ -92,6 +95,9 @@ const TICKET_RUN_WORK_CONTINUE_CHANNEL = "missions:ticket-run:work:continue";
 const TICKET_RUN_WORK_CANCEL_CHANNEL = "missions:ticket-run:work:cancel";
 const TICKET_RUN_COMPLETE_CHANNEL = "missions:ticket-run:complete";
 const TICKET_RUN_PROOFS_GET_CHANNEL = "missions:ticket-run:proofs:get";
+const TICKET_RUN_TIMELINE_GET_CHANNEL = "missions:ticket-run:timeline:get";
+const TICKET_RUN_REPO_INTELLIGENCE_GET_CHANNEL = "missions:ticket-run:repo-intelligence:get";
+const TICKET_RUN_REPO_INTELLIGENCE_APPROVE_CHANNEL = "missions:ticket-run:repo-intelligence:approve";
 const TICKET_RUN_PROOF_RUN_CHANNEL = "missions:ticket-run:proof:run";
 const TICKET_RUN_DELETE_CHANNEL = "missions:ticket-run:delete";
 const TICKET_RUN_REVIEW_SNAPSHOT_CHANNEL = "missions:ticket-run:review-snapshot:get";
@@ -818,7 +824,7 @@ const handleRetryTicketRunSync = async (
 };
 const handleStartTicketRunWork = async (
   _event: IpcMainInvokeEvent,
-  input?: { runId?: string },
+  input?: { runId?: string; prompt?: string },
 ): Promise<StartTicketRunWorkResult> => {
   if (!input?.runId) {
     throw new Error("Run id is required.");
@@ -828,7 +834,7 @@ const handleStartTicketRunWork = async (
     throw new Error("Backend bridge is unavailable.");
   }
 
-  return bridge.startTicketRunWork(input.runId);
+  return bridge.startTicketRunWork(input.runId, input.prompt);
 };
 const handleContinueTicketRunWork = async (
   _event: IpcMainInvokeEvent,
@@ -885,6 +891,51 @@ const handleGetTicketRunProofSnapshot = async (
   }
 
   return bridge.getTicketRunProofSnapshot(input.runId);
+};
+const handleGetTicketRunMissionTimeline = async (
+  _event: IpcMainInvokeEvent,
+  input?: { runId?: string },
+): Promise<TicketRunMissionTimelineResult> => {
+  if (!input?.runId) {
+    throw new Error("Run id is required.");
+  }
+
+  if (!bridge) {
+    throw new Error("Backend bridge is unavailable.");
+  }
+
+  return bridge.getTicketRunMissionTimeline(input.runId);
+};
+const handleGetTicketRunRepoIntelligence = async (
+  _event: IpcMainInvokeEvent,
+  input?: { runId?: string },
+): Promise<TicketRunRepoIntelligenceCandidatesResult> => {
+  if (!input?.runId) {
+    throw new Error("Run id is required.");
+  }
+
+  if (!bridge) {
+    throw new Error("Backend bridge is unavailable.");
+  }
+
+  return bridge.getTicketRunRepoIntelligence(input.runId);
+};
+const handleApproveTicketRunRepoIntelligence = async (
+  _event: IpcMainInvokeEvent,
+  input?: { runId?: string; entryId?: string },
+): Promise<ApproveTicketRunRepoIntelligenceResult> => {
+  if (!input?.runId) {
+    throw new Error("Run id is required.");
+  }
+  if (!input.entryId) {
+    throw new Error("Repo intelligence entry id is required.");
+  }
+
+  if (!bridge) {
+    throw new Error("Backend bridge is unavailable.");
+  }
+
+  return bridge.approveTicketRunRepoIntelligence(input.runId, input.entryId);
 };
 const handleRunTicketRunProof = async (
   _event: IpcMainInvokeEvent,
@@ -1599,6 +1650,9 @@ void app.whenReady().then(async () => {
   ipcMain.handle(TICKET_RUN_WORK_CANCEL_CHANNEL, handleCancelTicketRunWork);
   ipcMain.handle(TICKET_RUN_COMPLETE_CHANNEL, handleCompleteTicketRun);
   ipcMain.handle(TICKET_RUN_PROOFS_GET_CHANNEL, handleGetTicketRunProofSnapshot);
+  ipcMain.handle(TICKET_RUN_TIMELINE_GET_CHANNEL, handleGetTicketRunMissionTimeline);
+  ipcMain.handle(TICKET_RUN_REPO_INTELLIGENCE_GET_CHANNEL, handleGetTicketRunRepoIntelligence);
+  ipcMain.handle(TICKET_RUN_REPO_INTELLIGENCE_APPROVE_CHANNEL, handleApproveTicketRunRepoIntelligence);
   ipcMain.handle(TICKET_RUN_PROOF_RUN_CHANNEL, handleRunTicketRunProof);
   ipcMain.handle(TICKET_RUN_DELETE_CHANNEL, handleDeleteTicketRun);
   ipcMain.handle(TICKET_RUN_REVIEW_SNAPSHOT_CHANNEL, handleGetTicketRunReviewSnapshot);

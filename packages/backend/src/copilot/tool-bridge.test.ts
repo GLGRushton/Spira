@@ -54,6 +54,11 @@ const createMissionContext = () => ({
   availableProofs: [],
   latestAttemptSummary: null,
   previousPassContext: null,
+  repoGuidance: {
+    entries: [],
+    validationProfiles: [],
+  },
+  advisoryProofDecision: null,
   workflow: {
     kickoffComplete: false,
     classificationSaved: false,
@@ -67,6 +72,7 @@ const createMissionContext = () => ({
     summarySaved: false,
     nextAction: "load-context" as const,
     nextActionLabel: "Load mission context",
+    waitReason: "context-not-loaded" as const,
     blockedReason: "Call get_mission_context before taking mission actions.",
   },
 });
@@ -346,6 +352,38 @@ describe("getCopilotTools", () => {
         kind: "ui",
         scopeSummary: "Adds a new proof panel",
         proofRequired: true,
+      }),
+    );
+    expect(result.textResultForLlm).toContain('"ok":true');
+  });
+
+  it("accepts lint validation records for mission runs", async () => {
+    const aggregator = createAggregator();
+    const recordMissionValidation = vi.fn().mockResolvedValue({ ok: true });
+    const tool = getCopilotTools(aggregator as never, {
+      missionRunId: "run-77",
+      recordMissionValidation,
+    }).find((candidate) => candidate.name === "record_validation");
+
+    const result = await (
+      tool as unknown as {
+        handler: (args: Record<string, unknown>, ...rest: unknown[]) => Promise<{ textResultForLlm: string }>;
+      }
+    ).handler({
+      validationId: "validation-1",
+      kind: "lint",
+      command: "pnpm lint",
+      cwd: ".",
+      status: "passed",
+      summary: "Lint passed.",
+    });
+
+    expect(recordMissionValidation).toHaveBeenCalledWith(
+      "run-77",
+      expect.objectContaining({
+        validationId: "validation-1",
+        kind: "lint",
+        command: "pnpm lint",
       }),
     );
     expect(result.textResultForLlm).toContain('"ok":true');

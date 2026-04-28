@@ -1,5 +1,6 @@
 import {
   TICKET_RUN_MISSION_PHASES,
+  type TicketRunMissionEventSummary,
   type TicketRunMissionPhase,
   type TicketRunProofArtifact,
   type TicketRunSummary,
@@ -60,6 +61,76 @@ const formatEnumLabel = (value: string): string =>
     .split("-")
     .map((token) => token.charAt(0).toUpperCase() + token.slice(1))
     .join(" ");
+
+const describeTimelineEvent = (event: TicketRunMissionEventSummary): { title: string; detail: string | null } => {
+  switch (event.eventType) {
+    case "workspace-prepared":
+      return {
+        title: "Workspace prepared",
+        detail: typeof event.metadata?.status === "string" ? `Run status: ${formatEnumLabel(event.metadata.status)}` : null,
+      };
+    case "attempt-started":
+      return {
+        title: "Attempt started",
+        detail:
+          typeof event.metadata?.sequence === "number"
+            ? `Pass ${event.metadata.sequence}${event.stage !== "system" ? ` · ${formatEnumLabel(event.stage)}` : ""}`
+            : null,
+      };
+    case "attempt-repair-requested":
+      return {
+        title: "Corrective turn requested",
+        detail:
+          typeof event.metadata?.waitReason === "string"
+            ? `Waiting on ${formatEnumLabel(event.metadata.waitReason)}`
+            : null,
+      };
+    case "attempt-finished":
+      return {
+        title: "Attempt finished",
+        detail:
+          typeof event.metadata?.status === "string"
+            ? `${formatEnumLabel(event.metadata.status)}${typeof event.metadata?.waitReason === "string" ? ` · ${formatEnumLabel(event.metadata.waitReason)}` : ""}`
+            : null,
+      };
+    case "proof-started":
+      return {
+        title: "Proof started",
+        detail: typeof event.metadata?.profileLabel === "string" ? event.metadata.profileLabel : null,
+      };
+    case "proof-finished":
+      return {
+        title: "Proof finished",
+        detail:
+          typeof event.metadata?.status === "string"
+            ? formatEnumLabel(event.metadata.status)
+            : null,
+      };
+    case "run-closed":
+      return {
+        title: "Mission closed",
+        detail: null,
+      };
+    case "repo-intelligence-candidates-observed":
+      return {
+        title: "Repo intelligence observed",
+        detail:
+          typeof event.metadata?.count === "number"
+            ? `${event.metadata.count} candidate${event.metadata.count === 1 ? "" : "s"} recorded`
+            : null,
+      };
+    case "repo-intelligence-candidate-approved":
+      return {
+        title: "Repo intelligence approved",
+        detail: typeof event.metadata?.repoRelativePath === "string" ? event.metadata.repoRelativePath : null,
+      };
+    default:
+      return {
+        title: formatEnumLabel(event.eventType),
+        detail: event.stage === "system" ? null : formatEnumLabel(event.stage),
+      };
+  }
+};
 
 const getRunTone = (status: TicketRunSummary["status"]): "ready" | "working" | "blocked" | "error" | "done" => {
   switch (status) {
@@ -157,7 +228,7 @@ export function MissionDetailsRoom({ run, controller }: MissionDetailsRoomProps)
   const latestProofRun = [...run.proofRuns].sort((left, right) => right.startedAt - left.startedAt)[0] ?? null;
   const missionNextAction = describeMissionNextAction(run);
   const canRecoverErroredRun = run.status === "error" && run.attempts.length > 0;
-  const canCloseMission = controller.reviewSnapshot?.canClose ?? false;
+  const hasReviewCloseBlockers = controller.reviewSnapshot?.canClose === false;
   const canDeleteMission = controller.reviewSnapshot?.canDelete ?? false;
   const deleteBlockersText =
     controller.reviewSnapshot?.deleteBlockers.map((blocker) => `${blocker.label}: ${blocker.reason}`).join("; ") ??
@@ -223,6 +294,15 @@ export function MissionDetailsRoom({ run, controller }: MissionDetailsRoomProps)
         return (
           <div className={styles.commandFlow}>
             <div className={styles.commandSummary}>Workspace prepared. Shinra is standing by for the first pass.</div>
+            <label className={styles.commandField}>
+              <span>Additional mission context</span>
+              <textarea
+                className={`${projectStyles.input} ${projectStyles.textarea}`}
+                value={controller.continueDraft}
+                onChange={(event) => controller.setContinueDraft(event.target.value)}
+                placeholder="Anything not captured in the ticket that Shinra should know before the first pass."
+              />
+            </label>
             <div className={styles.inlineActions}>
               <button
                 type="button"
@@ -281,23 +361,14 @@ export function MissionDetailsRoom({ run, controller }: MissionDetailsRoomProps)
                 type="button"
                 className={projectStyles.actionButton}
                 onClick={() => void controller.completeRun()}
-                disabled={
-                  controller.isCompletingRun ||
-                  controller.isReviewSnapshotLoading ||
-                  !canCloseMission ||
-                  !missionNextAction.complete
-                }
+                disabled={controller.isCompletingRun || !missionNextAction.complete}
               >
-                {controller.isCompletingRun
-                  ? "Closing..."
-                  : controller.isReviewSnapshotLoading
-                    ? "Checking..."
-                    : "Close mission"}
+                {controller.isCompletingRun ? "Closing..." : "Close mission"}
               </button>
             </div>
-            {controller.reviewSnapshot !== null && !canCloseMission ? (
+            {hasReviewCloseBlockers ? (
               <div className={styles.commandHint}>
-                Finish the remaining repo and managed submodule review work before closing the mission.
+                Repo or managed submodule review work remains, but you can still mark the mission done.
               </div>
             ) : !missionNextAction.complete ? (
               <div className={styles.commandHint}>
@@ -747,6 +818,103 @@ export function MissionDetailsRoom({ run, controller }: MissionDetailsRoomProps)
         <strong>{missionNextAction.complete ? "Workflow complete" : `Next step: ${missionNextAction.label}`}</strong>
         <span>{missionNextAction.detail}</span>
       </div>
+
+      <article className={styles.surface}>
+        <div className={styles.sectionTopline}>
+          <div>
+            <div className={shellStyles.eyebrow}>Mission observability</div>
+            <h3 className={styles.sectionTitle}>Mission timeline</h3>
+            <p className={styles.sectionLead}>Recent lifecycle facts and wait signals for this run.</p>
+          </div>
+          <button
+            type="button"
+            className={projectStyles.secondaryButton}
+            onClick={() => void controller.refreshMissionTimeline()}
+            disabled={controller.isMissionTimelineLoading}
+          >
+            {controller.isMissionTimelineLoading ? "Refreshing..." : "Refresh timeline"}
+          </button>
+        </div>
+
+        <div className={styles.worktreeList}>
+          {controller.missionTimeline.length > 0 ? (
+            controller.missionTimeline.map((event) => {
+              const description = describeTimelineEvent(event);
+              return (
+                <div key={event.id} className={styles.worktreeRow}>
+                  <div className={styles.worktreeCopy}>
+                    <strong>{description.title}</strong>
+                    <span>
+                      {formatDateTime(event.occurredAt) ?? "Unknown time"}
+                      {description.detail ? ` · ${description.detail}` : ""}
+                    </span>
+                  </div>
+                  <div className={styles.worktreeMeta}>
+                    <span className={styles.metricBadgeMuted}>{formatEnumLabel(event.stage)}</span>
+                  </div>
+                </div>
+              );
+            })
+          ) : (
+            <div className={styles.commandHint}>
+              {controller.isMissionTimelineLoading ? "Loading mission timeline..." : "No mission events recorded yet."}
+            </div>
+          )}
+        </div>
+      </article>
+
+      <article className={styles.surface}>
+        <div className={styles.sectionTopline}>
+          <div>
+            <div className={shellStyles.eyebrow}>Repo intelligence enrichment</div>
+            <h3 className={styles.sectionTitle}>Observed candidates</h3>
+            <p className={styles.sectionLead}>Curated learning starts here: inspect, then approve the entries worth reusing.</p>
+          </div>
+          <button
+            type="button"
+            className={projectStyles.secondaryButton}
+            onClick={() => void controller.refreshRepoIntelligence()}
+            disabled={controller.isRepoIntelligenceLoading}
+          >
+            {controller.isRepoIntelligenceLoading ? "Refreshing..." : "Refresh candidates"}
+          </button>
+        </div>
+
+        <div className={styles.worktreeList}>
+          {controller.repoIntelligenceEntries.length > 0 ? (
+            controller.repoIntelligenceEntries.map((entry) => (
+              <div key={entry.id} className={styles.worktreeRow}>
+                <div className={styles.worktreeCopy}>
+                  <strong>{entry.title}</strong>
+                  <span>
+                    {(entry.repoRelativePath ?? "Mission scope") + " · " + (entry.approved ? "Approved" : "Observed")}
+                  </span>
+                  <span>{entry.content}</span>
+                </div>
+                <div className={styles.worktreeMeta}>
+                  <span className={styles.metricBadgeMuted}>{formatEnumLabel(entry.type)}</span>
+                  <button
+                    type="button"
+                    className={projectStyles.secondaryButton}
+                    onClick={() => void controller.approveRepoIntelligence(entry.id)}
+                    disabled={entry.approved || controller.approvingRepoIntelligenceEntryId === entry.id}
+                  >
+                    {entry.approved
+                      ? "Approved"
+                      : controller.approvingRepoIntelligenceEntryId === entry.id
+                        ? "Approving..."
+                        : "Approve"}
+                  </button>
+                </div>
+              </div>
+            ))
+          ) : (
+            <div className={styles.commandHint}>
+              {controller.isRepoIntelligenceLoading ? "Loading observed candidates..." : "No repo intelligence candidates recorded for this mission yet."}
+            </div>
+          )}
+        </div>
+      </article>
 
       <article className={`${styles.surface} ${styles.footerCard}`}>
         <button

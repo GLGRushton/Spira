@@ -114,6 +114,40 @@ describe("parseClientMessagePayload", () => {
         message: "feat(SPI-101): update shared module",
       },
     });
+
+    expect(
+      parseClientMessagePayload(
+        JSON.stringify({
+          type: "missions:ticket-run:timeline:get",
+          requestId: "req-3",
+          runId: "run-1",
+        }),
+      ),
+    ).toEqual({
+      message: {
+        type: "missions:ticket-run:timeline:get",
+        requestId: "req-3",
+        runId: "run-1",
+      },
+    });
+
+    expect(
+      parseClientMessagePayload(
+        JSON.stringify({
+          type: "missions:ticket-run:repo-intelligence:approve",
+          requestId: "req-4",
+          runId: "run-1",
+          entryId: "learned-run-1-packages-renderer",
+        }),
+      ),
+    ).toEqual({
+      message: {
+        type: "missions:ticket-run:repo-intelligence:approve",
+        requestId: "req-4",
+        runId: "run-1",
+        entryId: "learned-run-1-packages-renderer",
+      },
+    });
   });
 
   it("rejects unknown message types", () => {

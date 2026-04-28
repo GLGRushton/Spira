@@ -65,6 +65,42 @@ describe("preload electron API", () => {
     });
   });
 
+  it("passes an initial mission prompt when starting mission work", async () => {
+    const api = await loadPreloadApi();
+
+    await api.startTicketRunWork("run-1", "Use the seeded test account.");
+
+    expect(invoke).toHaveBeenCalledWith("missions:ticket-run:work:start", {
+      runId: "run-1",
+      prompt: "Use the seeded test account.",
+    });
+  });
+
+  it("requests mission timeline data over the dedicated ipc channel", async () => {
+    const api = await loadPreloadApi();
+
+    await api.getTicketRunMissionTimeline("run-42");
+
+    expect(invoke).toHaveBeenCalledWith("missions:ticket-run:timeline:get", {
+      runId: "run-42",
+    });
+  });
+
+  it("requests repo intelligence candidates and approvals over dedicated ipc channels", async () => {
+    const api = await loadPreloadApi();
+
+    await api.getTicketRunRepoIntelligence("run-42");
+    await api.approveTicketRunRepoIntelligence("run-42", "learned-run-42-packages-renderer");
+
+    expect(invoke).toHaveBeenNthCalledWith(1, "missions:ticket-run:repo-intelligence:get", {
+      runId: "run-42",
+    });
+    expect(invoke).toHaveBeenNthCalledWith(2, "missions:ticket-run:repo-intelligence:approve", {
+      runId: "run-42",
+      entryId: "learned-run-42-packages-renderer",
+    });
+  });
+
   it("replays the latest MCP status to new subscribers", async () => {
     const api = await loadPreloadApi();
     const received: McpServerStatus[][] = [];

@@ -4,6 +4,11 @@ import path from "node:path";
 import { SpiraMemoryDatabase, getSpiraMemoryDbPath } from "@spira/memory-db";
 import { describe, expect, it, vi } from "vitest";
 import type { TicketRunSummary } from "@spira/shared";
+import {
+  BUILTIN_PROOF_RULES,
+  BUILTIN_REPO_INTELLIGENCE,
+  BUILTIN_VALIDATION_PROFILES,
+} from "./mission-intelligence.js";
 import { getMissionWorkflowState } from "./mission-workflow-guard.js";
 import { MissionLifecycleService } from "./mission-lifecycle.js";
 
@@ -203,6 +208,196 @@ describe("MissionLifecycleService", () => {
       });
 
       expect(summarized.missionPhase).toBe("summarize");
+    } finally {
+      database.close();
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("returns repo guidance, persists advisory proof decisions, and records mission events", async () => {
+    const { database, tempDir } = createDatabase();
+    try {
+      database.upsertTicketRun({
+        ...createRun(database),
+        ticketSummary: "Adjust button label in the mission flow",
+      });
+      database.seedBuiltinRepoIntelligence(BUILTIN_REPO_INTELLIGENCE);
+      database.seedBuiltinValidationProfiles(BUILTIN_VALIDATION_PROFILES);
+      database.seedBuiltinProofRules(BUILTIN_PROOF_RULES);
+      database.upsertProofRule({
+        id: "packages-backend-light-proof",
+        projectKey: "SPI",
+        repoRelativePath: "packages/backend",
+        classificationKind: "ui",
+        uiChange: true,
+        proofRequired: true,
+        recommendedLevel: "manual-review-only",
+        rationale: "Backend mission surfaces in the monorepo require manual review proof when scoped from the root worktree.",
+      });
+
+      const service = new MissionLifecycleService(database, undefined, async (runId: string) => ({
+        run: database.getTicketRun(runId) as TicketRunSummary,
+        snapshot: database.getTicketRunSnapshot(),
+        proofSnapshot: {
+          runId,
+          proof: {
+            status: "not-run",
+            lastProofRunId: null,
+            lastProofProfileId: null,
+            lastProofAt: null,
+            lastProofSummary: null,
+            staleReason: null,
+          },
+          profiles: [
+            {
+              profileId: "profile-1",
+              label: "UI proof",
+              description: "Runs targeted UI proof.",
+              kind: "playwright-dotnet-nunit",
+              repoRelativePath: "apps/web",
+              projectRelativePath: "tests/ui",
+              runSettingsRelativePath: null,
+            },
+          ],
+          proofRuns: [],
+        },
+      }));
+
+      const context = await service.getMissionContext("run-1");
+
+      expect(context.repoGuidance.entries).not.toHaveLength(0);
+      expect(context.repoGuidance.validationProfiles).not.toHaveLength(0);
+      expect(context.advisoryProofDecision).toMatchObject({
+        runId: "run-1",
+        recommendedLevel: "light",
+        preflightStatus: "runnable",
+      });
+      expect(database.getProofDecision("run-1")).toMatchObject({
+        recommendedLevel: "light",
+        preflightStatus: "runnable",
+      });
+      expect(database.listMissionEvents("run-1")[0]).toMatchObject({
+        eventType: "context-loaded",
+        stage: "classification",
+      });
+    } finally {
+      database.close();
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses mission scope paths for root worktree runs and keeps advisory proof off the stored classification", async () => {
+    const { database, tempDir } = createDatabase();
+    try {
+      database.upsertTicketRun({
+        ...createRun(database),
+        ticketSummary: "Rename mission banner label",
+        worktrees: [
+          {
+            repoRelativePath: ".",
+            repoAbsolutePath: "C:\\Repos\\spira",
+            worktreePath: "C:\\Repos\\.spira-worktrees\\spi-101",
+            branchName: "feat/spi-101-mission-lifecycle",
+            cleanupState: "retained",
+          },
+        ],
+      });
+      database.upsertRepoIntelligence({
+        id: "packages-backend-briefing",
+        projectKey: "SPI",
+        repoRelativePath: "packages/backend",
+        type: "briefing",
+        title: "Backend mission guidance",
+        content: "Mission lifecycle code lives here.",
+        source: "user",
+      });
+      database.upsertValidationProfile({
+        id: "packages-backend-tests",
+        projectKey: "SPI",
+        repoRelativePath: "packages/backend",
+        label: "Backend tests",
+        kind: "unit-test",
+        command: "pnpm exec vitest run packages/backend/src/missions/mission-lifecycle.test.ts",
+        workingDirectory: ".",
+        source: "user",
+      });
+      database.seedBuiltinProofRules(BUILTIN_PROOF_RULES);
+      database.upsertProofRule({
+        id: "packages-backend-manual-proof",
+        projectKey: "SPI",
+        repoRelativePath: "packages/backend",
+        summaryKeywords: [],
+        uiChange: true,
+        proofRequired: true,
+        classificationKind: "ui",
+        recommendedLevel: "manual-review-only",
+        rationale:
+          "Backend mission surfaces in the monorepo require manual review proof when scoped from the root worktree.",
+      });
+
+      const service = new MissionLifecycleService(database, undefined, async (runId: string) => ({
+        run: database.getTicketRun(runId) as TicketRunSummary,
+        snapshot: database.getTicketRunSnapshot(),
+        proofSnapshot: {
+          runId,
+          proof: {
+            status: "not-run",
+            lastProofRunId: null,
+            lastProofProfileId: null,
+            lastProofAt: null,
+            lastProofSummary: null,
+            staleReason: null,
+          },
+          profiles: [
+            {
+              profileId: "profile-1",
+              label: "UI proof",
+              description: "Runs targeted UI proof.",
+              kind: "playwright-dotnet-nunit",
+              repoRelativePath: ".",
+              projectRelativePath: "tests/ui",
+              runSettingsRelativePath: null,
+            },
+          ],
+          proofRuns: [],
+        },
+      }));
+
+      await service.getMissionContext("run-1");
+      service.saveClassification("run-1", {
+        kind: "ui",
+        scopeSummary: "Rename copy in the backend mission screen",
+        acceptanceCriteria: [],
+        impactedRepoRelativePaths: ["packages/backend"],
+        risks: [],
+        uiChange: true,
+        proofRequired: true,
+        proofArtifactMode: "screenshot",
+        rationale: null,
+        createdAt: 1,
+        updatedAt: 1,
+      });
+
+      const savedRun = database.getTicketRun("run-1");
+      const context = await service.getMissionContext("run-1");
+
+      expect(savedRun?.classification?.advisoryProofLevel).toBeNull();
+      expect(savedRun?.classification?.advisoryProofRationale).toBeNull();
+      expect(context.repoGuidance.entries).toEqual(
+        expect.arrayContaining([expect.objectContaining({ id: "packages-backend-briefing" })]),
+      );
+      expect(context.repoGuidance.validationProfiles).toEqual(
+        expect.arrayContaining([expect.objectContaining({ id: "packages-backend-tests" })]),
+      );
+      expect(context.advisoryProofDecision).toMatchObject({
+        recommendedLevel: "manual-review-only",
+        preflightStatus: "degraded",
+        rationale: "Backend mission surfaces in the monorepo require manual review proof when scoped from the root worktree.",
+      });
+      expect(database.getProofDecision("run-1")).toMatchObject({
+        recommendedLevel: "manual-review-only",
+        repoRelativePaths: expect.arrayContaining([".", "packages/backend"]),
+      });
     } finally {
       database.close();
       rmSync(tempDir, { recursive: true, force: true });

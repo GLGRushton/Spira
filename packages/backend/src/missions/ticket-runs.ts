@@ -3,8 +3,9 @@ import { randomUUID } from "node:crypto";
 import { access, mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
-import type { SpiraMemoryDatabase } from "@spira/memory-db";
+import type { RepoIntelligenceRecord, SpiraMemoryDatabase } from "@spira/memory-db";
 import type {
+  ApproveTicketRunRepoIntelligenceResult,
   CancelTicketRunWorkResult,
   CommitTicketRunResult,
   CommitTicketRunSubmoduleResult,
@@ -30,8 +31,10 @@ import type {
   TicketRunDiffFileSummary,
   TicketRunGitState,
   TicketRunGitStateResult,
-  TicketRunProofArtifact,
-  TicketRunProofProfileSummary,
+  TicketRunMissionEventSummary,
+  TicketRunMissionTimelineResult,
+  TicketRunRepoIntelligenceCandidatesResult,
+  TicketRunRepoIntelligenceEntrySummary,
   TicketRunProofRunSummary,
   TicketRunProofSnapshot,
   TicketRunProofSnapshotResult,
@@ -55,16 +58,17 @@ import type {
 import { normalizeProjectKey } from "@spira/shared";
 import fetch from "node-fetch";
 import type { Logger } from "pino";
-import {
-  discoverMissionProofProfiles,
-  toMissionProofProfileSummary,
-  type ResolvedMissionProofProfile,
-} from "./proof-registry.js";
-import { runMissionProof, type RunMissionProofInput, type RunMissionProofOutput } from "./proof-runner.js";
-import { buildMissionWorkflowRepairPrompt, getMissionWorkflowState } from "./mission-workflow-guard.js";
 import type { ProjectRegistry } from "../projects/registry.js";
 import { ConfigError, SpiraError } from "../util/errors.js";
 import type { SpiraEventBus } from "../util/event-bus.js";
+import { buildLearnedRepoIntelligenceCandidates } from "./mission-intelligence.js";
+import { buildMissionWorkflowRepairPrompt, getMissionWorkflowState } from "./mission-workflow-guard.js";
+import {
+  type ResolvedMissionProofProfile,
+  discoverMissionProofProfiles,
+  toMissionProofProfileSummary,
+} from "./proof-registry.js";
+import { type RunMissionProofInput, type RunMissionProofOutput, runMissionProof } from "./proof-runner.js";
 
 const execFileAsync = promisify(execFile);
 const WORKTREE_DIRECTORY_NAME = ".spira-worktrees";
@@ -365,6 +369,10 @@ const isSubmoduleBlockingClose = (
   gitState.pushAction !== "none" ||
   gitState.parents.some((parentState) => !parentState.isAligned);
 
+const isSubmoduleBlockingRepoWorkflow = (
+  gitState: Pick<TicketRunSubmoduleGitState, "hasDiff" | "reconcileRequired" | "pushAction">,
+): boolean => gitState.hasDiff || gitState.reconcileRequired || gitState.pushAction !== "none";
+
 const isSubmoduleVisibleInReview = (
   gitState: Pick<TicketRunSubmoduleGitState, "hasDiff" | "reconcileRequired" | "pushAction" | "parents">,
 ): boolean => isSubmoduleBlockingClose(gitState);
@@ -378,18 +386,6 @@ const toReviewSubmoduleState = ({
 
 const describeReviewLoadError = (error: unknown, fallbackMessage: string): string =>
   error instanceof Error && error.message.trim().length > 0 ? error.message : fallbackMessage;
-
-const describeReviewBlockers = (run: TicketRunSummary, reviewSnapshot: TicketRunReviewSnapshot): string => {
-  const blockerNames = [
-    ...reviewSnapshot.visibleSubmoduleUrls.map(
-      (canonicalUrl) =>
-        run.submodules.find((submodule) => submodule.canonicalUrl === canonicalUrl)?.name ?? canonicalUrl,
-    ),
-    ...reviewSnapshot.visibleRepoPaths,
-  ];
-
-  return blockerNames.length > 0 ? blockerNames.join(", ") : "remaining mission review work";
-};
 
 const describeDeleteBlockers = (deleteBlockers: readonly TicketRunDeleteBlocker[]): string =>
   deleteBlockers.map((blocker) => `${blocker.label} (${blocker.reason})`).join(", ");
@@ -1156,15 +1152,16 @@ export class TicketRunService {
     };
   }
 
-  async startWork(runId: string): Promise<StartTicketRunWorkResult> {
+  async startWork(runId: string, prompt?: string): Promise<StartTicketRunWorkResult> {
     return this.withRunLock(runId, async () => {
       const run = this.getFreshRun(runId);
       if (run.status !== "ready") {
         throw new ConfigError(`Ticket ${run.ticketId} is ${run.status} and cannot start work yet.`);
       }
 
-      const handle = await this.launchMissionPass(run, this.buildInitialPrompt(run));
-      const nextRun = this.beginAttempt(run, handle, null);
+      const normalizedPrompt = normalizeMissionPrompt(prompt);
+      const handle = await this.launchMissionPass(run, this.buildInitialPrompt(run, normalizedPrompt));
+      const nextRun = this.beginAttempt(run, handle, normalizedPrompt);
       return {
         run: nextRun,
         snapshot: this.requireMemoryDb().getTicketRunSnapshot(),
@@ -1224,7 +1221,10 @@ export class TicketRunService {
                 updatedAt: cancelledAt,
               }
             : attempt,
-        ),
+          ),
+      });
+      this.recordMissionEvent(cancelledRun, cancelledRun.missionPhase, "attempt-cancelled", {
+        attemptId: latestAttempt.attemptId,
       });
       const snapshot = memoryDb.getTicketRunSnapshot();
       this.emitSnapshot(snapshot);
@@ -1246,12 +1246,6 @@ export class TicketRunService {
         throw new ConfigError(`Wait for the active proof run to finish before closing ${run.ticketId}.`);
       }
 
-      const reviewSnapshot = await this.buildReviewSnapshot(run);
-      if (!reviewSnapshot.canClose) {
-        throw new ConfigError(
-          `Finish the remaining mission review work before closing ${run.ticketId}: ${describeReviewBlockers(run, reviewSnapshot)}.`,
-        );
-      }
       this.assertRunCanCloseWithLifecycle(run);
 
       if (this.options.stopRunServices) {
@@ -1264,10 +1258,14 @@ export class TicketRunService {
         await this.options.closeMissionStation(stationId);
         stationCleared = true;
       }
-      let completedRun = this.persistRun(this.getFreshRun(runId), {
+      const completedRun = this.persistRun(this.getFreshRun(runId), {
         ...(stationCleared ? { stationId: null } : {}),
         status: "done",
         statusMessage: "Mission closed.",
+      });
+      this.observeRepoIntelligenceCandidates(completedRun);
+      this.recordMissionEvent(completedRun, "system", "run-closed", {
+        stationCleared,
       });
       const snapshot = memoryDb.getTicketRunSnapshot();
       this.emitSnapshot(snapshot);
@@ -1285,6 +1283,59 @@ export class TicketRunService {
       snapshot: this.requireMemoryDb().getTicketRunSnapshot(),
       proofSnapshot: await this.buildProofSnapshot(run),
     };
+  }
+
+  async getMissionTimeline(runId: string, limit = 80): Promise<TicketRunMissionTimelineResult> {
+    const run = this.getFreshRun(runId);
+    return {
+      run,
+      snapshot: this.requireMemoryDb().getTicketRunSnapshot(),
+      events: this.listMissionEvents(runId, limit),
+    };
+  }
+
+  async getRepoIntelligenceCandidates(runId: string, limit = 20): Promise<TicketRunRepoIntelligenceCandidatesResult> {
+    const run = this.getFreshRun(runId);
+    const memoryDb = this.requireMemoryDb();
+    return {
+      run,
+      snapshot: memoryDb.getTicketRunSnapshot(),
+      entries: memoryDb
+        .listRepoIntelligence({
+          projectKey: run.projectKey,
+          includeUnapproved: true,
+          tags: [`run:${runId}`],
+          limit,
+        })
+        .map((entry) => this.toRepoIntelligenceEntrySummary(entry)),
+    };
+  }
+
+  async approveRepoIntelligenceCandidate(
+    runId: string,
+    entryId: string,
+  ): Promise<ApproveTicketRunRepoIntelligenceResult> {
+    return this.withRunLock(runId, async () => {
+      const memoryDb = this.requireMemoryDb();
+      const run = this.getFreshRun(runId);
+      const entry = memoryDb.getRepoIntelligenceEntry(entryId);
+      if (!entry || !entry.tags.includes(`run:${runId}`) || entry.source !== "learned") {
+        throw new ConfigError(`Mission ${run.ticketId} does not expose a learned repo intelligence candidate named ${entryId}.`);
+      }
+
+      const approvedEntry = memoryDb.setRepoIntelligenceApproval(entryId, true);
+      this.recordMissionEvent(run, "system", "repo-intelligence-candidate-approved", {
+        entryId: approvedEntry.id,
+        repoRelativePath: approvedEntry.repoRelativePath,
+      });
+      const snapshot = memoryDb.getTicketRunSnapshot();
+      this.emitSnapshot(snapshot);
+      return {
+        run,
+        snapshot,
+        entry: this.toRepoIntelligenceEntrySummary(approvedEntry),
+      };
+    });
   }
 
   async runProof(runId: string, profileId: string): Promise<RunTicketRunProofResult> {
@@ -1325,6 +1376,11 @@ export class TicketRunService {
           staleReason: null,
         },
         proofRuns: [runningProofRun, ...run.proofRuns.filter((candidate) => candidate.proofRunId !== proofRunId)],
+      });
+      this.recordMissionEvent(run, "proof", "proof-started", {
+        proofRunId,
+        profileId: profile.profileId,
+        profileLabel: profile.label,
       });
       this.emitSnapshot(memoryDb.getTicketRunSnapshot());
 
@@ -1369,6 +1425,12 @@ export class TicketRunService {
           staleReason: null,
         },
         proofRuns: [completedProofRun, ...run.proofRuns.filter((candidate) => candidate.proofRunId !== proofRunId)],
+      });
+      this.recordMissionEvent(run, "proof", "proof-finished", {
+        proofRunId,
+        profileId: profile.profileId,
+        status: proofOutput.status,
+        exitCode: proofOutput.exitCode,
       });
       const snapshot = memoryDb.getTicketRunSnapshot();
       this.emitSnapshot(snapshot);
@@ -2052,6 +2114,12 @@ export class TicketRunService {
       proof: buildStaleProofSummary(run, "A new mission work pass started after the last proof run."),
       attempts: [...run.attempts, attempt],
     });
+    this.recordMissionEvent(nextRun, nextRun.missionPhase, "attempt-started", {
+      attemptId: attempt.attemptId,
+      sequence: attempt.sequence,
+      reusedLiveAttempt: handle.reusedLiveAttempt,
+      promptProvided: prompt !== null,
+    });
     this.emitSnapshot(this.requireMemoryDb().getTicketRunSnapshot());
     void this.watchAttemptCompletion(nextRun.runId, attempt.attemptId, handle.completion);
     return nextRun;
@@ -2146,7 +2214,14 @@ export class TicketRunService {
                 updatedAt: completedAt,
               }
             : attempt,
-        ),
+          ),
+      });
+      this.recordMissionEvent(updatedRun, updatedRun.missionPhase, "attempt-finished", {
+        attemptId,
+        status: attemptStatus,
+        repairCount,
+        waitReason: workflow.waitReason,
+        nextAction: workflow.nextAction,
       });
       this.emitSnapshot(memoryDb.getTicketRunSnapshot());
       this.options.logger.debug(
@@ -2188,6 +2263,11 @@ export class TicketRunService {
     this.persistRun(run, {
       status: "working",
       statusMessage: `Mission workflow incomplete. Requesting corrective turn: ${workflow.nextActionLabel}.`,
+    });
+    this.recordMissionEvent(run, run.missionPhase, "attempt-repair-requested", {
+      attemptId,
+      waitReason: workflow.waitReason,
+      nextAction: workflow.nextAction,
     });
     this.emitSnapshot(memoryDb.getTicketRunSnapshot());
 
@@ -2239,12 +2319,15 @@ export class TicketRunService {
             : attempt,
         ),
       });
+      this.recordMissionEvent(run, "system", "attempt-recovered-after-restart", {
+        attemptId: latestAttempt.attemptId,
+      });
     }
 
     this.emitSnapshot(memoryDb.getTicketRunSnapshot());
   }
 
-  private buildInitialPrompt(run: TicketRunSummary): string {
+  private buildInitialPrompt(run: TicketRunSummary, prompt: string | null): string {
     const workspace = describeTicketRunWorkspace(run.worktrees);
     return [
       `Work on ticket ${run.ticketId}: ${run.ticketSummary}.`,
@@ -2253,6 +2336,7 @@ export class TicketRunService {
       "The working directory is already set to the mission workspace. Move between repo directories as needed.",
       "Inspect the codebase, implement the ticket, and leave the worktree in a reviewable state.",
       "Use the existing station context as your scratchpad; do not restart from first principles unless the evidence demands it.",
+      prompt ? `Additional operator context: ${prompt}` : "No extra operator context was provided beyond the ticket.",
       "If you stop with open questions or partial work, say so plainly in your final summary.",
     ].join("\n");
   }
@@ -2833,7 +2917,7 @@ export class TicketRunService {
     return this.listRunSubmodulesForRepo(run, repoRelativePath)
       .filter((submodule) => {
         const gitState = submoduleGitStatesByUrl.get(submodule.canonicalUrl);
-        return gitState ? isSubmoduleBlockingClose(gitState) : true;
+        return gitState ? isSubmoduleBlockingRepoWorkflow(gitState) : true;
       })
       .map((submodule) => submodule.canonicalUrl);
   }
@@ -2862,7 +2946,7 @@ export class TicketRunService {
             })),
           )
         )
-          .filter(({ managedState }) => isSubmoduleBlockingClose(managedState.gitState))
+          .filter(({ managedState }) => isSubmoduleBlockingRepoWorkflow(managedState.gitState))
           .map(({ canonicalUrl }) => canonicalUrl);
 
     return {
@@ -3530,8 +3614,81 @@ export class TicketRunService {
       proof: previousRun?.proof ?? buildDefaultProofSummary(),
       proofRuns: previousRun?.proofRuns ?? [],
     });
+    this.recordMissionEvent(updatedRun, "system", "workspace-prepared", {
+      status: updatedRun.status,
+      worktreeCount: updatedRun.worktrees.length,
+    });
     this.emitSnapshot(memoryDb.getTicketRunSnapshot());
     return updatedRun;
+  }
+
+  private listMissionEvents(runId: string, limit: number): TicketRunMissionEventSummary[] {
+    const memoryDb = this.options.memoryDb;
+    if (!memoryDb) {
+      return [];
+    }
+    return memoryDb.listMissionEvents(runId, limit).map((event) => ({
+      id: event.id,
+      runId: event.runId,
+      attemptId: event.attemptId,
+      stage: (event.stage === "system" ? "system" : event.stage) as TicketRunMissionEventSummary["stage"],
+      eventType: event.eventType,
+      metadata: event.metadata,
+      occurredAt: event.occurredAt,
+    }));
+  }
+
+  private toRepoIntelligenceEntrySummary(entry: RepoIntelligenceRecord): TicketRunRepoIntelligenceEntrySummary {
+    return {
+      id: entry.id,
+      projectKey: entry.projectKey,
+      repoRelativePath: entry.repoRelativePath,
+      type: entry.type,
+      title: entry.title,
+      content: entry.content,
+      tags: entry.tags,
+      source: entry.source,
+      approved: entry.approved,
+      createdAt: entry.createdAt,
+      updatedAt: entry.updatedAt,
+    };
+  }
+
+  private observeRepoIntelligenceCandidates(run: TicketRunSummary): void {
+    const memoryDb = this.options.memoryDb;
+    if (!memoryDb) {
+      return;
+    }
+    const entries = buildLearnedRepoIntelligenceCandidates(run).map((candidate) => memoryDb.upsertRepoIntelligence(candidate));
+    if (entries.length === 0) {
+      return;
+    }
+    this.recordMissionEvent(run, "system", "repo-intelligence-candidates-observed", {
+      count: entries.length,
+      entryIds: entries.map((entry) => entry.id),
+      repoRelativePaths: entries.map((entry) => entry.repoRelativePath),
+    });
+  }
+
+  private recordMissionEvent(
+    run: Pick<TicketRunSummary, "runId" | "attempts" | "missionPhase">,
+    stage: TicketRunMissionEventSummary["stage"],
+    eventType: string,
+    metadata: Record<string, unknown>,
+  ): void {
+    const memoryDb = this.options.memoryDb;
+    if (!memoryDb) {
+      return;
+    }
+    const currentAttempt =
+      [...run.attempts].reverse().find((attempt) => attempt.status === "running") ?? run.attempts.at(-1) ?? null;
+    memoryDb.appendMissionEvent({
+      runId: run.runId,
+      attemptId: currentAttempt?.attemptId ?? null,
+      stage,
+      eventType,
+      metadata,
+    });
   }
 
   private emitSnapshot(snapshot?: TicketRunSnapshot): void {

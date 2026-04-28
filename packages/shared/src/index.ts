@@ -15,6 +15,7 @@ export type {
 } from "./project-repo-types.js";
 export { normalizeProjectKey } from "./project-repo-types.js";
 export type {
+  ApproveTicketRunRepoIntelligenceResult,
   CancelTicketRunWorkResult,
   CommitTicketRunResult,
   CommitTicketRunSubmoduleResult,
@@ -54,11 +55,19 @@ export type {
   TicketRunMissionPhase,
   TicketRunMissionPlan,
   TicketRunMissionProofArtifactMode,
+  TicketRunMissionEventSummary,
+  TicketRunMissionProofLevel,
+  TicketRunMissionProofPreflightStatus,
+  TicketRunMissionTimelineResult,
+  TicketRunRepoIntelligenceCandidatesResult,
+  TicketRunRepoIntelligenceEntrySummary,
   TicketRunMissionProofStrategy,
   TicketRunMissionSummary,
   TicketRunMissionValidationKind,
   TicketRunMissionValidationRecord,
   TicketRunMissionValidationStatus,
+  TicketRunMissionWorkflowState,
+  TicketRunMissionWorkflowWaitReason,
   TicketRunPreviousPassContext,
   TicketRunProofArtifact,
   TicketRunProofArtifactKind,
@@ -223,6 +232,9 @@ export {
   TICKET_RUN_MISSION_CLASSIFICATIONS,
   TICKET_RUN_MISSION_PHASES,
   TICKET_RUN_MISSION_PROOF_ARTIFACT_MODES,
+  TICKET_RUN_MISSION_PROOF_LEVELS,
+  TICKET_RUN_MISSION_PROOF_PREFLIGHT_STATUSES,
+  TICKET_RUN_MISSION_WORKFLOW_WAIT_REASONS,
   TICKET_RUN_MISSION_VALIDATION_KINDS,
   TICKET_RUN_MISSION_VALIDATION_STATUSES,
   TICKET_RUN_PROOF_ARTIFACT_KINDS,
@@ -230,6 +242,7 @@ export {
   TICKET_RUN_PROOF_STATUSES,
   TICKET_RUN_STATUSES,
 } from "./ticket-run-types.js";
+export { describeTicketRunMissionNextAction, getTicketRunMissionWorkflowState } from "./ticket-run-workflow.js";
 export {
   createMissionView,
   getMissionRunIdFromView,

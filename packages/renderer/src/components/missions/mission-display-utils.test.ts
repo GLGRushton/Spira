@@ -1,6 +1,6 @@
 import type { TicketRunSummary } from "@spira/shared";
 import { describe, expect, it } from "vitest";
-import { describeMissionNextAction } from "./mission-display-utils.js";
+import { describeMissionNextAction, describeRunStatus } from "./mission-display-utils.js";
 
 const createRun = (): TicketRunSummary => ({
   runId: "run-1",
@@ -122,5 +122,140 @@ describe("describeMissionNextAction", () => {
       detail: "A validation is still pending, so the pass cannot finish yet.",
       complete: false,
     });
+  });
+});
+
+describe("describeRunStatus", () => {
+  it("reconciles awaiting-review runs with complete lifecycle facts into a close-ready label", () => {
+    const run = createRun();
+    run.status = "awaiting-review";
+    run.classification = {
+      kind: "backend",
+      scopeSummary: "Finish the mission run",
+      acceptanceCriteria: [],
+      impactedRepoRelativePaths: ["packages/backend"],
+      risks: [],
+      uiChange: false,
+      proofRequired: false,
+      proofArtifactMode: "none",
+      rationale: null,
+      createdAt: 21,
+      updatedAt: 21,
+    };
+    run.plan = {
+      steps: ["Close the mission loop."],
+      touchedRepoRelativePaths: ["packages/backend"],
+      validationPlan: ["pnpm test"],
+      proofIntent: null,
+      blockers: [],
+      assumptions: [],
+      createdAt: 22,
+      updatedAt: 22,
+    };
+    run.validations = [
+      {
+        runId: "run-1",
+        validationId: "validation-1",
+        kind: "unit-test",
+        status: "passed",
+        command: "pnpm test",
+        cwd: "C:\\GitHub\\Spira",
+        summary: "Passed.",
+        artifacts: [],
+        startedAt: 23,
+        completedAt: 24,
+        createdAt: 23,
+        updatedAt: 24,
+      },
+    ];
+    run.missionSummary = {
+      completedWork: "Mission wrapped up.",
+      changedRepoRelativePaths: ["packages/backend"],
+      validationSummary: "pnpm test passed",
+      proofSummary: null,
+      openQuestions: [],
+      followUps: [],
+      createdAt: 25,
+      updatedAt: 25,
+    };
+    run.missionPhase = "summarize";
+    run.missionPhaseUpdatedAt = 25;
+    run.attempts[1] = {
+      ...run.attempts[1],
+      status: "completed",
+      updatedAt: 25,
+      completedAt: 25,
+    };
+
+    expect(describeRunStatus(run)).toBe("Ready to close");
+  });
+
+  it("keeps awaiting-review runs unreconciled until the summarize phase is actually reached", () => {
+    const run = createRun();
+    run.status = "awaiting-review";
+    run.classification = {
+      kind: "backend",
+      scopeSummary: "Almost done",
+      acceptanceCriteria: [],
+      impactedRepoRelativePaths: ["packages/backend"],
+      risks: [],
+      uiChange: false,
+      proofRequired: false,
+      proofArtifactMode: "none",
+      rationale: null,
+      createdAt: 21,
+      updatedAt: 21,
+    };
+    run.plan = {
+      steps: ["Wrap up the run."],
+      touchedRepoRelativePaths: ["packages/backend"],
+      validationPlan: ["pnpm test"],
+      proofIntent: null,
+      blockers: [],
+      assumptions: [],
+      createdAt: 22,
+      updatedAt: 22,
+    };
+    run.validations = [
+      {
+        runId: "run-1",
+        validationId: "validation-1",
+        kind: "unit-test",
+        status: "passed",
+        command: "pnpm test",
+        cwd: "C:\\GitHub\\Spira",
+        summary: "Passed.",
+        artifacts: [],
+        startedAt: 23,
+        completedAt: 24,
+        createdAt: 23,
+        updatedAt: 24,
+      },
+    ];
+    run.missionSummary = {
+      completedWork: "Summary recorded early.",
+      changedRepoRelativePaths: ["packages/backend"],
+      validationSummary: "pnpm test passed",
+      proofSummary: null,
+      openQuestions: [],
+      followUps: [],
+      createdAt: 25,
+      updatedAt: 25,
+    };
+    run.missionPhase = "validate";
+    run.missionPhaseUpdatedAt = 25;
+    run.attempts[1] = {
+      ...run.attempts[1],
+      status: "completed",
+      updatedAt: 25,
+      completedAt: 25,
+    };
+
+    expect(describeMissionNextAction(run)).toEqual({
+      label: "Save summary",
+      detail: "The final mission summary is still missing.",
+      complete: false,
+    });
+    expect(describeRunStatus(run)).toBe("Awaiting review");
   });
 });

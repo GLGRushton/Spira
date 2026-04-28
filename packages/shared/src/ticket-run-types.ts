@@ -37,11 +37,37 @@ export type TicketRunMissionClassificationKind = (typeof TICKET_RUN_MISSION_CLAS
 export const TICKET_RUN_MISSION_PROOF_ARTIFACT_MODES = ["none", "screenshot", "video"] as const;
 export type TicketRunMissionProofArtifactMode = (typeof TICKET_RUN_MISSION_PROOF_ARTIFACT_MODES)[number];
 
-export const TICKET_RUN_MISSION_VALIDATION_KINDS = ["build", "unit-test"] as const;
+export const TICKET_RUN_MISSION_PROOF_LEVELS = [
+  "none",
+  "light",
+  "targeted-screenshot",
+  "full-ui-proof",
+  "manual-review-only",
+] as const;
+export type TicketRunMissionProofLevel = (typeof TICKET_RUN_MISSION_PROOF_LEVELS)[number];
+
+export const TICKET_RUN_MISSION_VALIDATION_KINDS = ["build", "unit-test", "lint", "typecheck"] as const;
 export type TicketRunMissionValidationKind = (typeof TICKET_RUN_MISSION_VALIDATION_KINDS)[number];
 
 export const TICKET_RUN_MISSION_VALIDATION_STATUSES = ["pending", "passed", "failed", "skipped"] as const;
 export type TicketRunMissionValidationStatus = (typeof TICKET_RUN_MISSION_VALIDATION_STATUSES)[number];
+
+export const TICKET_RUN_MISSION_PROOF_PREFLIGHT_STATUSES = ["runnable", "blocked", "degraded"] as const;
+export type TicketRunMissionProofPreflightStatus = (typeof TICKET_RUN_MISSION_PROOF_PREFLIGHT_STATUSES)[number];
+
+export const TICKET_RUN_MISSION_WORKFLOW_WAIT_REASONS = [
+  "context-not-loaded",
+  "classification-missing",
+  "plan-missing",
+  "validation-missing",
+  "validation-pending",
+  "validation-failed",
+  "proof-strategy-missing",
+  "proof-missing",
+  "summary-missing",
+  "complete",
+ ] as const;
+export type TicketRunMissionWorkflowWaitReason = (typeof TICKET_RUN_MISSION_WORKFLOW_WAIT_REASONS)[number];
 
 export const TICKET_RUN_PROOF_ARTIFACT_KINDS = [
   "folder",
@@ -144,6 +170,31 @@ export interface TicketRunProofProfileSummary {
   runSettingsRelativePath: string | null;
 }
 
+export interface TicketRunMissionWorkflowState {
+  kickoffComplete: boolean;
+  classificationSaved: boolean;
+  planSaved: boolean;
+  hasPassingValidation: boolean;
+  hasFailingValidation: boolean;
+  hasPendingValidation: boolean;
+  proofRequired: boolean;
+  proofStrategySaved: boolean;
+  proofPassed: boolean;
+  summarySaved: boolean;
+  nextAction:
+    | "load-context"
+    | "save-classification"
+    | "save-plan"
+    | "record-validation"
+    | "save-proof-strategy"
+    | "record-proof-result"
+    | "save-summary"
+    | "complete-pass";
+  nextActionLabel: string;
+  waitReason: TicketRunMissionWorkflowWaitReason;
+  blockedReason: string | null;
+}
+
 export interface TicketRunMissionClassification {
   kind: TicketRunMissionClassificationKind;
   scopeSummary: string;
@@ -153,6 +204,8 @@ export interface TicketRunMissionClassification {
   uiChange: boolean;
   proofRequired: boolean;
   proofArtifactMode: TicketRunMissionProofArtifactMode;
+  advisoryProofLevel?: TicketRunMissionProofLevel | null;
+  advisoryProofRationale?: string | null;
   rationale: string | null;
   createdAt: number;
   updatedAt: number;
@@ -297,6 +350,48 @@ export interface TicketRunProofSnapshotResult {
   run: TicketRunSummary;
   snapshot: TicketRunSnapshot;
   proofSnapshot: TicketRunProofSnapshot;
+}
+
+export interface TicketRunMissionEventSummary {
+  id: number;
+  runId: string;
+  attemptId: string | null;
+  stage: TicketRunMissionPhase | "system";
+  eventType: string;
+  metadata: Record<string, unknown> | null;
+  occurredAt: number;
+}
+
+export interface TicketRunMissionTimelineResult {
+  run: TicketRunSummary;
+  snapshot: TicketRunSnapshot;
+  events: TicketRunMissionEventSummary[];
+}
+
+export interface TicketRunRepoIntelligenceEntrySummary {
+  id: string;
+  projectKey: string | null;
+  repoRelativePath: string | null;
+  type: "briefing" | "pitfall" | "example";
+  title: string;
+  content: string;
+  tags: string[];
+  source: "builtin" | "user" | "learned";
+  approved: boolean;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface TicketRunRepoIntelligenceCandidatesResult {
+  run: TicketRunSummary;
+  snapshot: TicketRunSnapshot;
+  entries: TicketRunRepoIntelligenceEntrySummary[];
+}
+
+export interface ApproveTicketRunRepoIntelligenceResult {
+  run: TicketRunSummary;
+  snapshot: TicketRunSnapshot;
+  entry: TicketRunRepoIntelligenceEntrySummary;
 }
 
 export interface RunTicketRunProofResult {

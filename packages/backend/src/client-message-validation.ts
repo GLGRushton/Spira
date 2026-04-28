@@ -172,6 +172,7 @@ const ClientMessageSchema = z.discriminatedUnion("type", [
   messageSchema("missions:ticket-run:work:start", {
     requestId: z.string(),
     runId: z.string(),
+    prompt: z.string().optional(),
   }),
   messageSchema("missions:ticket-run:work:continue", {
     requestId: z.string(),
@@ -189,6 +190,19 @@ const ClientMessageSchema = z.discriminatedUnion("type", [
   messageSchema("missions:ticket-run:proofs:get", {
     requestId: z.string(),
     runId: z.string(),
+  }),
+  messageSchema("missions:ticket-run:timeline:get", {
+    requestId: z.string(),
+    runId: z.string(),
+  }),
+  messageSchema("missions:ticket-run:repo-intelligence:get", {
+    requestId: z.string(),
+    runId: z.string(),
+  }),
+  messageSchema("missions:ticket-run:repo-intelligence:approve", {
+    requestId: z.string(),
+    runId: z.string(),
+    entryId: z.string(),
   }),
   messageSchema("missions:ticket-run:proof:run", {
     requestId: z.string(),

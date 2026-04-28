@@ -901,7 +901,7 @@ const buildRecordValidationTool = (
   recordMissionValidation: NonNullable<ToolBridgeOptions["recordMissionValidation"]>,
 ) =>
   defineTool("record_validation", {
-    description: "Append a build or unit-test validation record for the active mission.",
+    description: "Append a validation record for the active mission, including build, test, lint, or typecheck results.",
     parameters: {
       type: "object",
       properties: {

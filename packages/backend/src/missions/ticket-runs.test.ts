@@ -1123,6 +1123,7 @@ describe("TicketRunService", () => {
       subagentRunId: null,
     });
     expect(started.run.stationId).toBe("mission:run-1");
+    expect(database.listMissionEvents("run-1").map((event) => event.eventType)).toContain("attempt-started");
 
     resolveCompletion?.({ status: "completed", summary: "Code updated and ready for review." });
     await new Promise((resolve) => setTimeout(resolve, 25));
@@ -1135,6 +1136,67 @@ describe("TicketRunService", () => {
           summary: "Lifecycle repaired and ready for review.",
         },
       ],
+    });
+    await expect(service.getMissionTimeline("run-1")).resolves.toMatchObject({
+      run: {
+        runId: "run-1",
+      },
+      events: expect.arrayContaining([
+        expect.objectContaining({ eventType: "attempt-started" }),
+        expect.objectContaining({ eventType: "attempt-finished" }),
+      ]),
+    });
+  });
+
+  it("includes additional operator context in the first mission pass prompt", async () => {
+    const database = createTestDatabase();
+    database.upsertTicketRun({
+      runId: "run-1",
+      stationId: null,
+      ticketId: "SPI-100",
+      ticketSummary: "Mission kickoff prompt",
+      ticketUrl: "https://example.youtrack.cloud/issue/SPI-100",
+      projectKey: "SPI",
+      status: "ready",
+      createdAt: 100,
+      startedAt: 100,
+      worktrees: [
+        {
+          repoRelativePath: "service-api",
+          repoAbsolutePath: "C:\\Repos\\service-api",
+          worktreePath: "C:\\Repos\\.spira-worktrees\\spi-100\\service-api",
+          branchName: "feat/spi-100",
+        },
+      ],
+    });
+    const launchMissionPass = vi.fn().mockResolvedValue({
+      stationId: "mission:run-1",
+      reusedLiveAttempt: false,
+      completion: Promise.resolve({ status: "completed", summary: "Initial pass done." }),
+    });
+    const service = new TicketRunService({
+      memoryDb: database,
+      logger: createLogger(),
+      projectRegistry: { getSnapshot: async () => ({ workspaceRoot: null, repos: [], mappings: [] }) },
+      youTrackService: null,
+      launchMissionPass,
+      attemptIdFactory: () => "attempt-1",
+      now: () => 1234,
+    });
+
+    const started = await service.startWork("run-1", "Use the staging API key placeholder and avoid seed resets.");
+
+    expect(launchMissionPass).toHaveBeenCalledWith(
+      expect.objectContaining({
+        run: expect.objectContaining({ ticketId: "SPI-100" }),
+        prompt: expect.stringContaining(
+          "Additional operator context: Use the staging API key placeholder and avoid seed resets.",
+        ),
+      }),
+    );
+    expect(started.run.attempts[0]).toMatchObject({
+      prompt: "Use the staging API key placeholder and avoid seed resets.",
+      status: "running",
     });
   });
 
@@ -1517,6 +1579,120 @@ describe("TicketRunService", () => {
       statusMessage: "Mission closed.",
       commitMessageDraft: null,
     });
+    expect(database.listRepoIntelligence({ projectKey: "SPI", includeUnapproved: true, tags: ["run:run-1"] })).toMatchObject([
+      {
+        source: "learned",
+        approved: false,
+        repoRelativePath: "service-api",
+      },
+    ]);
+    expect(database.listMissionEvents("run-1").map((event) => event.eventType)).toContain(
+      "repo-intelligence-candidates-observed",
+    );
+  });
+
+  it("approves learned repo intelligence candidates for a completed mission", async () => {
+    const database = createTestDatabase();
+    database.upsertTicketRun({
+      runId: "run-1",
+      stationId: null,
+      ticketId: "SPI-110",
+      ticketSummary: "Capture learned mission pattern",
+      ticketUrl: "https://example.youtrack.cloud/issue/SPI-110",
+      projectKey: "SPI",
+      status: "done",
+      missionPhase: "summarize",
+      missionPhaseUpdatedAt: 400,
+      classification: {
+        kind: "backend",
+        scopeSummary: "Workflow cleanup",
+        acceptanceCriteria: [],
+        impactedRepoRelativePaths: ["service-api"],
+        risks: [],
+        uiChange: false,
+        proofRequired: false,
+        proofArtifactMode: "none",
+        rationale: null,
+        createdAt: 200,
+        updatedAt: 200,
+      },
+      plan: {
+        steps: ["Update the ticket workflow"],
+        touchedRepoRelativePaths: ["service-api"],
+        validationPlan: ["Run unit tests"],
+        proofIntent: null,
+        blockers: [],
+        assumptions: [],
+        createdAt: 250,
+        updatedAt: 250,
+      },
+      validations: [
+        {
+          validationId: "validation-1",
+          kind: "build",
+          command: "pnpm test",
+          cwd: "C:\\Repos\\.spira-worktrees\\spi-110-service-api",
+          status: "passed",
+          summary: "Tests passed.",
+          artifacts: [],
+          startedAt: 275,
+          completedAt: 280,
+          createdAt: 275,
+          updatedAt: 280,
+        },
+      ],
+      missionSummary: {
+        completedWork: "Closed out the workflow cleanup.",
+        changedRepoRelativePaths: ["service-api"],
+        validationSummary: "Unit tests passed.",
+        proofSummary: null,
+        openQuestions: [],
+        followUps: [],
+        createdAt: 300,
+        updatedAt: 300,
+      },
+      createdAt: 100,
+      startedAt: 100,
+      worktrees: [
+        {
+          repoRelativePath: "service-api",
+          repoAbsolutePath: "C:\\Repos\\service-api",
+          worktreePath: "C:\\Repos\\.spira-worktrees\\spi-110-service-api",
+          branchName: "feat/spi-110-capture-learned-mission-pattern",
+        },
+      ],
+    });
+    database.upsertRepoIntelligence({
+      id: "learned-run-1-service-api",
+      projectKey: "SPI",
+      repoRelativePath: "service-api",
+      type: "example",
+      title: "Observed mission pattern from SPI-110",
+      content: "Observed from a clean mission.",
+      tags: ["learned", "run:run-1", "ticket:SPI-110"],
+      source: "learned",
+      approved: false,
+    });
+    const service = new TicketRunService({
+      memoryDb: database,
+      logger: createLogger(),
+      projectRegistry: { getSnapshot: async () => ({ workspaceRoot: null, repos: [], mappings: [] }) },
+      youTrackService: null,
+      now: () => 500,
+    });
+
+    await expect(service.getRepoIntelligenceCandidates("run-1")).resolves.toMatchObject({
+      entries: [{ id: "learned-run-1-service-api", approved: false }],
+    });
+    await expect(service.approveRepoIntelligenceCandidate("run-1", "learned-run-1-service-api")).resolves.toMatchObject({
+      entry: { id: "learned-run-1-service-api", approved: true },
+    });
+    expect(database.getRepoIntelligenceEntry("learned-run-1-service-api")).toMatchObject({
+      approved: true,
+    });
+    expect(database.listMissionEvents("run-1").map((event) => event.eventType)).toContain(
+      "repo-intelligence-candidate-approved",
+    );
   });
 
   it("blocks closing until the lifecycle reaches summarize", async () => {
@@ -1835,7 +2011,7 @@ describe("TicketRunService", () => {
     );
   });
 
-  it("blocks closing when review work remains", async () => {
+  it("allows closing when review work remains after the mission lifecycle is complete", async () => {
     const database = createTestDatabase();
     database.upsertTicketRun({
       runId: "run-1",
@@ -1845,6 +2021,56 @@ describe("TicketRunService", () => {
       ticketUrl: "https://example.youtrack.cloud/issue/SPI-110",
       projectKey: "SPI",
       status: "awaiting-review",
+      missionPhase: "summarize",
+      missionPhaseUpdatedAt: 400,
+      classification: {
+        kind: "backend",
+        scopeSummary: "Workflow cleanup",
+        acceptanceCriteria: [],
+        impactedRepoRelativePaths: ["service-api"],
+        risks: [],
+        uiChange: false,
+        proofRequired: false,
+        proofArtifactMode: "none",
+        rationale: null,
+        createdAt: 200,
+        updatedAt: 200,
+      },
+      plan: {
+        steps: ["Update the ticket workflow"],
+        touchedRepoRelativePaths: ["service-api"],
+        validationPlan: ["Run unit tests"],
+        proofIntent: null,
+        blockers: [],
+        assumptions: [],
+        createdAt: 250,
+        updatedAt: 250,
+      },
+      validations: [
+        {
+          validationId: "validation-1",
+          kind: "build",
+          command: "pnpm test",
+          cwd: "C:\\Repos\\.spira-worktrees\\spi-110-service-api",
+          status: "passed",
+          summary: "Tests passed.",
+          artifacts: [],
+          startedAt: 275,
+          completedAt: 280,
+          createdAt: 275,
+          updatedAt: 280,
+        },
+      ],
+      missionSummary: {
+        completedWork: "Closed out the workflow cleanup.",
+        changedRepoRelativePaths: ["service-api"],
+        validationSummary: "Unit tests passed.",
+        proofSummary: null,
+        openQuestions: [],
+        followUps: [],
+        createdAt: 300,
+        updatedAt: 300,
+      },
       createdAt: 100,
       startedAt: 100,
       worktrees: [
@@ -1899,10 +2125,17 @@ describe("TicketRunService", () => {
       now: () => 500,
     });
 
-    await expect(service.completeRun("run-1")).rejects.toThrow(
-      "Finish the remaining mission review work before closing SPI-110: service-api.",
-    );
-    expect(closeMissionStation).not.toHaveBeenCalled();
+    const reviewSnapshot = await service.getReviewSnapshot("run-1");
+    expect(reviewSnapshot.reviewSnapshot.canClose).toBe(false);
+
+    const result = await service.completeRun("run-1");
+
+    expect(closeMissionStation).toHaveBeenCalledWith("mission:run-1");
+    expect(result.run).toMatchObject({
+      status: "done",
+      stationId: null,
+      statusMessage: "Mission closed.",
+    });
   });
 
   it("blocks closing while a proof run is still active", async () => {
@@ -2635,6 +2868,160 @@ describe("TicketRunService", () => {
     ]);
   });
 
+  it("does not block parent repo workflow for alignment-only managed submodule state", async () => {
+    const database = createTestDatabase();
+    const branchName = "feat/spi-204-ignore-alignment-only-submodules";
+    const canonicalUrl = "github.com/example/legapp-common";
+    const primaryParentWorktreePath = "C:\\Repos\\.spira-worktrees\\spi-204\\service-api";
+    const secondaryParentWorktreePath = "C:\\Repos\\.spira-worktrees\\spi-204\\web-app";
+    const primarySubmodulePath = `${primaryParentWorktreePath}\\Submodules\\LegAppCommon`;
+    const secondarySubmodulePath = `${secondaryParentWorktreePath}\\Submodules\\LegAppCommon`;
+    const canonicalSha = "3333333333333333333333333333333333333333";
+    const previousSha = "2222222222222222222222222222222222222222";
+
+    database.upsertTicketRun({
+      runId: "run-1",
+      ticketId: "SPI-204",
+      ticketSummary: "Ignore alignment-only submodule noise",
+      ticketUrl: "https://example.youtrack.cloud/issue/SPI-204",
+      projectKey: "SPI",
+      status: "awaiting-review",
+      createdAt: 100,
+      startedAt: 100,
+      worktrees: [
+        {
+          repoRelativePath: "service-api",
+          repoAbsolutePath: "C:\\Repos\\service-api",
+          worktreePath: primaryParentWorktreePath,
+          branchName,
+        },
+        {
+          repoRelativePath: "web-app",
+          repoAbsolutePath: "C:\\Repos\\web-app",
+          worktreePath: secondaryParentWorktreePath,
+          branchName,
+        },
+      ],
+      submodules: [
+        {
+          canonicalUrl,
+          name: "LegAppCommon",
+          branchName,
+          commitMessageDraft: null,
+          parentRefs: [
+            {
+              parentRepoRelativePath: "service-api",
+              submodulePath: "Submodules\\LegAppCommon",
+              submoduleWorktreePath: primarySubmodulePath,
+            },
+            {
+              parentRepoRelativePath: "web-app",
+              submodulePath: "Submodules\\LegAppCommon",
+              submoduleWorktreePath: secondarySubmodulePath,
+            },
+          ],
+        },
+      ],
+    });
+
+    const gitRunner = vi.fn().mockImplementation(async (cwd: string, args: readonly string[]) => {
+      const command = args.join(" ");
+      if (command === "remote get-url origin") {
+        if (cwd === primaryParentWorktreePath) {
+          return { stdout: "https://github.com/example/service-api.git\n", stderr: "" };
+        }
+        if (cwd === secondaryParentWorktreePath) {
+          return { stdout: "https://github.com/example/web-app.git\n", stderr: "" };
+        }
+        return { stdout: "https://github.com/example/legapp-common.git\n", stderr: "" };
+      }
+      if (command === "symbolic-ref --short refs/remotes/origin/HEAD") {
+        return { stdout: "origin/main\n", stderr: "" };
+      }
+      if (command.includes("rev-parse --abbrev-ref --symbolic-full-name @{upstream}")) {
+        return { stdout: `origin/${branchName}\n`, stderr: "" };
+      }
+      if (command.startsWith("rev-list --left-right --count")) {
+        return { stdout: "0 0\n", stderr: "" };
+      }
+      if (command === "status --porcelain=v1 --untracked-files=all --ignore-submodules=none") {
+        return { stdout: "", stderr: "" };
+      }
+      if (command === "rev-parse HEAD") {
+        if (cwd === secondarySubmodulePath) {
+          return { stdout: `${previousSha}\n`, stderr: "" };
+        }
+        return { stdout: `${canonicalSha}\n`, stderr: "" };
+      }
+      if (command.startsWith("rev-parse --verify ")) {
+        return { stdout: "", stderr: "" };
+      }
+      if (command === "ls-files --others --exclude-standard -z") {
+        return { stdout: "", stderr: "" };
+      }
+      if (command.includes("diff --find-renames --find-copies --name-status HEAD --")) {
+        return { stdout: "", stderr: "" };
+      }
+      if (command.includes("diff --find-renames --find-copies --numstat HEAD --")) {
+        return { stdout: "", stderr: "" };
+      }
+      if (command.includes("diff --find-renames --find-copies --patch --no-color HEAD --")) {
+        return { stdout: "", stderr: "" };
+      }
+      if (cwd === primarySubmodulePath && command === `merge-base --is-ancestor ${previousSha} ${canonicalSha}`) {
+        return { stdout: "", stderr: "" };
+      }
+      throw new Error(`Unexpected git command in ${cwd}: ${command}`);
+    });
+    const service = new TicketRunService({
+      memoryDb: database,
+      logger: createLogger(),
+      projectRegistry: { getSnapshot: async () => ({ workspaceRoot: null, repos: [], mappings: [] }) },
+      youTrackService: null,
+      runGitCommand: gitRunner,
+      now: () => 500,
+    });
+    vi.spyOn(service as unknown as EnsureRunSubmodulesTarget, "ensureRunSubmodules").mockImplementation(
+      async (run) => run,
+    );
+
+    const result = await service.getReviewSnapshot("run-1");
+
+    expect(result.reviewSnapshot.canClose).toBe(false);
+    expect(result.reviewSnapshot.repoEntries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          repoRelativePath: "service-api",
+          gitState: expect.objectContaining({
+            blockedBySubmoduleCanonicalUrls: [],
+          }),
+        }),
+        expect.objectContaining({
+          repoRelativePath: "web-app",
+          gitState: expect.objectContaining({
+            blockedBySubmoduleCanonicalUrls: [],
+          }),
+        }),
+      ]),
+    );
+    expect(result.reviewSnapshot.submoduleEntries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          canonicalUrl,
+          gitState: expect.objectContaining({
+            hasDiff: false,
+            pushAction: "none",
+            reconcileRequired: false,
+            parents: expect.arrayContaining([
+              expect.objectContaining({ parentRepoRelativePath: "service-api", isAligned: true }),
+              expect.objectContaining({ parentRepoRelativePath: "web-app", isAligned: false }),
+            ]),
+          }),
+        }),
+      ]),
+    );
+  });
+
   it("persists commit drafts on the selected repo worktree", async () => {
     const database = createTestDatabase();
     database.upsertTicketRun({
@@ -2850,6 +3237,19 @@ describe("TicketRunService", () => {
     expect(result.run.submodules[0]?.commitMessageDraft).toBeNull();
     expect(result.gitState.pushAction).toBe("publish");
     expect(gitRunner).toHaveBeenCalledWith(submoduleWorktreePath, ["add", "-A"]);
+    expect(gitRunner).toHaveBeenCalledWith(submoduleWorktreePath, [
+      "-c",
+      "user.name=Shinra",
+      "-c",
+      "user.email=shinra@example.com",
+      "-c",
+      "commit.gpgsign=false",
+      "commit",
+      "--author=Shinra <shinra@example.com>",
+      "--cleanup=strip",
+      "-m",
+      "feat(SPI-201): update shared common models",
+    ]);
   });
 
   it("publishes a managed submodule once and aligns every parent repo to the same commit", async () => {

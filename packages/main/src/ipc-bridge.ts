@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type {
+  ApproveTicketRunRepoIntelligenceResult,
   CancelTicketRunWorkResult,
   ClientMessage,
   CommitTicketRunResult,
@@ -28,6 +29,8 @@ import type {
   SyncTicketRunRemoteResult,
   SyncTicketRunSubmoduleRemoteResult,
   TicketRunGitStateResult,
+  TicketRunMissionTimelineResult,
+  TicketRunRepoIntelligenceCandidatesResult,
   TicketRunProofSnapshotResult,
   TicketRunReviewSnapshotResult,
   TicketRunSnapshot,
@@ -103,6 +106,9 @@ type MissionsRequestMessage =
   | Extract<ClientMessage, { type: "missions:ticket-run:work:cancel" }>
   | Extract<ClientMessage, { type: "missions:ticket-run:complete" }>
   | Extract<ClientMessage, { type: "missions:ticket-run:proofs:get" }>
+  | Extract<ClientMessage, { type: "missions:ticket-run:timeline:get" }>
+  | Extract<ClientMessage, { type: "missions:ticket-run:repo-intelligence:get" }>
+  | Extract<ClientMessage, { type: "missions:ticket-run:repo-intelligence:approve" }>
   | Extract<ClientMessage, { type: "missions:ticket-run:proof:run" }>
   | Extract<ClientMessage, { type: "missions:ticket-run:delete" }>
   | Extract<ClientMessage, { type: "missions:ticket-run:review-snapshot:get" }>
@@ -132,6 +138,9 @@ type MissionsResponseMessage =
   | Extract<ServerMessage, { type: "missions:ticket-run:work:cancel:result" }>
   | Extract<ServerMessage, { type: "missions:ticket-run:complete:result" }>
   | Extract<ServerMessage, { type: "missions:ticket-run:proofs:get:result" }>
+  | Extract<ServerMessage, { type: "missions:ticket-run:timeline:get:result" }>
+  | Extract<ServerMessage, { type: "missions:ticket-run:repo-intelligence:get:result" }>
+  | Extract<ServerMessage, { type: "missions:ticket-run:repo-intelligence:approve:result" }>
   | Extract<ServerMessage, { type: "missions:ticket-run:proof:run:result" }>
   | Extract<ServerMessage, { type: "missions:ticket-run:delete:result" }>
   | Extract<ServerMessage, { type: "missions:ticket-run:review-snapshot:result" }>
@@ -195,11 +204,14 @@ export interface IpcBridgeHandle {
   getTicketRuns(): Promise<TicketRunSnapshot>;
   startTicketRun(ticket: StartTicketRunRequest): Promise<StartTicketRunResult>;
   retryTicketRunSync(runId: string): Promise<RetryTicketRunSyncResult>;
-  startTicketRunWork(runId: string): Promise<StartTicketRunWorkResult>;
+  startTicketRunWork(runId: string, prompt?: string): Promise<StartTicketRunWorkResult>;
   continueTicketRunWork(runId: string, prompt?: string): Promise<ContinueTicketRunWorkResult>;
   cancelTicketRunWork(runId: string): Promise<CancelTicketRunWorkResult>;
   completeTicketRun(runId: string): Promise<CompleteTicketRunResult>;
   getTicketRunProofSnapshot(runId: string): Promise<TicketRunProofSnapshotResult>;
+  getTicketRunMissionTimeline(runId: string): Promise<TicketRunMissionTimelineResult>;
+  getTicketRunRepoIntelligence(runId: string): Promise<TicketRunRepoIntelligenceCandidatesResult>;
+  approveTicketRunRepoIntelligence(runId: string, entryId: string): Promise<ApproveTicketRunRepoIntelligenceResult>;
   runTicketRunProof(runId: string, profileId: string): Promise<RunTicketRunProofResult>;
   deleteTicketRun(runId: string): Promise<DeleteTicketRunResult>;
   getTicketRunReviewSnapshot(runId: string): Promise<TicketRunReviewSnapshotResult>;
@@ -264,6 +276,9 @@ const isBackendResponseMessage = (message: ServerMessage): message is BackendRes
     message.type === "missions:ticket-run:work:cancel:result" ||
     message.type === "missions:ticket-run:complete:result" ||
     message.type === "missions:ticket-run:proofs:get:result" ||
+    message.type === "missions:ticket-run:timeline:get:result" ||
+    message.type === "missions:ticket-run:repo-intelligence:get:result" ||
+    message.type === "missions:ticket-run:repo-intelligence:approve:result" ||
     message.type === "missions:ticket-run:proof:run:result" ||
     message.type === "missions:ticket-run:delete:result" ||
     message.type === "missions:ticket-run:review-snapshot:result" ||
@@ -701,12 +716,13 @@ export function setupIpcBridge(
         "missions:ticket-run:sync:result",
         MISSION_PREPARATION_REQUEST_TIMEOUT_MS,
       ).then((response) => response.result),
-    startTicketRunWork: (runId) =>
+    startTicketRunWork: (runId, prompt) =>
       requestBackend(
         {
           type: "missions:ticket-run:work:start",
           requestId: randomUUID(),
           runId,
+          ...(prompt !== undefined ? { prompt } : {}),
         },
         "missions:ticket-run:work:start:result",
         MISSION_WORK_REQUEST_TIMEOUT_MS,
@@ -750,6 +766,37 @@ export function setupIpcBridge(
           runId,
         },
         "missions:ticket-run:proofs:get:result",
+        MISSION_REVIEW_REQUEST_TIMEOUT_MS,
+      ).then((response) => response.result),
+    getTicketRunMissionTimeline: (runId) =>
+      requestBackend(
+        {
+          type: "missions:ticket-run:timeline:get",
+          requestId: randomUUID(),
+          runId,
+        },
+        "missions:ticket-run:timeline:get:result",
+        MISSION_REVIEW_REQUEST_TIMEOUT_MS,
+      ).then((response) => response.result),
+    getTicketRunRepoIntelligence: (runId) =>
+      requestBackend(
+        {
+          type: "missions:ticket-run:repo-intelligence:get",
+          requestId: randomUUID(),
+          runId,
+        },
+        "missions:ticket-run:repo-intelligence:get:result",
+        MISSION_REVIEW_REQUEST_TIMEOUT_MS,
+      ).then((response) => response.result),
+    approveTicketRunRepoIntelligence: (runId, entryId) =>
+      requestBackend(
+        {
+          type: "missions:ticket-run:repo-intelligence:approve",
+          requestId: randomUUID(),
+          runId,
+          entryId,
+        },
+        "missions:ticket-run:repo-intelligence:approve:result",
         MISSION_REVIEW_REQUEST_TIMEOUT_MS,
       ).then((response) => response.result),
     runTicketRunProof: (runId, profileId) =>
