@@ -14,6 +14,16 @@ import styles from "./SettingsPanel.module.css";
 
 const YOUTRACK_RUNTIME_CONFIG_KEYS: RuntimeConfigKey[] = ["youTrackBaseUrl", "youTrackToken"];
 const YOUTRACK_RUNTIME_CONFIG_KEY_SET = new Set<RuntimeConfigKey>(YOUTRACK_RUNTIME_CONFIG_KEYS);
+const AI_PROVIDER_RUNTIME_CONFIG_KEYS: RuntimeConfigKey[] = [
+  "modelProvider",
+  "githubToken",
+  "azureOpenAiApiKey",
+  "azureOpenAiEndpoint",
+  "azureOpenAiDeployment",
+  "azureOpenAiApiVersion",
+  "azureOpenAiModel",
+];
+const AI_PROVIDER_RUNTIME_CONFIG_KEY_SET = new Set<RuntimeConfigKey>(AI_PROVIDER_RUNTIME_CONFIG_KEYS);
 const SQL_SERVER_RUNTIME_CONFIG_KEYS: RuntimeConfigKey[] = [
   "sqlServerServer",
   "sqlServerPort",
@@ -30,6 +40,7 @@ const MISSION_GIT_RUNTIME_CONFIG_KEYS: RuntimeConfigKey[] = ["missionGitHubToken
 const MISSION_GIT_RUNTIME_CONFIG_KEY_SET = new Set<RuntimeConfigKey>(MISSION_GIT_RUNTIME_CONFIG_KEYS);
 const OTHER_RUNTIME_CONFIG_KEYS = RUNTIME_CONFIG_KEYS.filter(
   (key) =>
+    !AI_PROVIDER_RUNTIME_CONFIG_KEY_SET.has(key) &&
     !YOUTRACK_RUNTIME_CONFIG_KEY_SET.has(key) &&
     !SQL_SERVER_RUNTIME_CONFIG_KEY_SET.has(key) &&
     !MISSION_GIT_RUNTIME_CONFIG_KEY_SET.has(key),
@@ -62,9 +73,26 @@ export function SettingsPanel() {
   }, [elevenLabsVoiceId]);
 
   useEffect(() => {
-    void window.electronAPI.getRuntimeConfig().then((summary) => {
-      setRuntimeConfig(summary);
-    });
+    let cancelled = false;
+    void window.electronAPI
+      .getRuntimeConfig()
+      .then((summary) => {
+        if (cancelled) {
+          return;
+        }
+        setRuntimeConfig(summary);
+      })
+      .catch((error) => {
+        console.error("Failed to load secure runtime configuration", error);
+        if (cancelled) {
+          return;
+        }
+        setRuntimeConfigNotice("Failed to load secure runtime configuration. Restart Spira and try again.");
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const handleWakeWordToggle = () => {
@@ -162,6 +190,14 @@ export function SettingsPanel() {
       }
 
       const entry = runtimeConfig[key];
+      if (!entry) {
+        return (
+          <div key={key} className={styles.empty}>
+            Runtime setting <code>{key}</code> is unavailable in this session. Restart Spira to refresh the secure
+            config bridge.
+          </div>
+        );
+      }
       const draft = runtimeConfigDrafts[entry.key] ?? "";
       const isBusy = activeRuntimeConfigKey === entry.key;
       return (
@@ -385,6 +421,15 @@ export function SettingsPanel() {
         {runtimeConfigNotice ? <div className={styles.notice}>{runtimeConfigNotice}</div> : null}
         {runtimeConfig ? (
           <div className={styles.configGroups}>
+            <div className={styles.configGroup}>
+              <div className={styles.groupHeader}>
+                <span className={styles.label}>AI provider runtime</span>
+                <span className={styles.caption}>
+                  Select the active provider and store the credentials or deployment settings it needs.
+                </span>
+              </div>
+              <div className={styles.keyGrid}>{renderRuntimeConfigCards(AI_PROVIDER_RUNTIME_CONFIG_KEYS)}</div>
+            </div>
             <div className={styles.configGroup}>
               <div className={styles.groupHeader}>
                 <span className={styles.label}>YouTrack credentials</span>

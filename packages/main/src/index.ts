@@ -43,8 +43,8 @@ import {
   type SyncTicketRunSubmoduleRemoteResult,
   type TicketRunGitStateResult,
   type TicketRunMissionTimelineResult,
-  type TicketRunRepoIntelligenceCandidatesResult,
   type TicketRunProofSnapshotResult,
+  type TicketRunRepoIntelligenceCandidatesResult,
   type TicketRunReviewSnapshotResult,
   type TicketRunSnapshot,
   type TicketRunSubmoduleGitStateResult,
@@ -63,6 +63,7 @@ import WebSocket from "ws";
 import { setupAutoUpdater } from "./auto-update.js";
 import { type BackendExitInfo, BackendLifecycle } from "./backend-lifecycle.js";
 import { type IpcBridgeHandle, setupIpcBridge } from "./ipc-bridge.js";
+import { coerceStoredRuntimeConfigValue, normalizeRuntimeConfigValue } from "./runtime-config-utils.js";
 import { SpiraUiControlBridge } from "./spira-ui-control-bridge.js";
 import { createTray } from "./tray.js";
 import { UpgradeOrchestrator } from "./upgrade-orchestrator.js";
@@ -280,11 +281,48 @@ const RUNTIME_CONFIG_METADATA: Record<
   RuntimeConfigKey,
   { envKey: string; label: string; description: string; secret: boolean }
 > = {
+  modelProvider: {
+    envKey: "SPIRA_MODEL_PROVIDER",
+    label: "Model provider",
+    description: 'Selects the active provider adapter for Shinra turns, such as "copilot" or "azure-openai".',
+    secret: false,
+  },
   githubToken: {
     envKey: "GITHUB_TOKEN",
     label: "GitHub token",
     description: "Used for GitHub-authenticated Copilot flows when available.",
     secret: true,
+  },
+  azureOpenAiApiKey: {
+    envKey: "AZURE_OPENAI_API_KEY",
+    label: "Azure OpenAI API key",
+    description: "Used when the Azure OpenAI provider adapter is selected.",
+    secret: true,
+  },
+  azureOpenAiEndpoint: {
+    envKey: "AZURE_OPENAI_ENDPOINT",
+    label: "Azure OpenAI endpoint",
+    description: "The Azure OpenAI resource endpoint, such as https://example.openai.azure.com.",
+    secret: false,
+  },
+  azureOpenAiDeployment: {
+    envKey: "AZURE_OPENAI_DEPLOYMENT",
+    label: "Azure OpenAI deployment",
+    description: "The Azure OpenAI deployment name that backs Shinra's turns.",
+    secret: false,
+  },
+  azureOpenAiApiVersion: {
+    envKey: "AZURE_OPENAI_API_VERSION",
+    label: "Azure OpenAI API version",
+    description: "The Azure OpenAI REST API version to target for chat completions and tool calls.",
+    secret: false,
+  },
+  azureOpenAiModel: {
+    envKey: "AZURE_OPENAI_MODEL",
+    label: "Azure OpenAI model label",
+    description:
+      "Optional model label for telemetry and diagnostics when the deployment name is not descriptive enough.",
+    secret: false,
   },
   missionGitHubToken: {
     envKey: "MISSION_GITHUB_TOKEN",
@@ -379,18 +417,6 @@ const RUNTIME_CONFIG_METADATA: Record<
   },
 };
 
-const normalizeRuntimeConfigValue = (value: unknown): string | null | undefined => {
-  if (value === null) {
-    return null;
-  }
-
-  if (typeof value !== "string") {
-    return undefined;
-  }
-
-  return value.trim() ? value : null;
-};
-
 const encryptRuntimeConfigValue = (value: string | null): string | null => {
   if (value === null) {
     return null;
@@ -425,7 +451,7 @@ const getStoredRuntimeConfig = (): RuntimeConfigStoreData => {
   for (const key of RUNTIME_CONFIG_KEYS) {
     const decrypted = decryptRuntimeConfigValue(encrypted[key]);
     if (decrypted !== undefined) {
-      normalized[key] = decrypted;
+      normalized[key] = coerceStoredRuntimeConfigValue(key, decrypted);
     }
   }
 
@@ -1367,7 +1393,7 @@ const handleSetRuntimeConfig = async (
       continue;
     }
 
-    const normalizedValue = normalizeRuntimeConfigValue(update[key]);
+    const normalizedValue = normalizeRuntimeConfigValue(key, update[key]);
     if (normalizedValue !== undefined) {
       sanitised[key] = normalizedValue;
     }

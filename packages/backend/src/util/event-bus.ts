@@ -19,6 +19,7 @@ import type {
   TicketRunSnapshot,
   VoicePipelineState,
 } from "@spira/shared";
+import type { ProviderUsageRecord } from "../provider/types.js";
 
 export interface EventMap {
   "chat:assistant-message": [
@@ -40,6 +41,7 @@ export interface EventMap {
   "copilot:tool-result": [callId: string, result: unknown];
   "copilot:permission-request": [request: PermissionRequestPayload];
   "copilot:permission-complete": [requestId: string, result: "approved" | "denied" | "expired"];
+  "provider:usage": [record: ProviderUsageRecord];
   "mcp:server-crashed": [serverId: string];
   "mcp:server-stderr": [serverId: string, line: string];
   "mcp:servers-changed": [statuses: McpServerStatus[]];
@@ -47,6 +49,14 @@ export interface EventMap {
   "missions:ticket-run:services-changed": [snapshot: MissionServiceSnapshot];
   "subagent:catalog-changed": [agents: SubagentDomain[]];
   "subagent:started": [event: SubagentStartedEvent];
+  "subagent:runtime-sync": [
+    event: {
+      runId: string;
+      roomId: `agent:${string}`;
+      allowWrites: boolean;
+      providerSessionId: string | null;
+    },
+  ];
   "subagent:tool-call": [event: SubagentToolCallEvent];
   "subagent:tool-result": [event: SubagentToolResultEvent];
   "subagent:delta": [event: SubagentDeltaEvent];

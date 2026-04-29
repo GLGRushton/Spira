@@ -1,10 +1,10 @@
 import type { ConversationRecord, MemoryEntryRecord, SpiraMemoryDatabase } from "@spira/memory-db";
 
 const MAX_MEMORY_ENTRIES = 6;
-const MAX_CONVERSATION_MESSAGES = 8;
+const MAX_CONVERSATION_MESSAGES = 12;
 const MAX_ENTRY_LENGTH = 240;
-const MAX_MESSAGE_LENGTH = 320;
-const MAX_PREAMBLE_LENGTH = 3_000;
+const MAX_MESSAGE_LENGTH = 360;
+const MAX_PREAMBLE_LENGTH = 5_000;
 
 const truncate = (value: string, maxLength: number): string => {
   const normalized = value.trim().replace(/\s+/gu, " ");
@@ -40,15 +40,24 @@ const getConversationLines = (conversation: ConversationRecord): string[] =>
   conversation.messages
     .filter((message) => message.role === "user" || message.role === "assistant")
     .slice(-MAX_CONVERSATION_MESSAGES)
-    .map(
-      (message) => `${message.role === "user" ? "User" : "Shinra"}: ${truncate(message.content, MAX_MESSAGE_LENGTH)}`,
-    )
+    .flatMap((message) => {
+      const speaker = message.role === "user" ? "User" : "Shinra";
+      const lines = [`${speaker}: ${truncate(message.content, MAX_MESSAGE_LENGTH)}`];
+      if (message.toolCalls.length > 0) {
+        const toolSummary = message.toolCalls
+          .map((toolCall) => `${toolCall.name}${toolCall.status ? ` (${toolCall.status})` : ""}`)
+          .join(", ");
+        lines.push(`Tools: ${truncate(toolSummary, MAX_MESSAGE_LENGTH)}`);
+      }
+      return lines;
+    })
     .filter((line) => line.length > 0);
 
 export const buildContinuityPreamble = (options: {
   database: SpiraMemoryDatabase | null;
   conversationId?: string | null;
   query: string;
+  sessionSections?: string[];
 }): string | null => {
   const { database, conversationId, query } = options;
   if (!database) {
@@ -78,6 +87,10 @@ export const buildContinuityPreamble = (options: {
         ].join("\n"),
       );
     }
+  }
+
+  if (options.sessionSections && options.sessionSections.length > 0) {
+    sections.push(...options.sessionSections);
   }
 
   if (sections.length === 0) {

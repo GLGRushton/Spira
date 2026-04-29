@@ -2,11 +2,14 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 import type {
+  AssistantState,
   McpServerConfig,
   McpServerSource,
+  PermissionRequestPayload,
   TicketRunMissionProofLevel,
   TicketRunMissionProofPreflightStatus,
   SubagentDomain,
+  SubagentRunSnapshot,
   SubagentSource,
   TicketRunAttemptStatus,
   TicketRunAttemptSummary,
@@ -62,12 +65,14 @@ const MEMORY_ENTRY_CATEGORIES = ["user-preference", "fact", "task-context", "cor
 const REPO_INTELLIGENCE_ENTRY_TYPES = ["briefing", "pitfall", "example"] as const;
 const REPO_INTELLIGENCE_ENTRY_SOURCES = ["builtin", "user", "learned"] as const;
 const VALIDATION_PROFILE_KINDS = ["build", "unit-test", "lint", "typecheck"] as const;
+const RUNTIME_PERMISSION_REQUEST_STATUSES = ["pending", "approved", "denied", "expired"] as const;
 
 export type ConversationRole = "user" | "assistant" | "system";
 export type MemoryEntryCategory = (typeof MEMORY_ENTRY_CATEGORIES)[number];
 export type RepoIntelligenceEntryType = (typeof REPO_INTELLIGENCE_ENTRY_TYPES)[number];
 export type RepoIntelligenceEntrySource = (typeof REPO_INTELLIGENCE_ENTRY_SOURCES)[number];
 export type ValidationProfileKind = (typeof VALIDATION_PROFILE_KINDS)[number];
+export type RuntimePermissionRequestStatus = (typeof RUNTIME_PERMISSION_REQUEST_STATUSES)[number];
 
 export interface ConversationSummary {
   id: string;
@@ -166,6 +171,120 @@ export interface UpdateMemoryInput {
 
 export interface OpenSpiraMemoryDatabaseOptions {
   readonly?: boolean;
+}
+
+export interface RuntimePermissionRequestRecord {
+  requestId: string;
+  stationId: string | null;
+  payload: PermissionRequestPayload;
+  status: RuntimePermissionRequestStatus;
+  createdAt: number;
+  updatedAt: number;
+  resolvedAt: number | null;
+}
+
+export interface UpsertRuntimePermissionRequestInput {
+  requestId: string;
+  stationId?: string | null;
+  payload: PermissionRequestPayload;
+  createdAt?: number;
+}
+
+export interface RuntimeSubagentRunRecord {
+  runId: string;
+  stationId: string | null;
+  snapshot: SubagentRunSnapshot;
+  createdAt: number;
+  updatedAt: number;
+  expiresAt: number | null;
+}
+
+export interface UpsertRuntimeSubagentRunInput {
+  runId: string;
+  stationId?: string | null;
+  snapshot: SubagentRunSnapshot;
+  createdAt?: number;
+}
+
+export interface PersistedProviderUsageRecord {
+  id: number;
+  provider: "copilot" | "azure-openai";
+  stationId: string | null;
+  runId: string | null;
+  sessionId: string | null;
+  model: string | null;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  totalTokens: number | null;
+  estimatedCostUsd: number | null;
+  latencyMs: number | null;
+  observedAt: number;
+  source: "provider" | "estimated" | "unknown";
+}
+
+export interface PersistedStationRecord {
+  stationId: string;
+  label: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface UpsertPersistedStationInput {
+  stationId: string;
+  label: string;
+  createdAt?: number;
+}
+
+export interface RuntimeStationToolCallRecord {
+  callId: string;
+  toolName: string;
+  args: unknown;
+  startedAt: number;
+}
+
+export interface RuntimeStationStateRecord {
+  stationId: string;
+  state: AssistantState;
+  promptInFlight: boolean;
+  activeSessionId: string | null;
+  activeToolCalls: RuntimeStationToolCallRecord[];
+  abortRequestedAt: number | null;
+  recoveryMessage: string | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface UpsertRuntimeStationStateInput {
+  stationId: string;
+  state: AssistantState;
+  promptInFlight: boolean;
+  activeSessionId?: string | null;
+  activeToolCalls?: RuntimeStationToolCallRecord[];
+  abortRequestedAt?: number | null;
+  recoveryMessage?: string | null;
+  createdAt?: number;
+  updatedAt?: number;
+}
+
+export interface AppendProviderUsageRecordInput {
+  provider: PersistedProviderUsageRecord["provider"];
+  stationId?: string | null;
+  runId?: string | null;
+  sessionId?: string | null;
+  model?: string | null;
+  inputTokens?: number | null;
+  outputTokens?: number | null;
+  totalTokens?: number | null;
+  estimatedCostUsd?: number | null;
+  latencyMs?: number | null;
+  observedAt?: number;
+  source: PersistedProviderUsageRecord["source"];
+}
+
+export interface RuntimeRecoverySummary {
+  expiredPermissionRequestIds: string[];
+  recoveredSubagentRunIds: string[];
+  recoveredStationIds: string[];
 }
 
 export type McpServerConfigRecord = McpServerConfig & {
@@ -513,6 +632,55 @@ interface MemoryEntryRow {
 
 interface SessionStateRow {
   value: string | null;
+}
+
+interface SessionStateKeyRow {
+  key: string;
+}
+
+interface SessionStateRecordRow {
+  key: string;
+  value: string | null;
+  updatedAt: number;
+}
+
+const getPersistedProviderSessionStateKey = (stationId: string): string =>
+  stationId === "primary" ? "copilot-session-id" : `station:${stationId}:copilot-session-id`;
+
+interface RuntimePermissionRequestRow {
+  requestId: string;
+  stationId: string | null;
+  payloadJson: string;
+  status: string;
+  createdAt: number;
+  updatedAt: number;
+  resolvedAt: number | null;
+}
+
+interface RuntimeSubagentRunRow {
+  runId: string;
+  stationId: string | null;
+  snapshotJson: string;
+  status: string;
+  createdAt: number;
+  updatedAt: number;
+  expiresAt: number | null;
+}
+
+interface ProviderUsageRecordRow {
+  id: number;
+  provider: string;
+  stationId: string | null;
+  runId: string | null;
+  sessionId: string | null;
+  model: string | null;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  totalTokens: number | null;
+  estimatedCostUsd: number | null;
+  latencyMs: number | null;
+  observedAt: number;
+  source: string;
 }
 
 interface ProjectWorkspaceConfigRow {
@@ -1350,6 +1518,48 @@ const MIGRATIONS: MigrationDefinition[] = [
       "CREATE INDEX idx_mission_events_run_v20 ON mission_events(run_id, occurred_at DESC)",
     ],
   },
+  {
+    version: 21,
+    statements: [
+      `CREATE TABLE runtime_permission_requests (
+        request_id TEXT PRIMARY KEY,
+        station_id TEXT,
+        payload_json TEXT NOT NULL,
+        status TEXT NOT NULL CHECK(status IN ('pending', 'approved', 'denied', 'expired')),
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        resolved_at INTEGER
+      )`,
+      "CREATE INDEX idx_runtime_permission_requests_station_status_v21 ON runtime_permission_requests(station_id, status, updated_at DESC)",
+      `CREATE TABLE runtime_subagent_runs (
+        run_id TEXT PRIMARY KEY,
+        station_id TEXT,
+        snapshot_json TEXT NOT NULL,
+        status TEXT NOT NULL CHECK(status IN ('running', 'idle', 'completed', 'failed', 'partial', 'cancelled', 'expired')),
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        expires_at INTEGER
+      )`,
+      "CREATE INDEX idx_runtime_subagent_runs_station_status_v21 ON runtime_subagent_runs(station_id, status, updated_at DESC)",
+      `CREATE TABLE provider_usage_records (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        provider TEXT NOT NULL CHECK(provider IN ('copilot', 'azure-openai')),
+        station_id TEXT,
+        run_id TEXT,
+        session_id TEXT,
+        model TEXT,
+        input_tokens INTEGER,
+        output_tokens INTEGER,
+        total_tokens INTEGER,
+        estimated_cost_usd REAL,
+        latency_ms INTEGER,
+        observed_at INTEGER NOT NULL,
+        source TEXT NOT NULL CHECK(source IN ('provider', 'estimated', 'unknown'))
+      )`,
+      "CREATE INDEX idx_provider_usage_records_scope_v21 ON provider_usage_records(provider, station_id, run_id, observed_at DESC)",
+      "CREATE INDEX idx_provider_usage_records_session_v21 ON provider_usage_records(session_id, observed_at DESC)",
+    ],
+  },
 ];
 
 type SqliteDatabase = InstanceType<typeof BetterSqlite3>;
@@ -1412,6 +1622,61 @@ const normalizeStringArray = (value: readonly string[] | null | undefined): stri
   (value ?? []).map((entry) => entry.trim()).filter((entry) => entry.length > 0);
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null;
+
+const assertRuntimePermissionRequestStatus = (value: string): asserts value is RuntimePermissionRequestStatus => {
+  if ((RUNTIME_PERMISSION_REQUEST_STATUSES as readonly string[]).includes(value)) {
+    return;
+  }
+  throw new Error(`Unknown runtime permission request status: ${value}`);
+};
+
+const mapRuntimePermissionRequestRow = (row: RuntimePermissionRequestRow): RuntimePermissionRequestRecord => {
+  assertRuntimePermissionRequestStatus(row.status);
+  const payload = tryParseJson(row.payloadJson);
+  if (!isRecord(payload)) {
+    throw new Error(`Stored runtime permission request ${row.requestId} has invalid payload JSON`);
+  }
+  return {
+    requestId: String(row.requestId),
+    stationId: row.stationId === null ? null : String(row.stationId),
+    payload: payload as unknown as PermissionRequestPayload,
+    status: row.status,
+    createdAt: Number(row.createdAt),
+    updatedAt: Number(row.updatedAt),
+    resolvedAt: row.resolvedAt === null ? null : Number(row.resolvedAt),
+  };
+};
+
+const mapRuntimeSubagentRunRow = (row: RuntimeSubagentRunRow): RuntimeSubagentRunRecord => {
+  const snapshot = tryParseJson(row.snapshotJson);
+  if (!isRecord(snapshot)) {
+    throw new Error(`Stored runtime subagent run ${row.runId} has invalid snapshot JSON`);
+  }
+  return {
+    runId: String(row.runId),
+    stationId: row.stationId === null ? null : String(row.stationId),
+    snapshot: snapshot as unknown as SubagentRunSnapshot,
+    createdAt: Number(row.createdAt),
+    updatedAt: Number(row.updatedAt),
+    expiresAt: row.expiresAt === null ? null : Number(row.expiresAt),
+  };
+};
+
+const mapProviderUsageRecordRow = (row: ProviderUsageRecordRow): PersistedProviderUsageRecord => ({
+  id: Number(row.id),
+  provider: row.provider === "azure-openai" ? "azure-openai" : "copilot",
+  stationId: row.stationId === null ? null : String(row.stationId),
+  runId: row.runId === null ? null : String(row.runId),
+  sessionId: row.sessionId === null ? null : String(row.sessionId),
+  model: row.model === null ? null : String(row.model),
+  inputTokens: row.inputTokens === null ? null : Number(row.inputTokens),
+  outputTokens: row.outputTokens === null ? null : Number(row.outputTokens),
+  totalTokens: row.totalTokens === null ? null : Number(row.totalTokens),
+  estimatedCostUsd: row.estimatedCostUsd === null ? null : Number(row.estimatedCostUsd),
+  latencyMs: row.latencyMs === null ? null : Number(row.latencyMs),
+  observedAt: Number(row.observedAt),
+  source: row.source === "provider" || row.source === "estimated" ? row.source : "unknown",
+});
 
 const toFtsQuery = (query: string): string => {
   const tokens = query
@@ -2545,6 +2810,661 @@ export class SpiraMemoryDatabase {
         value: normalizedValue,
         updatedAt,
       });
+  }
+
+  upsertPersistedStation(input: UpsertPersistedStationInput): PersistedStationRecord {
+    this.assertWritable();
+    const stationId = normalizeText(input.stationId);
+    const label = normalizeText(input.label);
+    if (!stationId) {
+      throw new Error("Persisted station id is required.");
+    }
+    if (!label) {
+      throw new Error("Persisted station label is required.");
+    }
+
+    const key = `station-record:${stationId}`;
+    const existingRow = this.db
+      .prepare(
+        `SELECT
+           value,
+           updated_at AS updatedAt
+         FROM session_state
+         WHERE key = @key`,
+      )
+      .get({ key }) as Pick<SessionStateRecordRow, "value" | "updatedAt"> | undefined;
+    const parsedExisting = tryParseJson(existingRow?.value ?? null) as Partial<PersistedStationRecord> | null;
+    const createdAt =
+      typeof parsedExisting?.createdAt === "number" && Number.isFinite(parsedExisting.createdAt)
+        ? parsedExisting.createdAt
+        : (input.createdAt ?? Date.now());
+    const updatedAt = Date.now();
+    const record: PersistedStationRecord = {
+      stationId,
+      label,
+      createdAt,
+      updatedAt,
+    };
+
+    this.db
+      .prepare(
+        `INSERT INTO session_state (key, value, updated_at)
+         VALUES (@key, @value, @updatedAt)
+         ON CONFLICT(key) DO UPDATE SET
+           value = excluded.value,
+           updated_at = excluded.updated_at`,
+      )
+      .run({
+        key,
+        value: serializeJson(record),
+        updatedAt,
+      });
+
+    return record;
+  }
+
+  listPersistedStations(): PersistedStationRecord[] {
+    const explicitRows = this.db
+      .prepare(
+        `SELECT
+           key,
+           value,
+           updated_at AS updatedAt
+         FROM session_state
+         WHERE key LIKE 'station-record:%'
+           AND value IS NOT NULL`,
+      )
+      .all() as SessionStateRecordRow[];
+
+    const records = new Map<string, PersistedStationRecord>();
+    for (const row of explicitRows) {
+      const stationId = String(row.key).slice("station-record:".length);
+      if (!stationId) {
+        continue;
+      }
+      const parsed = tryParseJson(row.value) as Partial<PersistedStationRecord> | null;
+      const label = normalizeText(parsed?.label);
+      if (!label) {
+        continue;
+      }
+      records.set(stationId, {
+        stationId,
+        label,
+        createdAt:
+          typeof parsed?.createdAt === "number" && Number.isFinite(parsed.createdAt) ? parsed.createdAt : row.updatedAt,
+        updatedAt: row.updatedAt,
+      });
+    }
+
+    const legacySessionKeys = this.db
+      .prepare(
+        `SELECT
+           key
+         FROM session_state
+         WHERE key LIKE 'station:%'
+           AND value IS NOT NULL`,
+      )
+      .all() as SessionStateKeyRow[];
+    for (const row of legacySessionKeys) {
+      const match = /^station:([^:]+):/u.exec(String(row.key));
+      const stationId = match?.[1];
+      if (!stationId || records.has(stationId)) {
+        continue;
+      }
+      records.set(stationId, {
+        stationId,
+        label: `Station ${stationId}`,
+        createdAt: 0,
+        updatedAt: 0,
+      });
+    }
+
+    return [...records.values()].sort((left, right) =>
+      left.createdAt === right.createdAt ? left.stationId.localeCompare(right.stationId) : left.createdAt - right.createdAt,
+    );
+  }
+
+  deletePersistedStation(stationId: string): boolean {
+    this.assertWritable();
+    const normalizedStationId = normalizeText(stationId);
+    if (!normalizedStationId) {
+      return false;
+    }
+    const result = this.db
+      .prepare("DELETE FROM session_state WHERE key = @key")
+      .run({ key: `station-record:${normalizedStationId}` });
+    return result.changes > 0;
+  }
+
+  upsertRuntimeStationState(input: UpsertRuntimeStationStateInput): RuntimeStationStateRecord {
+    this.assertWritable();
+    const stationId = normalizeText(input.stationId);
+    if (!stationId) {
+      throw new Error("Runtime station state requires a station id.");
+    }
+
+    const key = `station-runtime:${stationId}`;
+    const existingRow = this.db
+      .prepare(
+        `SELECT
+           value,
+           updated_at AS updatedAt
+         FROM session_state
+         WHERE key = @key`,
+      )
+      .get({ key }) as Pick<SessionStateRecordRow, "value" | "updatedAt"> | undefined;
+    const parsedExisting = tryParseJson(existingRow?.value ?? null) as Partial<RuntimeStationStateRecord> | null;
+    const updatedAt = input.updatedAt ?? Date.now();
+    const record: RuntimeStationStateRecord = {
+      stationId,
+      state: input.state,
+      promptInFlight: input.promptInFlight,
+      activeSessionId: input.activeSessionId ?? null,
+      activeToolCalls: input.activeToolCalls ?? [],
+      abortRequestedAt: input.abortRequestedAt ?? null,
+      recoveryMessage: normalizeTitle(input.recoveryMessage) ?? null,
+      createdAt:
+        typeof parsedExisting?.createdAt === "number" && Number.isFinite(parsedExisting.createdAt)
+          ? parsedExisting.createdAt
+          : (input.createdAt ?? updatedAt),
+      updatedAt,
+    };
+
+    this.db
+      .prepare(
+        `INSERT INTO session_state (key, value, updated_at)
+         VALUES (@key, @value, @updatedAt)
+         ON CONFLICT(key) DO UPDATE SET
+           value = excluded.value,
+           updated_at = excluded.updated_at`,
+      )
+      .run({
+        key,
+        value: serializeJson(record),
+        updatedAt,
+      });
+
+    return record;
+  }
+
+  getRuntimeStationState(stationId: string): RuntimeStationStateRecord | null {
+    const normalizedStationId = normalizeText(stationId);
+    if (!normalizedStationId) {
+      return null;
+    }
+
+    const row = this.db
+      .prepare(
+        `SELECT
+           value,
+           updated_at AS updatedAt
+         FROM session_state
+         WHERE key = @key`,
+      )
+      .get({ key: `station-runtime:${normalizedStationId}` }) as Pick<SessionStateRecordRow, "value" | "updatedAt"> | undefined;
+    if (!row?.value) {
+      return null;
+    }
+
+    const parsed = tryParseJson(row.value) as Partial<RuntimeStationStateRecord> | null;
+    return {
+      stationId: normalizedStationId,
+      state:
+        parsed?.state === "listening" ||
+        parsed?.state === "transcribing" ||
+        parsed?.state === "speaking" ||
+        parsed?.state === "thinking" ||
+        parsed?.state === "error"
+          ? parsed.state
+          : "idle",
+      promptInFlight: parsed?.promptInFlight === true,
+      activeSessionId: typeof parsed?.activeSessionId === "string" ? parsed.activeSessionId : null,
+      activeToolCalls: Array.isArray(parsed?.activeToolCalls)
+        ? parsed.activeToolCalls.flatMap((entry) => {
+            if (
+              entry &&
+              typeof entry === "object" &&
+              typeof entry.callId === "string" &&
+              typeof entry.toolName === "string" &&
+              typeof entry.startedAt === "number" &&
+              Number.isFinite(entry.startedAt)
+            ) {
+              return [
+                {
+                  callId: entry.callId,
+                  toolName: entry.toolName,
+                  args: "args" in entry ? entry.args : {},
+                  startedAt: entry.startedAt,
+                },
+              ];
+            }
+            return [];
+          })
+        : [],
+      abortRequestedAt:
+        typeof parsed?.abortRequestedAt === "number" && Number.isFinite(parsed.abortRequestedAt)
+          ? parsed.abortRequestedAt
+          : null,
+      recoveryMessage: normalizeTitle(parsed?.recoveryMessage) ?? null,
+      createdAt:
+        typeof parsed?.createdAt === "number" && Number.isFinite(parsed.createdAt) ? parsed.createdAt : row.updatedAt,
+      updatedAt: row.updatedAt,
+    };
+  }
+
+  listRuntimeStationStates(): RuntimeStationStateRecord[] {
+    const rows = this.db
+      .prepare(
+        `SELECT
+           key
+         FROM session_state
+         WHERE key LIKE 'station-runtime:%'
+           AND value IS NOT NULL`,
+      )
+      .all() as SessionStateKeyRow[];
+    return rows.flatMap((row) => {
+      const stationId = String(row.key).slice("station-runtime:".length);
+      const record = this.getRuntimeStationState(stationId);
+      return record ? [record] : [];
+    });
+  }
+
+  deleteRuntimeStationState(stationId: string): boolean {
+    this.assertWritable();
+    const normalizedStationId = normalizeText(stationId);
+    if (!normalizedStationId) {
+      return false;
+    }
+    const result = this.db
+      .prepare("DELETE FROM session_state WHERE key = @key")
+      .run({ key: `station-runtime:${normalizedStationId}` });
+    return result.changes > 0;
+  }
+
+  upsertRuntimePermissionRequest(input: UpsertRuntimePermissionRequestInput): RuntimePermissionRequestRecord {
+    this.assertWritable();
+    const createdAt = input.createdAt ?? Date.now();
+    const stationId = input.stationId ?? input.payload.stationId ?? null;
+    const payload: PermissionRequestPayload = {
+      ...input.payload,
+      ...(stationId ? { stationId } : {}),
+    };
+    this.db
+      .prepare(
+        `INSERT INTO runtime_permission_requests (
+           request_id,
+           station_id,
+           payload_json,
+           status,
+           created_at,
+           updated_at,
+           resolved_at
+         )
+         VALUES (@requestId, @stationId, @payloadJson, 'pending', @createdAt, @updatedAt, NULL)
+         ON CONFLICT(request_id) DO UPDATE SET
+           station_id = excluded.station_id,
+           payload_json = excluded.payload_json,
+           status = 'pending',
+           updated_at = excluded.updated_at,
+           resolved_at = NULL`,
+      )
+      .run({
+        requestId: input.requestId,
+        stationId,
+        payloadJson: serializeJson(payload),
+        createdAt,
+        updatedAt: createdAt,
+      });
+
+    const record = this.getRuntimePermissionRequest(input.requestId);
+    if (!record) {
+      throw new Error(`Failed to persist runtime permission request ${input.requestId}`);
+    }
+    return record;
+  }
+
+  getRuntimePermissionRequest(requestId: string): RuntimePermissionRequestRecord | null {
+    const row = this.db
+      .prepare(
+        `SELECT
+           request_id AS requestId,
+           station_id AS stationId,
+           payload_json AS payloadJson,
+           status,
+           created_at AS createdAt,
+           updated_at AS updatedAt,
+           resolved_at AS resolvedAt
+         FROM runtime_permission_requests
+         WHERE request_id = @requestId`,
+      )
+      .get({ requestId }) as RuntimePermissionRequestRow | undefined;
+
+    return row ? mapRuntimePermissionRequestRow(row) : null;
+  }
+
+  listPendingRuntimePermissionRequests(stationId?: string | null): RuntimePermissionRequestRecord[] {
+    const rows = (stationId
+      ? this.db
+          .prepare(
+            `SELECT
+               request_id AS requestId,
+               station_id AS stationId,
+               payload_json AS payloadJson,
+               status,
+               created_at AS createdAt,
+               updated_at AS updatedAt,
+               resolved_at AS resolvedAt
+             FROM runtime_permission_requests
+             WHERE status = 'pending' AND station_id = @stationId
+             ORDER BY updated_at DESC`,
+          )
+          .all({ stationId })
+      : this.db
+          .prepare(
+            `SELECT
+               request_id AS requestId,
+               station_id AS stationId,
+               payload_json AS payloadJson,
+               status,
+               created_at AS createdAt,
+               updated_at AS updatedAt,
+               resolved_at AS resolvedAt
+             FROM runtime_permission_requests
+             WHERE status = 'pending'
+             ORDER BY updated_at DESC`,
+          )
+          .all()) as RuntimePermissionRequestRow[];
+
+    return rows.map(mapRuntimePermissionRequestRow);
+  }
+
+  resolveRuntimePermissionRequest(
+    requestId: string,
+    status: Exclude<RuntimePermissionRequestStatus, "pending">,
+    resolvedAt = Date.now(),
+  ): boolean {
+    this.assertWritable();
+    const result = this.db
+      .prepare(
+        `UPDATE runtime_permission_requests
+         SET status = @status,
+             updated_at = @resolvedAt,
+             resolved_at = @resolvedAt
+         WHERE request_id = @requestId AND status = 'pending'`,
+      )
+      .run({ requestId, status, resolvedAt });
+    return result.changes > 0;
+  }
+
+  upsertRuntimeSubagentRun(input: UpsertRuntimeSubagentRunInput): RuntimeSubagentRunRecord {
+    this.assertWritable();
+    const createdAt = input.createdAt ?? input.snapshot.startedAt ?? Date.now();
+    const updatedAt = input.snapshot.updatedAt;
+    const expiresAt = input.snapshot.expiresAt ?? null;
+    this.db
+      .prepare(
+        `INSERT INTO runtime_subagent_runs (
+           run_id,
+           station_id,
+           snapshot_json,
+           status,
+           created_at,
+           updated_at,
+           expires_at
+         )
+         VALUES (@runId, @stationId, @snapshotJson, @status, @createdAt, @updatedAt, @expiresAt)
+         ON CONFLICT(run_id) DO UPDATE SET
+           station_id = excluded.station_id,
+           snapshot_json = excluded.snapshot_json,
+           status = excluded.status,
+           updated_at = excluded.updated_at,
+           expires_at = excluded.expires_at`,
+      )
+      .run({
+        runId: input.runId,
+        stationId: input.stationId ?? null,
+        snapshotJson: serializeJson(input.snapshot),
+        status: input.snapshot.status,
+        createdAt,
+        updatedAt,
+        expiresAt,
+      });
+
+    const record = this.getRuntimeSubagentRun(input.runId);
+    if (!record) {
+      throw new Error(`Failed to persist runtime subagent run ${input.runId}`);
+    }
+    return record;
+  }
+
+  getRuntimeSubagentRun(runId: string): RuntimeSubagentRunRecord | null {
+    const row = this.db
+      .prepare(
+        `SELECT
+           run_id AS runId,
+           station_id AS stationId,
+           snapshot_json AS snapshotJson,
+           status,
+           created_at AS createdAt,
+           updated_at AS updatedAt,
+           expires_at AS expiresAt
+         FROM runtime_subagent_runs
+         WHERE run_id = @runId`,
+      )
+      .get({ runId }) as RuntimeSubagentRunRow | undefined;
+
+    return row ? mapRuntimeSubagentRunRow(row) : null;
+  }
+
+  listRuntimeSubagentRuns(stationId?: string | null): RuntimeSubagentRunRecord[] {
+    const rows = (stationId
+      ? this.db
+          .prepare(
+            `SELECT
+               run_id AS runId,
+               station_id AS stationId,
+               snapshot_json AS snapshotJson,
+               status,
+               created_at AS createdAt,
+               updated_at AS updatedAt,
+               expires_at AS expiresAt
+             FROM runtime_subagent_runs
+             WHERE station_id = @stationId
+             ORDER BY updated_at DESC`,
+          )
+          .all({ stationId })
+      : this.db
+          .prepare(
+            `SELECT
+               run_id AS runId,
+               station_id AS stationId,
+               snapshot_json AS snapshotJson,
+               status,
+               created_at AS createdAt,
+               updated_at AS updatedAt,
+               expires_at AS expiresAt
+             FROM runtime_subagent_runs
+             ORDER BY updated_at DESC`,
+          )
+          .all()) as RuntimeSubagentRunRow[];
+
+    return rows.map(mapRuntimeSubagentRunRow);
+  }
+
+  deleteRuntimeSubagentRun(runId: string): boolean {
+    this.assertWritable();
+    const result = this.db
+      .prepare(
+        `DELETE FROM runtime_subagent_runs
+         WHERE run_id = @runId`,
+      )
+      .run({ runId });
+    return result.changes > 0;
+  }
+
+  appendProviderUsageRecord(input: AppendProviderUsageRecordInput): PersistedProviderUsageRecord {
+    this.assertWritable();
+    const observedAt = input.observedAt ?? Date.now();
+    const result = this.db
+      .prepare(
+        `INSERT INTO provider_usage_records (
+           provider,
+           station_id,
+           run_id,
+           session_id,
+           model,
+           input_tokens,
+           output_tokens,
+           total_tokens,
+           estimated_cost_usd,
+           latency_ms,
+           observed_at,
+           source
+         )
+         VALUES (
+           @provider,
+           @stationId,
+           @runId,
+           @sessionId,
+           @model,
+           @inputTokens,
+           @outputTokens,
+           @totalTokens,
+           @estimatedCostUsd,
+           @latencyMs,
+           @observedAt,
+           @source
+         )`,
+      )
+      .run({
+        provider: input.provider,
+        stationId: input.stationId ?? null,
+        runId: input.runId ?? null,
+        sessionId: input.sessionId ?? null,
+        model: input.model ?? null,
+        inputTokens: input.inputTokens ?? null,
+        outputTokens: input.outputTokens ?? null,
+        totalTokens: input.totalTokens ?? null,
+        estimatedCostUsd: input.estimatedCostUsd ?? null,
+        latencyMs: input.latencyMs ?? null,
+        observedAt,
+        source: input.source,
+      });
+
+    const row = this.db
+      .prepare(
+        `SELECT
+           id,
+           provider,
+           station_id AS stationId,
+           run_id AS runId,
+           session_id AS sessionId,
+           model,
+           input_tokens AS inputTokens,
+           output_tokens AS outputTokens,
+           total_tokens AS totalTokens,
+           estimated_cost_usd AS estimatedCostUsd,
+           latency_ms AS latencyMs,
+           observed_at AS observedAt,
+           source
+         FROM provider_usage_records
+         WHERE id = @id`,
+      )
+      .get({ id: result.lastInsertRowid }) as ProviderUsageRecordRow | undefined;
+
+    if (!row) {
+      throw new Error("Failed to persist provider usage record");
+    }
+    return mapProviderUsageRecordRow(row);
+  }
+
+  listProviderUsageRecords(limit = 100): PersistedProviderUsageRecord[] {
+    const rows = this.db
+      .prepare(
+        `SELECT
+           id,
+           provider,
+           station_id AS stationId,
+           run_id AS runId,
+           session_id AS sessionId,
+           model,
+           input_tokens AS inputTokens,
+           output_tokens AS outputTokens,
+           total_tokens AS totalTokens,
+           estimated_cost_usd AS estimatedCostUsd,
+           latency_ms AS latencyMs,
+           observed_at AS observedAt,
+           source
+         FROM provider_usage_records
+         ORDER BY observed_at DESC, id DESC
+         LIMIT @limit`,
+      )
+      .all({ limit }) as ProviderUsageRecordRow[];
+
+    return rows.map(mapProviderUsageRecordRow);
+  }
+
+  recoverInterruptedRuntimeState(now = Date.now()): RuntimeRecoverySummary {
+    this.assertWritable();
+
+    const expiredPermissionRequestIds = this.listPendingRuntimePermissionRequests().map((record) => record.requestId);
+    if (expiredPermissionRequestIds.length > 0) {
+      this.db
+        .prepare(
+          `UPDATE runtime_permission_requests
+           SET status = 'expired',
+               updated_at = @now,
+               resolved_at = @now
+           WHERE status = 'pending'`,
+        )
+        .run({ now });
+    }
+
+    const recoveredRuns = this.listRuntimeSubagentRuns().filter((record) => record.snapshot.status === "running");
+    for (const record of recoveredRuns) {
+      this.upsertRuntimeSubagentRun({
+        runId: record.runId,
+        stationId: record.stationId,
+        createdAt: record.createdAt,
+        snapshot: {
+          ...record.snapshot,
+          status: "failed",
+          summary: "Delegated subagent run ended when the backend restarted.",
+          followupNeeded: undefined,
+          envelope: undefined,
+          updatedAt: now,
+          completedAt: now,
+          expiresAt: now + 10 * 60_000,
+        },
+      });
+    }
+
+    const recoveredStations = this.listRuntimeStationStates().filter(
+      (record) =>
+        record.promptInFlight || record.state === "thinking" || record.activeToolCalls.length > 0 || record.abortRequestedAt,
+    );
+    for (const record of recoveredStations) {
+      this.setSessionState(getPersistedProviderSessionStateKey(record.stationId), null);
+      this.upsertRuntimeStationState({
+        stationId: record.stationId,
+        state: "error",
+        promptInFlight: false,
+        activeSessionId: null,
+        activeToolCalls: [],
+        abortRequestedAt: null,
+        recoveryMessage: record.abortRequestedAt
+          ? "The previous response was interrupted while cancellation was in progress."
+          : "The previous response ended when the backend restarted.",
+        createdAt: record.createdAt,
+        updatedAt: now,
+      });
+    }
+
+    return {
+      expiredPermissionRequestIds,
+      recoveredSubagentRunIds: recoveredRuns.map((record) => record.runId),
+      recoveredStationIds: recoveredStations.map((record) => record.stationId),
+    };
   }
 
   getYouTrackStateMapping(): YouTrackStateMapping | null {

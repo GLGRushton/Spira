@@ -35,6 +35,7 @@ import { MissionLifecycleService } from "./missions/mission-lifecycle.js";
 import { MissionServiceRegistry } from "./missions/service-registry.js";
 import { type GenerateCommitDraftInput, TicketRunService } from "./missions/ticket-runs.js";
 import { ProjectRegistry } from "./projects/registry.js";
+import { RuntimeStore } from "./runtime/runtime-store.js";
 import { WsServer } from "./server.js";
 import { MANAGED_SQL_SERVER_BUILTIN_SERVER_IDS, buildSqlServerBuiltinMcpServers } from "./sqlserver/builtin.js";
 import { SubagentRegistry } from "./subagent/registry.js";
@@ -75,6 +76,7 @@ let voiceConfiguration: VoiceConfiguration | null = null;
 let wakeWordEnabled = true;
 let speechEnabled = true;
 let memoryDb: SpiraMemoryDatabase | null = null;
+let runtimeStore: RuntimeStore | null = null;
 let youTrackService: YouTrackService | null = null;
 let projectRegistry: ProjectRegistry | null = null;
 let ticketRunService: TicketRunService | null = null;
@@ -296,6 +298,30 @@ const restoreMissionStations = (registry: StationRegistry, database: SpiraMemory
   }
 };
 
+const restorePersistedStations = (registry: StationRegistry, database: SpiraMemoryDatabase | null): void => {
+  if (!database) {
+    return;
+  }
+
+  const missionStationIds = new Set(
+    database
+      .listTicketRuns()
+      .map((run) => run.stationId)
+      .filter((stationId): stationId is string => typeof stationId === "string" && stationId.length > 0),
+  );
+  for (const station of database.listPersistedStations()) {
+    if (station.stationId === DEFAULT_STATION_ID || missionStationIds.has(station.stationId)) {
+      continue;
+    }
+    registry.createStation({
+      stationId: station.stationId,
+      label: station.label,
+      createdAt: station.createdAt,
+      updatedAt: station.updatedAt,
+    });
+  }
+};
+
 const createWakeWordProvider = (env: Env, config: VoiceConfiguration): WakeWordProvider => {
   if (config.wakeWordProvider === "none") {
     return new NullWakeWordProvider();
@@ -452,6 +478,7 @@ const shutdown = async (signal: ShutdownReason) => {
   wakeWordEnabled = true;
   speechEnabled = true;
   memoryDb = null;
+  runtimeStore = null;
   youTrackService = null;
   server = null;
   bus = null;
@@ -527,6 +554,8 @@ const handleClientMessage = async (message: ClientMessage): Promise<void> => {
       requestId: message.requestId,
       stations: stationRegistry?.listStations() ?? [],
     });
+    stationRegistry?.replayRecoveredStationIssues();
+    stationRegistry?.replayManagedSubagentState();
     return;
   }
 
@@ -2267,6 +2296,17 @@ const bootstrap = async () => {
   const memoryDbPath = process.env[SPIRA_MEMORY_DB_PATH_ENV];
   if (typeof memoryDbPath === "string" && memoryDbPath.trim()) {
     memoryDb = SpiraMemoryDatabase.open(memoryDbPath.trim());
+    runtimeStore = new RuntimeStore(memoryDb);
+    const runtimeRecovery = RuntimeStore.recoverInterruptedState(memoryDb);
+    if (runtimeRecovery.expiredPermissionRequestIds.length > 0 || runtimeRecovery.recoveredSubagentRunIds.length > 0) {
+      logger.warn(
+        {
+          expiredPermissionRequestIds: runtimeRecovery.expiredPermissionRequestIds,
+          recoveredSubagentRunIds: runtimeRecovery.recoveredSubagentRunIds,
+        },
+        "Recovered interrupted runtime state after backend startup",
+      );
+    }
   } else {
     logger.warn(
       { envKey: SPIRA_MEMORY_DB_PATH_ENV },
@@ -2547,6 +2587,7 @@ const bootstrap = async () => {
   stationRegistry.createStation({ stationId: DEFAULT_STATION_ID, label: "Primary" });
   ticketRunService?.recoverInterruptedWork();
   restoreMissionStations(stationRegistry, memoryDb);
+  restorePersistedStations(stationRegistry, memoryDb);
   ttsPlayback = new TtsPlaybackService(env, bus, logger);
 
   bus.on("voice:transcript", ({ text }) => {
@@ -2569,6 +2610,9 @@ const bootstrap = async () => {
 
   bus.on("transport:client-disconnected", () => {
     stationRegistry?.handleClientDisconnected();
+  });
+  bus.on("provider:usage", (record) => {
+    runtimeStore?.persistProviderUsage(record);
   });
 
   bus.on("missions:runs-changed", (snapshot) => {

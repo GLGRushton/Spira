@@ -1,5 +1,6 @@
 import type { SubagentEnvelope } from "@spira/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { SpiraEventBus } from "../util/event-bus.js";
 import { SubagentRunRegistry } from "./run-registry.js";
 
 const createEnvelope = (overrides: Partial<SubagentEnvelope> = {}): SubagentEnvelope => ({
@@ -37,6 +38,7 @@ describe("SubagentRunRegistry", () => {
         runId: "run-1",
         roomId: "agent:subagent-run-1",
         startedAt: 1000,
+        workingDirectory: "C:\\GitHub\\Spira",
         resultPromise: completion,
         write: async () => createEnvelope(),
         stop: async () => undefined,
@@ -55,6 +57,7 @@ describe("SubagentRunRegistry", () => {
       runId: "run-1",
       status: "running",
       task: "Inspect Spira",
+      workingDirectory: "C:\\GitHub\\Spira",
     });
 
     await registry.waitFor("run-1");
@@ -289,5 +292,166 @@ describe("SubagentRunRegistry", () => {
 
     await vi.advanceTimersByTimeAsync(100);
     expect(registry.get("run-9")).toBeNull();
+  });
+
+  it("expires recovered idle runs even without a live launch handle", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+
+    const persistedSnapshots: Record<string, unknown> = {};
+    const registry = new SubagentRunRegistry({
+      idleTimeoutMs: 50,
+      retentionMs: 100,
+      runtimeStore: {
+        listPersistedSubagentRuns: () => [
+          {
+            agent_id: "run-10",
+            runId: "run-10",
+            roomId: "agent:subagent-run-10",
+            domain: "spira",
+            task: "Recovered task",
+            status: "idle",
+            startedAt: 1_000,
+            updatedAt: 1_200,
+            completedAt: 1_200,
+            expiresAt: 5_000,
+            summary: "Recovered turn finished.",
+            envelope: createEnvelope({ runId: "run-10" }),
+          },
+        ],
+        persistSubagentRun: (snapshot) => {
+          persistedSnapshots[snapshot.runId] = snapshot;
+          return snapshot;
+        },
+        deleteSubagentRun: vi.fn(),
+      } as never,
+    });
+
+    expect(registry.get("run-10")).toMatchObject({
+      runId: "run-10",
+      status: "idle",
+    });
+
+    await vi.advanceTimersByTimeAsync(50);
+
+    expect(registry.get("run-10")).toMatchObject({
+      runId: "run-10",
+      status: "expired",
+    });
+    expect(persistedSnapshots["run-10"]).toMatchObject({
+      runId: "run-10",
+      status: "expired",
+    });
+  });
+
+  it("persists in-flight and completed tool call state for background runs", async () => {
+    const bus = new SpiraEventBus();
+    const persistedSnapshots: Record<string, unknown> = {};
+    const registry = new SubagentRunRegistry({
+      bus,
+      runtimeStore: {
+        listPersistedSubagentRuns: () => [],
+        persistSubagentRun: (snapshot) => {
+          persistedSnapshots[snapshot.runId] = snapshot;
+          return snapshot;
+        },
+        deleteSubagentRun: vi.fn(),
+      } as never,
+    });
+
+    registry.track(
+      "spira",
+      { task: "Inspect Spira", mode: "background" },
+      {
+        runId: "run-11",
+        roomId: "agent:subagent-run-11",
+        startedAt: 1000,
+        resultPromise: new Promise(() => undefined),
+        write: async () => createEnvelope({ runId: "run-11" }),
+        stop: async () => undefined,
+      },
+    );
+    bus.emit("subagent:runtime-sync", {
+      runId: "run-11",
+      roomId: "agent:subagent-run-11",
+      allowWrites: true,
+      providerSessionId: "provider-session-11",
+    });
+    bus.emit("subagent:tool-call", {
+      runId: "run-11",
+      roomId: "agent:subagent-run-11",
+      callId: "call-1",
+      toolName: "spira_ui_get_snapshot",
+      args: {},
+      startedAt: 1100,
+    });
+    bus.emit("subagent:tool-result", {
+      runId: "run-11",
+      roomId: "agent:subagent-run-11",
+      callId: "call-1",
+      toolName: "spira_ui_get_snapshot",
+      status: "success",
+      result: { activeView: "bridge" },
+      startedAt: 1100,
+      completedAt: 1200,
+      durationMs: 100,
+    });
+
+    expect(persistedSnapshots["run-11"]).toMatchObject({
+      runId: "run-11",
+      allowWrites: true,
+      providerSessionId: "provider-session-11",
+      activeToolCalls: [],
+      toolCalls: [
+        expect.objectContaining({
+          callId: "call-1",
+          toolName: "spira_ui_get_snapshot",
+          status: "success",
+        }),
+      ],
+    });
+  });
+
+  it("rehydrates recovered idle runs when a resumable launch can be reconstructed", async () => {
+    const write = vi.fn(async () => createEnvelope({ runId: "run-12", summary: "Recovered follow-up finished." }));
+    const stop = vi.fn(async () => undefined);
+    const registry = new SubagentRunRegistry({
+      runtimeStore: {
+        listPersistedSubagentRuns: () => [
+          {
+            agent_id: "run-12",
+            runId: "run-12",
+            roomId: "agent:subagent-run-12",
+            domain: "spira",
+            task: "Recovered task",
+            status: "idle",
+            allowWrites: true,
+            providerSessionId: "provider-session-12",
+            activeToolCalls: [],
+            toolCalls: [],
+            startedAt: 1_000,
+            updatedAt: 1_200,
+            completedAt: 1_200,
+            expiresAt: 5_000_000_000_000,
+            summary: "Recovered turn finished.",
+            envelope: createEnvelope({ runId: "run-12" }),
+          },
+        ],
+        persistSubagentRun: vi.fn(),
+        deleteSubagentRun: vi.fn(),
+      } as never,
+      recoverLaunch: () => ({ write, stop }),
+    });
+
+    await expect(registry.write("run-12", "Keep going")).resolves.toMatchObject({
+      runId: "run-12",
+      status: "running",
+    });
+    await expect(registry.waitFor("run-12")).resolves.toMatchObject({
+      runId: "run-12",
+      status: "idle",
+      summary: "Recovered follow-up finished.",
+    });
+    expect(write).toHaveBeenCalledWith("Keep going");
   });
 });

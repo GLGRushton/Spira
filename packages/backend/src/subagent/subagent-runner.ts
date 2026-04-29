@@ -1,12 +1,4 @@
 import { randomUUID } from "node:crypto";
-import type {
-  CopilotClient,
-  CopilotSession,
-  PermissionRequest,
-  PermissionRequestResult,
-  SessionConfig,
-  SessionEvent,
-} from "@github/copilot-sdk";
 import { SUBAGENT_SCOPE_IDS } from "@spira/shared";
 import type {
   Env,
@@ -18,18 +10,31 @@ import type {
   SubagentDomain,
   SubagentEnvelope,
   SubagentErrorRecord,
+  SubagentRunSnapshot,
   SubagentScopeId,
   SubagentToolCallRecord,
 } from "@spira/shared";
-import {
-  createCopilotClient,
-  createFreshCopilotSession,
-  stopCopilotClient,
-  withTimeout,
-} from "../copilot/session-factory.js";
+import { approvePermissionOnce, permissionUserNotAvailable } from "../copilot/permission-decisions.js";
 import { StreamAssembler } from "../copilot/stream-handler.js";
 import { getCopilotTools } from "../copilot/tool-bridge.js";
 import type { McpToolAggregator } from "../mcp/tool-aggregator.js";
+import { createFreshProviderSession, createProviderClient, stopProviderClient, withTimeout } from "../provider/client-factory.js";
+import {
+  normalizeProviderUsageSnapshot,
+  shouldPersistProviderSession,
+  shouldRequestNativeStreaming,
+} from "../provider/capability-fallback.js";
+import { getConfiguredProviderId, getProviderLabel } from "../provider/provider-config.js";
+import type {
+  ProviderClient,
+  ProviderPermissionRequest,
+  ProviderPermissionResult,
+  ProviderSession,
+  ProviderSessionConfig,
+  ProviderSessionEvent,
+  ProviderUsageRecord,
+  ProviderUsageSnapshot,
+} from "../provider/types.js";
 import { appRootDir } from "../util/app-paths.js";
 import { CopilotError, formatErrorDetails } from "../util/errors.js";
 import type { SpiraEventBus } from "../util/event-bus.js";
@@ -67,6 +72,7 @@ interface RunContext {
   rejectCompletion: (error: Error) => void;
   idleObserved: boolean;
   latestAssistantText?: string;
+  latestUsage?: ProviderUsageSnapshot;
 }
 
 interface LiveRunState {
@@ -76,9 +82,11 @@ interface LiveRunState {
   writesAllowed: boolean;
   keepAlive: boolean;
   toolLookup: Map<string, McpTool>;
-  client: CopilotClient | null;
-  session: CopilotSession | null;
+  client: ProviderClient | null;
+  session: ProviderSession | null;
   ownsClient: boolean;
+  providerSessionId: string | null;
+  recoveryPrompt: string | null;
   activeTurnPromise: Promise<SubagentEnvelope> | null;
   currentContext: RunContext | null;
   closed: boolean;
@@ -96,18 +104,19 @@ interface ParsedSubagentResponse {
 interface SubagentRunnerOptions {
   bus: SpiraEventBus;
   env: Env;
+  stationId?: string | null;
   toolAggregator: McpToolAggregator;
   domain: SubagentDomain;
   workingDirectory?: string;
-  getClient?: () => Promise<CopilotClient>;
+  getClient?: () => Promise<ProviderClient>;
   now?: () => number;
   runIdFactory?: () => string;
   sessionIdFactory?: () => `${string}-${string}-${string}-${string}-${string}`;
   retryDelayMs?: number;
   onPermissionRequest?: (
-    request: PermissionRequest,
+    request: ProviderPermissionRequest,
     context: { runId: string; domain: SubagentDomain },
-  ) => Promise<PermissionRequestResult>;
+  ) => Promise<ProviderPermissionResult>;
   lockManager?: SubagentLockManager;
 }
 
@@ -115,12 +124,21 @@ export interface SubagentRunLaunch {
   runId: string;
   roomId: `agent:${string}`;
   startedAt: number;
+  allowWrites?: boolean;
+  workingDirectory?: string;
   resultPromise: Promise<SubagentEnvelope>;
   write: (input: string) => Promise<SubagentEnvelope>;
   stop: () => Promise<void>;
 }
 
+export interface RecoveredSubagentRunLaunch {
+  write: (input: string) => Promise<SubagentEnvelope>;
+  stop: () => Promise<void>;
+}
+
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null;
+const getPermissionToolName = (request: ProviderPermissionRequest): string | null =>
+  "toolName" in request && typeof request.toolName === "string" ? request.toolName : null;
 
 const asString = (value: unknown): string | undefined =>
   typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
@@ -253,6 +271,48 @@ const parseSubagentResponse = (text: string, domain: SubagentDomain["id"]): Pars
   }
 };
 
+const buildRecoveredPrompt = (snapshot: SubagentRunSnapshot): string => {
+  const sections = [
+    "[Recovered subagent context]",
+    `Task: ${snapshot.task}`,
+    snapshot.summary ? `Latest summary: ${snapshot.summary}` : null,
+    snapshot.followupNeeded !== undefined ? `Follow-up needed: ${snapshot.followupNeeded ? "yes" : "no"}` : null,
+    snapshot.envelope?.payload ? `Latest payload: ${JSON.stringify(snapshot.envelope.payload)}` : null,
+    snapshot.toolCalls && snapshot.toolCalls.length > 0
+      ? `Recent tool calls: ${snapshot.toolCalls
+          .slice(-6)
+          .map((toolCall) => `${toolCall.toolName} (${toolCall.status})`)
+          .join(", ")}`
+      : null,
+    "Resume the run from this durable host-owned context rather than assuming provider session persistence.",
+    "[End recovered subagent context]",
+  ].filter((entry): entry is string => Boolean(entry));
+  return sections.join("\n\n");
+};
+
+const collectErrorMessages = (error: unknown, depth = 0): string[] => {
+  if (depth > 5 || error === null || error === undefined) {
+    return [];
+  }
+
+  if (typeof error === "string") {
+    return [error];
+  }
+
+  if (error instanceof Error) {
+    const messages = [error.message];
+    if ("cause" in error && error.cause !== undefined) {
+      messages.push(...collectErrorMessages(error.cause, depth + 1));
+    }
+    return messages;
+  }
+
+  return [];
+};
+
+const isMissingSessionError = (error: unknown): boolean =>
+  collectErrorMessages(error).some((message) => message.includes("Session not found:"));
+
 const getToolLookup = (tools: readonly McpTool[]): Map<string, McpTool> =>
   new Map(tools.map((tool) => [tool.name, tool]));
 
@@ -269,6 +329,14 @@ export class SubagentRunner {
     this.sessionIdFactory = options.sessionIdFactory ?? randomUUID;
     this.retryDelayMs = options.retryDelayMs ?? RETRY_DELAY_MS;
     this.lockManager = options.lockManager ?? new SubagentLockManager({ now: this.now });
+  }
+
+  private get configuredProviderId() {
+    return getConfiguredProviderId(this.options.env);
+  }
+
+  private get providerLabel(): string {
+    return getProviderLabel(this.configuredProviderId);
   }
 
   async run(args: SubagentDelegationArgs): Promise<SubagentEnvelope> {
@@ -292,6 +360,8 @@ export class SubagentRunner {
       client: null,
       session: null,
       ownsClient: !this.options.getClient,
+      providerSessionId: null,
+      recoveryPrompt: null,
       activeTurnPromise: null,
       currentContext: null,
       closed: false,
@@ -301,8 +371,49 @@ export class SubagentRunner {
       runId,
       roomId,
       startedAt,
+      allowWrites: writesAllowed,
+      workingDirectory: this.options.workingDirectory ?? appRootDir,
       resultPromise,
       write: (input) => this.writeToLiveRun(liveRun, args, input),
+      stop: () => this.stopLiveRun(liveRun),
+    };
+  }
+
+  recover(snapshot: SubagentRunSnapshot): RecoveredSubagentRunLaunch | null {
+    if (snapshot.status !== "idle") {
+      return null;
+    }
+
+    const scopedMcpTools = this.options.toolAggregator.getToolsForServerIds(this.options.domain.serverIds);
+    const writesAllowed = this.options.domain.allowWrites && snapshot.allowWrites === true;
+    const liveRun: LiveRunState = {
+      runId: snapshot.runId,
+      roomId: snapshot.roomId,
+      startedAt: snapshot.startedAt,
+      writesAllowed,
+      keepAlive: true,
+      toolLookup: getToolLookup(scopedMcpTools),
+      client: null,
+      session: null,
+      ownsClient: !this.options.getClient,
+      providerSessionId: snapshot.providerSessionId ?? null,
+      recoveryPrompt: buildRecoveredPrompt(snapshot),
+      activeTurnPromise: null,
+      currentContext: null,
+      closed: false,
+    };
+
+    return {
+      write: (input) =>
+        this.writeToLiveRun(
+          liveRun,
+          {
+            task: snapshot.task,
+            mode: "background",
+            ...(writesAllowed ? { allowWrites: true } : {}),
+          },
+          input,
+        ),
       stop: () => this.stopLiveRun(liveRun),
     };
   }
@@ -333,9 +444,10 @@ export class SubagentRunner {
       completionPromise,
       completionSettled: false,
       resolveCompletion,
-      rejectCompletion,
-      idleObserved: false,
-    };
+        rejectCompletion,
+        idleObserved: false,
+        latestUsage: undefined,
+      };
     liveRun.currentContext = context;
     if (announceStart) {
       this.options.bus.emit("subagent:started", {
@@ -367,6 +479,7 @@ export class SubagentRunner {
 
         const parsed = parseSubagentResponse(assistantText, this.options.domain.id);
         const completedAt = this.now();
+        this.emitProviderUsage(this.buildUsageRecord(liveRun, context, completedAt));
         const envelope = this.buildEnvelope(args, context, completedAt, "completed", parsed);
         this.options.bus.emit("subagent:completed", {
           runId: liveRun.runId,
@@ -410,6 +523,7 @@ export class SubagentRunner {
 
         liveRun.closed = true;
         const completedAt = this.now();
+        this.emitProviderUsage(this.buildUsageRecord(liveRun, context, completedAt));
         const envelope = this.buildEnvelope(
           args,
           context,
@@ -463,11 +577,13 @@ export class SubagentRunner {
     if (liveRun.activeTurnPromise) {
       throw new CopilotError("Delegated subagent run is still working on a previous turn");
     }
-    if (!liveRun.keepAlive || !liveRun.session) {
+    if (!liveRun.keepAlive) {
       throw new CopilotError("Delegated subagent run cannot accept follow-up input");
     }
 
-    return this.startTurn(liveRun, args, input, 0, false, false);
+    const prompt = liveRun.recoveryPrompt ? `${liveRun.recoveryPrompt}\n\nFollow-up request:\n${input}` : input;
+    liveRun.recoveryPrompt = null;
+    return this.startTurn(liveRun, args, prompt, 0, false, false);
   }
 
   private async stopLiveRun(liveRun: LiveRunState): Promise<void> {
@@ -482,17 +598,37 @@ export class SubagentRunner {
 
     liveRun.client = this.options.getClient
       ? await this.options.getClient()
-      : (await createCopilotClient(this.options.env, logger)).client;
+      : (await createProviderClient(this.options.env, logger)).client;
+    const sessionConfig = this.getSessionConfig(liveRun, liveRun.writesAllowed, liveRun.toolLookup);
+    const createSession = () => createFreshProviderSession(liveRun.client!, sessionConfig, this.sessionIdFactory());
 
-    liveRun.session = await withTimeout(
-      createFreshCopilotSession(
-        liveRun.client,
-        this.getSessionConfig(liveRun, liveRun.writesAllowed, liveRun.toolLookup),
-        this.sessionIdFactory(),
-      ),
-      SESSION_INIT_TIMEOUT_MS,
-      "Timed out while connecting a subagent to GitHub Copilot",
-    );
+    try {
+      liveRun.session = await withTimeout(
+        shouldPersistProviderSession(liveRun.client.capabilities) && liveRun.providerSessionId
+          ? liveRun.client.resumeSession(liveRun.providerSessionId, sessionConfig)
+          : createSession(),
+        SESSION_INIT_TIMEOUT_MS,
+        `Timed out while connecting a subagent to ${this.providerLabel}`,
+      );
+    } catch (error) {
+      if (!liveRun.providerSessionId || !isMissingSessionError(error)) {
+        throw error;
+      }
+
+      liveRun.providerSessionId = null;
+      liveRun.session = await withTimeout(
+        createSession(),
+        SESSION_INIT_TIMEOUT_MS,
+        `Timed out while reconnecting a subagent to ${this.providerLabel}`,
+      );
+    }
+    liveRun.providerSessionId = shouldPersistProviderSession(liveRun.client.capabilities) ? liveRun.session.sessionId : null;
+    this.options.bus.emit("subagent:runtime-sync", {
+      runId: liveRun.runId,
+      roomId: liveRun.roomId,
+      allowWrites: liveRun.writesAllowed,
+      providerSessionId: liveRun.providerSessionId,
+    });
   }
 
   private async cleanupLiveSession(liveRun: LiveRunState): Promise<void> {
@@ -511,7 +647,7 @@ export class SubagentRunner {
         });
       }
       if (liveRun.ownsClient && client) {
-        await stopCopilotClient(client, logger).catch((stopError) => {
+        await stopProviderClient(client, logger).catch((stopError) => {
           logger.warn(
             { error: stopError, runId: liveRun.runId, roomId: liveRun.roomId },
             "Failed to stop subagent client cleanly",
@@ -527,7 +663,7 @@ export class SubagentRunner {
     liveRun: LiveRunState,
     writesAllowed: boolean,
     toolLookup: Map<string, McpTool>,
-  ): Omit<SessionConfig, "sessionId"> {
+  ): Omit<ProviderSessionConfig, "sessionId"> {
     return {
       clientName: "Spira",
       infiniteSessions: {
@@ -535,14 +671,14 @@ export class SubagentRunner {
       },
       onEvent: (event) => {
         if (liveRun.currentContext) {
-          this.handleSessionEvent(liveRun.currentContext, toolLookup, event);
+          this.handleSessionEvent(liveRun, liveRun.currentContext, toolLookup, event);
         }
       },
       onPermissionRequest: (request) =>
         liveRun.currentContext
           ? this.handlePermissionRequest(liveRun.currentContext, request)
-          : Promise.resolve({ kind: "approved" }),
-      streaming: true,
+          : Promise.resolve(approvePermissionOnce()),
+      streaming: liveRun.client ? shouldRequestNativeStreaming(liveRun.client.capabilities) : true,
       systemMessage: {
         mode: "customize",
         content: [
@@ -587,7 +723,12 @@ export class SubagentRunner {
     return `Context:\n${args.context.trim()}\n\nTask:\n${args.task}`;
   }
 
-  private handleSessionEvent(context: RunContext, toolLookup: Map<string, McpTool>, event: SessionEvent): void {
+  private handleSessionEvent(
+    liveRun: LiveRunState,
+    context: RunContext,
+    toolLookup: Map<string, McpTool>,
+    event: ProviderSessionEvent,
+  ): void {
     switch (event.type) {
       case "assistant.message_delta":
         context.streamAssembler.append(event.data.messageId, event.data.deltaContent);
@@ -675,7 +816,16 @@ export class SubagentRunner {
 
       case "session.idle":
         context.idleObserved = true;
+        context.latestUsage = liveRun.client
+          ? normalizeProviderUsageSnapshot(liveRun.client.capabilities, event.data.usage ?? context.latestUsage)
+          : event.data.usage;
         this.resolveCompletionIfReady(context);
+        return;
+
+      case "assistant.usage":
+        context.latestUsage = liveRun.client
+          ? normalizeProviderUsageSnapshot(liveRun.client.capabilities, event.data)
+          : event.data;
         return;
 
       default:
@@ -815,16 +965,44 @@ export class SubagentRunner {
     };
   }
 
-  private handlePermissionRequest(context: RunContext, request: PermissionRequest): Promise<PermissionRequestResult> {
+  private handlePermissionRequest(
+    context: RunContext,
+    request: ProviderPermissionRequest,
+  ): Promise<ProviderPermissionResult> {
     if (this.options.onPermissionRequest) {
       return this.options.onPermissionRequest(request, { runId: context.runId, domain: this.options.domain });
     }
 
-    if (request.kind === "mcp" && typeof request.toolName === "string" && request.toolName.startsWith("vision_")) {
-      return Promise.resolve({ kind: "denied-no-approval-rule-and-could-not-request-from-user" });
+    const toolName = getPermissionToolName(request);
+    if (request.kind === "mcp" && toolName !== null && toolName.startsWith("vision_")) {
+      return Promise.resolve(permissionUserNotAvailable());
     }
 
-    return Promise.resolve({ kind: "approved" });
+    return Promise.resolve(approvePermissionOnce());
+  }
+
+  private emitProviderUsage(record: ProviderUsageRecord): void {
+    this.options.bus.emit("provider:usage", record);
+    logger.info({ usage: record, runId: record.runId }, "Provider usage observed for subagent run");
+  }
+
+  private buildUsageRecord(liveRun: LiveRunState, context: RunContext, observedAt: number): ProviderUsageRecord {
+    return {
+      provider: liveRun.client?.providerId ?? this.configuredProviderId,
+      stationId: this.options.stationId ?? null,
+      sessionId: liveRun.session?.sessionId ?? null,
+      runId: liveRun.runId,
+      model: context.latestUsage?.model ?? null,
+      inputTokens: context.latestUsage?.inputTokens ?? null,
+      outputTokens: context.latestUsage?.outputTokens ?? null,
+      totalTokens: context.latestUsage?.totalTokens ?? null,
+      estimatedCostUsd: context.latestUsage?.estimatedCostUsd ?? null,
+      latencyMs: context.latestUsage?.latencyMs ?? observedAt - context.startedAt,
+      observedAt,
+      source:
+        context.latestUsage?.source ??
+        (liveRun.client ? normalizeProviderUsageSnapshot(liveRun.client.capabilities, null).source : "unknown"),
+    };
   }
 
   private buildEnvelope(

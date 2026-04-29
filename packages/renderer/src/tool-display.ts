@@ -1,7 +1,7 @@
 export const RECENT_COMPLETION_MS = 3_000;
 
 const HIDDEN_TOOL_NAMES = new Set(["report_intent"]);
-const OPERATING_TOOLS = new Set(["apply_patch", "powershell", "sql"]);
+const OPERATING_TOOLS = new Set(["apply_patch", "powershell", "list_powershell", "sql", "write_file"]);
 const RESEARCH_TOOLS = new Set(["list_agents", "read_agent", "task", "web_fetch", "web_search"]);
 const INSPECT_PREFIXES = ["read_"];
 const INSPECT_TOOLS = new Set(["glob", "rg", "view"]);

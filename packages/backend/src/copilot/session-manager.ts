@@ -1,16 +1,10 @@
 import { randomUUID } from "node:crypto";
-import type {
-  CopilotClient,
-  CopilotSession,
-  PermissionRequest,
-  PermissionRequestResult,
-  SessionConfig,
-  SessionEvent,
-} from "@github/copilot-sdk";
+import type { RuntimeStationToolCallRecord, SpiraMemoryDatabase } from "@spira/memory-db";
 import type {
   AssistantState,
   Env,
   PermissionRequestPayload,
+  StationId,
   SubagentDelegationArgs,
   SubagentDomain,
   SubagentEnvelope,
@@ -20,27 +14,48 @@ import type {
 } from "@spira/shared";
 import { SUBAGENT_DOMAINS } from "@spira/shared";
 import type { McpToolAggregator } from "../mcp/tool-aggregator.js";
+import type {
+  ProviderClient,
+  ProviderPermissionRequest,
+  ProviderPermissionResult,
+  ProviderSession,
+  ProviderSessionConfig,
+  ProviderSessionEvent,
+  ProviderUsageRecord,
+  ProviderUsageSnapshot,
+} from "../provider/types.js";
+import { getConfiguredProviderId, getProviderLabel } from "../provider/provider-config.js";
+import {
+  type ProviderAuthStrategy,
+  createFreshProviderSession,
+  createProviderClient,
+  stopProviderClient,
+  withTimeout,
+} from "../provider/client-factory.js";
+import {
+  normalizeProviderUsageSnapshot,
+  shouldPersistProviderSession,
+  shouldRequestNativeStreaming,
+  shouldUseProviderAbort,
+} from "../provider/capability-fallback.js";
+import {
+  type MissionWorkflowState,
+  assertMissionMcpToolAllowedForState,
+  assertMissionWorkflowStateActionAllowed,
+} from "../missions/mission-workflow-guard.js";
 import { SubagentLockManager } from "../subagent/lock-manager.js";
 import type { SubagentRegistry } from "../subagent/registry.js";
 import { SubagentRunRegistry } from "../subagent/run-registry.js";
 import { SubagentRunner } from "../subagent/subagent-runner.js";
-import {
-  assertMissionMcpToolAllowedForState,
-  assertMissionWorkflowStateActionAllowed,
-  type MissionWorkflowState,
-} from "../missions/mission-workflow-guard.js";
+import { RuntimeStore } from "../runtime/runtime-store.js";
+import { createStationSessionStorage, type StationSessionStorage } from "../runtime/station-session-storage.js";
+import { appRootDir } from "../util/app-paths.js";
 import { CopilotError, formatErrorDetails } from "../util/errors.js";
 import type { SpiraEventBus } from "../util/event-bus.js";
 import { createLogger } from "../util/logger.js";
 import { setUnrefTimeout } from "../util/timers.js";
+import { approvePermissionOnce, permissionUserNotAvailable, rejectPermission } from "./permission-decisions.js";
 import { VOICE_RESPONSE_INSTRUCTIONS, buildOutgoingPrompt, createSessionConfig } from "./session-config.js";
-import {
-  type CopilotAuthStrategy,
-  createCopilotClient,
-  createFreshCopilotSession,
-  stopCopilotClient,
-  withTimeout,
-} from "./session-factory.js";
 import { StreamAssembler } from "./stream-handler.js";
 import { type ToolBridgeOptions, getCopilotTools } from "./tool-bridge.js";
 
@@ -60,6 +75,8 @@ interface SendPromptOptions {
 }
 
 interface SessionManagerOptions {
+  stationId?: StationId | null;
+  memoryDb?: SpiraMemoryDatabase | null;
   sessionPersistence?: SessionPersistence | null;
   subagentLockManager?: SubagentLockManager;
   subagentRegistry?: SubagentRegistry | null;
@@ -90,33 +107,44 @@ export interface ManagedSubagentLaunch {
 
 type ReportedCopilotError = CopilotError & { reportedToClient?: boolean };
 type PendingPermissionRequest = {
-  resolve: (result: PermissionRequestResult) => void;
+  resolve: (result: ProviderPermissionResult) => void;
   timeout: NodeJS.Timeout;
 };
 
+const getPermissionToolName = (request: ProviderPermissionRequest): string | null =>
+  "toolName" in request && typeof request.toolName === "string" ? request.toolName : null;
+
 const isVisionPermissionRequest = (
-  request: PermissionRequest,
-): request is PermissionRequest & {
+  request: ProviderPermissionRequest,
+): request is ProviderPermissionRequest & {
   kind: "mcp";
   serverName: string;
   toolName: string;
   toolTitle?: string;
   args?: Record<string, unknown>;
   readOnly?: boolean;
-} => request.kind === "mcp" && typeof request.toolName === "string" && request.toolName.startsWith("vision_");
+} => {
+  const toolName = getPermissionToolName(request);
+  return request.kind === "mcp" && toolName !== null && toolName.startsWith("vision_");
+};
 
 const isMissionServicePermissionRequest = (
-  request: PermissionRequest,
-): request is PermissionRequest & {
+  request: ProviderPermissionRequest,
+): request is ProviderPermissionRequest & {
   kind: "custom-tool";
   toolName: "spira_start_mission_service" | "spira_stop_mission_service" | "spira_run_mission_proof";
   toolCallId?: string;
   args?: Record<string, unknown>;
 } =>
   request.kind === "custom-tool" &&
-  (request.toolName === "spira_start_mission_service" ||
-    request.toolName === "spira_stop_mission_service" ||
-    request.toolName === "spira_run_mission_proof");
+  (() => {
+    const toolName = getPermissionToolName(request);
+    return (
+      toolName === "spira_start_mission_service" ||
+      toolName === "spira_stop_mission_service" ||
+      toolName === "spira_run_mission_proof"
+    );
+  })();
 
 const getMissionServiceToolTitle = (toolName: string): string => {
   switch (toolName) {
@@ -131,26 +159,74 @@ const getMissionServiceToolTitle = (toolName: string): string => {
   }
 };
 
+const INTERACTIVE_HOST_TOOL_NAMES = new Set([
+  "write_file",
+  "apply_patch",
+  "powershell",
+  "write_powershell",
+  "stop_powershell",
+  "spira_session_set_plan",
+  "spira_session_set_scratchpad",
+  "spira_session_set_context",
+]);
+
+const HOST_TOOL_MISSION_ACTIONS = new Map<string, "load-context" | "repo-read" | "repo-write">([
+  ["view", "repo-read"],
+  ["glob", "repo-read"],
+  ["rg", "repo-read"],
+  ["read_powershell", "repo-read"],
+  ["list_powershell", "repo-read"],
+  ["spira_session_get_plan", "load-context"],
+  ["spira_session_get_scratchpad", "load-context"],
+  ["spira_session_get_context", "load-context"],
+  ["write_file", "repo-write"],
+  ["apply_patch", "repo-write"],
+  ["powershell", "repo-write"],
+  ["write_powershell", "repo-write"],
+  ["stop_powershell", "repo-write"],
+  ["spira_session_set_plan", "repo-write"],
+  ["spira_session_set_scratchpad", "repo-write"],
+  ["spira_session_set_context", "repo-write"],
+]);
+
+const isInteractiveHostToolPermissionRequest = (
+  request: ProviderPermissionRequest,
+): request is ProviderPermissionRequest & {
+  kind: "custom-tool";
+  toolName: string;
+  toolCallId?: string;
+  args?: Record<string, unknown>;
+} => request.kind === "custom-tool" && INTERACTIVE_HOST_TOOL_NAMES.has(getPermissionToolName(request) ?? "");
+
 export class CopilotSessionManager {
-  private client: CopilotClient | null = null;
-  private session: CopilotSession | null = null;
-  private initializingSession: Promise<CopilotSession> | null = null;
+  private client: ProviderClient | null = null;
+  private session: ProviderSession | null = null;
+  private initializingSession: Promise<ProviderSession> | null = null;
   private activeSessionId: string | null = null;
   private readonly streamAssembler = new StreamAssembler();
   private readonly pendingPermissionRequests = new Map<string, PendingPermissionRequest>();
   private currentState: AssistantState = "idle";
-  private authStrategy: CopilotAuthStrategy | null = null;
+  private authStrategy: ProviderAuthStrategy | null = null;
   private registeredToolSignature: string | null = null;
   private pendingToolRefreshSignature: string | null = null;
   private refreshingSessionForToolChanges: Promise<void> | null = null;
   private nextResponseAutoSpeak = true;
   private responseAbortEpoch = 0;
   private promptInFlight = false;
+  private activePromptEpoch = 0;
   private sessionOrigin: "created" | "resumed" | null = null;
+  private latestUsage: ProviderUsageSnapshot | null = null;
+  private observedToolActivity = false;
+  private readonly stationId: StationId | null;
+  private readonly memoryDb: SpiraMemoryDatabase | null;
   private readonly sessionPersistence: SessionPersistence | null;
+  private readonly sessionStorage: StationSessionStorage | null;
+  private readonly runtimeStore: RuntimeStore;
   private readonly subagentLockManager: SubagentLockManager;
   private readonly subagentRunRegistry: SubagentRunRegistry;
   private readonly subagentRunners = new Map<string, SubagentRunner>();
+  private readonly activeToolCalls = new Map<string, RuntimeStationToolCallRecord>();
+  private abortRequestedAt: number | null = null;
   private readonly subagentRegistry: SubagentRegistry | null;
   private readonly additionalInstructions: string | null;
   private readonly workingDirectory: string | null;
@@ -179,9 +255,17 @@ export class CopilotSessionManager {
     private readonly applyHotCapabilityUpgrade?: () => Promise<void> | void,
     options: SessionManagerOptions = {},
   ) {
+    this.stationId = options.stationId ?? null;
+    this.memoryDb = options.memoryDb ?? null;
     this.sessionPersistence = options.sessionPersistence ?? null;
+    this.sessionStorage = createStationSessionStorage(this.memoryDb, this.stationId);
+    this.runtimeStore = new RuntimeStore(this.memoryDb, this.stationId);
     this.subagentLockManager = options.subagentLockManager ?? new SubagentLockManager();
-    this.subagentRunRegistry = new SubagentRunRegistry({ bus: this.bus });
+    this.subagentRunRegistry = new SubagentRunRegistry({
+      bus: this.bus,
+      runtimeStore: this.runtimeStore,
+      recoverLaunch: (snapshot) => this.recoverManagedSubagent(snapshot),
+    });
     this.subagentRegistry = options.subagentRegistry ?? null;
     this.additionalInstructions = options.additionalInstructions?.trim() || null;
     this.workingDirectory = options.workingDirectory?.trim() || null;
@@ -201,7 +285,6 @@ export class CopilotSessionManager {
     this.setMissionProofStrategy = options.setMissionProofStrategy;
     this.recordMissionProofResult = options.recordMissionProofResult;
     this.saveMissionSummary = options.saveMissionSummary;
-    this.activeSessionId = this.sessionPersistence?.load() ?? null;
     this.bus.on("mcp:servers-changed", () => {
       void this.refreshSessionForToolChanges();
     });
@@ -217,6 +300,14 @@ export class CopilotSessionManager {
     });
   }
 
+  private get configuredProviderId() {
+    return this.client?.providerId ?? getConfiguredProviderId(this.env);
+  }
+
+  private get providerLabel(): string {
+    return getProviderLabel(this.configuredProviderId);
+  }
+
   async sendMessage(text: string, options: SendPromptOptions = {}): Promise<void> {
     return this.sendPrompt(text, true, options);
   }
@@ -227,6 +318,7 @@ export class CopilotSessionManager {
 
   private async sendPrompt(text: string, autoSpeak: boolean, options: SendPromptOptions): Promise<void> {
     const abortEpoch = this.responseAbortEpoch;
+    const promptEpoch = this.activePromptEpoch + 1;
     try {
       if (this.currentState === "error") {
         this.transitionTo("idle");
@@ -234,7 +326,9 @@ export class CopilotSessionManager {
       if (this.currentState === "thinking" || this.promptInFlight) {
         throw new CopilotError("A response is already in progress.");
       }
+      this.activePromptEpoch = promptEpoch;
       this.promptInFlight = true;
+      this.observedToolActivity = false;
       this.transitionTo("thinking");
       this.nextResponseAutoSpeak = autoSpeak;
 
@@ -245,9 +339,13 @@ export class CopilotSessionManager {
         logger.info("Suppressed send failure caused by an intentional response abort");
         return;
       }
-      throw this.reportAndWrapError(error, "Failed to send message to GitHub Copilot");
+      throw this.reportAndWrapError(error, `Failed to send message to ${this.providerLabel}`);
     } finally {
-      this.promptInFlight = false;
+      if (this.activePromptEpoch === promptEpoch) {
+        this.promptInFlight = false;
+        this.observedToolActivity = false;
+        this.syncRuntimeState();
+      }
     }
   }
 
@@ -259,7 +357,7 @@ export class CopilotSessionManager {
       await withTimeout(
         session.send({ prompt: this.buildOutgoingPrompt(text, options.continuityPreamble ?? null, hadLiveSession) }),
         SEND_TIMEOUT_MS,
-        "Timed out while sending a message to GitHub Copilot",
+        `Timed out while sending a message to ${this.providerLabel}`,
       );
     } catch (error) {
       if (!this.isMissingSessionError(error)) {
@@ -268,9 +366,14 @@ export class CopilotSessionManager {
 
       logger.warn(
         { error, sessionId: session.sessionId },
-        "GitHub Copilot session was not found during send; re-establishing session and retrying once",
+        `${this.providerLabel} session was not found during send; re-establishing session and retrying once`,
       );
       await this.invalidateExpiredSession(session);
+      if (this.observedToolActivity) {
+        throw new CopilotError(
+          `${this.providerLabel} session was lost after tool activity; the turn was not retried automatically.`,
+        );
+      }
 
       const refreshedSession = await this.getOrCreateSession();
       if (this.responseAbortEpoch !== abortEpoch) {
@@ -280,7 +383,7 @@ export class CopilotSessionManager {
       await withTimeout(
         refreshedSession.send({ prompt: this.buildOutgoingPrompt(text, options.continuityPreamble ?? null, false) }),
         SEND_TIMEOUT_MS,
-        "Timed out while sending a message to GitHub Copilot",
+        `Timed out while sending a message to ${this.providerLabel}`,
       );
     }
   }
@@ -293,11 +396,12 @@ export class CopilotSessionManager {
         await this.deletePersistedSession(sessionId);
       }
       this.activeSessionId = null;
+      this.abortRequestedAt = null;
       this.persistSessionId(null);
       this.streamAssembler.clear();
       this.transitionTo("idle");
     } catch (error) {
-      throw this.reportAndWrapError(error, "Failed to clear the GitHub Copilot session");
+      throw this.reportAndWrapError(error, `Failed to clear the ${this.providerLabel} session`);
     }
   }
 
@@ -307,8 +411,36 @@ export class CopilotSessionManager {
     }
 
     this.responseAbortEpoch += 1;
+    this.abortRequestedAt = Date.now();
+    this.syncRuntimeState();
     this.nextResponseAutoSpeak = true;
+    const activeSessionId = this.activeSessionId;
+    const client = await this.getOrCreateClient();
+    const liveSession = this.session;
+    if (shouldUseProviderAbort(client.capabilities) && liveSession?.abort) {
+      await liveSession.abort();
+      this.clearPendingPermissionRequests("expired");
+      this.streamAssembler.clear();
+      this.latestUsage = null;
+      this.abortRequestedAt = null;
+      this.transitionTo("idle");
+      return;
+    }
+    this.activePromptEpoch += 1;
+    this.promptInFlight = false;
+    this.observedToolActivity = false;
     await this.disconnectSession();
+    if (activeSessionId) {
+      if (shouldUseProviderAbort(client.capabilities)) {
+        this.abortRequestedAt = null;
+        this.transitionTo("idle");
+        return;
+      }
+      await this.deletePersistedSession(activeSessionId);
+      this.activeSessionId = null;
+      this.persistSessionId(null);
+    }
+    this.abortRequestedAt = null;
     this.transitionTo("idle");
   }
 
@@ -330,7 +462,8 @@ export class CopilotSessionManager {
 
     this.pendingPermissionRequests.delete(requestId);
     clearTimeout(pending.timeout);
-    pending.resolve(approved ? { kind: "approved" } : { kind: "denied-interactively-by-user" });
+    pending.resolve(approved ? approvePermissionOnce() : rejectPermission());
+    this.runtimeStore.resolvePermissionRequest(requestId, approved ? "approved" : "denied");
     this.bus.emit("copilot:permission-complete", requestId, approved ? "approved" : "denied");
     return true;
   }
@@ -360,7 +493,11 @@ export class CopilotSessionManager {
     return this.subagentRunRegistry.stop(runId);
   }
 
-  private async getOrCreateSession(): Promise<CopilotSession> {
+  listManagedSubagents(options: { includeCompleted?: boolean } = {}): SubagentRunSnapshot[] {
+    return this.subagentRunRegistry.list(options);
+  }
+
+  private async getOrCreateSession(): Promise<ProviderSession> {
     if (this.session) {
       return this.session;
     }
@@ -381,7 +518,7 @@ export class CopilotSessionManager {
         void session.disconnect().catch((error) => {
           logger.warn(
             { error, sessionId: session.sessionId },
-            "Failed to disconnect superseded GitHub Copilot session",
+            "Failed to disconnect superseded provider session",
           );
         });
       }
@@ -394,16 +531,16 @@ export class CopilotSessionManager {
     }
   }
 
-  private async createSession(): Promise<CopilotSession> {
+  private async createSession(): Promise<ProviderSession> {
     const client = await this.getOrCreateClient();
     const sessionPromise = this.openSession(client);
 
-    let session: CopilotSession;
+    let session: ProviderSession;
     try {
       session = await withTimeout(
         sessionPromise,
         SESSION_INIT_TIMEOUT_MS,
-        "Timed out while connecting to GitHub Copilot",
+        `Timed out while connecting to ${this.providerLabel}`,
       );
     } catch (error) {
       this.session = null;
@@ -412,7 +549,7 @@ export class CopilotSessionManager {
           resolvedSession.disconnect().catch((disconnectError) => {
             logger.warn(
               { error: disconnectError, sessionId: resolvedSession.sessionId },
-              "Failed to disconnect GitHub Copilot session after initialization failure",
+              "Failed to disconnect provider session after initialization failure",
             );
           }),
         )
@@ -423,22 +560,27 @@ export class CopilotSessionManager {
     }
 
     this.activeSessionId = session.sessionId;
-    this.persistSessionId(session.sessionId);
+    this.persistSessionId(shouldPersistProviderSession(client.capabilities) ? session.sessionId : null);
     this.registeredToolSignature = this.getCurrentToolSignature();
-    logger.info({ sessionId: session.sessionId }, "GitHub Copilot session ready");
+    this.syncRuntimeState();
+    logger.info({ sessionId: session.sessionId, providerId: client.providerId }, "Provider session ready");
 
     return session;
   }
 
-  private async openSession(client: CopilotClient): Promise<CopilotSession> {
-    const sessionConfig = this.getSessionConfig();
-    const persistedSessionId = this.activeSessionId ?? this.sessionPersistence?.load() ?? null;
+  private async openSession(client: ProviderClient): Promise<ProviderSession> {
+    const persistedSessionId =
+      this.activeSessionId ??
+      (shouldPersistProviderSession(client.capabilities) ? this.sessionPersistence?.load() ?? null : null);
     if (persistedSessionId) {
       try {
-        const session = await client.resumeSession(persistedSessionId, sessionConfig);
+        const session = await client.resumeSession(
+          persistedSessionId,
+          this.getSessionConfig(persistedSessionId, client.capabilities),
+        );
         this.activeSessionId = persistedSessionId;
         this.sessionOrigin = "resumed";
-        logger.info({ sessionId: persistedSessionId }, "GitHub Copilot session resumed");
+        logger.info({ sessionId: persistedSessionId, providerId: client.providerId }, "Provider session resumed");
         return session;
       } catch (error) {
         if (!this.isMissingSessionError(error)) {
@@ -447,7 +589,7 @@ export class CopilotSessionManager {
 
         logger.warn(
           { error, sessionId: persistedSessionId },
-          "Persisted GitHub Copilot session was not found; creating a fresh session",
+          `Persisted ${this.providerLabel} session was not found; creating a fresh session`,
         );
         this.activeSessionId = null;
         this.persistSessionId(null);
@@ -457,30 +599,37 @@ export class CopilotSessionManager {
     const sessionId = randomUUID();
     this.activeSessionId = sessionId;
     this.sessionOrigin = "created";
-    return createFreshCopilotSession(client, sessionConfig, sessionId);
+    return createFreshProviderSession(client, this.getSessionConfig(sessionId, client.capabilities), sessionId);
   }
 
   private buildOutgoingPrompt(text: string, continuityPreamble: string | null, hadLiveSession: boolean): string {
     return buildOutgoingPrompt(text, continuityPreamble, hadLiveSession, this.sessionOrigin);
   }
 
-  private getSessionConfig(): Omit<SessionConfig, "sessionId"> {
+  private getSessionConfig(
+    expectedSessionId?: string | null,
+    capabilities?: ProviderClient["capabilities"],
+  ): Omit<ProviderSessionConfig, "sessionId"> {
     const toolBridgeOptions = this.getToolBridgeOptions();
     return createSessionConfig({
       env: this.env,
       onEvent: (event) => {
-        this.handleSessionEvent(event);
+        this.handleSessionEvent(event, expectedSessionId ?? undefined);
       },
-      onPermissionRequest: (request) => this.handlePermissionRequest(request),
+      onPermissionRequest: (request) => this.handlePermissionRequest(request, expectedSessionId ?? undefined),
       additionalInstructions: this.additionalInstructions,
       toolAggregator: this.toolAggregator,
       toolBridgeOptions,
       workingDirectory: this.workingDirectory,
+      streaming: capabilities ? shouldRequestNativeStreaming(capabilities) : true,
     });
   }
 
-  private handleSessionEvent(event: SessionEvent): void {
+  private handleSessionEvent(event: ProviderSessionEvent, expectedSessionId?: string): void {
     if (this.session === null && this.initializingSession === null) {
+      return;
+    }
+    if (expectedSessionId && this.activeSessionId !== expectedSessionId) {
       return;
     }
 
@@ -500,36 +649,75 @@ export class CopilotSessionManager {
           autoSpeak: this.nextResponseAutoSpeak,
         });
         this.nextResponseAutoSpeak = true;
+        this.syncRuntimeState();
         return;
       }
 
+      case "assistant.usage":
+        this.latestUsage = this.normalizeUsage(event.data);
+        return;
+
       case "tool.execution_start":
+        this.observedToolActivity = true;
+        this.activeToolCalls.set(event.data.toolCallId, {
+          callId: event.data.toolCallId,
+          toolName: event.data.toolName,
+          args: event.data.arguments ?? {},
+          startedAt: Date.now(),
+        });
+        this.syncRuntimeState();
         this.bus.emit("copilot:tool-call", event.data.toolCallId, event.data.toolName, event.data.arguments ?? {});
         return;
 
       case "tool.execution_complete":
+        this.observedToolActivity = true;
+        this.activeToolCalls.delete(event.data.toolCallId);
+        this.syncRuntimeState();
         this.bus.emit("copilot:tool-result", event.data.toolCallId, event.data.result ?? null);
         return;
 
       case "session.error":
-        logger.error({ errorType: event.data.errorType, sessionError: event.data }, "GitHub Copilot session error");
+        logger.error(
+          { errorType: event.data.errorType, providerId: this.configuredProviderId, sessionError: event.data },
+          "Provider session error",
+        );
         // Invalidate the live handle so the next sendMessage can resume or recreate the session.
         this.clearPendingPermissionRequests("expired");
         this.session = null;
+        this.activeToolCalls.clear();
+        this.abortRequestedAt = null;
+        this.latestUsage = null;
         this.streamAssembler.clear();
         this.bus.emit(
           "copilot:error",
-          "COPILOT_SESSION_ERROR",
+          "PROVIDER_SESSION_ERROR",
           event.data.message,
           formatErrorDetails(event.data),
-          "copilot",
+          this.configuredProviderId,
         );
         this.nextResponseAutoSpeak = true;
         this.transitionTo("error");
         return;
 
       case "session.idle":
+        const usage = this.normalizeUsage(event.data.usage ?? this.latestUsage);
+        this.emitProviderUsage({
+          provider: this.configuredProviderId,
+          stationId: this.stationId,
+          sessionId: this.activeSessionId ?? this.session?.sessionId ?? null,
+          runId: this.missionRunId,
+          model: usage.model,
+          inputTokens: usage.inputTokens,
+          outputTokens: usage.outputTokens,
+          totalTokens: usage.totalTokens,
+          estimatedCostUsd: usage.estimatedCostUsd,
+          latencyMs: usage.latencyMs,
+          observedAt: Date.now(),
+          source: usage.source,
+        });
+        this.latestUsage = null;
         if (this.currentState === "thinking") {
+          this.abortRequestedAt = null;
           this.transitionTo("idle");
         }
         return;
@@ -547,14 +735,17 @@ export class CopilotSessionManager {
     this.initializingSession = null;
     this.sessionOrigin = null;
     this.registeredToolSignature = null;
+    this.activeToolCalls.clear();
+    this.latestUsage = null;
     this.streamAssembler.clear();
+    this.syncRuntimeState();
 
     if (initializingSession) {
       try {
         const inflightSession = await initializingSession;
         await inflightSession.disconnect();
       } catch (error) {
-        logger.debug({ error }, "Ignored failed in-flight GitHub Copilot session cleanup");
+        logger.debug({ error }, "Ignored failed in-flight provider session cleanup");
       }
     }
 
@@ -564,9 +755,9 @@ export class CopilotSessionManager {
 
     try {
       await session.disconnect();
-      logger.info({ sessionId: session.sessionId }, "GitHub Copilot session disconnected");
+      logger.info({ sessionId: session.sessionId, providerId: this.configuredProviderId }, "Provider session disconnected");
     } catch (error) {
-      logger.warn({ error, sessionId: session.sessionId }, "Failed to disconnect GitHub Copilot session cleanly");
+      logger.warn({ error, sessionId: session.sessionId }, "Failed to disconnect provider session cleanly");
     }
   }
 
@@ -574,7 +765,7 @@ export class CopilotSessionManager {
     this.sessionPersistence?.save(sessionId);
   }
 
-  private async invalidateExpiredSession(session: CopilotSession): Promise<void> {
+  private async invalidateExpiredSession(session: ProviderSession): Promise<void> {
     if (this.session !== session) {
       return;
     }
@@ -585,7 +776,7 @@ export class CopilotSessionManager {
     this.transitionTo("idle");
   }
 
-  private async getOrCreateClient(): Promise<CopilotClient> {
+  private async getOrCreateClient(): Promise<ProviderClient> {
     if (this.client) {
       return this.client;
     }
@@ -596,8 +787,8 @@ export class CopilotSessionManager {
     return client;
   }
 
-  private async createClient(): Promise<{ client: CopilotClient; strategy: CopilotAuthStrategy }> {
-    return createCopilotClient(this.env, logger);
+  private async createClient(): Promise<{ client: ProviderClient; strategy: ProviderAuthStrategy }> {
+    return createProviderClient(this.env, logger);
   }
 
   private transitionTo(nextState: AssistantState): void {
@@ -607,6 +798,7 @@ export class CopilotSessionManager {
 
     const previousState = this.currentState;
     this.currentState = nextState;
+    this.syncRuntimeState();
     this.bus.emit("copilot:state", nextState);
     this.bus.emit("state:change", previousState, nextState);
 
@@ -627,8 +819,8 @@ export class CopilotSessionManager {
     await this.stopClient(client);
   }
 
-  private async stopClient(client: CopilotClient): Promise<void> {
-    await stopCopilotClient(client, logger);
+  private async stopClient(client: ProviderClient): Promise<void> {
+    await stopProviderClient(client, logger);
   }
 
   private async deletePersistedSession(sessionId: string): Promise<void> {
@@ -636,10 +828,10 @@ export class CopilotSessionManager {
 
     try {
       await client.deleteSession(sessionId);
-      logger.info({ sessionId }, "GitHub Copilot session deleted");
+      logger.info({ sessionId, providerId: client.providerId }, "Provider session deleted");
     } catch (error) {
       if (this.isMissingSessionError(error)) {
-        logger.info({ sessionId }, "GitHub Copilot session was already deleted");
+        logger.info({ sessionId, providerId: client.providerId }, "Provider session was already deleted");
         return;
       }
 
@@ -662,7 +854,7 @@ export class CopilotSessionManager {
         wrappedError.code,
         wrappedError.message,
         formatErrorDetails(wrappedError),
-        "copilot",
+        this.configuredProviderId,
       );
     }
     this.transitionTo("error");
@@ -702,36 +894,51 @@ export class CopilotSessionManager {
     return [];
   }
 
-  private async handlePermissionRequest(request: PermissionRequest): Promise<PermissionRequestResult> {
+  private async handlePermissionRequest(
+    request: ProviderPermissionRequest,
+    expectedSessionId?: string,
+  ): Promise<ProviderPermissionResult> {
+    if (expectedSessionId && this.activeSessionId !== expectedSessionId) {
+      return permissionUserNotAvailable();
+    }
     const visionPermission = isVisionPermissionRequest(request);
     const missionServicePermission = isMissionServicePermissionRequest(request);
-    if (!visionPermission && !missionServicePermission) {
-      return { kind: "approved" };
+    const interactiveHostToolPermission = isInteractiveHostToolPermissionRequest(request);
+    if (!visionPermission && !missionServicePermission && !interactiveHostToolPermission) {
+      return approvePermissionOnce();
     }
 
     if (!this.session) {
-      return { kind: "denied-no-approval-rule-and-could-not-request-from-user" };
+      return permissionUserNotAvailable();
     }
 
     const requestId = randomUUID();
     const payload: PermissionRequestPayload = {
       requestId,
+      ...(this.stationId ? { stationId: this.stationId } : {}),
       kind: visionPermission ? "mcp" : "custom-tool",
       toolCallId: typeof request.toolCallId === "string" ? request.toolCallId : undefined,
-      serverName: visionPermission ? request.serverName : "Spira mission runtime",
+      serverName: visionPermission
+        ? request.serverName
+        : missionServicePermission
+          ? "Spira mission runtime"
+          : "Spira host runtime",
       toolName: request.toolName,
       toolTitle: visionPermission
         ? typeof request.toolTitle === "string" && request.toolTitle.length > 0
           ? request.toolTitle
           : request.toolName
-        : getMissionServiceToolTitle(request.toolName),
+        : missionServicePermission
+          ? getMissionServiceToolTitle(request.toolName)
+          : request.toolName,
       args: request.args,
       readOnly: visionPermission ? request.readOnly === true : false,
     };
 
     this.bus.emit("copilot:permission-request", payload);
+    this.runtimeStore.persistPermissionRequest(payload);
 
-    return await new Promise<PermissionRequestResult>((resolve) => {
+    return await new Promise<ProviderPermissionResult>((resolve) => {
       const timeout = setUnrefTimeout(() => {
         const pending = this.pendingPermissionRequests.get(requestId);
         if (!pending) {
@@ -739,7 +946,8 @@ export class CopilotSessionManager {
         }
 
         this.pendingPermissionRequests.delete(requestId);
-        pending.resolve({ kind: "denied-no-approval-rule-and-could-not-request-from-user" });
+        pending.resolve(permissionUserNotAvailable());
+        this.runtimeStore.resolvePermissionRequest(requestId, "expired");
         this.bus.emit("copilot:permission-complete", requestId, "expired");
       }, PERMISSION_REQUEST_TIMEOUT_MS);
 
@@ -750,10 +958,41 @@ export class CopilotSessionManager {
   private clearPendingPermissionRequests(result: "denied" | "expired"): void {
     for (const [requestId, pending] of this.pendingPermissionRequests.entries()) {
       clearTimeout(pending.timeout);
-      pending.resolve({ kind: "denied-no-approval-rule-and-could-not-request-from-user" });
+      pending.resolve(permissionUserNotAvailable());
+      this.runtimeStore.resolvePermissionRequest(requestId, result);
       this.bus.emit("copilot:permission-complete", requestId, result);
     }
     this.pendingPermissionRequests.clear();
+  }
+
+  private emitProviderUsage(record: ProviderUsageRecord): void {
+    this.bus.emit("provider:usage", record);
+    logger.info({ usage: record }, "Provider usage observed");
+  }
+
+  private normalizeUsage(snapshot: Partial<ProviderUsageSnapshot> | null | undefined): ProviderUsageSnapshot {
+    return normalizeProviderUsageSnapshot(
+      this.client?.capabilities ?? {
+        persistentSessions: false,
+        abortableTurns: false,
+        sessionResumption: "host-managed",
+        turnCancellation: "disconnect-and-reset",
+        responseStreaming: "host-buffered",
+        usageReporting: "none",
+      },
+      snapshot,
+    );
+  }
+
+  private syncRuntimeState(): void {
+    this.runtimeStore.persistStationRuntimeState({
+      state: this.currentState,
+      promptInFlight: this.promptInFlight,
+      activeSessionId: this.activeSessionId,
+      activeToolCalls: [...this.activeToolCalls.values()],
+      abortRequestedAt: this.abortRequestedAt,
+      recoveryMessage: null,
+    });
   }
 
   private getCurrentToolSignature(): string {
@@ -791,6 +1030,8 @@ export class CopilotSessionManager {
     const missionScoped = this.missionRunId !== null;
     const delegationEnabled = connectedDelegationDomains.length > 0;
     return {
+      workingDirectory: this.workingDirectory ?? appRootDir,
+      sessionStorage: this.sessionStorage,
       ...(this.allowUpgradeTools
         ? {
             requestUpgradeProposal: this.requestUpgradeProposal,
@@ -861,8 +1102,24 @@ export class CopilotSessionManager {
         : {}),
       ...(missionScoped && this.missionRunId && this.getMissionWorkflowState
         ? {
-            wrapToolExecution: async (tool, args, execute) => {
-              const workflowState = this.getMissionWorkflowState?.(this.missionRunId!);
+            wrapHostToolExecution: async (tool, _args, execute) => {
+              const missionRunId = this.missionRunId;
+              if (!missionRunId) {
+                return execute();
+              }
+              const workflowState = this.getMissionWorkflowState?.(missionRunId);
+              const action = HOST_TOOL_MISSION_ACTIONS.get(tool.name);
+              if (workflowState && action) {
+                assertMissionWorkflowStateActionAllowed(workflowState, action);
+              }
+              return execute();
+            },
+            wrapToolExecution: async (tool, _args, execute) => {
+              const missionRunId = this.missionRunId;
+              if (!missionRunId) {
+                return execute();
+              }
+              const workflowState = this.getMissionWorkflowState?.(missionRunId);
               if (workflowState) {
                 assertMissionMcpToolAllowedForState(workflowState, tool);
               }
@@ -884,7 +1141,7 @@ export class CopilotSessionManager {
       throw new CopilotError(`Unknown subagent domain ${domainId}`);
     }
 
-    const runner = this.createSubagentRunner(domain);
+    const runner = this.createSubagentRunner(domain, this.workingDirectory ?? undefined);
     this.subagentRunners.set(domainId, runner);
     return runner;
   }
@@ -899,7 +1156,20 @@ export class CopilotSessionManager {
       getClient: () => this.getOrCreateClient(),
       onPermissionRequest: (request) => this.handlePermissionRequest(request),
       lockManager: this.subagentLockManager,
+      stationId: this.stationId,
     });
+  }
+
+  private recoverManagedSubagent(snapshot: SubagentRunSnapshot) {
+    const domain = this.getDelegationDomain(snapshot.domain);
+    if (!domain) {
+      return null;
+    }
+
+    const recoveredWorkingDirectory = (snapshot as SubagentRunSnapshot & { workingDirectory?: string }).workingDirectory;
+    return this.createSubagentRunner(domain, recoveredWorkingDirectory ?? this.workingDirectory ?? undefined).recover(
+      snapshot,
+    );
   }
 
   private getDelegationDomains(): SubagentDomain[] {

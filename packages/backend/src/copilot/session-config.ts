@@ -1,6 +1,11 @@
-import type { PermissionRequest, PermissionRequestResult, SessionConfig, SessionEvent } from "@github/copilot-sdk";
 import { type Env, SUBAGENT_DOMAINS, type SubagentDomain } from "@spira/shared";
 import type { McpToolAggregator } from "../mcp/tool-aggregator.js";
+import type {
+  ProviderPermissionRequest,
+  ProviderPermissionResult,
+  ProviderSessionConfig,
+  ProviderSessionEvent,
+} from "../provider/types.js";
 import { appRootDir } from "../util/app-paths.js";
 import { type ToolBridgeOptions, getCopilotTools } from "./tool-bridge.js";
 
@@ -102,11 +107,12 @@ export const createSessionConfig = (options: {
   env: Env;
   toolAggregator: McpToolAggregator;
   toolBridgeOptions: ToolBridgeOptions;
-  onEvent: (event: SessionEvent) => void;
-  onPermissionRequest: (request: PermissionRequest) => Promise<PermissionRequestResult>;
+  onEvent: (event: ProviderSessionEvent) => void;
+  onPermissionRequest: (request: ProviderPermissionRequest) => Promise<ProviderPermissionResult>;
   additionalInstructions?: string | null;
   workingDirectory?: string | null;
-}): Omit<SessionConfig, "sessionId"> => {
+  streaming?: boolean;
+}): Omit<ProviderSessionConfig, "sessionId"> => {
   const toolAwarenessInstructions = getToolAwarenessInstructions(
     options.env,
     options.toolAggregator,
@@ -121,7 +127,7 @@ export const createSessionConfig = (options: {
     },
     onEvent: options.onEvent,
     onPermissionRequest: options.onPermissionRequest,
-    streaming: true,
+    streaming: options.streaming ?? true,
     systemMessage: {
       mode: "customize",
       sections: {

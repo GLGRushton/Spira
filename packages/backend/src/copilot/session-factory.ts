@@ -1,41 +1,22 @@
 import { randomUUID } from "node:crypto";
-import { createRequire } from "node:module";
-import path from "node:path";
-import { CopilotClient, type CopilotSession, type SessionConfig } from "@github/copilot-sdk";
 import type { Env } from "@spira/shared";
 import type { Logger } from "pino";
+import type { ProviderClient, ProviderSession, ProviderSessionConfig } from "../provider/types.js";
+import { createCopilotProviderClient, type CopilotAuthStrategy } from "../provider/copilot/client-factory.js";
 import { CopilotError } from "../util/errors.js";
 import { setUnrefTimeout } from "../util/timers.js";
 
-const require = createRequire(import.meta.url);
-const COPILOT_AUTH_ENV_KEYS = ["COPILOT_SDK_AUTH_TOKEN", "GITHUB_ACCESS_TOKEN", "GITHUB_TOKEN", "GH_TOKEN"] as const;
+export type { CopilotAuthStrategy };
 
-export type CopilotAuthStrategy = "logged-in-user" | "github-token";
+export const createCopilotClient = async (
+  env: Env,
+  logger: Pick<Logger, "info" | "warn">,
+): Promise<{ client: ProviderClient; strategy: CopilotAuthStrategy }> => createCopilotProviderClient(env, logger);
 
-const getSanitizedCopilotEnv = (): NodeJS.ProcessEnv => {
-  const sanitizedEnv = { ...process.env };
-  for (const key of COPILOT_AUTH_ENV_KEYS) {
-    delete sanitizedEnv[key];
-  }
-  return sanitizedEnv;
-};
-
-const resolveCliPath = (logger: Pick<Logger, "warn">): string | undefined => {
-  try {
-    if (process.platform === "win32") {
-      const packageName = process.arch === "arm64" ? "@github/copilot-win32-arm64" : "@github/copilot-win32-x64";
-      const packageJsonPath = require.resolve(`${packageName}/package.json`);
-      return path.join(path.dirname(packageJsonPath), "copilot.exe");
-    }
-
-    return undefined;
-  } catch (error) {
-    logger.warn({ error, platform: process.platform, arch: process.arch }, "Falling back to default Copilot CLI path");
-    return undefined;
-  }
-};
-
-const stopClient = async (client: CopilotClient, logger: Pick<Logger, "warn">): Promise<void> => {
+export const stopCopilotClient = async (
+  client: ProviderClient,
+  logger: Pick<Logger, "warn">,
+): Promise<void> => {
   try {
     const stopErrors = await client.stop();
     if (stopErrors.length > 0) {
@@ -46,71 +27,11 @@ const stopClient = async (client: CopilotClient, logger: Pick<Logger, "warn">): 
   }
 };
 
-export const createCopilotClient = async (
-  env: Env,
-  logger: Pick<Logger, "info" | "warn">,
-): Promise<{ client: CopilotClient; strategy: CopilotAuthStrategy }> => {
-  const cliPath = resolveCliPath(logger);
-  const loggedInClient = new CopilotClient({
-    cliPath,
-    env: getSanitizedCopilotEnv(),
-    useLoggedInUser: true,
-    useStdio: true,
-  });
-
-  try {
-    await loggedInClient.start();
-    const authStatus = await loggedInClient.getAuthStatus();
-
-    if (authStatus.isAuthenticated) {
-      logger.info(
-        { authType: authStatus.authType ?? "unknown", strategy: "logged-in-user" },
-        "Using logged-in Copilot authentication",
-      );
-      return { client: loggedInClient, strategy: "logged-in-user" };
-    }
-  } catch (error) {
-    logger.warn({ error }, "Logged-in Copilot authentication check failed");
-  }
-
-  await stopClient(loggedInClient, logger);
-
-  if (env.GITHUB_TOKEN.trim()) {
-    const tokenClient = new CopilotClient({
-      cliPath,
-      env: getSanitizedCopilotEnv(),
-      githubToken: env.GITHUB_TOKEN,
-      useStdio: true,
-    });
-
-    try {
-      await tokenClient.start();
-      const authStatus = await tokenClient.getAuthStatus();
-      if (authStatus.isAuthenticated) {
-        logger.info(
-          { authType: authStatus.authType ?? "unknown", strategy: "github-token" },
-          "Using token-based Copilot authentication",
-        );
-        return { client: tokenClient, strategy: "github-token" };
-      }
-
-      await stopClient(tokenClient, logger);
-    } catch (error) {
-      logger.warn({ error }, "Token-based Copilot authentication check failed");
-      await stopClient(tokenClient, logger);
-    }
-  }
-
-  throw new CopilotError("GitHub Copilot is not authenticated. Run /login in the Copilot CLI.");
-};
-
-export const stopCopilotClient = stopClient;
-
 export const createFreshCopilotSession = (
-  client: CopilotClient,
-  sessionConfig: Omit<SessionConfig, "sessionId">,
+  client: ProviderClient,
+  sessionConfig: Omit<ProviderSessionConfig, "sessionId">,
   sessionId = randomUUID(),
-): Promise<CopilotSession> =>
+): Promise<ProviderSession> =>
   client.createSession({
     ...sessionConfig,
     sessionId,

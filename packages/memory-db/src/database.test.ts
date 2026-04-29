@@ -166,6 +166,264 @@ describe("SpiraMemoryDatabase", () => {
     expect(database.getSessionState("copilot-session-id")).toBeNull();
   });
 
+  it("persists explicit station records and falls back to live legacy session keys", () => {
+    const database = createTestDatabase();
+
+    database.upsertPersistedStation({
+      stationId: "bravo",
+      label: "Bravo",
+      createdAt: 100,
+    });
+    database.setSessionState("station:charlie:copilot-session-id", "session-charlie");
+    database.setSessionState("station:delta:copilot-session-id", null);
+
+    expect(database.listPersistedStations()).toMatchObject([
+      {
+        stationId: "charlie",
+        label: "Station charlie",
+      },
+      {
+        stationId: "bravo",
+        label: "Bravo",
+        createdAt: 100,
+      },
+    ]);
+
+    expect(database.deletePersistedStation("bravo")).toBe(true);
+    expect(database.listPersistedStations()).toMatchObject([
+      {
+        stationId: "charlie",
+        label: "Station charlie",
+      },
+    ]);
+  });
+
+  it("persists runtime permission requests and fails them closed during recovery", () => {
+    const database = createTestDatabase();
+
+    database.upsertRuntimePermissionRequest({
+      requestId: "perm-1",
+      stationId: "primary",
+      createdAt: 1_000,
+      payload: {
+        requestId: "perm-1",
+        stationId: "primary",
+        kind: "mcp",
+        serverName: "Spira Vision",
+        toolName: "vision_read_screen",
+        toolTitle: "Read screen",
+        readOnly: true,
+      },
+    });
+
+    expect(database.listPendingRuntimePermissionRequests("primary")).toMatchObject([
+      {
+        requestId: "perm-1",
+        stationId: "primary",
+        status: "pending",
+      },
+    ]);
+
+    expect(database.resolveRuntimePermissionRequest("perm-1", "approved", 1_500)).toBe(true);
+    expect(database.listPendingRuntimePermissionRequests("primary")).toEqual([]);
+
+    database.upsertRuntimePermissionRequest({
+      requestId: "perm-2",
+      stationId: "primary",
+      createdAt: 2_000,
+      payload: {
+        requestId: "perm-2",
+        stationId: "primary",
+        kind: "custom-tool",
+        serverName: "Spira mission runtime",
+        toolName: "spira_run_mission_proof",
+        toolTitle: "Run mission proof",
+        readOnly: false,
+      },
+    });
+
+    const recovery = database.recoverInterruptedRuntimeState(3_000);
+    expect(recovery.expiredPermissionRequestIds).toEqual(["perm-2"]);
+    expect(database.getRuntimePermissionRequest("perm-2")).toMatchObject({
+      requestId: "perm-2",
+      status: "expired",
+      resolvedAt: 3_000,
+    });
+  });
+
+  it("persists runtime station state and recovers interrupted turns", () => {
+    const database = createTestDatabase();
+
+    database.upsertRuntimeStationState({
+      stationId: "primary",
+      state: "thinking",
+      promptInFlight: true,
+      activeSessionId: "session-1",
+      activeToolCalls: [
+        {
+          callId: "tool-1",
+          toolName: "vision_read_screen",
+          args: { target: "screen" },
+          startedAt: 1_100,
+        },
+      ],
+      abortRequestedAt: 1_200,
+      createdAt: 1_000,
+      updatedAt: 1_200,
+    });
+
+    expect(database.getRuntimeStationState("primary")).toMatchObject({
+      stationId: "primary",
+      state: "thinking",
+      promptInFlight: true,
+      activeToolCalls: [
+        {
+          callId: "tool-1",
+          toolName: "vision_read_screen",
+        },
+      ],
+      abortRequestedAt: 1_200,
+    });
+
+    const recovery = database.recoverInterruptedRuntimeState(2_000);
+
+    expect(recovery.recoveredStationIds).toEqual(["primary"]);
+    expect(database.getRuntimeStationState("primary")).toMatchObject({
+      stationId: "primary",
+      state: "error",
+      promptInFlight: false,
+      activeSessionId: null,
+      activeToolCalls: [],
+      abortRequestedAt: null,
+      recoveryMessage: "The previous response was interrupted while cancellation was in progress.",
+      updatedAt: 2_000,
+    });
+    expect(database.getSessionState("copilot-session-id")).toBeNull();
+  });
+
+  it("persists runtime subagent runs, usage records, and recovers interrupted runs", () => {
+    const database = createTestDatabase();
+
+    database.upsertRuntimeSubagentRun({
+      runId: "run-1",
+      stationId: "primary",
+      snapshot: {
+        agent_id: "run-1",
+        runId: "run-1",
+        roomId: "agent:subagent-run-1",
+        domain: "spira",
+        task: "Inspect bridge",
+        status: "running",
+        startedAt: 1_000,
+        updatedAt: 1_000,
+        envelope: {
+          runId: "run-1",
+          domain: "spira",
+          task: "Inspect bridge",
+          status: "completed",
+          retryCount: 0,
+          startedAt: 1_000,
+          completedAt: 1_000,
+          durationMs: 0,
+          followupNeeded: false,
+          summary: "Old idle result",
+          artifacts: [],
+          stateChanges: [],
+          toolCalls: [],
+          errors: [],
+          payload: null,
+        },
+      },
+      createdAt: 1_000,
+    });
+
+    database.appendProviderUsageRecord({
+      provider: "copilot",
+      stationId: "primary",
+      runId: "run-1",
+      sessionId: "session-1",
+      model: "gpt-5.4",
+      inputTokens: 12,
+      outputTokens: 4,
+      totalTokens: 16,
+      observedAt: 1_500,
+      source: "provider",
+    });
+
+    expect(database.listRuntimeSubagentRuns("primary")).toMatchObject([
+      {
+        runId: "run-1",
+        stationId: "primary",
+        snapshot: {
+          status: "running",
+        },
+      },
+    ]);
+    expect(database.listProviderUsageRecords()).toMatchObject([
+      {
+        provider: "copilot",
+        stationId: "primary",
+        runId: "run-1",
+        sessionId: "session-1",
+        totalTokens: 16,
+      },
+    ]);
+
+    const recovery = database.recoverInterruptedRuntimeState(2_500);
+    expect(recovery.recoveredSubagentRunIds).toEqual(["run-1"]);
+    expect(database.getRuntimeSubagentRun("run-1")).toMatchObject({
+      runId: "run-1",
+      snapshot: {
+        status: "failed",
+        completedAt: 2_500,
+        summary: "Delegated subagent run ended when the backend restarted.",
+      },
+    });
+    expect(database.getRuntimeSubagentRun("run-1")?.snapshot.envelope).toBeUndefined();
+
+    expect(database.deleteRuntimeSubagentRun("run-1")).toBe(true);
+    expect(database.getRuntimeSubagentRun("run-1")).toBeNull();
+  });
+
+  it("preserves resumable idle subagent runs across recovery", () => {
+    const database = createTestDatabase();
+
+    database.upsertRuntimeSubagentRun({
+      runId: "run-2",
+      stationId: "primary",
+      snapshot: {
+        agent_id: "run-2",
+        runId: "run-2",
+        roomId: "agent:subagent-run-2",
+        domain: "spira",
+        task: "Recovered task",
+        status: "idle",
+        allowWrites: true,
+        providerSessionId: "provider-session-2",
+        activeToolCalls: [],
+        toolCalls: [],
+        startedAt: 1_000,
+        updatedAt: 1_200,
+        completedAt: 1_200,
+        expiresAt: 5_000,
+        summary: "Recovered turn finished.",
+      },
+      createdAt: 1_000,
+    });
+
+    const recovery = database.recoverInterruptedRuntimeState(2_500);
+
+    expect(recovery.recoveredSubagentRunIds).toEqual([]);
+    expect(database.getRuntimeSubagentRun("run-2")).toMatchObject({
+      runId: "run-2",
+      snapshot: {
+        status: "idle",
+        providerSessionId: "provider-session-2",
+        summary: "Recovered turn finished.",
+      },
+    });
+  });
+
   it("stores seeded MCP server configs and preserves built-in enabled overrides", () => {
     const database = createTestDatabase();
 

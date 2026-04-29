@@ -32,7 +32,14 @@ const DELEGATION_TOOL_NAMES = new Set([
   "stop_subagent",
   "list_subagents",
 ]);
-const ACTION_TOOL_NAMES = new Set(["apply_patch", "powershell", "write_powershell", "stop_powershell", "sql"]);
+const ACTION_TOOL_NAMES = new Set([
+  "apply_patch",
+  "powershell",
+  "write_file",
+  "write_powershell",
+  "stop_powershell",
+  "sql",
+]);
 const LEARNING_TOOL_PREFIXES = ["spira_memory_"];
 const UPGRADE_TOOL_NAMES = new Set(["spira_propose_upgrade"]);
 

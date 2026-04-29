@@ -49,8 +49,25 @@ export const McpServersFileSchema = z.object({
 });
 
 /** Validates environment variables loaded from .env */
+const ModelProviderSchema = z.preprocess(
+  (value) => {
+    if (typeof value !== "string") {
+      return value;
+    }
+    const trimmed = value.trim();
+    return trimmed === "" ? undefined : trimmed;
+  },
+  z.enum(["copilot", "azure-openai"]).default("copilot"),
+);
+
 export const EnvSchema = z.object({
+  SPIRA_MODEL_PROVIDER: ModelProviderSchema,
   GITHUB_TOKEN: z.string().default(""),
+  AZURE_OPENAI_API_KEY: z.string().optional(),
+  AZURE_OPENAI_ENDPOINT: z.string().url().optional(),
+  AZURE_OPENAI_DEPLOYMENT: z.string().optional(),
+  AZURE_OPENAI_API_VERSION: z.string().default("2024-10-21"),
+  AZURE_OPENAI_MODEL: z.string().optional(),
   MISSION_GITHUB_TOKEN: z.string().optional(),
   YOUTRACK_BASE_URL: z.string().optional(),
   YOUTRACK_TOKEN: z.string().optional(),

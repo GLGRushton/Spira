@@ -1,5 +1,11 @@
 export const RUNTIME_CONFIG_KEYS = [
+  "modelProvider",
   "githubToken",
+  "azureOpenAiApiKey",
+  "azureOpenAiEndpoint",
+  "azureOpenAiDeployment",
+  "azureOpenAiApiVersion",
+  "azureOpenAiModel",
   "missionGitHubToken",
   "elevenLabsApiKey",
   "picovoiceAccessKey",

@@ -19,6 +19,7 @@ import type {
 import type { McpToolAggregator } from "../mcp/tool-aggregator.js";
 import { SubagentLockManager } from "../subagent/lock-manager.js";
 import type { SubagentRegistry } from "../subagent/registry.js";
+import { clearStationSessionArtifacts, createStationSessionStorage } from "../runtime/station-session-storage.js";
 import { SpiraError } from "../util/errors.js";
 import { type EventMap, SpiraEventBus } from "../util/event-bus.js";
 import { setUnrefTimeout } from "../util/timers.js";
@@ -43,6 +44,7 @@ interface StationContext {
   createdAt: number;
   updatedAt: number;
   state: AssistantState;
+  recoveredRuntimeMessage: string | null;
   disposeHandlers: Array<() => void>;
 }
 
@@ -53,6 +55,8 @@ interface CreateStationOptions {
   workingDirectory?: string;
   allowUpgradeTools?: boolean;
   missionRunId?: string;
+  createdAt?: number;
+  updatedAt?: number;
 }
 
 export interface AwaitStationResponseResult {
@@ -96,6 +100,8 @@ interface StationRegistryOptions {
     stationId: StationId,
     bus: SpiraEventBus,
     options: {
+      stationId: StationId;
+      memoryDb: SpiraMemoryDatabase | null;
       sessionPersistence: SessionPersistence | null;
       subagentLockManager: SubagentLockManager;
       subagentRegistry: SubagentRegistry | null;
@@ -170,7 +176,9 @@ export class StationRegistry {
     }
 
     const bus = new SpiraEventBus();
-    const createdAt = Date.now();
+    const runtimeState = this.options.memoryDb?.getRuntimeStationState(stationId) ?? null;
+    const createdAt = createOptions.createdAt ?? Date.now();
+    const updatedAt = Math.max(createOptions.updatedAt ?? createdAt, runtimeState?.updatedAt ?? createdAt);
     const label =
       createOptions.label?.trim() ||
       (stationId === DEFAULT_STATION_ID ? "Primary" : `Station ${this.stations.size + 1}`);
@@ -190,6 +198,8 @@ export class StationRegistry {
       : null;
     const manager = this.options.createSessionManager
       ? this.options.createSessionManager(stationId, bus, {
+          stationId,
+          memoryDb: this.options.memoryDb,
           sessionPersistence,
           subagentLockManager: this.subagentLockManager,
           subagentRegistry: this.options.subagentRegistry ?? null,
@@ -219,6 +229,8 @@ export class StationRegistry {
           this.options.requestUpgradeProposal,
           this.options.applyHotCapabilityUpgrade,
           {
+            stationId,
+            memoryDb: this.options.memoryDb,
             sessionPersistence,
             subagentLockManager: this.subagentLockManager,
             subagentRegistry: this.options.subagentRegistry ?? null,
@@ -253,10 +265,19 @@ export class StationRegistry {
           getStationSessionKey(stationId, "active-conversation-id", LEGACY_SESSION_STATE_CONVERSATION_ID_KEY),
         ) ?? null,
       createdAt,
-      updatedAt: createdAt,
-      state: "idle",
+      updatedAt,
+      state: runtimeState?.state ?? "idle",
+      recoveredRuntimeMessage: runtimeState?.recoveryMessage ?? null,
       disposeHandlers: [],
     };
+
+    if (stationId !== DEFAULT_STATION_ID && !createOptions.missionRunId) {
+      this.options.memoryDb?.upsertPersistedStation({
+        stationId,
+        label,
+        createdAt,
+      });
+    }
 
     station.disposeHandlers = this.attachStationListeners(station);
     this.stations.set(stationId, station);
@@ -267,6 +288,61 @@ export class StationRegistry {
     return [...this.stations.values()]
       .sort((left, right) => left.createdAt - right.createdAt)
       .map((station) => this.toStationSummary(station));
+  }
+
+  replayManagedSubagentState(stationId?: StationId): void {
+    const stations = stationId ? [this.ensureStation(stationId)] : [...this.stations.values()];
+    for (const station of stations) {
+      for (const snapshot of station.manager.listManagedSubagents()) {
+        if (snapshot.status === "idle" && snapshot.envelope) {
+          this.options.transport.send({
+            type: "subagent:completed",
+            stationId: station.stationId,
+            event: {
+              runId: snapshot.runId,
+              roomId: snapshot.roomId,
+              domain: snapshot.domain,
+              label: snapshot.domain,
+              completedAt: snapshot.completedAt ?? snapshot.updatedAt,
+              envelope: snapshot.envelope,
+            },
+          });
+          continue;
+        }
+
+        this.options.transport.send({
+          type: "subagent:status",
+          stationId: station.stationId,
+          event: {
+            runId: snapshot.runId,
+            roomId: snapshot.roomId,
+            domain: snapshot.domain,
+            label: snapshot.domain,
+            status: snapshot.status,
+            occurredAt: snapshot.updatedAt,
+            ...(snapshot.summary ? { summary: snapshot.summary } : {}),
+            ...(snapshot.expiresAt ? { expiresAt: snapshot.expiresAt } : {}),
+          },
+        });
+      }
+    }
+  }
+
+  replayRecoveredStationIssues(stationId?: StationId): void {
+    const stations = stationId ? [this.ensureStation(stationId)] : [...this.stations.values()];
+    for (const station of stations) {
+      if (!station.recoveredRuntimeMessage) {
+        continue;
+      }
+      this.options.transport.send({
+        type: "error",
+        code: "RECOVERED_STATION_RUNTIME",
+        message: station.recoveredRuntimeMessage,
+        source: "backend",
+        stationId: station.stationId,
+      });
+      station.recoveredRuntimeMessage = null;
+    }
   }
 
   async closeStation(stationId: StationId): Promise<boolean> {
@@ -286,6 +362,9 @@ export class StationRegistry {
       getStationSessionKey(station.stationId, "copilot-session-id", LEGACY_SESSION_STATE_SESSION_ID_KEY),
       null,
     );
+    clearStationSessionArtifacts(this.options.memoryDb, station.stationId);
+    this.options.memoryDb?.deletePersistedStation(station.stationId);
+    this.options.memoryDb?.deleteRuntimeStationState(station.stationId);
 
     for (const dispose of station.disposeHandlers) {
       dispose();
@@ -652,6 +731,12 @@ export class StationRegistry {
           stationId: station.stationId,
         });
       }),
+      register("provider:usage", (record) => {
+        this.options.rootBus.emit("provider:usage", {
+          ...record,
+          stationId: record.stationId ?? station.stationId,
+        });
+      }),
       register("subagent:started", (event) => {
         this.options.transport.send({ type: "subagent:started", event, stationId: station.stationId });
       }),
@@ -768,10 +853,12 @@ export class StationRegistry {
   }
 
   private getContinuityPreamble(station: StationContext, text: string, conversationId?: string): string | null {
+    const sessionStorage = createStationSessionStorage(this.options.memoryDb, station.stationId);
     return buildContinuityPreamble({
       database: this.options.memoryDb,
       query: text,
       conversationId: conversationId ?? station.activeConversationId,
+      sessionSections: sessionStorage?.buildContinuitySections() ?? [],
     });
   }
 

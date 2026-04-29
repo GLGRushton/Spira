@@ -116,6 +116,53 @@ describe("getCopilotTools", () => {
     expect(toolNames).toEqual(["system_get_volume", "spira_ui_get_snapshot"]);
   });
 
+  it("adds host-owned operating tools when a working directory is provided", () => {
+    const aggregator = createAggregator();
+
+    const toolNames = getCopilotTools(aggregator as never, {
+      workingDirectory: "C:\\GitHub\\Spira",
+    }).map((tool) => tool.name);
+
+    expect(toolNames).toEqual(
+      expect.arrayContaining([
+        "view",
+        "glob",
+        "rg",
+        "write_file",
+        "apply_patch",
+        "powershell",
+        "read_powershell",
+        "write_powershell",
+        "stop_powershell",
+        "list_powershell",
+      ]),
+    );
+  });
+
+  it("adds durable session storage tools when session storage is available", () => {
+    const aggregator = createAggregator();
+
+    const toolNames = getCopilotTools(aggregator as never, {
+      workingDirectory: "C:\\GitHub\\Spira",
+      sessionStorage: {
+        get: () => null,
+        set: (_kind, value) => value ?? null,
+        buildContinuitySections: () => [],
+      },
+    }).map((tool) => tool.name);
+
+    expect(toolNames).toEqual(
+      expect.arrayContaining([
+        "spira_session_get_plan",
+        "spira_session_set_plan",
+        "spira_session_get_scratchpad",
+        "spira_session_set_scratchpad",
+        "spira_session_get_context",
+        "spira_session_set_context",
+      ]),
+    );
+  });
+
   it("treats an empty exclude list as a no-op", () => {
     const aggregator = createAggregator();
 
@@ -616,5 +663,22 @@ describe("getCopilotTools", () => {
 
     expect(executeTool).toHaveBeenCalledWith("system_get_volume", {});
     expect(result.textResultForLlm).toBe("before:wrapped-result");
+  });
+
+  it("allows callers to wrap host-owned tool execution", async () => {
+    const [tool] = getCopilotTools(createAggregator() as never, {
+      workingDirectory: "C:\\GitHub\\Spira",
+      wrapHostToolExecution: async (_tool, _args, execute) => {
+        const result = await execute();
+        return {
+          ...result,
+          textResultForLlm: `guarded:${result.textResultForLlm}`,
+        };
+      },
+    }).filter((candidate) => candidate.name === "view");
+
+    const result = await tool.handler({ path: "README.md" });
+
+    expect(result.textResultForLlm.startsWith("guarded:")).toBe(true);
   });
 });

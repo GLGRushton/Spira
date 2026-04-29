@@ -40,6 +40,12 @@ export class CopilotError extends SpiraError {
   }
 }
 
+export class ProviderError extends SpiraError {
+  constructor(message: string, cause?: unknown) {
+    super("PROVIDER_ERROR", message, cause);
+  }
+}
+
 export class YouTrackError extends SpiraError {
   constructor(message: string, cause?: unknown) {
     super("YOUTRACK_ERROR", message, cause);

@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { type Tool, type ToolResultObject, defineTool } from "@github/copilot-sdk";
 import {
   type McpTool,
   type TicketRunMissionClassification,
@@ -34,15 +33,24 @@ import {
   TICKET_RUN_PROOF_RUN_STATUSES,
   TICKET_RUN_PROOF_STATUSES,
 } from "@spira/shared";
+import type { StationSessionStorage } from "../runtime/station-session-storage.js";
+import { createHostTools } from "../runtime/host-tools.js";
 import type { MissionContextSnapshot, MissionProofResultInput } from "../missions/mission-lifecycle.js";
 import type { MissionWorkflowState } from "../missions/mission-workflow-guard.js";
 import type { McpToolAggregator } from "../mcp/tool-aggregator.js";
+import type { ProviderToolDefinition, ProviderToolResultObject } from "../provider/types.js";
 import { createLogger } from "../util/logger.js";
 
 const logger = createLogger("tool-bridge");
 const DEFAULT_READ_SUBAGENT_TIMEOUT_MS = 30_000;
+const defineTool = (name: string, config: Omit<ProviderToolDefinition, "name">): ProviderToolDefinition => ({
+  name,
+  ...config,
+});
 
 export interface ToolBridgeOptions {
+  workingDirectory?: string | null;
+  sessionStorage?: StationSessionStorage | null;
   requestUpgradeProposal?: (proposal: UpgradeProposal) => Promise<void> | void;
   applyHotCapabilityUpgrade?: () => Promise<void> | void;
   includeServerIds?: readonly string[];
@@ -78,6 +86,11 @@ export interface ToolBridgeOptions {
   saveMissionSummary?: (runId: string, missionSummary: TicketRunMissionSummary) => Promise<unknown> | unknown;
   missionWorkflowState?: MissionWorkflowState | null;
   wrapToolExecution?: (tool: McpTool, args: unknown, execute: () => Promise<unknown>) => Promise<unknown>;
+  wrapHostToolExecution?: (
+    tool: ProviderToolDefinition,
+    args: Record<string, unknown>,
+    execute: () => Promise<ProviderToolResultObject>,
+  ) => Promise<ProviderToolResultObject>;
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null;
@@ -329,12 +342,12 @@ const filterMissionScopedMcpTools = (
   return [...tools];
 };
 
-const toSuccessResult = (result: unknown): ToolResultObject => ({
+const toSuccessResult = (result: unknown): ProviderToolResultObject => ({
   textResultForLlm: typeof result === "string" ? result : JSON.stringify(result ?? null),
   resultType: "success",
 });
 
-const toFailureResult = (toolName: string, error: unknown): ToolResultObject => {
+const toFailureResult = (toolName: string, error: unknown): ProviderToolResultObject => {
   const message = error instanceof Error ? error.message : `Tool ${toolName} failed`;
   return {
     textResultForLlm: message,
@@ -347,84 +360,84 @@ const buildTool = (
   tool: McpTool,
   aggregator: McpToolAggregator,
   wrapToolExecution?: ToolBridgeOptions["wrapToolExecution"],
-) =>
-  defineTool(tool.name, {
-    description: tool.description ?? `Execute the ${tool.name} tool from ${tool.serverName}.`,
-    parameters: tool.inputSchema,
-    skipPermission: isPermissionlessTool(tool),
-    handler: async (args) => {
-      try {
-        const execute = () => aggregator.executeTool(tool.name, args);
-        return toSuccessResult(await (wrapToolExecution ? wrapToolExecution(tool, args, execute) : execute()));
-      } catch (error) {
-        logger.error({ error, toolName: tool.name, serverId: tool.serverId }, "MCP tool execution failed");
-        return toFailureResult(tool.name, error);
-      }
-    },
-  });
+): ProviderToolDefinition => ({
+  name: tool.name,
+  description: tool.description ?? `Execute the ${tool.name} tool from ${tool.serverName}.`,
+  parameters: tool.inputSchema,
+  skipPermission: isPermissionlessTool(tool),
+  handler: async (args) => {
+    try {
+      const execute = () => aggregator.executeTool(tool.name, args);
+      return toSuccessResult(await (wrapToolExecution ? wrapToolExecution(tool, args, execute) : execute()));
+    } catch (error) {
+      logger.error({ error, toolName: tool.name, serverId: tool.serverId }, "MCP tool execution failed");
+      return toFailureResult(tool.name, error);
+    }
+  },
+});
 
 const buildUpgradeProposalTool = (
   requestUpgradeProposal: NonNullable<ToolBridgeOptions["requestUpgradeProposal"]>,
   applyHotCapabilityUpgrade?: ToolBridgeOptions["applyHotCapabilityUpgrade"],
-) =>
-  defineTool("spira_propose_upgrade", {
-    description:
-      "Ask Spira to apply local code or configuration changes. Provide the changed project-relative file paths and Spira will classify and apply the safest upgrade path automatically.",
-    parameters: {
-      type: "object",
-      properties: {
-        summary: {
-          type: "string",
-          description: "Short user-facing summary of the upgrade.",
-        },
-        changedFiles: {
-          type: "array",
-          items: { type: "string" },
-          description: "Project-relative file paths touched by this upgrade.",
-        },
+): ProviderToolDefinition => ({
+  name: "spira_propose_upgrade",
+  description:
+    "Ask Spira to apply local code or configuration changes. Provide the changed project-relative file paths and Spira will classify and apply the safest upgrade path automatically.",
+  parameters: {
+    type: "object",
+    properties: {
+      summary: {
+        type: "string",
+        description: "Short user-facing summary of the upgrade.",
       },
-      required: ["summary", "changedFiles"],
-      additionalProperties: false,
+      changedFiles: {
+        type: "array",
+        items: { type: "string" },
+        description: "Project-relative file paths touched by this upgrade.",
+      },
     },
-    handler: async (args) => {
-      try {
-        const payload = isRecord(args) ? args : {};
-        const summary = typeof payload.summary === "string" ? payload.summary : "Spira upgrade";
-        const changedFiles = Array.isArray(payload.changedFiles)
-          ? payload.changedFiles.filter((value: unknown): value is string => typeof value === "string")
-          : [];
-        const relevantChangedFiles = getRelevantUpgradeFiles(changedFiles);
-        if (relevantChangedFiles.length === 0) {
-          return toSuccessResult("No live Spira upgrade is needed for the changed files.");
-        }
-
-        const scope = classifyUpgradeScope(relevantChangedFiles);
-
-        if (scope === "hot-capability") {
-          if (!applyHotCapabilityUpgrade) {
-            throw new Error("Hot-capability upgrades are unavailable in this backend mode");
-          }
-
-          await applyHotCapabilityUpgrade();
-          return toSuccessResult(
-            "MCP capability update applied without restarting the backend. Newly added MCP tools will be available on the next turn after this response finishes.",
-          );
-        }
-
-        await requestUpgradeProposal({
-          proposalId: randomUUID(),
-          scope,
-          summary,
-          changedFiles: relevantChangedFiles,
-          requestedAt: Date.now(),
-        });
-        return toSuccessResult("Upgrade proposal sent to the user for approval.");
-      } catch (error) {
-        logger.error({ error }, "Failed to apply or propose upgrade");
-        return toFailureResult("spira_propose_upgrade", error);
+    required: ["summary", "changedFiles"],
+    additionalProperties: false,
+  },
+  handler: async (args) => {
+    try {
+      const payload = isRecord(args) ? args : {};
+      const summary = typeof payload.summary === "string" ? payload.summary : "Spira upgrade";
+      const changedFiles = Array.isArray(payload.changedFiles)
+        ? payload.changedFiles.filter((value: unknown): value is string => typeof value === "string")
+        : [];
+      const relevantChangedFiles = getRelevantUpgradeFiles(changedFiles);
+      if (relevantChangedFiles.length === 0) {
+        return toSuccessResult("No live Spira upgrade is needed for the changed files.");
       }
-    },
-  });
+
+      const scope = classifyUpgradeScope(relevantChangedFiles);
+
+      if (scope === "hot-capability") {
+        if (!applyHotCapabilityUpgrade) {
+          throw new Error("Hot-capability upgrades are unavailable in this backend mode");
+        }
+
+        await applyHotCapabilityUpgrade();
+        return toSuccessResult(
+          "MCP capability update applied without restarting the backend. Newly added MCP tools will be available on the next turn after this response finishes.",
+        );
+      }
+
+      await requestUpgradeProposal({
+        proposalId: randomUUID(),
+        scope,
+        summary,
+        changedFiles: relevantChangedFiles,
+        requestedAt: Date.now(),
+      });
+      return toSuccessResult("Upgrade proposal sent to the user for approval.");
+    } catch (error) {
+      logger.error({ error }, "Failed to apply or propose upgrade");
+      return toFailureResult("spira_propose_upgrade", error);
+    }
+  },
+});
 
 const buildDelegationTool = (
   domain: SubagentDomain,
@@ -1073,7 +1086,10 @@ const buildSaveSummaryTool = (
     },
   });
 
-export function getCopilotTools(aggregator: McpToolAggregator, options: ToolBridgeOptions = {}): Tool[] {
+export function getCopilotTools(
+  aggregator: McpToolAggregator,
+  options: ToolBridgeOptions = {},
+): ProviderToolDefinition[] {
   let mcpTools = options.includeServerIds?.length
     ? aggregator.getToolsForServerIds(options.includeServerIds)
     : aggregator.getTools();
@@ -1083,7 +1099,29 @@ export function getCopilotTools(aggregator: McpToolAggregator, options: ToolBrid
   }
   mcpTools = filterMissionScopedMcpTools(mcpTools, options.missionWorkflowState);
 
-  const tools = mcpTools.map((tool) => buildTool(tool, aggregator, options.wrapToolExecution));
+  const hostTools = options.workingDirectory
+    ? createHostTools({
+        workingDirectory: options.workingDirectory,
+        sessionStorage: options.sessionStorage ?? null,
+      }).map((tool) =>
+        options.wrapHostToolExecution
+          ? {
+              ...tool,
+              handler: async (args: Record<string, unknown>, ...rest: unknown[]) =>
+                options.wrapHostToolExecution!(
+                  tool,
+                  args,
+                  () => tool.handler(args, ...rest) as Promise<ProviderToolResultObject>,
+                ),
+            }
+          : tool,
+      )
+    : [];
+
+  const tools = [
+    ...hostTools,
+    ...mcpTools.map((tool) => buildTool(tool, aggregator, options.wrapToolExecution)),
+  ];
   if (options.requestUpgradeProposal) {
     tools.push(buildUpgradeProposalTool(options.requestUpgradeProposal, options.applyHotCapabilityUpgrade));
   }

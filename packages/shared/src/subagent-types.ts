@@ -148,12 +148,17 @@ export interface SubagentRunSnapshot {
   domain: SubagentDomainId;
   task: string;
   status: SubagentRunStatus;
+  allowWrites?: boolean;
+  workingDirectory?: string;
+  providerSessionId?: string;
   startedAt: number;
   updatedAt: number;
   completedAt?: number;
   summary?: string;
   followupNeeded?: boolean;
   expiresAt?: number;
+  activeToolCalls?: SubagentToolCallRecord[];
+  toolCalls?: SubagentToolCallRecord[];
   envelope?: SubagentEnvelope;
 }
 
