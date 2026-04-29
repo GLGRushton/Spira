@@ -190,6 +190,7 @@ const sameVoiceConfiguration = (left: VoiceConfiguration, right: VoiceConfigurat
   left.openWakeWordThreshold === right.openWakeWordThreshold;
 
 const buildMissionStationId = (runId: string): string => `mission:${runId}`;
+const MISSION_STATION_MODEL = "gpt-5.5";
 
 const MISSION_WORKTREE_DIRECTORY_NAME = ".spira-worktrees";
 
@@ -291,6 +292,7 @@ const restoreMissionStations = (registry: StationRegistry, database: SpiraMemory
       stationId: run.stationId,
       label: `Mission ${run.ticketId}`,
       missionRunId: run.runId,
+      requestedModel: MISSION_STATION_MODEL,
       additionalInstructions: buildMissionStationInstructions(run.runId, run.ticketId, run.worktrees),
       workingDirectory,
       allowUpgradeTools: false,
@@ -505,6 +507,7 @@ const handleClientMessage = async (message: ClientMessage): Promise<void> => {
       type: "pong",
       protocolVersion: PROTOCOL_VERSION,
       backendBuildId: BACKEND_BUILD_ID,
+      generation: BACKEND_GENERATION,
     });
     if (message.type === "handshake" && message.protocolVersion !== PROTOCOL_VERSION) {
       logger.warn(
@@ -1150,7 +1153,10 @@ const handleClientMessage = async (message: ClientMessage): Promise<void> => {
         result: await ticketRunService.getMissionTimeline(message.runId),
       });
     } catch (error) {
-      logger.error({ err: error, requestId: message.requestId, runId: message.runId }, "Failed to get mission timeline");
+      logger.error(
+        { err: error, requestId: message.requestId, runId: message.runId },
+        "Failed to get mission timeline",
+      );
       transport?.send({
         type: "missions:request-error",
         requestId: message.requestId,
@@ -2365,6 +2371,7 @@ const bootstrap = async () => {
         stationId,
         label: `Mission ${run.ticketId}`,
         missionRunId: run.runId,
+        requestedModel: MISSION_STATION_MODEL,
         additionalInstructions: buildMissionStationInstructions(run.runId, run.ticketId, run.worktrees),
         workingDirectory,
         allowUpgradeTools: false,
@@ -2393,6 +2400,7 @@ const bootstrap = async () => {
         stationId,
         label: `Mission ${run.ticketId}`,
         missionRunId: run.runId,
+        requestedModel: MISSION_STATION_MODEL,
         additionalInstructions: buildMissionStationInstructions(run.runId, run.ticketId, run.worktrees),
         workingDirectory: resolveMissionStationWorkingDirectory(run.worktrees) ?? undefined,
         allowUpgradeTools: false,

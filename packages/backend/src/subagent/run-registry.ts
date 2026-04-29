@@ -7,6 +7,7 @@ import type {
   SubagentRunSnapshot,
   SubagentRunStatus,
 } from "@spira/shared";
+import type { ProviderUsageRecord } from "../provider/types.js";
 import { RuntimeStore } from "../runtime/runtime-store.js";
 import type { SpiraEventBus } from "../util/event-bus.js";
 import { setUnrefTimeout } from "../util/timers.js";
@@ -117,6 +118,22 @@ export class SubagentRunRegistry {
       };
       this.persistSnapshot(trackedRun.snapshot);
     });
+    this.bus?.on("provider:usage", (record: ProviderUsageRecord) => {
+      if (!record.runId) {
+        return;
+      }
+      const trackedRun = this.runs.get(record.runId);
+      if (!trackedRun || typeof record.model !== "string" || record.model.trim().length === 0) {
+        return;
+      }
+
+      trackedRun.snapshot = {
+        ...trackedRun.snapshot,
+        observedModel: record.model.trim(),
+        updatedAt: this.now(),
+      };
+      this.persistSnapshot(trackedRun.snapshot);
+    });
   }
 
   private hydratePersistedRuns(): void {
@@ -151,6 +168,7 @@ export class SubagentRunRegistry {
       roomId: launch.roomId,
       domain,
       task: args.task,
+      ...(args.model ? { requestedModel: args.model } : {}),
       status: "running",
       allowWrites: launch.allowWrites === true,
       workingDirectory: launch.workingDirectory,

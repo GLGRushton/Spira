@@ -51,6 +51,7 @@ interface StationContext {
 interface CreateStationOptions {
   stationId?: StationId;
   label?: string;
+  requestedModel?: string;
   additionalInstructions?: string;
   workingDirectory?: string;
   allowUpgradeTools?: boolean;
@@ -99,15 +100,16 @@ interface StationRegistryOptions {
   createSessionManager?: (
     stationId: StationId,
     bus: SpiraEventBus,
-    options: {
-      stationId: StationId;
-      memoryDb: SpiraMemoryDatabase | null;
-      sessionPersistence: SessionPersistence | null;
-      subagentLockManager: SubagentLockManager;
-      subagentRegistry: SubagentRegistry | null;
-      additionalInstructions?: string | null;
-      workingDirectory?: string | null;
-      allowUpgradeTools?: boolean;
+      options: {
+        stationId: StationId;
+        memoryDb: SpiraMemoryDatabase | null;
+        sessionPersistence: SessionPersistence | null;
+        subagentLockManager: SubagentLockManager;
+        subagentRegistry: SubagentRegistry | null;
+        requestedModel?: string | null;
+        additionalInstructions?: string | null;
+        workingDirectory?: string | null;
+        allowUpgradeTools?: boolean;
       missionRunId?: string | null;
       listMissionServices?: (runId: string) => Promise<MissionServiceSnapshot>;
       startMissionService?: (runId: string, profileId: string) => Promise<MissionServiceSnapshot>;
@@ -203,6 +205,7 @@ export class StationRegistry {
           sessionPersistence,
           subagentLockManager: this.subagentLockManager,
           subagentRegistry: this.options.subagentRegistry ?? null,
+          requestedModel: createOptions.requestedModel ?? null,
           additionalInstructions: createOptions.additionalInstructions ?? null,
           workingDirectory: createOptions.workingDirectory ?? null,
           allowUpgradeTools: createOptions.allowUpgradeTools,
@@ -234,6 +237,7 @@ export class StationRegistry {
             sessionPersistence,
             subagentLockManager: this.subagentLockManager,
             subagentRegistry: this.options.subagentRegistry ?? null,
+            requestedModel: createOptions.requestedModel ?? null,
             additionalInstructions: createOptions.additionalInstructions ?? null,
             workingDirectory: createOptions.workingDirectory ?? null,
             allowUpgradeTools: createOptions.allowUpgradeTools,

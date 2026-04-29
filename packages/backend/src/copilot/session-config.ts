@@ -29,6 +29,12 @@ const SHINRA_LAST_INSTRUCTIONS = [
   "When discussing the product, treat Spira as the application and Shinra as the assistant persona inside it.",
 ].join("\n");
 
+const BACKGROUND_AGENT_MODEL_WARNING = [
+  "Background agent tooling may accept a requested model ID, but the host runtime can still fall back to its default model.",
+  "Do not claim a specific background-agent model actually ran unless a returned tool result explicitly confirms it.",
+  "Until then, describe the model as requested or unconfirmed rather than as executed fact.",
+].join("\n");
+
 export const VOICE_RESPONSE_INSTRUCTIONS = [
   "The current user request arrived through voice.",
   "Optimize for spoken clarity: lead with the answer, avoid unnecessary markdown structure, and keep the pacing natural for read-aloud delivery.",
@@ -66,9 +72,16 @@ export const getToolAwarenessInstructions = (
       "- list_subagents lists active and recently completed delegated runs.",
       "- write_subagent sends follow-up input into an idle delegated run so it can continue working.",
       "- stop_subagent cancels a delegated run and lets it fizzle out cleanly.",
+      "- When exact model selection matters for delegated work, prefer the matching delegate_to_* tool over built-in task/background agents.",
+      "- Use read_subagent or list_subagents to inspect delegated runtime metadata, including the observed model, instead of relying on read_agent.",
       ...(activeDelegationDomains.some((domain) => domain.id === "windows")
         ? [
             "If the user asks whether you can inspect the screen or active window, answer yes and use delegate_to_windows.",
+          ]
+        : []),
+      ...(activeDelegationDomains.some((domain) => domain.id === "code-review")
+        ? [
+            "When exact model selection matters for repository review or analysis, prefer delegate_to_code_review over built-in task/background agents.",
           ]
         : []),
       "Set allowWrites to true only when the delegated task genuinely needs to change state.",
@@ -109,6 +122,7 @@ export const createSessionConfig = (options: {
   toolBridgeOptions: ToolBridgeOptions;
   onEvent: (event: ProviderSessionEvent) => void;
   onPermissionRequest: (request: ProviderPermissionRequest) => Promise<ProviderPermissionResult>;
+  model?: string | null;
   additionalInstructions?: string | null;
   workingDirectory?: string | null;
   streaming?: boolean;
@@ -122,6 +136,7 @@ export const createSessionConfig = (options: {
 
   return {
     clientName: "Spira",
+    ...(options.model?.trim() ? { model: options.model.trim() } : {}),
     infiniteSessions: {
       enabled: true,
     },
@@ -144,6 +159,7 @@ export const createSessionConfig = (options: {
           action: "append",
           content: [
             "Prefer short, clear answers. Use the name Shinra naturally when self-identifying, but keep the focus on solving the user's task.",
+            BACKGROUND_AGENT_MODEL_WARNING,
             upgradeToolInstructions,
             toolAwarenessInstructions,
             options.additionalInstructions?.trim() ?? "",

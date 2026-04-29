@@ -1,6 +1,6 @@
 import type { ToolCallStatus } from "./chat-types.js";
 
-export const SUBAGENT_DOMAIN_IDS = ["windows", "spira", "nexus", "data-entry"] as const;
+export const SUBAGENT_DOMAIN_IDS = ["windows", "spira", "nexus", "data-entry", "code-review"] as const;
 export type BuiltinSubagentDomainId = (typeof SUBAGENT_DOMAIN_IDS)[number];
 export type SubagentDomainId = string;
 export const SUBAGENT_SCOPE_IDS = [...SUBAGENT_DOMAIN_IDS, "shinra"] as const;
@@ -14,6 +14,7 @@ export interface SubagentDomain {
   description?: string;
   serverIds: string[];
   allowedToolNames?: string[] | null;
+  allowHostTools?: boolean;
   delegationToolName: string;
   allowWrites: boolean;
   systemPrompt: string;
@@ -76,11 +77,26 @@ export const SUBAGENT_DOMAINS: readonly SubagentDomain[] = [
     ready: true,
     source: "builtin",
   },
+  {
+    id: "code-review",
+    label: "Code Review Agent",
+    description: "Reviews repository code with host tools when exact model selection matters.",
+    serverIds: [],
+    allowedToolNames: null,
+    allowHostTools: true,
+    delegationToolName: "delegate_to_code_review",
+    allowWrites: false,
+    systemPrompt:
+      "Perform repository review and investigation work with the host tools available to you. Stay read-only unless the caller explicitly requests a write-capable lane instead.",
+    ready: true,
+    source: "builtin",
+  },
 ] as const;
 
 export interface SubagentDelegationArgs {
   task: string;
   context?: string;
+  model?: string;
   allowWrites?: boolean;
   mode?: "sync" | "background";
 }
@@ -147,6 +163,8 @@ export interface SubagentRunSnapshot {
   roomId: `agent:${string}`;
   domain: SubagentDomainId;
   task: string;
+  requestedModel?: string;
+  observedModel?: string;
   status: SubagentRunStatus;
   allowWrites?: boolean;
   workingDirectory?: string;

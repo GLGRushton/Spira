@@ -41,9 +41,9 @@ import type {
   SyncTicketRunRemoteResult,
   SyncTicketRunSubmoduleRemoteResult,
   TicketRunGitStateResult,
-  TicketRunRepoIntelligenceCandidatesResult,
   TicketRunMissionTimelineResult,
   TicketRunProofSnapshotResult,
+  TicketRunRepoIntelligenceCandidatesResult,
   TicketRunReviewSnapshotResult,
   TicketRunSnapshot,
   TicketRunSubmoduleGitStateResult,
@@ -207,7 +207,7 @@ export type ClientMessage =
   | { type: "ping" };
 
 export type ServerMessage =
-  | { type: "pong"; protocolVersion: number; backendBuildId: string }
+  | { type: "pong"; protocolVersion: number; backendBuildId: string; generation: number }
   | { type: "backend:hello"; generation: number; protocolVersion: number; backendBuildId: string }
   | { type: "station:created"; station: StationSummary }
   | { type: "station:closed"; stationId: StationId }

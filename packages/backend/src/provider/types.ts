@@ -41,6 +41,7 @@ export type ProviderToolDefinition = {
   description: string;
   parameters: Record<string, unknown>;
   skipPermission?: boolean;
+  overridesBuiltInTool?: boolean;
   handler: (args: Record<string, unknown>, ...rest: unknown[]) => Promise<ProviderToolResultObject>;
 };
 
@@ -125,6 +126,7 @@ export type ProviderPermissionResult =
 
 export type ProviderSessionConfig = {
   clientName: string;
+  model?: string;
   infiniteSessions?: {
     enabled: boolean;
   };
@@ -139,6 +141,7 @@ export type ProviderSessionConfig = {
 export type ProviderSession = {
   sessionId: string;
   send(payload: { prompt: string }): Promise<void>;
+  setModel?(model: string): Promise<void>;
   abort?(): Promise<void>;
   disconnect(): Promise<void>;
 };

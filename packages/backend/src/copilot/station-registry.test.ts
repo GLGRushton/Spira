@@ -156,6 +156,7 @@ class FakeMemoryDb {
 type FakeManager = {
   bus: SpiraEventBus;
   options: {
+    requestedModel?: string | null;
     additionalInstructions?: string | null;
     workingDirectory?: string | null;
     allowUpgradeTools?: boolean;
@@ -190,6 +191,7 @@ const createRegistry = () => {
       const manager: FakeManager = {
         bus,
         options: {
+          requestedModel: options.requestedModel ?? null,
           additionalInstructions: options.additionalInstructions ?? null,
           workingDirectory: options.workingDirectory ?? null,
           allowUpgradeTools: options.allowUpgradeTools ?? true,
@@ -399,6 +401,7 @@ describe("StationRegistry", () => {
     registry.createStation({
       stationId: "mission:run-1",
       label: "Mission SPI-69",
+      requestedModel: "gpt-5.5",
       additionalInstructions: "Stay rooted in the managed worktree.",
       workingDirectory: "C:\\Repos\\.spira-worktrees\\spi-69-spira",
       allowUpgradeTools: false,
@@ -406,6 +409,7 @@ describe("StationRegistry", () => {
 
     const manager = managers.get("mission:run-1");
     expect(manager?.options).toMatchObject({
+      requestedModel: "gpt-5.5",
       additionalInstructions: "Stay rooted in the managed worktree.",
       workingDirectory: "C:\\Repos\\.spira-worktrees\\spi-69-spira",
       allowUpgradeTools: false,

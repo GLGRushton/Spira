@@ -3,6 +3,7 @@ import { fork } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { UpgradeProposal } from "@spira/shared";
+import { PROTOCOL_VERSION, type ServerMessage } from "@spira/shared";
 import { app } from "electron";
 import WebSocket from "ws";
 
@@ -24,6 +25,8 @@ interface BackendLifecycleOptions {
   onFatal?: (info: BackendExitInfo) => void;
   onMessage?: (message: BackendLifecycleMessage) => void;
 }
+
+type ReadyPongMessage = Extract<ServerMessage, { type: "pong" }>;
 
 const currentFile = fileURLToPath(import.meta.url);
 const currentDir = path.dirname(currentFile);
@@ -206,7 +209,7 @@ export class BackendLifecycle {
       }
     });
 
-    void this.waitForReady(myGeneration);
+    void this.waitForReady(myGeneration, this.getBuildId());
 
     childEvents.once("exit", (code: number | null, signal: NodeJS.Signals | null) => {
       this.child = null;
@@ -259,11 +262,11 @@ export class BackendLifecycle {
     return process.env.SPIRA_BUILD_ID?.trim() || (app.isPackaged ? app.getVersion() : "dev");
   }
 
-  private async waitForReady(generation: number): Promise<void> {
+  private async waitForReady(generation: number, buildId: string): Promise<void> {
     const deadline = Date.now() + 15_000;
 
     while (!this.stopping && this.generation === generation && Date.now() < deadline) {
-      const ready = await this.pingBackend();
+      const ready = await this.pingBackend(generation, buildId);
       if (ready) {
         if (this.generation !== generation) {
           return;
@@ -281,7 +284,7 @@ export class BackendLifecycle {
     }
   }
 
-  private pingBackend(): Promise<boolean> {
+  private pingBackend(expectedGeneration: number, expectedBuildId: string): Promise<boolean> {
     return new Promise((resolve) => {
       const socket = new WebSocket(`ws://127.0.0.1:${this.backendPort}`);
       let settled = false;
@@ -308,16 +311,16 @@ export class BackendLifecycle {
         if (settled) {
           return;
         }
-        let message: { type?: string };
+        let message: unknown;
         try {
-          message = JSON.parse(raw.toString()) as { type?: string };
+          message = JSON.parse(raw.toString()) as unknown;
         } catch {
           cleanup();
           settled = true;
           resolve(false);
           return;
         }
-        if (message.type !== "pong") {
+        if (!isExpectedReadyPong(message, expectedGeneration, expectedBuildId)) {
           return;
         }
         settled = true;
@@ -343,3 +346,18 @@ export class BackendLifecycle {
     });
   }
 }
+
+export const isExpectedReadyPong = (
+  message: unknown,
+  expectedGeneration: number,
+  expectedBuildId: string,
+): message is ReadyPongMessage =>
+  isRecord(message) &&
+  message.type === "pong" &&
+  message.protocolVersion === PROTOCOL_VERSION &&
+  typeof message.backendBuildId === "string" &&
+  message.backendBuildId === expectedBuildId &&
+  typeof message.generation === "number" &&
+  message.generation === expectedGeneration;
+
+const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null;

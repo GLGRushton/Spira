@@ -198,6 +198,105 @@ describe("SubagentRunner", () => {
     );
   });
 
+it("passes requested models into provider session creation", async () => {
+    const bus = new SpiraEventBus();
+    const setModel = vi.fn().mockResolvedValue(undefined);
+    const client = {
+      providerId: "copilot" as const,
+      capabilities: {
+        persistentSessions: true,
+        abortableTurns: true,
+        sessionResumption: "provider-managed" as const,
+        turnCancellation: "provider-abort" as const,
+        responseStreaming: "native" as const,
+        usageReporting: "full" as const,
+      },
+      createSession: vi.fn(async (config: ProviderSessionConfig & { sessionId: string }) => ({
+        sessionId: "subagent-session-model",
+        setModel,
+        send: async () => {
+          config.onEvent?.(
+            createSessionEvent("assistant.message", {
+              messageId: "msg-model",
+              content: '{"summary":"Used requested model."}',
+            }),
+          );
+          config.onEvent?.(createSessionEvent("session.idle", {}));
+        },
+        disconnect: vi.fn().mockResolvedValue(undefined),
+      })),
+      resumeSession: vi.fn(),
+      deleteSession: vi.fn(),
+      getAuthStatus: vi.fn(),
+      stop: vi.fn().mockResolvedValue([]),
+    };
+
+    const runner = new SubagentRunner({
+      bus,
+      env: parseEnv({}),
+      toolAggregator: createToolAggregator(),
+      domain: baseDomain,
+      getClient: async () => client as unknown as ProviderClient,
+      sessionIdFactory: () => "00000000-0000-0000-0000-0000000000ac",
+    });
+
+    await runner.run({ task: "Inspect Spira", model: "gpt-5.5" });
+
+    expect(client.createSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: "gpt-5.5",
+      }),
+    );
+    expect(setModel).toHaveBeenCalledWith("gpt-5.5");
+  });
+
+  it("reapplies the requested model when resuming a background subagent session", async () => {
+    const setModel = vi.fn().mockResolvedValue(undefined);
+    const { client, clientMock } = createClient((config) => ({
+      sessionId: "resumed-session",
+      setModel,
+      send: async () => {
+        config.onEvent?.(
+          createSessionEvent("assistant.message", {
+            messageId: "msg-resume-model",
+            content: '{"summary":"Resumed with the requested model."}',
+          }),
+        );
+        config.onEvent?.(createSessionEvent("session.idle", {}));
+      },
+      disconnect: vi.fn().mockResolvedValue(undefined),
+    }));
+
+    const runner = new SubagentRunner({
+      bus: new SpiraEventBus(),
+      env: parseEnv({}),
+      toolAggregator: createToolAggregator(),
+      domain: baseDomain,
+      getClient: async () => client,
+    });
+
+    const recovered = runner.recover({
+      agent_id: "run-resume-model",
+      runId: "run-resume-model",
+      roomId: "agent:subagent-run-resume-model",
+      domain: "spira",
+      task: "Inspect Spira",
+      requestedModel: "claude-opus-4.7",
+      status: "idle",
+      allowWrites: false,
+      providerSessionId: "persisted-model-session",
+      startedAt: 1,
+      updatedAt: 2,
+    });
+
+    await recovered?.write("Continue.");
+
+    expect(clientMock.resumeSession).toHaveBeenCalledWith("persisted-model-session", expect.objectContaining({
+      model: "claude-opus-4.7",
+    }));
+    expect(setModel).toHaveBeenCalledWith("claude-opus-4.7");
+  });
+
   it("retries once after an initial failure", async () => {
     const bus = new SpiraEventBus();
     const errored = vi.fn();
@@ -454,6 +553,7 @@ describe("SubagentRunner", () => {
       roomId: "agent:subagent-run-recovered",
       domain: "spira",
       task: "Inspect Spira",
+      requestedModel: "gpt-5.5",
       status: "idle",
       allowWrites: true,
       startedAt: 1000,
@@ -485,8 +585,13 @@ describe("SubagentRunner", () => {
     await expect(recovered?.write("Continue with a follow-up")).resolves.toMatchObject({
       summary: "Recovered follow-up complete.",
     });
+    expect(prompts).toHaveLength(1);
     expect(prompts[0]).toContain("[Recovered subagent context]");
     expect(prompts[0]).toContain("Follow-up request:\nContinue with a follow-up");
+    expect(prompts[0]).toContain("Task: Inspect Spira");
+    expect((hostManagedClient.createSession as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]).toMatchObject({
+      model: "gpt-5.5",
+    });
   });
 
   it("falls back to a fresh session when recovered provider resume fails", async () => {
@@ -557,6 +662,63 @@ describe("SubagentRunner", () => {
     expect(clientMock.resumeSession).toHaveBeenCalledWith("expired-session", expect.any(Object));
     expect(clientMock.createSession).toHaveBeenCalledTimes(1);
     expect(prompts[0]).toContain("[Recovered subagent context]");
+  });
+
+  it("exposes host tools for review domains that opt into them", async () => {
+    const capturedTools: string[][] = [];
+    const client = {
+      providerId: "copilot" as const,
+      capabilities: {
+        persistentSessions: true,
+        abortableTurns: true,
+        sessionResumption: "provider-managed" as const,
+        turnCancellation: "provider-abort" as const,
+        responseStreaming: "native" as const,
+        usageReporting: "full" as const,
+      },
+      createSession: vi.fn(async (config: ProviderSessionConfig & { sessionId: string }) => {
+        capturedTools.push(config.tools.map((tool) => tool.name));
+        return {
+          sessionId: "subagent-session-review",
+          send: async () => {
+            config.onEvent?.(
+              createSessionEvent("assistant.message", {
+                messageId: "msg-review",
+                content: '{"summary":"Review complete."}',
+              }),
+            );
+            config.onEvent?.(createSessionEvent("session.idle", {}));
+          },
+          disconnect: vi.fn().mockResolvedValue(undefined),
+        };
+      }),
+      resumeSession: vi.fn(),
+      deleteSession: vi.fn(),
+      getAuthStatus: vi.fn(),
+      stop: vi.fn().mockResolvedValue([]),
+    };
+
+    const runner = new SubagentRunner({
+      bus: new SpiraEventBus(),
+      env: parseEnv({}),
+      toolAggregator: createToolAggregator(),
+      domain: {
+        ...baseDomain,
+        id: "code-review",
+        label: "Code Review Agent",
+        description: "Reviews repository code with host tools.",
+        serverIds: [],
+        allowWrites: false,
+        allowHostTools: true,
+        delegationToolName: "delegate_to_code_review",
+      },
+      getClient: async () => client as unknown as ProviderClient,
+    });
+
+    await runner.run({ task: "Review the repository", model: "gpt-5.5" });
+
+    expect(capturedTools[0]).toEqual(expect.arrayContaining(["view", "glob", "rg", "powershell"]));
+    expect(capturedTools[0]).not.toContain("spira_ui_get_snapshot");
   });
 
   it("emits provider usage when a subagent run completes", async () => {

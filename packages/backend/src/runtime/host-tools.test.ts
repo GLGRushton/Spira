@@ -56,4 +56,10 @@ describe("createHostTools", () => {
       expect.objectContaining({ shellId: "sync-cleanup-test" }),
     );
   });
+
+  it("marks host tools as explicit overrides for Copilot built-ins", () => {
+    const tools = createHostTools({ workingDirectory: "C:\\GitHub\\Spira" });
+
+    expect(tools.every((tool) => tool.overridesBuiltInTool === true)).toBe(true);
+  });
 });

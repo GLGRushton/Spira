@@ -50,6 +50,7 @@ const defineTool = (name: string, config: Omit<ProviderToolDefinition, "name">):
 
 export interface ToolBridgeOptions {
   workingDirectory?: string | null;
+  includeHostTools?: boolean;
   sessionStorage?: StationSessionStorage | null;
   requestUpgradeProposal?: (proposal: UpgradeProposal) => Promise<void> | void;
   applyHotCapabilityUpgrade?: () => Promise<void> | void;
@@ -456,6 +457,10 @@ const buildDelegationTool = (
           type: "string",
           description: "Optional supporting context for the delegated task.",
         },
+        model: {
+          type: "string",
+          description: "Optional model ID to request for the delegated run.",
+        },
         allowWrites: {
           type: "boolean",
           description: "Whether the subagent may perform state-changing actions.",
@@ -483,6 +488,7 @@ const buildDelegationTool = (
             ...(typeof payload.context === "string" && payload.context.trim()
               ? { context: payload.context.trim() }
               : {}),
+            ...(typeof payload.model === "string" && payload.model.trim() ? { model: payload.model.trim() } : {}),
             ...(typeof payload.allowWrites === "boolean" ? { allowWrites: payload.allowWrites } : {}),
             ...(payload.mode === "background" || payload.mode === "sync" ? { mode: payload.mode } : {}),
           }),
@@ -1090,16 +1096,15 @@ export function getCopilotTools(
   aggregator: McpToolAggregator,
   options: ToolBridgeOptions = {},
 ): ProviderToolDefinition[] {
-  let mcpTools = options.includeServerIds?.length
-    ? aggregator.getToolsForServerIds(options.includeServerIds)
-    : aggregator.getTools();
+  let mcpTools =
+    options.includeServerIds !== undefined ? aggregator.getToolsForServerIds(options.includeServerIds) : aggregator.getTools();
   if (options.excludeServerIds?.length) {
     const excludedServerIds = new Set(options.excludeServerIds);
     mcpTools = mcpTools.filter((tool) => !excludedServerIds.has(tool.serverId));
   }
   mcpTools = filterMissionScopedMcpTools(mcpTools, options.missionWorkflowState);
 
-  const hostTools = options.workingDirectory
+  const hostTools = options.workingDirectory && options.includeHostTools !== false
     ? createHostTools({
         workingDirectory: options.workingDirectory,
         sessionStorage: options.sessionStorage ?? null,

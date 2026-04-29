@@ -1064,5 +1064,8 @@ export const createHostTools = (options: {
     );
   }
 
-  return tools;
+  return tools.map((tool) => ({
+    ...tool,
+    overridesBuiltInTool: true,
+  }));
 };

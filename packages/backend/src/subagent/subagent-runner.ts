@@ -81,6 +81,7 @@ interface LiveRunState {
   startedAt: number;
   writesAllowed: boolean;
   keepAlive: boolean;
+  requestedModel: string | null;
   toolLookup: Map<string, McpTool>;
   client: ProviderClient | null;
   session: ProviderSession | null;
@@ -356,6 +357,7 @@ export class SubagentRunner {
       startedAt,
       writesAllowed,
       keepAlive: args.mode === "background",
+      requestedModel: args.model?.trim() || null,
       toolLookup: getToolLookup(scopedMcpTools),
       client: null,
       session: null,
@@ -392,6 +394,7 @@ export class SubagentRunner {
       startedAt: snapshot.startedAt,
       writesAllowed,
       keepAlive: true,
+      requestedModel: snapshot.requestedModel?.trim() || null,
       toolLookup: getToolLookup(scopedMcpTools),
       client: null,
       session: null,
@@ -409,6 +412,7 @@ export class SubagentRunner {
           liveRun,
           {
             task: snapshot.task,
+            ...(snapshot.requestedModel ? { model: snapshot.requestedModel } : {}),
             mode: "background",
             ...(writesAllowed ? { allowWrites: true } : {}),
           },
@@ -622,6 +626,7 @@ export class SubagentRunner {
         `Timed out while reconnecting a subagent to ${this.providerLabel}`,
       );
     }
+    await this.applyRequestedModel(liveRun);
     liveRun.providerSessionId = shouldPersistProviderSession(liveRun.client.capabilities) ? liveRun.session.sessionId : null;
     this.options.bus.emit("subagent:runtime-sync", {
       runId: liveRun.runId,
@@ -629,6 +634,19 @@ export class SubagentRunner {
       allowWrites: liveRun.writesAllowed,
       providerSessionId: liveRun.providerSessionId,
     });
+  }
+
+  private async applyRequestedModel(liveRun: LiveRunState): Promise<void> {
+    const requestedModel = liveRun.requestedModel?.trim();
+    if (!requestedModel || !liveRun.session?.setModel) {
+      return;
+    }
+
+    await withTimeout(
+      liveRun.session.setModel(requestedModel),
+      SESSION_INIT_TIMEOUT_MS,
+      `Timed out while selecting subagent model ${requestedModel}`,
+    );
   }
 
   private async cleanupLiveSession(liveRun: LiveRunState): Promise<void> {
@@ -666,6 +684,7 @@ export class SubagentRunner {
   ): Omit<ProviderSessionConfig, "sessionId"> {
     return {
       clientName: "Spira",
+      ...(liveRun.requestedModel ? { model: liveRun.requestedModel } : {}),
       infiniteSessions: {
         enabled: true,
       },
@@ -704,6 +723,10 @@ export class SubagentRunner {
       },
       workingDirectory: this.options.workingDirectory ?? appRootDir,
       tools: getCopilotTools(this.options.toolAggregator, {
+        workingDirectory: this.options.workingDirectory ?? appRootDir,
+        includeHostTools:
+          this.options.domain.allowHostTools === true ||
+          (liveRun.client?.providerId ?? this.configuredProviderId) !== "copilot",
         includeServerIds: this.options.domain.serverIds,
         wrapToolExecution: (tool, toolArgs, execute) => {
           if (!liveRun.currentContext) {

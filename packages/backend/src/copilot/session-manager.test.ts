@@ -38,6 +38,7 @@ const createManager = (
     applyHotCapabilityUpgrade?: (() => Promise<void> | void) | undefined;
     memoryDb?: Record<string, unknown> | null;
     stationId?: string;
+    requestedModel?: string | null;
   },
 ) => {
   const bus = new SpiraEventBus();
@@ -47,6 +48,15 @@ const createManager = (
     getToolsExcludingServerIds: (serverIds: readonly string[]) =>
       tools.filter((tool) => !serverIds.includes(tool.serverId)),
   };
+  const sessionOptions = options
+    ? {
+        sessionPersistence: options.sessionPersistence,
+        allowUpgradeTools: options.allowUpgradeTools,
+        memoryDb: options.memoryDb as never,
+        stationId: options.stationId,
+        requestedModel: options.requestedModel,
+      }
+    : undefined;
 
   return new CopilotSessionManager(
     bus,
@@ -54,7 +64,7 @@ const createManager = (
     aggregator as never,
     options?.requestUpgradeProposal,
     options?.applyHotCapabilityUpgrade,
-    options,
+    sessionOptions,
   );
 };
 
@@ -268,6 +278,39 @@ describe("CopilotSessionManager", () => {
     expect(toolNames).not.toContain("spira_propose_upgrade");
   });
 
+  it("omits duplicated host tools when using the copilot provider", () => {
+    const manager = createManager([], {
+      envInput: { SPIRA_MODEL_PROVIDER: "copilot" },
+    });
+    const internals = manager as unknown as SessionManagerInternals;
+    const toolNames = internals.getSessionConfig().tools.map((tool) => tool.name);
+
+    expect(toolNames).not.toContain("view");
+    expect(toolNames).not.toContain("glob");
+    expect(toolNames).not.toContain("rg");
+  });
+
+  it("keeps host tools for the azure-openai provider", () => {
+    const manager = createManager([], {
+      envInput: { SPIRA_MODEL_PROVIDER: "azure-openai" },
+    });
+    const internals = manager as unknown as SessionManagerInternals;
+    const toolNames = internals.getSessionConfig().tools.map((tool) => tool.name);
+
+    expect(toolNames).toEqual(expect.arrayContaining(["view", "glob", "rg"]));
+  });
+
+  it("includes the requested station model in the session config", () => {
+    const manager = createManager([], {
+      requestedModel: "gpt-5.5",
+    });
+    const internals = manager as unknown as SessionManagerInternals & { getSessionConfig(): { model?: string } };
+
+    expect(internals.getSessionConfig()).toMatchObject({
+      model: "gpt-5.5",
+    });
+  });
+
   it("recreates the session and retries when the SDK reports Session not found", async () => {
     const manager = createManager([]);
     const internals = manager as unknown as SessionManagerInternals;
@@ -296,6 +339,29 @@ describe("CopilotSessionManager", () => {
     expect(staleSession.disconnect).toHaveBeenCalledTimes(1);
     expect(freshSession.send).toHaveBeenCalledTimes(1);
     expect(getOrCreateSessionSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("applies the requested model before sending a station prompt", async () => {
+    const manager = createManager([], {
+      requestedModel: "gpt-5.5",
+    });
+    const internals = manager as unknown as SessionManagerInternals;
+    const session = {
+      sessionId: "model-session",
+      send: vi.fn().mockResolvedValue(undefined),
+      setModel: vi.fn().mockResolvedValue(undefined),
+      disconnect: vi.fn().mockResolvedValue(undefined),
+    };
+
+    vi.spyOn(
+      manager as unknown as { getOrCreateSession: () => Promise<typeof session> },
+      "getOrCreateSession",
+    ).mockResolvedValue(session);
+
+    await expect(manager.sendMessage("Use the requested model")).resolves.toBeUndefined();
+
+    expect(session.setModel).toHaveBeenCalledWith("gpt-5.5");
+    expect(session.setModel.mock.invocationCallOrder[0]).toBeLessThan(session.send.mock.invocationCallOrder[0] ?? 0);
   });
 
   it("emits provider usage when a turn becomes idle", () => {
@@ -1099,11 +1165,32 @@ describe("CopilotSessionManager", () => {
       ),
       disconnect: vi.fn().mockResolvedValue(undefined),
     };
+    const client = {
+      capabilities: {
+        persistentSessions: true,
+        abortableTurns: false,
+        sessionResumption: "provider-managed" as const,
+        turnCancellation: "disconnect-and-reset" as const,
+        responseStreaming: "native" as const,
+        usageReporting: "full" as const,
+      },
+      resumeSession: vi.fn(),
+      createSession: vi.fn(),
+      deleteSession: vi.fn(),
+      getAuthStatus: vi.fn(),
+      stop: vi.fn().mockResolvedValue([]),
+    };
 
     internals.session = session;
+    vi.spyOn(
+      manager as unknown as { getOrCreateClient: () => Promise<typeof client> },
+      "getOrCreateClient",
+    ).mockResolvedValue(client);
 
     const sendPromise = manager.sendMessage("hello");
-    await Promise.resolve();
+    for (let index = 0; index < 5 && !rejectSend; index += 1) {
+      await Promise.resolve();
+    }
 
     const abortPromise = internals.abortResponse();
     rejectSend?.(new Error("Aborted by test"));

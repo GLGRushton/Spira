@@ -54,7 +54,7 @@ const toProviderEvent = (event: SessionEvent): ProviderSessionEvent | null => {
     case "assistant.usage":
       return {
         type: "assistant.usage",
-        data: toProviderUsageSnapshot(event.data as Record<string, unknown>),
+        data: toProviderUsageSnapshot(event.data as unknown as Record<string, unknown>),
       };
     case "tool.execution_start":
       return {
@@ -119,6 +119,7 @@ const toCopilotTools = (tools: readonly ProviderToolDefinition[]): Tool[] =>
         description: tool.description,
         parameters: tool.parameters,
         ...(tool.skipPermission !== undefined ? { skipPermission: tool.skipPermission } : {}),
+        ...(tool.overridesBuiltInTool !== undefined ? { overridesBuiltInTool: tool.overridesBuiltInTool } : {}),
         handler: tool.handler,
       }) as unknown as Tool,
   );
@@ -126,6 +127,7 @@ const toCopilotTools = (tools: readonly ProviderToolDefinition[]): Tool[] =>
 const toCopilotSessionConfig = (config: ProviderSessionConfig): SessionConfig => {
   return {
     clientName: config.clientName,
+    ...(config.model ? { model: config.model } : {}),
     ...(config.infiniteSessions ? { infiniteSessions: config.infiniteSessions } : {}),
     onEvent: (event) => {
       const providerEvent = toProviderEvent(event);
@@ -155,6 +157,10 @@ class CopilotProviderSession implements ProviderSession {
 
   async send(payload: { prompt: string }): Promise<void> {
     await this.session.send(payload);
+  }
+
+  setModel(model: string): Promise<void> {
+    return this.session.setModel(model);
   }
 
   abort(): Promise<void> {

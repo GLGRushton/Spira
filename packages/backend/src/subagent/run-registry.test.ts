@@ -33,7 +33,7 @@ describe("SubagentRunRegistry", () => {
 
     const handle = registry.track(
       "spira",
-      { task: "Inspect Spira", mode: "background" },
+      { task: "Inspect Spira", model: "gpt-5.5", mode: "background" },
       {
         runId: "run-1",
         roomId: "agent:subagent-run-1",
@@ -57,6 +57,7 @@ describe("SubagentRunRegistry", () => {
       runId: "run-1",
       status: "running",
       task: "Inspect Spira",
+      requestedModel: "gpt-5.5",
       workingDirectory: "C:\\GitHub\\Spira",
     });
 
@@ -67,6 +68,37 @@ describe("SubagentRunRegistry", () => {
       status: "idle",
       summary: "Finished inspection.",
       envelope: createEnvelope(),
+    });
+  });
+
+  it("records the observed model from provider usage for delegated runs", () => {
+    const bus = new SpiraEventBus();
+    const registry = new SubagentRunRegistry({ bus });
+
+    registry.track(
+      "spira",
+      { task: "Inspect Spira", model: "gpt-5.5", mode: "background" },
+      {
+        runId: "run-model",
+        roomId: "agent:subagent-run-model",
+        startedAt: 1000,
+        resultPromise: new Promise(() => undefined),
+        write: async () => createEnvelope({ runId: "run-model" }),
+        stop: async () => undefined,
+      },
+    );
+
+    bus.emit("provider:usage", {
+      provider: "copilot",
+      runId: "run-model",
+      observedAt: 1100,
+      model: "gpt-5.5",
+      source: "provider",
+    });
+
+    expect(registry.get("run-model")).toMatchObject({
+      runId: "run-model",
+      observedModel: "gpt-5.5",
     });
   });
 
@@ -319,7 +351,7 @@ describe("SubagentRunRegistry", () => {
             envelope: createEnvelope({ runId: "run-10" }),
           },
         ],
-        persistSubagentRun: (snapshot) => {
+        persistSubagentRun: (snapshot: { runId: string }) => {
           persistedSnapshots[snapshot.runId] = snapshot;
           return snapshot;
         },
@@ -351,7 +383,7 @@ describe("SubagentRunRegistry", () => {
       bus,
       runtimeStore: {
         listPersistedSubagentRuns: () => [],
-        persistSubagentRun: (snapshot) => {
+        persistSubagentRun: (snapshot: { runId: string }) => {
           persistedSnapshots[snapshot.runId] = snapshot;
           return snapshot;
         },

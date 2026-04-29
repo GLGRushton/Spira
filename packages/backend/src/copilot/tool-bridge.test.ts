@@ -139,6 +139,32 @@ describe("getCopilotTools", () => {
     );
   });
 
+  it("supports host-tools-only sessions when includeServerIds is empty", () => {
+    const aggregator = createAggregator();
+
+    const toolNames = getCopilotTools(aggregator as never, {
+      workingDirectory: "C:\\GitHub\\Spira",
+      includeHostTools: true,
+      includeServerIds: [],
+    }).map((tool) => tool.name);
+
+    expect(toolNames).toEqual(expect.arrayContaining(["view", "glob", "rg", "powershell"]));
+    expect(toolNames).not.toContain("system_get_volume");
+    expect(toolNames).not.toContain("spira_ui_get_snapshot");
+    expect(toolNames).not.toContain("spira_memory_list_entries");
+  });
+
+  it("can omit host-owned operating tools when the provider already supplies built-ins", () => {
+    const aggregator = createAggregator();
+
+    const toolNames = getCopilotTools(aggregator as never, {
+      workingDirectory: "C:\\GitHub\\Spira",
+      includeHostTools: false,
+    }).map((tool) => tool.name);
+
+    expect(toolNames).toEqual(["system_get_volume", "spira_ui_get_snapshot", "spira_memory_list_entries"]);
+  });
+
   it("adds durable session storage tools when session storage is available", () => {
     const aggregator = createAggregator();
 
@@ -276,6 +302,43 @@ describe("getCopilotTools", () => {
       mode: "background",
     });
     expect(result.textResultForLlm).toContain('"agent_id":"run-1"');
+  });
+
+  it("passes requested models through delegation tools", async () => {
+    const aggregator = createAggregator();
+    const delegateToDomain = vi.fn().mockResolvedValue({
+      agent_id: "run-1",
+      runId: "run-1",
+      roomId: "agent:subagent-run-1",
+      domain: "windows",
+      status: "running",
+      startedAt: 1000,
+    });
+
+    const tool = getCopilotTools(aggregator as never, {
+      delegationDomains: [
+        {
+          id: "windows",
+          label: "Windows Agent",
+          serverIds: ["windows-system"],
+          delegationToolName: "delegate_to_windows",
+          allowWrites: true,
+          systemPrompt: "",
+        },
+      ],
+      delegateToDomain,
+    }).find((candidate) => candidate.name === "delegate_to_windows");
+
+    await (
+      tool as unknown as {
+        handler: (args: Record<string, unknown>, ...rest: unknown[]) => Promise<{ textResultForLlm: string }>;
+      }
+    ).handler({ task: "Inspect active window", model: "gpt-5.5" });
+
+    expect(delegateToDomain).toHaveBeenCalledWith("windows", {
+      task: "Inspect active window",
+      model: "gpt-5.5",
+    });
   });
 
   it("registers mission lifecycle tools only for mission-scoped sessions", () => {

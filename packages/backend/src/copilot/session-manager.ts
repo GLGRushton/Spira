@@ -80,6 +80,7 @@ interface SessionManagerOptions {
   sessionPersistence?: SessionPersistence | null;
   subagentLockManager?: SubagentLockManager;
   subagentRegistry?: SubagentRegistry | null;
+  requestedModel?: string | null;
   additionalInstructions?: string | null;
   workingDirectory?: string | null;
   allowUpgradeTools?: boolean;
@@ -228,6 +229,7 @@ export class CopilotSessionManager {
   private readonly activeToolCalls = new Map<string, RuntimeStationToolCallRecord>();
   private abortRequestedAt: number | null = null;
   private readonly subagentRegistry: SubagentRegistry | null;
+  private readonly requestedModel: string | null;
   private readonly additionalInstructions: string | null;
   private readonly workingDirectory: string | null;
   private readonly allowUpgradeTools: boolean;
@@ -267,6 +269,7 @@ export class CopilotSessionManager {
       recoverLaunch: (snapshot) => this.recoverManagedSubagent(snapshot),
     });
     this.subagentRegistry = options.subagentRegistry ?? null;
+    this.requestedModel = options.requestedModel?.trim() || null;
     this.additionalInstructions = options.additionalInstructions?.trim() || null;
     this.workingDirectory = options.workingDirectory?.trim() || null;
     this.allowUpgradeTools = options.allowUpgradeTools ?? true;
@@ -352,6 +355,7 @@ export class CopilotSessionManager {
   private async sendPromptWithRecovery(text: string, abortEpoch: number, options: SendPromptOptions): Promise<void> {
     const hadLiveSession = this.session !== null;
     const session = await this.getOrCreateSession();
+    await this.applyRequestedModel(session);
 
     try {
       await withTimeout(
@@ -376,6 +380,7 @@ export class CopilotSessionManager {
       }
 
       const refreshedSession = await this.getOrCreateSession();
+      await this.applyRequestedModel(refreshedSession);
       if (this.responseAbortEpoch !== abortEpoch) {
         logger.info("Skipped retry send because the response was aborted during recovery");
         return;
@@ -613,6 +618,7 @@ export class CopilotSessionManager {
     const toolBridgeOptions = this.getToolBridgeOptions();
     return createSessionConfig({
       env: this.env,
+      model: this.requestedModel,
       onEvent: (event) => {
         this.handleSessionEvent(event, expectedSessionId ?? undefined);
       },
@@ -623,6 +629,17 @@ export class CopilotSessionManager {
       workingDirectory: this.workingDirectory,
       streaming: capabilities ? shouldRequestNativeStreaming(capabilities) : true,
     });
+  }
+
+  private async applyRequestedModel(session: ProviderSession): Promise<void> {
+    if (!this.requestedModel || !session.setModel) {
+      return;
+    }
+    await withTimeout(
+      session.setModel(this.requestedModel),
+      SESSION_INIT_TIMEOUT_MS,
+      `Timed out while selecting station model ${this.requestedModel}`,
+    );
   }
 
   private handleSessionEvent(event: ProviderSessionEvent, expectedSessionId?: string): void {
@@ -1031,6 +1048,7 @@ export class CopilotSessionManager {
     const delegationEnabled = connectedDelegationDomains.length > 0;
     return {
       workingDirectory: this.workingDirectory ?? appRootDir,
+      includeHostTools: this.configuredProviderId !== "copilot",
       sessionStorage: this.sessionStorage,
       ...(this.allowUpgradeTools
         ? {
