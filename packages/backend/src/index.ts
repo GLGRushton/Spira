@@ -318,6 +318,7 @@ const restorePersistedStations = (registry: StationRegistry, database: SpiraMemo
     registry.createStation({
       stationId: station.stationId,
       label: station.label,
+      workingDirectory: station.workingDirectory ?? undefined,
       createdAt: station.createdAt,
       updatedAt: station.updatedAt,
     });
@@ -2303,12 +2304,17 @@ const bootstrap = async () => {
   if (typeof memoryDbPath === "string" && memoryDbPath.trim()) {
     memoryDb = SpiraMemoryDatabase.open(memoryDbPath.trim());
     runtimeStore = new RuntimeStore(memoryDb);
-    const runtimeRecovery = RuntimeStore.recoverInterruptedState(memoryDb);
-    if (runtimeRecovery.expiredPermissionRequestIds.length > 0 || runtimeRecovery.recoveredSubagentRunIds.length > 0) {
+    const runtimeRecovery = await RuntimeStore.recoverInterruptedState(memoryDb, env);
+    if (
+      runtimeRecovery.expiredPermissionRequestIds.length > 0 ||
+      runtimeRecovery.recoveredSubagentRunIds.length > 0 ||
+      runtimeRecovery.unrecoverableHostResourceIds.length > 0
+    ) {
       logger.warn(
         {
           expiredPermissionRequestIds: runtimeRecovery.expiredPermissionRequestIds,
           recoveredSubagentRunIds: runtimeRecovery.recoveredSubagentRunIds,
+          unrecoverableHostResourceIds: runtimeRecovery.unrecoverableHostResourceIds,
         },
         "Recovered interrupted runtime state after backend startup",
       );

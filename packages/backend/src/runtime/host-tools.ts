@@ -3,6 +3,8 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { ProviderToolDefinition, ProviderToolResultObject } from "../provider/types.js";
+import { createRuntimeLedgerEvent } from "./runtime-contract.js";
+import type { RuntimeStore } from "./runtime-store.js";
 import type { StationSessionArtifactKind, StationSessionStorage } from "./station-session-storage.js";
 
 const DEFAULT_INITIAL_WAIT_SECONDS = 30;
@@ -70,7 +72,11 @@ const normalizeInputSequence = (input: string): string =>
   input
     .replace(/\{enter\}/g, "\n")
     .replace(/\{backspace\}/g, "\b")
-    .replace(/\{tab\}/g, "\t");
+    .replace(/\{tab\}/g, "\t")
+    .replace(/\{up\}/g, "\u001b[A")
+    .replace(/\{down\}/g, "\u001b[B")
+    .replace(/\{right\}/g, "\u001b[C")
+    .replace(/\{left\}/g, "\u001b[D");
 
 const isHiddenEntry = (name: string): boolean => name.startsWith(".");
 
@@ -306,13 +312,14 @@ const renderRg = async (root: string, args: Record<string, unknown>): Promise<un
   const showLineNumbers = getBoolean(args["-n"]);
   const before = Math.max(0, Math.trunc(getNumber(args["-B"]) ?? getNumber(args["-C"]) ?? 0));
   const after = Math.max(0, Math.trunc(getNumber(args["-A"]) ?? getNumber(args["-C"]) ?? 0));
-  const flags = getBoolean(args["-i"]) ? "giu" : "gu";
+  const baseFlags = getBoolean(args["-i"]) ? "iu" : "u";
+  const matchPattern = new RegExp(pattern, baseFlags);
   const files = await collectWorkspaceFiles(roots, { globPattern, fileType });
   if (outputMode === "files_with_matches") {
     const matches: string[] = [];
     for (const filePath of files) {
-      const content = await readFile(filePath, "utf8");
-      if (new RegExp(pattern, flags).test(normalizeLineEndings(content))) {
+      const content = normalizeLineEndings(await readFile(filePath, "utf8"));
+      if (content.split("\n").some((line) => matchPattern.test(line))) {
         matches.push(filePath);
         if (matches.length >= headLimit) {
           break;
@@ -323,9 +330,13 @@ const renderRg = async (root: string, args: Record<string, unknown>): Promise<un
   }
   if (outputMode === "count") {
     const counts: Array<{ path: string; count: number }> = [];
+    const countPattern = new RegExp(pattern, `${baseFlags}g`);
     for (const filePath of files) {
       const content = normalizeLineEndings(await readFile(filePath, "utf8"));
-      const matchCount = [...content.matchAll(new RegExp(pattern, flags))].length;
+      const matchCount = content.split("\n").reduce((total, line) => {
+        countPattern.lastIndex = 0;
+        return total + [...line.matchAll(countPattern)].length;
+      }, 0);
       if (matchCount > 0) {
         counts.push({ path: filePath, count: matchCount });
         if (counts.length >= headLimit) {
@@ -348,7 +359,7 @@ const renderRg = async (root: string, args: Record<string, unknown>): Promise<un
     const lines = content.split("\n");
     for (let index = 0; index < lines.length; index += 1) {
       const line = lines[index];
-      if (!new RegExp(pattern, flags).test(line)) {
+      if (!matchPattern.test(line)) {
         continue;
       }
       matches.push({
@@ -519,14 +530,16 @@ const applyPatchToWorkspace = async (root: string, patchText: string): Promise<u
   return { changedFiles };
 };
 
-type PowerShellSessionStatus = "running" | "completed" | "failed" | "stopped";
+type PowerShellSessionStatus = "running" | "idle" | "completed" | "failed" | "stopped";
 
 interface PowerShellSessionRecord {
   shellId: string;
+  runtimeSessionId: string | null;
   command: string;
   description: string;
   mode: "sync" | "async";
   detached: boolean;
+  workingDirectory: string;
   process: ChildProcessWithoutNullStreams | null;
   status: PowerShellSessionStatus;
   pid: number | null;
@@ -535,12 +548,43 @@ interface PowerShellSessionRecord {
   updatedAt: number;
   exitCode: number | null;
   hasUnreadOutput: boolean;
+  persist?: ((record: PowerShellSessionRecord) => void) | null;
 }
+
+type PowerShellResourceState = {
+  shellId: string;
+  command: string;
+  description: string;
+  mode: "sync" | "async";
+  detached: boolean;
+  status: PowerShellSessionStatus | "unrecoverable" | "cancelled";
+  pid: number | null;
+  exitCode: number | null;
+  output: string;
+  outputCursor: number;
+  hasUnreadOutput: boolean;
+  startedAt: number;
+  updatedAt: number;
+  recoveryPolicy: "ephemeral" | "unrecoverable-after-restart" | "detached";
+  recoveryNote?: string;
+};
 
 class PowerShellSessionManager {
   private readonly sessions = new Map<string, PowerShellSessionRecord>();
+  private readonly terminalSnapshots = new Map<string, PowerShellSessionRecord>();
+  private static readonly TERMINAL_SNAPSHOT_TTL_MS = 5 * 60 * 1000;
 
-  async start(args: Record<string, unknown>): Promise<unknown> {
+  private toSessionKey(runtimeSessionId: string | null | undefined, shellId: string): string {
+    return `${runtimeSessionId ?? "global"}::${shellId}`;
+  }
+
+  async start(
+    args: Record<string, unknown>,
+    persist?: ((record: PowerShellSessionRecord) => void) | null,
+    runtimeSessionId?: string | null,
+    workingDirectory?: string,
+  ): Promise<unknown> {
+    this.pruneTerminalSnapshots();
     const command = getString(args.command);
     const description = getString(args.description);
     if (!command || !description) {
@@ -549,28 +593,32 @@ class PowerShellSessionManager {
     const mode = getString(args.mode) === "async" ? "async" : "sync";
     const initialWait = Math.max(1, Math.trunc(getNumber(args.initial_wait) ?? DEFAULT_INITIAL_WAIT_SECONDS));
     const requestedShellId = getString(args.shellId) ?? `shell-${randomUUID()}`;
-    if (this.sessions.has(requestedShellId)) {
+    const sessionKey = this.toSessionKey(runtimeSessionId, requestedShellId);
+    if (this.sessions.has(sessionKey)) {
       throw new Error(`PowerShell session ${requestedShellId} already exists.`);
     }
     const detached = getBoolean(args.detach);
-    const child = spawn(
-      "powershell.exe",
-      ["-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command],
-      {
-        stdio: ["pipe", "pipe", "pipe"],
-        windowsHide: true,
-        detached,
-      },
-    );
+    const spawnArgs =
+      mode === "async"
+        ? ["-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-NoExit", "-Command", "-"]
+        : ["-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command];
+    const child = spawn("powershell.exe", spawnArgs, {
+      stdio: ["pipe", "pipe", "pipe"],
+      windowsHide: true,
+      detached,
+      cwd: workingDirectory,
+    });
     if (detached) {
       child.unref();
     }
     const record: PowerShellSessionRecord = {
       shellId: requestedShellId,
+      runtimeSessionId: runtimeSessionId ?? null,
       command,
       description,
       mode,
       detached,
+      workingDirectory: workingDirectory ?? process.cwd(),
       process: child,
       status: "running",
       pid: child.pid ?? null,
@@ -579,23 +627,39 @@ class PowerShellSessionManager {
       updatedAt: Date.now(),
       exitCode: null,
       hasUnreadOutput: false,
+      persist: persist ?? null,
     };
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
     const onData = (chunk: string) => {
       record.output = clampOutput(`${record.output}${chunk}`);
+      record.status = "running";
       record.updatedAt = Date.now();
       record.hasUnreadOutput = true;
+      record.persist?.(record);
     };
     child.stdout.on("data", onData);
     child.stderr.on("data", onData);
+    if (mode === "async") {
+      child.stdin.write(`${command}\n`);
+    }
     const childEvents = child as ChildProcessWithoutNullStreams & NodeJS.EventEmitter;
     childEvents.on("close", (exitCode: number | null) => {
+      if (record.status === "stopped") {
+        record.updatedAt = Date.now();
+        record.process = null;
+        record.hasUnreadOutput = true;
+        record.persist?.(record);
+        this.rememberTerminalSnapshot(sessionKey, record);
+        return;
+      }
       record.status = exitCode === 0 ? "completed" : "failed";
       record.exitCode = exitCode ?? -1;
       record.updatedAt = Date.now();
       record.process = null;
       record.hasUnreadOutput = true;
+      record.persist?.(record);
+      this.rememberTerminalSnapshot(sessionKey, record);
     });
     childEvents.on("error", (error: Error) => {
       record.status = "failed";
@@ -604,8 +668,11 @@ class PowerShellSessionManager {
       record.updatedAt = Date.now();
       record.process = null;
       record.hasUnreadOutput = true;
+      record.persist?.(record);
+      this.rememberTerminalSnapshot(sessionKey, record);
     });
-    this.sessions.set(requestedShellId, record);
+    this.sessions.set(sessionKey, record);
+    record.persist?.(record);
     if (mode === "async") {
       if (initialWait > 0) {
         await this.delay(initialWait);
@@ -614,50 +681,86 @@ class PowerShellSessionManager {
     }
     await this.waitForCompletionOrTimeout(record, initialWait);
     const serialized = this.serialize(record);
-    if (record.status !== "running") {
-      this.sessions.delete(record.shellId);
+    if (record.status === "completed" || record.status === "failed" || record.status === "stopped") {
+      this.discardTerminalSnapshot(sessionKey);
     }
     return serialized;
   }
 
-  async read(shellId: string, delaySeconds: number): Promise<unknown> {
-    const record = this.get(shellId);
+  async read(shellId: string, delaySeconds: number, runtimeSessionId?: string | null): Promise<unknown> {
+    this.pruneTerminalSnapshots();
+    const sessionKey = this.toSessionKey(runtimeSessionId, shellId);
+    const record = this.getReadable(sessionKey, shellId, runtimeSessionId);
     await this.delay(delaySeconds);
-    return this.serialize(record);
+    if (record.process && record.status === "running" && !record.hasUnreadOutput) {
+      record.status = "idle";
+      record.updatedAt = Date.now();
+      record.persist?.(record);
+    }
+    const serialized = this.serialize(record);
+    if (!record.process && (record.status === "completed" || record.status === "failed" || record.status === "stopped")) {
+      this.discardTerminalSnapshot(sessionKey);
+    }
+    return serialized;
   }
 
-  async write(shellId: string, input: string, delaySeconds: number): Promise<unknown> {
-    const record = this.get(shellId);
-    if (!record.process || record.status !== "running") {
+  async write(
+    shellId: string,
+    input: string,
+    delaySeconds: number,
+    runtimeSessionId?: string | null,
+  ): Promise<unknown> {
+    this.pruneTerminalSnapshots();
+    const record = this.getActive(shellId, runtimeSessionId);
+    if (!record.process || (record.status !== "running" && record.status !== "idle")) {
       throw new Error(`PowerShell session ${shellId} is not running.`);
     }
+    record.status = "running";
     record.process.stdin.write(normalizeInputSequence(input));
     record.updatedAt = Date.now();
+    record.persist?.(record);
     await this.delay(delaySeconds);
+    if (record.process && !record.hasUnreadOutput) {
+      record.status = "idle";
+      record.updatedAt = Date.now();
+      record.persist?.(record);
+    }
     return this.serialize(record);
   }
 
-  stop(shellId: string): unknown {
-    const record = this.get(shellId);
-    record.process?.kill();
+  async stop(shellId: string, runtimeSessionId?: string | null): Promise<unknown> {
+    this.pruneTerminalSnapshots();
+    const record = this.getActive(shellId, runtimeSessionId);
+    if (!record.process || (record.status !== "running" && record.status !== "idle") || record.pid === null) {
+      throw new Error(`PowerShell session ${shellId} is not running.`);
+    }
+    await stopWindowsProcessTree(record.pid);
     record.process = null;
     record.status = "stopped";
     record.updatedAt = Date.now();
     record.hasUnreadOutput = true;
+    record.persist?.(record);
     return this.serialize(record);
   }
 
-  list(): unknown {
+  list(runtimeSessionId?: string | null): unknown {
+    this.pruneTerminalSnapshots();
     return {
       sessions: [...this.sessions.values()]
+        .filter((record) => record.runtimeSessionId === (runtimeSessionId ?? null))
         .map((record) => ({
           shellId: record.shellId,
           command: record.command,
           description: record.description,
           mode: record.mode,
+          detached: record.detached,
           status: record.status,
           pid: record.pid,
+          exitCode: record.exitCode,
+          output: "",
+          outputCursor: record.output.length,
           hasUnreadOutput: record.hasUnreadOutput,
+          recoveryPolicy: record.detached ? "detached" : "unrecoverable-after-restart",
           startedAt: record.startedAt,
           updatedAt: record.updatedAt,
         }))
@@ -665,21 +768,47 @@ class PowerShellSessionManager {
     };
   }
 
-  private get(shellId: string): PowerShellSessionRecord {
-    const record = this.sessions.get(shellId);
-    if (!record) {
+  private getActive(shellId: string, runtimeSessionId?: string | null): PowerShellSessionRecord {
+    const sessionKey = this.toSessionKey(runtimeSessionId, shellId);
+    const record = this.sessions.get(sessionKey);
+    if (!record || record.runtimeSessionId !== (runtimeSessionId ?? null)) {
+      const snapshot = this.terminalSnapshots.get(sessionKey);
+      if (snapshot && snapshot.runtimeSessionId === (runtimeSessionId ?? null)) {
+        throw new Error(`PowerShell session ${shellId} is not running.`);
+      }
       throw new Error(`PowerShell session ${shellId} was not found.`);
     }
     return record;
+  }
+
+  private getReadable(
+    sessionKey: string,
+    shellId: string,
+    runtimeSessionId?: string | null,
+  ): PowerShellSessionRecord {
+    const active = this.sessions.get(sessionKey);
+    if (active && active.runtimeSessionId === (runtimeSessionId ?? null)) {
+      return active;
+    }
+    const snapshot = this.terminalSnapshots.get(sessionKey);
+    if (snapshot && snapshot.runtimeSessionId === (runtimeSessionId ?? null)) {
+      return snapshot;
+    }
+    throw new Error(`PowerShell session ${shellId} was not found.`);
   }
 
   private async waitForCompletionOrTimeout(record: PowerShellSessionRecord, initialWait: number): Promise<void> {
     if (record.status !== "running") {
       return;
     }
+    let cancelled = false;
     await Promise.race([
       new Promise<void>((resolve) => {
         const check = () => {
+          if (cancelled) {
+            resolve();
+            return;
+          }
           if (record.status !== "running") {
             resolve();
             return;
@@ -688,7 +817,9 @@ class PowerShellSessionManager {
         };
         check();
       }),
-      this.delay(initialWait),
+      this.delay(initialWait).then(() => {
+        cancelled = true;
+      }),
     ]);
   }
 
@@ -712,16 +843,94 @@ class PowerShellSessionManager {
       pid: record.pid,
       exitCode: record.exitCode,
       output: record.output.trim(),
+      outputCursor: record.output.length,
       startedAt: record.startedAt,
       updatedAt: record.updatedAt,
       hasUnreadOutput: record.hasUnreadOutput,
+      recoveryPolicy: record.detached ? "detached" : "unrecoverable-after-restart",
     };
     record.hasUnreadOutput = false;
     return serialized;
   }
+
+  private rememberTerminalSnapshot(sessionKey: string, record: PowerShellSessionRecord): void {
+    this.sessions.delete(sessionKey);
+    this.terminalSnapshots.set(sessionKey, record);
+  }
+
+  private discardTerminalSnapshot(sessionKey: string): void {
+    this.sessions.delete(sessionKey);
+    this.terminalSnapshots.delete(sessionKey);
+  }
+
+  private pruneTerminalSnapshots(now = Date.now()): void {
+    for (const [sessionKey, record] of this.terminalSnapshots.entries()) {
+      if (now - record.updatedAt > PowerShellSessionManager.TERMINAL_SNAPSHOT_TTL_MS) {
+        this.terminalSnapshots.delete(sessionKey);
+      }
+    }
+  }
 }
 
 const powerShellSessions = new PowerShellSessionManager();
+const getPowerShellResourceId = (runtimeSessionId: string | null | undefined, shellId: string): string =>
+  `powershell:${runtimeSessionId ?? "global"}:${shellId}`;
+const stopWindowsProcessTree = async (pid: number): Promise<void> =>
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn("taskkill", ["/PID", String(pid), "/T", "/F"], {
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+    });
+    const childEvents = child as typeof child & NodeJS.EventEmitter;
+    let stderr = "";
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    childEvents.on("close", (exitCode: number | null) => {
+      if (exitCode === 0) {
+        resolve();
+        return;
+      }
+      reject(new Error(stderr.trim() || `Failed to stop process tree for PID ${pid}.`));
+    });
+    childEvents.on("error", (error: Error) => reject(error));
+  });
+
+const toPowerShellResourceState = (
+  record: Pick<
+    PowerShellSessionRecord,
+    | "shellId"
+    | "command"
+    | "description"
+    | "mode"
+    | "detached"
+    | "status"
+    | "pid"
+    | "exitCode"
+    | "output"
+    | "startedAt"
+    | "updatedAt"
+    | "hasUnreadOutput"
+  >,
+  overrides: Partial<PowerShellResourceState> = {},
+): PowerShellResourceState => ({
+  shellId: record.shellId,
+  command: record.command,
+  description: record.description,
+  mode: record.mode,
+  detached: record.detached,
+  status: record.status,
+  pid: record.pid,
+  exitCode: record.exitCode,
+  output: record.output.trim(),
+  outputCursor: record.output.length,
+  hasUnreadOutput: record.hasUnreadOutput,
+  startedAt: record.startedAt,
+  updatedAt: record.updatedAt,
+  recoveryPolicy: record.detached ? "detached" : "unrecoverable-after-restart",
+  ...overrides,
+});
 
 const buildSessionArtifactTool = (
   name: string,
@@ -758,7 +967,71 @@ const buildSessionArtifactTool = (
 export const createHostTools = (options: {
   workingDirectory: string;
   sessionStorage?: StationSessionStorage | null;
+  runtimeStore?: RuntimeStore | null;
+  runtimeSessionId?: string | null;
+  stationId?: string | null;
 }): ProviderToolDefinition[] => {
+  const shouldPersistPowerShellResource = (state: PowerShellResourceState): boolean =>
+    !(state.mode === "sync" && (state.status === "completed" || state.status === "failed" || state.status === "cancelled"));
+  const deletePersistedPowerShellResource = (shellId: string): void => {
+    if (!options.runtimeStore || !options.runtimeSessionId) {
+      return;
+    }
+    options.runtimeStore.deleteRuntimeHostResource(getPowerShellResourceId(options.runtimeSessionId, shellId));
+  };
+  const persistPowerShellResource = (state: PowerShellResourceState): void => {
+    if (!options.runtimeStore || !options.runtimeSessionId) {
+      return;
+    }
+    if (!shouldPersistPowerShellResource(state)) {
+      deletePersistedPowerShellResource(state.shellId);
+      return;
+    }
+    const status =
+      state.status === "stopped" || state.status === "cancelled"
+        ? "cancelled"
+        : state.status === "idle"
+          ? "idle"
+        : state.status === "failed"
+          ? "failed"
+          : state.status === "completed"
+            ? "completed"
+            : state.status === "unrecoverable"
+              ? "unrecoverable"
+              : "running";
+    options.runtimeStore.upsertRuntimeHostResource({
+      resourceId: getPowerShellResourceId(options.runtimeSessionId, state.shellId),
+      runtimeSessionId: options.runtimeSessionId,
+      stationId: options.stationId ?? null,
+      kind: "powershell",
+      status,
+      state,
+    });
+    options.runtimeStore.appendRuntimeLedgerEvent(
+      createRuntimeLedgerEvent({
+        eventId: randomUUID(),
+        sessionId: options.runtimeSessionId,
+        occurredAt: state.updatedAt,
+        type: "host.resource_recorded",
+        payload: {
+          resourceId: getPowerShellResourceId(options.runtimeSessionId, state.shellId),
+          kind: "powershell",
+          status,
+          outputCursor: state.outputCursor,
+        },
+      }),
+    );
+  };
+  const listPersistedPowerShellResources = (): PowerShellResourceState[] =>
+    options.runtimeStore && options.runtimeSessionId
+      ? options.runtimeStore
+          .listRuntimeHostResources(options.runtimeSessionId)
+          .filter((record) => record.kind === "powershell")
+          .map((record) => record.state as unknown as PowerShellResourceState)
+          .filter((state) => shouldPersistPowerShellResource(state))
+      : [];
+  const getPersistedPowerShellResource = (shellId: string): PowerShellResourceState | null =>
+    listPersistedPowerShellResources().find((session) => session.shellId === shellId) ?? null;
   const tools: ProviderToolDefinition[] = [
     {
       name: "view",
@@ -921,7 +1194,14 @@ export const createHostTools = (options: {
       },
       handler: async (args) => {
         try {
-          return toSuccess(await powerShellSessions.start(args));
+          const result = (await powerShellSessions.start(
+            args,
+            (record) => persistPowerShellResource(toPowerShellResourceState(record)),
+            options.runtimeSessionId,
+            options.workingDirectory,
+          )) as PowerShellResourceState;
+          persistPowerShellResource(result);
+          return toSuccess(result);
         } catch (error) {
           return toFailure(error instanceof Error ? error.message : "Failed to start the PowerShell command.");
         }
@@ -947,7 +1227,15 @@ export const createHostTools = (options: {
             throw new Error("read_powershell requires shellId.");
           }
           const delay = Math.max(0, Math.trunc(getNumber(args.delay) ?? 0));
-          return toSuccess(await powerShellSessions.read(shellId, delay));
+          const result = (await powerShellSessions.read(shellId, delay, options.runtimeSessionId).catch(() => {
+            const persisted = getPersistedPowerShellResource(shellId);
+            if (persisted) {
+              return persisted;
+            }
+            throw new Error(`PowerShell session ${shellId} was not found.`);
+          })) as PowerShellResourceState;
+          persistPowerShellResource(result);
+          return toSuccess(result);
         } catch (error) {
           return toFailure(error instanceof Error ? error.message : "Failed to read the PowerShell session.");
         }
@@ -972,8 +1260,19 @@ export const createHostTools = (options: {
           if (!shellId) {
             throw new Error("write_powershell requires shellId.");
           }
+          const persisted = getPersistedPowerShellResource(shellId);
+          if (persisted && persisted.status === "unrecoverable") {
+            throw new Error(`PowerShell session ${shellId} is unrecoverable after restart.`);
+          }
           const delay = Math.max(0, Math.trunc(getNumber(args.delay) ?? 0));
-          return toSuccess(await powerShellSessions.write(shellId, typeof args.input === "string" ? args.input : "", delay));
+          const result = (await powerShellSessions.write(
+            shellId,
+            typeof args.input === "string" ? args.input : "",
+            delay,
+            options.runtimeSessionId,
+          )) as PowerShellResourceState;
+          persistPowerShellResource(result);
+          return toSuccess(result);
         } catch (error) {
           return toFailure(error instanceof Error ? error.message : "Failed to write to the PowerShell session.");
         }
@@ -996,7 +1295,21 @@ export const createHostTools = (options: {
           if (!shellId) {
             throw new Error("stop_powershell requires shellId.");
           }
-          return toSuccess(powerShellSessions.stop(shellId));
+          const result = (await powerShellSessions
+            .stop(shellId, options.runtimeSessionId)
+            .catch(async () => {
+              const persisted = getPersistedPowerShellResource(shellId);
+              if (!persisted) {
+                throw new Error(`PowerShell session ${shellId} was not found.`);
+              }
+              if ((persisted.status !== "running" && persisted.status !== "idle") || persisted.pid === null) {
+                throw new Error(`PowerShell session ${shellId} is not running.`);
+              }
+              await stopWindowsProcessTree(persisted.pid);
+              return { ...persisted, status: "cancelled", updatedAt: Date.now(), exitCode: null };
+            })) as PowerShellResourceState;
+          persistPowerShellResource({ ...result, status: "cancelled" });
+          return toSuccess(result);
         } catch (error) {
           return toFailure(error instanceof Error ? error.message : "Failed to stop the PowerShell session.");
         }
@@ -1009,7 +1322,12 @@ export const createHostTools = (options: {
       skipPermission: true,
       handler: async () => {
         try {
-          return toSuccess(powerShellSessions.list());
+          const listed = powerShellSessions.list(options.runtimeSessionId) as { sessions: PowerShellResourceState[] };
+          const activeIds = new Set(listed.sessions.map((session) => session.shellId));
+          const persisted = listPersistedPowerShellResources().filter((session) => !activeIds.has(session.shellId));
+          return toSuccess({
+            sessions: [...listed.sessions, ...persisted].sort((left, right) => right.startedAt - left.startedAt),
+          });
         } catch (error) {
           return toFailure(error instanceof Error ? error.message : "Failed to list PowerShell sessions.");
         }

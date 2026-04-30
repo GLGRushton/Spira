@@ -1,13 +1,17 @@
 import { type Env, SUBAGENT_DOMAINS, type SubagentDomain } from "@spira/shared";
 import type { McpToolAggregator } from "../mcp/tool-aggregator.js";
 import type {
+  ProviderCapabilities,
+  ProviderId,
   ProviderPermissionRequest,
   ProviderPermissionResult,
   ProviderSessionConfig,
   ProviderSessionEvent,
+  ProviderSystemMessageSection,
 } from "../provider/types.js";
+import { getProviderToolManifest } from "../runtime/capability-registry.js";
 import { appRootDir } from "../util/app-paths.js";
-import { type ToolBridgeOptions, getCopilotTools } from "./tool-bridge.js";
+import type { ToolBridgeOptions } from "../runtime/tool-bridge.js";
 
 const SHINRA_PERSONA_INSTRUCTIONS = [
   "You are Shinra, the resident operations intelligence of Spira.",
@@ -126,6 +130,9 @@ export const createSessionConfig = (options: {
   additionalInstructions?: string | null;
   workingDirectory?: string | null;
   streaming?: boolean;
+  providerId?: ProviderId;
+  providerCapabilities?: ProviderCapabilities;
+  runtimeRecoverySection?: ProviderSystemMessageSection | null;
 }): Omit<ProviderSessionConfig, "sessionId"> => {
   const toolAwarenessInstructions = getToolAwarenessInstructions(
     options.env,
@@ -167,6 +174,7 @@ export const createSessionConfig = (options: {
             .filter((section) => section.length > 0)
             .join("\n\n"),
         },
+        ...(options.runtimeRecoverySection ? { runtime_recovery: options.runtimeRecoverySection } : {}),
         last_instructions: {
           action: "append",
           content: SHINRA_LAST_INSTRUCTIONS,
@@ -175,6 +183,11 @@ export const createSessionConfig = (options: {
       content: SHINRA_PERSONA_INSTRUCTIONS,
     },
     workingDirectory: options.workingDirectory?.trim() || appRootDir,
-    tools: getCopilotTools(options.toolAggregator, options.toolBridgeOptions),
+    tools: getProviderToolManifest({
+      aggregator: options.toolAggregator,
+      options: options.toolBridgeOptions,
+      providerId: options.providerId,
+      capabilities: options.providerCapabilities,
+    }).tools,
   };
 };

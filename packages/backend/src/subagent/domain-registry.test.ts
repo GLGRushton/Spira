@@ -22,7 +22,13 @@ const createTool = (serverId: string, name: string): McpTool => ({
 
 describe("domain registry", () => {
   it("defines the expected initial domains", () => {
-    expect(SUBAGENT_DOMAINS.map((domain) => domain.id)).toEqual(["windows", "spira", "nexus", "data-entry"]);
+    expect(SUBAGENT_DOMAINS.map((domain) => domain.id)).toEqual([
+      "windows",
+      "spira",
+      "nexus",
+      "data-entry",
+      "code-review",
+    ]);
   });
 
   it("finds a domain by id and server id", () => {

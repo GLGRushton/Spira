@@ -163,12 +163,15 @@ export interface SubagentRunSnapshot {
   roomId: `agent:${string}`;
   domain: SubagentDomainId;
   task: string;
+  providerId?: "copilot" | "azure-openai";
   requestedModel?: string;
   observedModel?: string;
   status: SubagentRunStatus;
   allowWrites?: boolean;
   workingDirectory?: string;
   providerSessionId?: string;
+  hostManifestHash?: string;
+  providerProjectionHash?: string;
   startedAt: number;
   updatedAt: number;
   completedAt?: number;

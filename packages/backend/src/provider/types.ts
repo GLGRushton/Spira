@@ -150,6 +150,9 @@ export type ProviderSessionResumptionMode = "provider-managed" | "host-managed";
 export type ProviderTurnCancellationMode = "provider-abort" | "disconnect-and-reset";
 export type ProviderResponseStreamingMode = "native" | "host-buffered";
 export type ProviderUsageReportingMode = "full" | "partial" | "none";
+export type ProviderToolManifestMode = "literal" | "projected";
+export type ProviderModelSelectionMode = "session-scoped" | "provider-default";
+export type ProviderToolCallingMode = "native" | "none";
 
 export type ProviderCapabilities = {
   persistentSessions: boolean;
@@ -158,6 +161,9 @@ export type ProviderCapabilities = {
   turnCancellation: ProviderTurnCancellationMode;
   responseStreaming: ProviderResponseStreamingMode;
   usageReporting: ProviderUsageReportingMode;
+  toolManifestMode: ProviderToolManifestMode;
+  modelSelection: ProviderModelSelectionMode;
+  toolCalling: ProviderToolCallingMode;
 };
 
 export type ProviderClient = {

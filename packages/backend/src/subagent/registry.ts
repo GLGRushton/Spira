@@ -98,14 +98,7 @@ export class SubagentRegistry {
       return [];
     }
 
-    const serverIdSet = new Set(domain.serverIds);
-    const scopedTools = tools.filter((tool) => serverIdSet.has(tool.serverId));
-    if (!domain.allowedToolNames || domain.allowedToolNames.length === 0) {
-      return scopedTools;
-    }
-
-    const allowedToolNames = new Set(domain.allowedToolNames);
-    return scopedTools.filter((tool) => allowedToolNames.has(tool.name));
+    return filterSubagentDomainTools(domain, tools);
   }
 
   createCustom(input: SubagentCreateConfig): SubagentDomain {
@@ -205,3 +198,17 @@ export class SubagentRegistry {
     this.bus.emit("subagent:catalog-changed", this.listAll());
   }
 }
+
+export const filterSubagentDomainTools = (
+  domain: Pick<SubagentDomain, "serverIds" | "allowedToolNames">,
+  tools: readonly McpTool[],
+): McpTool[] => {
+  const serverIdSet = new Set(domain.serverIds);
+  const scopedTools = tools.filter((tool) => serverIdSet.has(tool.serverId));
+  if (!domain.allowedToolNames || domain.allowedToolNames.length === 0) {
+    return scopedTools;
+  }
+
+  const allowedToolNames = new Set(domain.allowedToolNames);
+  return scopedTools.filter((tool) => allowedToolNames.has(tool.name));
+};

@@ -1,14 +1,16 @@
 import type {
+  Env,
   SubagentDelegationArgs,
   SubagentDomainId,
   SubagentEnvelope,
-  SubagentToolCallRecord,
   SubagentRunHandle,
   SubagentRunSnapshot,
   SubagentRunStatus,
+  SubagentToolCallRecord,
 } from "@spira/shared";
 import type { ProviderUsageRecord } from "../provider/types.js";
-import { RuntimeStore } from "../runtime/runtime-store.js";
+import type { RuntimeStore } from "../runtime/runtime-store.js";
+import { resolveSubagentProviderBinding } from "../runtime/provider-binding.js";
 import type { SpiraEventBus } from "../util/event-bus.js";
 import { setUnrefTimeout } from "../util/timers.js";
 import type { RecoveredSubagentRunLaunch, SubagentRunLaunch } from "./subagent-runner.js";
@@ -33,6 +35,7 @@ type PersistedSubagentRunSnapshot = SubagentRunSnapshot & { workingDirectory?: s
 interface SubagentRunRegistryOptions {
   bus?: SpiraEventBus;
   runtimeStore?: RuntimeStore;
+  env?: Env;
   now?: () => number;
   retentionMs?: number;
   idleTimeoutMs?: number;
@@ -42,6 +45,7 @@ interface SubagentRunRegistryOptions {
 export class SubagentRunRegistry {
   private readonly bus: SpiraEventBus | null;
   private readonly runtimeStore: RuntimeStore | null;
+  private readonly env: Env | null;
   private readonly now: () => number;
   private readonly retentionMs: number;
   private readonly idleTimeoutMs: number;
@@ -51,6 +55,7 @@ export class SubagentRunRegistry {
   constructor(options: SubagentRunRegistryOptions = {}) {
     this.bus = options.bus ?? null;
     this.runtimeStore = options.runtimeStore ?? null;
+    this.env = options.env ?? null;
     this.now = options.now ?? Date.now;
     this.retentionMs = options.retentionMs ?? DEFAULT_RETENTION_MS;
     this.idleTimeoutMs = options.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS;
@@ -69,7 +74,10 @@ export class SubagentRunRegistry {
       trackedRun.snapshot = {
         ...trackedRun.snapshot,
         allowWrites: event.allowWrites,
+        providerId: event.providerId,
         providerSessionId: event.providerSessionId ?? undefined,
+        hostManifestHash: event.hostManifestHash ?? undefined,
+        providerProjectionHash: event.providerProjectionHash ?? undefined,
         updatedAt: this.now(),
       };
       this.persistSnapshot(trackedRun.snapshot);
@@ -137,21 +145,104 @@ export class SubagentRunRegistry {
   }
 
   private hydratePersistedRuns(): void {
-    for (const snapshot of this.runtimeStore?.listPersistedSubagentRuns() ?? []) {
+    for (const persistedSnapshot of this.runtimeStore?.listPersistedSubagentRuns() ?? []) {
+      let snapshot =
+        persistedSnapshot.status === "running" ? this.failInterruptedSnapshot(persistedSnapshot) : persistedSnapshot;
+      const recoveredLaunch = snapshot.status === "idle" ? (this.recoverLaunch?.(snapshot) ?? null) : null;
+      if (snapshot.status === "idle" && this.recoverLaunch && !recoveredLaunch) {
+        snapshot = this.failUnrecoverableIdleSnapshot(snapshot);
+      }
+      if (snapshot.status === "idle") {
+        const rearmedExpiresAt = this.now() + this.idleTimeoutMs;
+        const expiresAt =
+          typeof snapshot.expiresAt === "number" ? Math.min(snapshot.expiresAt, rearmedExpiresAt) : rearmedExpiresAt;
+        snapshot = {
+          ...snapshot,
+          expiresAt,
+        };
+        this.persistSnapshot(snapshot);
+      }
       const trackedRun: TrackedSubagentRun = {
         snapshot,
         turnPromise: Promise.resolve(),
         sequence: 0,
         terminal: snapshot.status !== "running" && snapshot.status !== "idle",
         waiters: new Set(),
-        ...(snapshot.status === "idle" ? { launch: this.recoverLaunch?.(snapshot) ?? undefined } : {}),
+        ...(snapshot.status === "idle" && recoveredLaunch ? { launch: recoveredLaunch } : {}),
       };
       this.runs.set(snapshot.runId, trackedRun);
-      if (snapshot.status === "idle" && snapshot.expiresAt) {
+      if (snapshot.status === "idle") {
         this.armIdleTimer(trackedRun);
       } else if (trackedRun.terminal && snapshot.expiresAt) {
-        this.schedulePrune(trackedRun);
+        const remainingTtlMs = snapshot.expiresAt - this.now();
+        if (remainingTtlMs <= 0) {
+          this.deleteRun(snapshot.runId);
+          continue;
+        }
+        this.schedulePrune(trackedRun, remainingTtlMs);
       }
+    }
+  }
+
+  private failInterruptedSnapshot(snapshot: SubagentRunSnapshot): PersistedSubagentRunSnapshot {
+    const occurredAt = this.now();
+    const interruptedSnapshot: PersistedSubagentRunSnapshot = {
+      ...snapshot,
+      status: "failed",
+      providerId: undefined,
+      providerSessionId: undefined,
+      activeToolCalls: [],
+      updatedAt: occurredAt,
+      completedAt: snapshot.completedAt ?? occurredAt,
+      summary: snapshot.summary ?? "Delegated subagent run was interrupted before completion.",
+      expiresAt: occurredAt + this.retentionMs,
+    };
+    this.persistSnapshot(interruptedSnapshot);
+    return interruptedSnapshot;
+  }
+
+  private failUnrecoverableIdleSnapshot(snapshot: SubagentRunSnapshot): PersistedSubagentRunSnapshot {
+    const occurredAt = this.now();
+    this.queueProviderSessionCleanup(snapshot);
+    const failedSnapshot: PersistedSubagentRunSnapshot = {
+      ...snapshot,
+      status: "failed",
+      providerId: undefined,
+      providerSessionId: undefined,
+      activeToolCalls: [],
+      updatedAt: occurredAt,
+      completedAt: snapshot.completedAt ?? occurredAt,
+      summary: snapshot.summary ?? "Delegated subagent run could not be recovered after restart.",
+      expiresAt: occurredAt + this.retentionMs,
+    };
+    this.persistSnapshot(failedSnapshot);
+    return failedSnapshot;
+  }
+
+  private queueProviderSessionCleanup(snapshot: SubagentRunSnapshot): void {
+    const runtimeSessionId =
+      this.runtimeStore && typeof this.runtimeStore.getSubagentRuntimeSessionId === "function"
+        ? this.runtimeStore.getSubagentRuntimeSessionId(snapshot.runId)
+        : null;
+    const runtimeSession =
+      runtimeSessionId && this.runtimeStore && typeof this.runtimeStore.getRuntimeSession === "function"
+        ? this.runtimeStore.getRuntimeSession(runtimeSessionId)
+        : null;
+    const stationRuntimeSessionId =
+      this.runtimeStore && typeof this.runtimeStore.getStationRuntimeSessionId === "function"
+        ? this.runtimeStore.getStationRuntimeSessionId()
+        : null;
+    const stationRuntimeSession =
+      stationRuntimeSessionId && this.runtimeStore && typeof this.runtimeStore.getRuntimeSession === "function"
+        ? this.runtimeStore.getRuntimeSession(stationRuntimeSessionId)
+        : null;
+    const { providerId, providerSessionId } = resolveSubagentProviderBinding(snapshot, runtimeSession, stationRuntimeSession);
+    if (!providerId || !providerSessionId || !this.runtimeStore) {
+      return;
+    }
+    this.runtimeStore.queueProviderSessionCleanup(providerId, providerSessionId);
+    if (this.env) {
+      void this.runtimeStore.drainPendingProviderSessionCleanup(this.env);
     }
   }
 
@@ -259,6 +350,7 @@ export class SubagentRunRegistry {
       activeToolCalls: [],
       toolCalls: [],
       updatedAt: this.now(),
+      expiresAt: undefined,
     };
     this.persistSnapshot(trackedRun.snapshot);
     this.emitStatus(trackedRun.snapshot, "running");
@@ -287,6 +379,7 @@ export class SubagentRunRegistry {
     trackedRun.snapshot = {
       ...trackedRun.snapshot,
       status: "cancelled",
+      providerId: undefined,
       providerSessionId: undefined,
       activeToolCalls: [],
       updatedAt: occurredAt,
@@ -322,6 +415,7 @@ export class SubagentRunRegistry {
           activeToolCalls: [],
           toolCalls: envelope.toolCalls,
           envelope,
+          ...(envelope.status === "completed" ? { expiresAt: updatedAt + this.idleTimeoutMs } : { expiresAt: undefined }),
         };
         this.persistSnapshot(current.snapshot);
         if (envelope.status === "completed") {
@@ -331,6 +425,7 @@ export class SubagentRunRegistry {
           current.terminal = true;
           current.snapshot = {
             ...current.snapshot,
+            providerId: undefined,
             providerSessionId: undefined,
             expiresAt: updatedAt + this.retentionMs,
           };
@@ -351,6 +446,7 @@ export class SubagentRunRegistry {
         current.snapshot = {
           ...current.snapshot,
           status: "failed",
+          providerId: undefined,
           providerSessionId: undefined,
           activeToolCalls: [],
           updatedAt: occurredAt,
@@ -367,9 +463,10 @@ export class SubagentRunRegistry {
 
   private armIdleTimer(trackedRun: TrackedSubagentRun): void {
     this.clearIdleTimer(trackedRun);
+    const delay = Math.max(0, (trackedRun.snapshot.expiresAt ?? this.now() + this.idleTimeoutMs) - this.now());
     trackedRun.idleTimer = setUnrefTimeout(() => {
       void this.expire(trackedRun.snapshot.runId);
-    }, this.idleTimeoutMs);
+    }, delay);
   }
 
   private clearIdleTimer(trackedRun: TrackedSubagentRun): void {
@@ -379,11 +476,11 @@ export class SubagentRunRegistry {
     }
   }
 
-  private schedulePrune(trackedRun: TrackedSubagentRun): void {
+  private schedulePrune(trackedRun: TrackedSubagentRun, delayMs = this.retentionMs): void {
     this.clearPruneTimer(trackedRun);
     trackedRun.pruneTimer = setUnrefTimeout(() => {
       this.deleteRun(trackedRun.snapshot.runId);
-    }, this.retentionMs);
+    }, Math.max(0, delayMs));
   }
 
   private async expire(runId: string): Promise<void> {
@@ -403,6 +500,7 @@ export class SubagentRunRegistry {
     trackedRun.snapshot = {
       ...trackedRun.snapshot,
       status: "expired",
+      providerId: undefined,
       providerSessionId: undefined,
       activeToolCalls: [],
       updatedAt: occurredAt,
@@ -420,6 +518,13 @@ export class SubagentRunRegistry {
     const now = this.now();
     for (const [runId, trackedRun] of this.runs.entries()) {
       if (trackedRun.snapshot.expiresAt && trackedRun.snapshot.expiresAt <= now) {
+        if (!trackedRun.terminal && trackedRun.snapshot.status === "idle") {
+          void this.expire(runId);
+          continue;
+        }
+        if (!trackedRun.terminal) {
+          continue;
+        }
         this.deleteRun(runId);
       }
     }

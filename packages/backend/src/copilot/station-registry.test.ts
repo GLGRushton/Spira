@@ -17,6 +17,7 @@ class FakeMemoryDb {
     {
       stationId: string;
       label: string;
+      workingDirectory: string | null;
       createdAt: number;
       updatedAt: number;
     }
@@ -28,6 +29,8 @@ class FakeMemoryDb {
       state: "idle" | "thinking" | "listening" | "transcribing" | "speaking" | "error";
       promptInFlight: boolean;
       activeSessionId: string | null;
+      hostManifestHash: string | null;
+      providerProjectionHash: string | null;
       activeToolCalls: unknown[];
       abortRequestedAt: number | null;
       recoveryMessage: string | null;
@@ -97,11 +100,17 @@ class FakeMemoryDb {
 
   upsertToolCall(): void {}
 
-  upsertPersistedStation(input: { stationId: string; label: string; createdAt?: number }) {
+  upsertPersistedStation(input: {
+    stationId: string;
+    label: string;
+    workingDirectory?: string | null;
+    createdAt?: number;
+  }) {
     const existing = this.stations.get(input.stationId);
     const record = {
       stationId: input.stationId,
       label: input.label,
+      workingDirectory: input.workingDirectory ?? existing?.workingDirectory ?? null,
       createdAt: existing?.createdAt ?? input.createdAt ?? Date.now(),
       updatedAt: Date.now(),
     };
@@ -126,6 +135,8 @@ class FakeMemoryDb {
     state: "idle" | "thinking" | "listening" | "transcribing" | "speaking" | "error";
     promptInFlight: boolean;
     activeSessionId?: string | null;
+    hostManifestHash?: string | null;
+    providerProjectionHash?: string | null;
     activeToolCalls?: unknown[];
     abortRequestedAt?: number | null;
     recoveryMessage?: string | null;
@@ -138,6 +149,8 @@ class FakeMemoryDb {
       state: input.state,
       promptInFlight: input.promptInFlight,
       activeSessionId: input.activeSessionId ?? null,
+      hostManifestHash: input.hostManifestHash ?? existing?.hostManifestHash ?? null,
+      providerProjectionHash: input.providerProjectionHash ?? existing?.providerProjectionHash ?? null,
       activeToolCalls: input.activeToolCalls ?? [],
       abortRequestedAt: input.abortRequestedAt ?? null,
       recoveryMessage: input.recoveryMessage ?? null,
@@ -168,6 +181,7 @@ type FakeManager = {
   shutdown: ReturnType<typeof vi.fn>;
   cancelPendingPermissionRequests: ReturnType<typeof vi.fn>;
   resolvePermissionRequest: ReturnType<typeof vi.fn>;
+  stopManagedSubagent: ReturnType<typeof vi.fn>;
   listManagedSubagents: ReturnType<typeof vi.fn>;
 };
 
@@ -203,6 +217,7 @@ const createRegistry = () => {
         shutdown: vi.fn().mockResolvedValue(undefined),
         cancelPendingPermissionRequests: vi.fn(),
         resolvePermissionRequest: vi.fn().mockReturnValue(false),
+        stopManagedSubagent: vi.fn().mockResolvedValue(null),
         listManagedSubagents: vi.fn().mockReturnValue([]),
       };
       managers.set(stationId, manager);
@@ -368,6 +383,98 @@ describe("StationRegistry", () => {
 
     await expect(registry.closeStation(DEFAULT_STATION_ID)).resolves.toBe(false);
     await expect(registry.closeStation("bravo")).resolves.toBe(true);
+    expect(managers.get("bravo")?.clearSession).toHaveBeenCalledTimes(2);
+    expect(managers.get("bravo")?.shutdown).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops managed subagents before closing a station", async () => {
+    const { registry, managers } = createRegistry();
+    registry.createStation({ stationId: "bravo", label: "Bravo" });
+    managers.get("bravo")?.listManagedSubagents.mockReturnValue([
+      {
+        runId: "run-1",
+        roomId: "agent:run-1",
+        domain: "spira",
+        task: "Task 1",
+        status: "running",
+        startedAt: 1,
+        updatedAt: 1,
+      },
+      {
+        runId: "run-2",
+        roomId: "agent:run-2",
+        domain: "spira",
+        task: "Task 2",
+        status: "idle",
+        startedAt: 1,
+        updatedAt: 1,
+      },
+    ]);
+
+    await expect(registry.closeStation("bravo")).resolves.toBe(true);
+
+    expect(managers.get("bravo")?.listManagedSubagents).toHaveBeenCalledWith({ includeCompleted: false });
+    expect(managers.get("bravo")?.stopManagedSubagent).toHaveBeenCalledTimes(2);
+    expect(managers.get("bravo")?.stopManagedSubagent).toHaveBeenCalledWith("run-1");
+    expect(managers.get("bravo")?.stopManagedSubagent).toHaveBeenCalledWith("run-2");
+  });
+
+  it("rejects new work while a station is closing", async () => {
+    const { registry, managers } = createRegistry();
+    registry.createStation({ stationId: "bravo", label: "Bravo" });
+    let releaseClearSession: (() => void) | null = null;
+    managers.get("bravo")?.clearSession.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseClearSession = resolve;
+        }),
+    );
+
+    const closePromise = registry.closeStation("bravo");
+    await Promise.resolve();
+
+    await expect(registry.sendMessage("Still there?", { stationId: "bravo" })).rejects.toMatchObject({
+      code: "STATION_CLOSING",
+    });
+    expect(releaseClearSession).not.toBeNull();
+    releaseClearSession!();
+    await expect(closePromise).resolves.toBe(true);
+  });
+
+  it("performs terminal cleanup for all stations during registry shutdown", async () => {
+    const { registry, managers } = createRegistry();
+    registry.createStation({ stationId: DEFAULT_STATION_ID, label: "Primary" });
+    registry.createStation({ stationId: "bravo", label: "Bravo" });
+    managers.get(DEFAULT_STATION_ID)?.listManagedSubagents.mockReturnValue([
+      {
+        runId: "run-primary",
+        roomId: "agent:run-primary",
+        domain: "spira",
+        task: "Primary task",
+        status: "running",
+        startedAt: 1,
+        updatedAt: 1,
+      },
+    ]);
+    managers.get("bravo")?.listManagedSubagents.mockReturnValue([
+      {
+        runId: "run-bravo",
+        roomId: "agent:run-bravo",
+        domain: "spira",
+        task: "Bravo task",
+        status: "idle",
+        startedAt: 1,
+        updatedAt: 1,
+      },
+    ]);
+
+    await registry.shutdown();
+
+    expect(managers.get(DEFAULT_STATION_ID)?.clearSession).toHaveBeenCalledTimes(1);
+    expect(managers.get(DEFAULT_STATION_ID)?.stopManagedSubagent).toHaveBeenCalledWith("run-primary");
+    expect(managers.get(DEFAULT_STATION_ID)?.shutdown).toHaveBeenCalledTimes(1);
+    expect(managers.get("bravo")?.clearSession).toHaveBeenCalledTimes(1);
+    expect(managers.get("bravo")?.stopManagedSubagent).toHaveBeenCalledWith("run-bravo");
     expect(managers.get("bravo")?.shutdown).toHaveBeenCalledTimes(1);
   });
 
@@ -455,7 +562,7 @@ describe("StationRegistry", () => {
     });
     memoryDb.setSessionState("station:bravo:artifact:plan", "Keep parity work moving.");
     memoryDb.setSessionState("station:bravo:artifact:scratchpad", "Pending notes");
-    memoryDb.setSessionState("station:bravo:artifact:context", "{\"mode\":\"review\"}");
+    memoryDb.setSessionState("station:bravo:artifact:context", '{"mode":"review"}');
 
     await expect(registry.closeStation("bravo")).resolves.toBe(true);
     expect(memoryDb.getSessionState("station:bravo:artifact:plan")).toBeNull();

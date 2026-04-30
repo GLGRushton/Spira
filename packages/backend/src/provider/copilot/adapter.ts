@@ -1,12 +1,12 @@
 import {
-  CopilotClient,
-  defineTool,
+  type CopilotClient,
   type CopilotSession,
   type PermissionRequest,
   type PermissionRequestResult,
   type SessionConfig,
   type SessionEvent,
   type Tool,
+  defineTool,
 } from "@github/copilot-sdk";
 import type {
   ProviderAuthStatus,
@@ -182,6 +182,9 @@ export class CopilotProviderClient implements ProviderClient {
     turnCancellation: "provider-abort",
     responseStreaming: "native",
     usageReporting: "full",
+    toolManifestMode: "projected",
+    modelSelection: "session-scoped",
+    toolCalling: "native",
   } as const;
 
   constructor(private readonly client: CopilotClient) {}

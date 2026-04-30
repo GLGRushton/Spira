@@ -6,8 +6,6 @@ import type {
   McpServerConfig,
   McpServerSource,
   PermissionRequestPayload,
-  TicketRunMissionProofLevel,
-  TicketRunMissionProofPreflightStatus,
   SubagentDomain,
   SubagentRunSnapshot,
   SubagentSource,
@@ -19,6 +17,8 @@ import type {
   TicketRunMissionPhase,
   TicketRunMissionPlan,
   TicketRunMissionProofArtifactMode,
+  TicketRunMissionProofLevel,
+  TicketRunMissionProofPreflightStatus,
   TicketRunMissionProofStrategy,
   TicketRunMissionSummary,
   TicketRunMissionValidationKind,
@@ -66,6 +66,14 @@ const REPO_INTELLIGENCE_ENTRY_TYPES = ["briefing", "pitfall", "example"] as cons
 const REPO_INTELLIGENCE_ENTRY_SOURCES = ["builtin", "user", "learned"] as const;
 const VALIDATION_PROFILE_KINDS = ["build", "unit-test", "lint", "typecheck"] as const;
 const RUNTIME_PERMISSION_REQUEST_STATUSES = ["pending", "approved", "denied", "expired"] as const;
+const RUNTIME_HOST_RESOURCE_STATUSES = [
+  "running",
+  "idle",
+  "completed",
+  "failed",
+  "unrecoverable",
+  "cancelled",
+] as const;
 
 export type ConversationRole = "user" | "assistant" | "system";
 export type MemoryEntryCategory = (typeof MEMORY_ENTRY_CATEGORIES)[number];
@@ -73,6 +81,7 @@ export type RepoIntelligenceEntryType = (typeof REPO_INTELLIGENCE_ENTRY_TYPES)[n
 export type RepoIntelligenceEntrySource = (typeof REPO_INTELLIGENCE_ENTRY_SOURCES)[number];
 export type ValidationProfileKind = (typeof VALIDATION_PROFILE_KINDS)[number];
 export type RuntimePermissionRequestStatus = (typeof RUNTIME_PERMISSION_REQUEST_STATUSES)[number];
+export type RuntimeHostResourceStatus = (typeof RUNTIME_HOST_RESOURCE_STATUSES)[number];
 
 export interface ConversationSummary {
   id: string;
@@ -225,6 +234,7 @@ export interface PersistedProviderUsageRecord {
 export interface PersistedStationRecord {
   stationId: string;
   label: string;
+  workingDirectory: string | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -232,6 +242,7 @@ export interface PersistedStationRecord {
 export interface UpsertPersistedStationInput {
   stationId: string;
   label: string;
+  workingDirectory?: string | null;
   createdAt?: number;
 }
 
@@ -246,7 +257,10 @@ export interface RuntimeStationStateRecord {
   stationId: string;
   state: AssistantState;
   promptInFlight: boolean;
+  providerId: "copilot" | "azure-openai" | null;
   activeSessionId: string | null;
+  hostManifestHash: string | null;
+  providerProjectionHash: string | null;
   activeToolCalls: RuntimeStationToolCallRecord[];
   abortRequestedAt: number | null;
   recoveryMessage: string | null;
@@ -258,7 +272,10 @@ export interface UpsertRuntimeStationStateInput {
   stationId: string;
   state: AssistantState;
   promptInFlight: boolean;
+  providerId?: "copilot" | "azure-openai" | null;
   activeSessionId?: string | null;
+  hostManifestHash?: string | null;
+  providerProjectionHash?: string | null;
   activeToolCalls?: RuntimeStationToolCallRecord[];
   abortRequestedAt?: number | null;
   recoveryMessage?: string | null;
@@ -281,10 +298,96 @@ export interface AppendProviderUsageRecordInput {
   source: PersistedProviderUsageRecord["source"];
 }
 
+export interface PersistedRuntimeSessionRecord {
+  runtimeSessionId: string;
+  stationId: string | null;
+  runId: string | null;
+  kind: "station" | "subagent" | "background";
+  contract: Record<string, unknown>;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface UpsertRuntimeSessionInput {
+  runtimeSessionId: string;
+  stationId?: string | null;
+  runId?: string | null;
+  kind: PersistedRuntimeSessionRecord["kind"];
+  contract: Record<string, unknown>;
+  createdAt?: number;
+  updatedAt?: number;
+}
+
+export interface PersistedRuntimeCheckpointRecord {
+  checkpointId: string;
+  runtimeSessionId: string;
+  stationId: string | null;
+  runId: string | null;
+  kind: string;
+  summary: string;
+  payload: Record<string, unknown>;
+  createdAt: number;
+}
+
+export interface UpsertRuntimeCheckpointInput {
+  checkpointId: string;
+  runtimeSessionId: string;
+  stationId?: string | null;
+  runId?: string | null;
+  kind: string;
+  summary: string;
+  payload: Record<string, unknown>;
+  createdAt?: number;
+}
+
+export interface PersistedRuntimeLedgerEventRecord {
+  id: number;
+  eventId: string;
+  runtimeSessionId: string;
+  stationId: string | null;
+  runId: string | null;
+  type: string;
+  payload: Record<string, unknown>;
+  occurredAt: number;
+}
+
+export interface AppendRuntimeLedgerEventInput {
+  eventId: string;
+  runtimeSessionId: string;
+  stationId?: string | null;
+  runId?: string | null;
+  type: string;
+  payload: Record<string, unknown>;
+  occurredAt?: number;
+}
+
 export interface RuntimeRecoverySummary {
   expiredPermissionRequestIds: string[];
   recoveredSubagentRunIds: string[];
   recoveredStationIds: string[];
+  unrecoverableHostResourceIds: string[];
+}
+
+export interface PersistedRuntimeHostResourceRecord {
+  resourceId: string;
+  runtimeSessionId: string;
+  stationId: string | null;
+  kind: string;
+  status: RuntimeHostResourceStatus;
+  state: Record<string, unknown>;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface UpsertRuntimeHostResourceInput {
+  resourceId: string;
+  runtimeSessionId: string;
+  stationId?: string | null;
+  kind: string;
+  status: RuntimeHostResourceStatus;
+  state: Record<string, unknown>;
+  createdAt?: number;
+  updatedAt?: number;
 }
 
 export type McpServerConfigRecord = McpServerConfig & {
@@ -665,6 +768,49 @@ interface RuntimeSubagentRunRow {
   createdAt: number;
   updatedAt: number;
   expiresAt: number | null;
+}
+
+interface RuntimeSessionRow {
+  runtimeSessionId: string;
+  stationId: string | null;
+  runId: string | null;
+  kind: string;
+  contractJson: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+interface RuntimeCheckpointRow {
+  checkpointId: string;
+  runtimeSessionId: string;
+  stationId: string | null;
+  runId: string | null;
+  kind: string;
+  summary: string;
+  payloadJson: string;
+  createdAt: number;
+}
+
+interface RuntimeLedgerEventRow {
+  id: number;
+  eventId: string;
+  runtimeSessionId: string;
+  stationId: string | null;
+  runId: string | null;
+  type: string;
+  payloadJson: string;
+  occurredAt: number;
+}
+
+interface RuntimeHostResourceRow {
+  resourceId: string;
+  runtimeSessionId: string;
+  stationId: string | null;
+  kind: string;
+  status: string;
+  stateJson: string;
+  createdAt: number;
+  updatedAt: number;
 }
 
 interface ProviderUsageRecordRow {
@@ -1560,6 +1706,61 @@ const MIGRATIONS: MigrationDefinition[] = [
       "CREATE INDEX idx_provider_usage_records_session_v21 ON provider_usage_records(session_id, observed_at DESC)",
     ],
   },
+  {
+    version: 22,
+    statements: [
+      `CREATE TABLE runtime_sessions (
+        runtime_session_id TEXT PRIMARY KEY,
+        station_id TEXT,
+        run_id TEXT,
+        kind TEXT NOT NULL CHECK(kind IN ('station', 'subagent', 'background')),
+        contract_json TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      )`,
+      "CREATE INDEX idx_runtime_sessions_station_v22 ON runtime_sessions(station_id, updated_at DESC)",
+      "CREATE INDEX idx_runtime_sessions_run_v22 ON runtime_sessions(run_id, updated_at DESC)",
+      `CREATE TABLE runtime_checkpoints (
+        checkpoint_id TEXT PRIMARY KEY,
+        runtime_session_id TEXT NOT NULL REFERENCES runtime_sessions(runtime_session_id) ON DELETE CASCADE,
+        station_id TEXT,
+        run_id TEXT,
+        kind TEXT NOT NULL,
+        summary TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      )`,
+      "CREATE INDEX idx_runtime_checkpoints_session_v22 ON runtime_checkpoints(runtime_session_id, created_at DESC)",
+      `CREATE TABLE runtime_ledger_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        event_id TEXT NOT NULL UNIQUE,
+        runtime_session_id TEXT NOT NULL REFERENCES runtime_sessions(runtime_session_id) ON DELETE CASCADE,
+        station_id TEXT,
+        run_id TEXT,
+        event_type TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        occurred_at INTEGER NOT NULL
+      )`,
+      "CREATE INDEX idx_runtime_ledger_events_session_v22 ON runtime_ledger_events(runtime_session_id, occurred_at ASC, id ASC)",
+    ],
+  },
+  {
+    version: 23,
+    statements: [
+      `CREATE TABLE runtime_host_resources (
+        resource_id TEXT PRIMARY KEY,
+        runtime_session_id TEXT NOT NULL REFERENCES runtime_sessions(runtime_session_id) ON DELETE CASCADE,
+        station_id TEXT,
+        kind TEXT NOT NULL,
+        status TEXT NOT NULL CHECK(status IN ('running', 'idle', 'completed', 'failed', 'unrecoverable', 'cancelled')),
+        state_json TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      )`,
+      "CREATE INDEX idx_runtime_host_resources_session_v23 ON runtime_host_resources(runtime_session_id, updated_at DESC)",
+      "CREATE INDEX idx_runtime_host_resources_station_v23 ON runtime_host_resources(station_id, updated_at DESC)",
+    ],
+  },
 ];
 
 type SqliteDatabase = InstanceType<typeof BetterSqlite3>;
@@ -1623,11 +1824,20 @@ const normalizeStringArray = (value: readonly string[] | null | undefined): stri
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null;
 
-const assertRuntimePermissionRequestStatus = (value: string): asserts value is RuntimePermissionRequestStatus => {
+const assertRuntimePermissionRequestStatus: (value: string) => asserts value is RuntimePermissionRequestStatus = (
+  value,
+) => {
   if ((RUNTIME_PERMISSION_REQUEST_STATUSES as readonly string[]).includes(value)) {
     return;
   }
   throw new Error(`Unknown runtime permission request status: ${value}`);
+};
+
+const assertRuntimeHostResourceStatus: (value: string) => asserts value is RuntimeHostResourceStatus = (value) => {
+  if ((RUNTIME_HOST_RESOURCE_STATUSES as readonly string[]).includes(value)) {
+    return;
+  }
+  throw new Error(`Unknown runtime host resource status: ${value}`);
 };
 
 const mapRuntimePermissionRequestRow = (row: RuntimePermissionRequestRow): RuntimePermissionRequestRecord => {
@@ -1659,6 +1869,74 @@ const mapRuntimeSubagentRunRow = (row: RuntimeSubagentRunRow): RuntimeSubagentRu
     createdAt: Number(row.createdAt),
     updatedAt: Number(row.updatedAt),
     expiresAt: row.expiresAt === null ? null : Number(row.expiresAt),
+  };
+};
+
+const mapRuntimeSessionRow = (row: RuntimeSessionRow): PersistedRuntimeSessionRecord => {
+  const contract = tryParseJson(row.contractJson);
+  if (!isRecord(contract)) {
+    throw new Error(`Stored runtime session ${row.runtimeSessionId} has invalid contract JSON`);
+  }
+  return {
+    runtimeSessionId: String(row.runtimeSessionId),
+    stationId: row.stationId === null ? null : String(row.stationId),
+    runId: row.runId === null ? null : String(row.runId),
+    kind: row.kind === "subagent" || row.kind === "background" ? row.kind : "station",
+    contract,
+    createdAt: Number(row.createdAt),
+    updatedAt: Number(row.updatedAt),
+  };
+};
+
+const mapRuntimeCheckpointRow = (row: RuntimeCheckpointRow): PersistedRuntimeCheckpointRecord => {
+  const payload = tryParseJson(row.payloadJson);
+  if (!isRecord(payload)) {
+    throw new Error(`Stored runtime checkpoint ${row.checkpointId} has invalid payload JSON`);
+  }
+  return {
+    checkpointId: String(row.checkpointId),
+    runtimeSessionId: String(row.runtimeSessionId),
+    stationId: row.stationId === null ? null : String(row.stationId),
+    runId: row.runId === null ? null : String(row.runId),
+    kind: String(row.kind),
+    summary: String(row.summary),
+    payload,
+    createdAt: Number(row.createdAt),
+  };
+};
+
+const mapRuntimeLedgerEventRow = (row: RuntimeLedgerEventRow): PersistedRuntimeLedgerEventRecord => {
+  const payload = tryParseJson(row.payloadJson);
+  if (!isRecord(payload)) {
+    throw new Error(`Stored runtime ledger event ${row.eventId} has invalid payload JSON`);
+  }
+  return {
+    id: Number(row.id),
+    eventId: String(row.eventId),
+    runtimeSessionId: String(row.runtimeSessionId),
+    stationId: row.stationId === null ? null : String(row.stationId),
+    runId: row.runId === null ? null : String(row.runId),
+    type: String(row.type),
+    payload,
+    occurredAt: Number(row.occurredAt),
+  };
+};
+
+const mapRuntimeHostResourceRow = (row: RuntimeHostResourceRow): PersistedRuntimeHostResourceRecord => {
+  assertRuntimeHostResourceStatus(row.status);
+  const state = tryParseJson(row.stateJson);
+  if (!isRecord(state)) {
+    throw new Error(`Stored runtime host resource ${row.resourceId} has invalid state JSON`);
+  }
+  return {
+    resourceId: String(row.resourceId),
+    runtimeSessionId: String(row.runtimeSessionId),
+    stationId: row.stationId === null ? null : String(row.stationId),
+    kind: String(row.kind),
+    status: row.status,
+    state,
+    createdAt: Number(row.createdAt),
+    updatedAt: Number(row.updatedAt),
   };
 };
 
@@ -2842,6 +3120,7 @@ export class SpiraMemoryDatabase {
     const record: PersistedStationRecord = {
       stationId,
       label,
+      workingDirectory: normalizeText(input.workingDirectory) ?? null,
       createdAt,
       updatedAt,
     };
@@ -2890,6 +3169,7 @@ export class SpiraMemoryDatabase {
       records.set(stationId, {
         stationId,
         label,
+        workingDirectory: normalizeText(parsed?.workingDirectory) ?? null,
         createdAt:
           typeof parsed?.createdAt === "number" && Number.isFinite(parsed.createdAt) ? parsed.createdAt : row.updatedAt,
         updatedAt: row.updatedAt,
@@ -2914,13 +3194,16 @@ export class SpiraMemoryDatabase {
       records.set(stationId, {
         stationId,
         label: `Station ${stationId}`,
+        workingDirectory: null,
         createdAt: 0,
         updatedAt: 0,
       });
     }
 
     return [...records.values()].sort((left, right) =>
-      left.createdAt === right.createdAt ? left.stationId.localeCompare(right.stationId) : left.createdAt - right.createdAt,
+      left.createdAt === right.createdAt
+        ? left.stationId.localeCompare(right.stationId)
+        : left.createdAt - right.createdAt,
     );
   }
 
@@ -2959,7 +3242,20 @@ export class SpiraMemoryDatabase {
       stationId,
       state: input.state,
       promptInFlight: input.promptInFlight,
+      providerId:
+        input.providerId ??
+        (parsedExisting?.providerId === "azure-openai"
+          ? "azure-openai"
+          : parsedExisting?.providerId === "copilot"
+            ? "copilot"
+            : null),
       activeSessionId: input.activeSessionId ?? null,
+      hostManifestHash:
+        normalizeTitle(input.hostManifestHash) ??
+        (typeof parsedExisting?.hostManifestHash === "string" ? parsedExisting.hostManifestHash : null),
+      providerProjectionHash:
+        normalizeTitle(input.providerProjectionHash) ??
+        (typeof parsedExisting?.providerProjectionHash === "string" ? parsedExisting.providerProjectionHash : null),
       activeToolCalls: input.activeToolCalls ?? [],
       abortRequestedAt: input.abortRequestedAt ?? null,
       recoveryMessage: normalizeTitle(input.recoveryMessage) ?? null,
@@ -3001,7 +3297,9 @@ export class SpiraMemoryDatabase {
          FROM session_state
          WHERE key = @key`,
       )
-      .get({ key: `station-runtime:${normalizedStationId}` }) as Pick<SessionStateRecordRow, "value" | "updatedAt"> | undefined;
+      .get({ key: `station-runtime:${normalizedStationId}` }) as
+      | Pick<SessionStateRecordRow, "value" | "updatedAt">
+      | undefined;
     if (!row?.value) {
       return null;
     }
@@ -3018,7 +3316,10 @@ export class SpiraMemoryDatabase {
           ? parsed.state
           : "idle",
       promptInFlight: parsed?.promptInFlight === true,
+      providerId: parsed?.providerId === "azure-openai" ? "azure-openai" : parsed?.providerId === "copilot" ? "copilot" : null,
       activeSessionId: typeof parsed?.activeSessionId === "string" ? parsed.activeSessionId : null,
+      hostManifestHash: typeof parsed?.hostManifestHash === "string" ? parsed.hostManifestHash : null,
+      providerProjectionHash: typeof parsed?.providerProjectionHash === "string" ? parsed.providerProjectionHash : null,
       activeToolCalls: Array.isArray(parsed?.activeToolCalls)
         ? parsed.activeToolCalls.flatMap((entry) => {
             if (
@@ -3079,6 +3380,403 @@ export class SpiraMemoryDatabase {
       .prepare("DELETE FROM session_state WHERE key = @key")
       .run({ key: `station-runtime:${normalizedStationId}` });
     return result.changes > 0;
+  }
+
+  upsertRuntimeSession(input: UpsertRuntimeSessionInput): PersistedRuntimeSessionRecord {
+    this.assertWritable();
+    const runtimeSessionId = normalizeText(input.runtimeSessionId);
+    if (!runtimeSessionId) {
+      throw new Error("Runtime session persistence requires a runtime session id.");
+    }
+    const updatedAt = input.updatedAt ?? Date.now();
+    const existing = this.db
+      .prepare(
+        `SELECT
+           created_at AS createdAt
+         FROM runtime_sessions
+         WHERE runtime_session_id = @runtimeSessionId`,
+      )
+      .get({ runtimeSessionId }) as Pick<RuntimeSessionRow, "createdAt"> | undefined;
+    this.db
+      .prepare(
+        `INSERT INTO runtime_sessions (
+           runtime_session_id,
+           station_id,
+           run_id,
+           kind,
+           contract_json,
+           created_at,
+           updated_at
+         )
+         VALUES (@runtimeSessionId, @stationId, @runId, @kind, @contractJson, @createdAt, @updatedAt)
+         ON CONFLICT(runtime_session_id) DO UPDATE SET
+           station_id = excluded.station_id,
+           run_id = excluded.run_id,
+           kind = excluded.kind,
+           contract_json = excluded.contract_json,
+           updated_at = excluded.updated_at`,
+      )
+      .run({
+        runtimeSessionId,
+        stationId: normalizeText(input.stationId ?? null) || null,
+        runId: normalizeText(input.runId ?? null) || null,
+        kind: input.kind,
+        contractJson: serializeJson(input.contract),
+        createdAt: existing?.createdAt ?? (input.createdAt ?? updatedAt),
+        updatedAt,
+      });
+
+    const record = this.getRuntimeSession(runtimeSessionId);
+    if (!record) {
+      throw new Error(`Failed to persist runtime session ${runtimeSessionId}`);
+    }
+    return record;
+  }
+
+  getRuntimeSession(runtimeSessionId: string): PersistedRuntimeSessionRecord | null {
+    const normalizedRuntimeSessionId = normalizeText(runtimeSessionId);
+    if (!normalizedRuntimeSessionId) {
+      return null;
+    }
+    const row = this.db
+      .prepare(
+        `SELECT
+           runtime_session_id AS runtimeSessionId,
+           station_id AS stationId,
+           run_id AS runId,
+           kind,
+           contract_json AS contractJson,
+           created_at AS createdAt,
+           updated_at AS updatedAt
+         FROM runtime_sessions
+         WHERE runtime_session_id = @runtimeSessionId`,
+      )
+      .get({ runtimeSessionId: normalizedRuntimeSessionId }) as RuntimeSessionRow | undefined;
+    return row ? mapRuntimeSessionRow(row) : null;
+  }
+
+  listRuntimeSessions(stationId?: string | null): PersistedRuntimeSessionRecord[] {
+    const rows = (
+      stationId
+        ? this.db
+            .prepare(
+              `SELECT
+                 runtime_session_id AS runtimeSessionId,
+                 station_id AS stationId,
+                 run_id AS runId,
+                 kind,
+                 contract_json AS contractJson,
+                 created_at AS createdAt,
+                 updated_at AS updatedAt
+               FROM runtime_sessions
+               WHERE station_id = @stationId
+               ORDER BY updated_at DESC`,
+            )
+            .all({ stationId })
+        : this.db
+            .prepare(
+              `SELECT
+                 runtime_session_id AS runtimeSessionId,
+                 station_id AS stationId,
+                 run_id AS runId,
+                 kind,
+                 contract_json AS contractJson,
+                 created_at AS createdAt,
+                 updated_at AS updatedAt
+               FROM runtime_sessions
+               ORDER BY updated_at DESC`,
+            )
+            .all()
+    ) as RuntimeSessionRow[];
+    return rows.map(mapRuntimeSessionRow);
+  }
+
+  appendRuntimeLedgerEvent(input: AppendRuntimeLedgerEventInput): PersistedRuntimeLedgerEventRecord {
+    this.assertWritable();
+    const eventId = normalizeText(input.eventId);
+    const runtimeSessionId = normalizeText(input.runtimeSessionId);
+    if (!eventId || !runtimeSessionId) {
+      throw new Error("Runtime ledger events require non-empty event and session ids.");
+    }
+    const occurredAt = input.occurredAt ?? Date.now();
+    this.db
+      .prepare(
+        `INSERT INTO runtime_ledger_events (
+           event_id,
+           runtime_session_id,
+           station_id,
+           run_id,
+           event_type,
+           payload_json,
+           occurred_at
+         )
+         VALUES (@eventId, @runtimeSessionId, @stationId, @runId, @type, @payloadJson, @occurredAt)
+         ON CONFLICT(event_id) DO NOTHING`,
+      )
+      .run({
+        eventId,
+        runtimeSessionId,
+        stationId: normalizeText(input.stationId ?? null) || null,
+        runId: normalizeText(input.runId ?? null) || null,
+        type: input.type,
+        payloadJson: serializeJson(input.payload),
+        occurredAt,
+      });
+
+    const row = this.db
+      .prepare(
+        `SELECT
+           id,
+           event_id AS eventId,
+           runtime_session_id AS runtimeSessionId,
+           station_id AS stationId,
+           run_id AS runId,
+           event_type AS type,
+           payload_json AS payloadJson,
+           occurred_at AS occurredAt
+         FROM runtime_ledger_events
+         WHERE event_id = @eventId`,
+      )
+      .get({ eventId }) as RuntimeLedgerEventRow | undefined;
+    if (!row) {
+      throw new Error(`Failed to append runtime ledger event ${eventId}`);
+    }
+    return mapRuntimeLedgerEventRow(row);
+  }
+
+  listRuntimeLedgerEvents(runtimeSessionId: string): PersistedRuntimeLedgerEventRecord[] {
+    const normalizedRuntimeSessionId = normalizeText(runtimeSessionId);
+    if (!normalizedRuntimeSessionId) {
+      return [];
+    }
+    const rows = this.db
+      .prepare(
+        `SELECT
+           id,
+           event_id AS eventId,
+           runtime_session_id AS runtimeSessionId,
+           station_id AS stationId,
+           run_id AS runId,
+           event_type AS type,
+           payload_json AS payloadJson,
+           occurred_at AS occurredAt
+         FROM runtime_ledger_events
+         WHERE runtime_session_id = @runtimeSessionId
+         ORDER BY occurred_at ASC, id ASC`,
+      )
+      .all({ runtimeSessionId: normalizedRuntimeSessionId }) as RuntimeLedgerEventRow[];
+    return rows.map(mapRuntimeLedgerEventRow);
+  }
+
+  upsertRuntimeCheckpoint(input: UpsertRuntimeCheckpointInput): PersistedRuntimeCheckpointRecord {
+    this.assertWritable();
+    const checkpointId = normalizeText(input.checkpointId);
+    const runtimeSessionId = normalizeText(input.runtimeSessionId);
+    if (!checkpointId || !runtimeSessionId) {
+      throw new Error("Runtime checkpoints require non-empty checkpoint and session ids.");
+    }
+    const createdAt = input.createdAt ?? Date.now();
+    this.db
+      .prepare(
+        `INSERT INTO runtime_checkpoints (
+           checkpoint_id,
+           runtime_session_id,
+           station_id,
+           run_id,
+           kind,
+           summary,
+           payload_json,
+           created_at
+         )
+         VALUES (@checkpointId, @runtimeSessionId, @stationId, @runId, @kind, @summary, @payloadJson, @createdAt)
+         ON CONFLICT(checkpoint_id) DO UPDATE SET
+           station_id = excluded.station_id,
+           run_id = excluded.run_id,
+           kind = excluded.kind,
+           summary = excluded.summary,
+           payload_json = excluded.payload_json,
+           created_at = excluded.created_at`,
+      )
+      .run({
+        checkpointId,
+        runtimeSessionId,
+        stationId: normalizeText(input.stationId ?? null) || null,
+        runId: normalizeText(input.runId ?? null) || null,
+        kind: input.kind,
+        summary: input.summary,
+        payloadJson: serializeJson(input.payload),
+        createdAt,
+      });
+
+    const record = this.getRuntimeCheckpoint(checkpointId);
+    if (!record) {
+      throw new Error(`Failed to persist runtime checkpoint ${checkpointId}`);
+    }
+    return record;
+  }
+
+  getRuntimeCheckpoint(checkpointId: string): PersistedRuntimeCheckpointRecord | null {
+    const normalizedCheckpointId = normalizeText(checkpointId);
+    if (!normalizedCheckpointId) {
+      return null;
+    }
+    const row = this.db
+      .prepare(
+        `SELECT
+           checkpoint_id AS checkpointId,
+           runtime_session_id AS runtimeSessionId,
+           station_id AS stationId,
+           run_id AS runId,
+           kind,
+           summary,
+           payload_json AS payloadJson,
+           created_at AS createdAt
+         FROM runtime_checkpoints
+         WHERE checkpoint_id = @checkpointId`,
+      )
+      .get({ checkpointId: normalizedCheckpointId }) as RuntimeCheckpointRow | undefined;
+    return row ? mapRuntimeCheckpointRow(row) : null;
+  }
+
+  getLatestRuntimeCheckpoint(runtimeSessionId: string): PersistedRuntimeCheckpointRecord | null {
+    const normalizedRuntimeSessionId = normalizeText(runtimeSessionId);
+    if (!normalizedRuntimeSessionId) {
+      return null;
+    }
+    const row = this.db
+      .prepare(
+        `SELECT
+           checkpoint_id AS checkpointId,
+           runtime_session_id AS runtimeSessionId,
+           station_id AS stationId,
+           run_id AS runId,
+           kind,
+           summary,
+           payload_json AS payloadJson,
+           created_at AS createdAt
+         FROM runtime_checkpoints
+         WHERE runtime_session_id = @runtimeSessionId
+         ORDER BY created_at DESC
+         LIMIT 1`,
+      )
+      .get({ runtimeSessionId: normalizedRuntimeSessionId }) as RuntimeCheckpointRow | undefined;
+    return row ? mapRuntimeCheckpointRow(row) : null;
+  }
+
+  upsertRuntimeHostResource(input: UpsertRuntimeHostResourceInput): PersistedRuntimeHostResourceRecord {
+    this.assertWritable();
+    const resourceId = normalizeText(input.resourceId);
+    const runtimeSessionId = normalizeText(input.runtimeSessionId);
+    if (!resourceId || !runtimeSessionId) {
+      throw new Error("Runtime host resources require non-empty resource and session ids.");
+    }
+    const updatedAt = input.updatedAt ?? Date.now();
+    const existing = this.db
+      .prepare(
+        `SELECT
+           created_at AS createdAt
+         FROM runtime_host_resources
+         WHERE resource_id = @resourceId`,
+      )
+      .get({ resourceId }) as Pick<RuntimeHostResourceRow, "createdAt"> | undefined;
+    this.db
+      .prepare(
+        `INSERT INTO runtime_host_resources (
+           resource_id,
+           runtime_session_id,
+           station_id,
+           kind,
+           status,
+           state_json,
+           created_at,
+           updated_at
+         )
+         VALUES (@resourceId, @runtimeSessionId, @stationId, @kind, @status, @stateJson, @createdAt, @updatedAt)
+         ON CONFLICT(resource_id) DO UPDATE SET
+           runtime_session_id = excluded.runtime_session_id,
+           station_id = excluded.station_id,
+           kind = excluded.kind,
+           status = excluded.status,
+           state_json = excluded.state_json,
+           updated_at = excluded.updated_at`,
+      )
+      .run({
+        resourceId,
+        runtimeSessionId,
+        stationId: normalizeText(input.stationId ?? null) || null,
+        kind: input.kind,
+        status: input.status,
+        stateJson: serializeJson(input.state),
+        createdAt: existing?.createdAt ?? (input.createdAt ?? updatedAt),
+        updatedAt,
+      });
+
+    const record = this.getRuntimeHostResource(resourceId);
+    if (!record) {
+      throw new Error(`Failed to persist runtime host resource ${resourceId}`);
+    }
+    return record;
+  }
+
+  getRuntimeHostResource(resourceId: string): PersistedRuntimeHostResourceRecord | null {
+    const normalizedResourceId = normalizeText(resourceId);
+    if (!normalizedResourceId) {
+      return null;
+    }
+    const row = this.db
+      .prepare(
+        `SELECT
+           resource_id AS resourceId,
+           runtime_session_id AS runtimeSessionId,
+           station_id AS stationId,
+           kind,
+           status,
+           state_json AS stateJson,
+           created_at AS createdAt,
+           updated_at AS updatedAt
+         FROM runtime_host_resources
+         WHERE resource_id = @resourceId`,
+      )
+      .get({ resourceId: normalizedResourceId }) as RuntimeHostResourceRow | undefined;
+    return row ? mapRuntimeHostResourceRow(row) : null;
+  }
+
+  deleteRuntimeHostResource(resourceId: string): boolean {
+    const normalizedResourceId = normalizeText(resourceId);
+    if (!normalizedResourceId) {
+      return false;
+    }
+    const result = this.db
+      .prepare(
+        `DELETE FROM runtime_host_resources
+         WHERE resource_id = @resourceId`,
+      )
+      .run({ resourceId: normalizedResourceId });
+    return result.changes > 0;
+  }
+
+  listRuntimeHostResources(runtimeSessionId: string): PersistedRuntimeHostResourceRecord[] {
+    const normalizedRuntimeSessionId = normalizeText(runtimeSessionId);
+    if (!normalizedRuntimeSessionId) {
+      return [];
+    }
+    const rows = this.db
+      .prepare(
+        `SELECT
+           resource_id AS resourceId,
+           runtime_session_id AS runtimeSessionId,
+           station_id AS stationId,
+           kind,
+           status,
+           state_json AS stateJson,
+           created_at AS createdAt,
+           updated_at AS updatedAt
+         FROM runtime_host_resources
+         WHERE runtime_session_id = @runtimeSessionId
+         ORDER BY updated_at DESC`,
+      )
+      .all({ runtimeSessionId: normalizedRuntimeSessionId }) as RuntimeHostResourceRow[];
+    return rows.map(mapRuntimeHostResourceRow);
   }
 
   upsertRuntimePermissionRequest(input: UpsertRuntimePermissionRequestInput): RuntimePermissionRequestRecord {
@@ -3143,10 +3841,11 @@ export class SpiraMemoryDatabase {
   }
 
   listPendingRuntimePermissionRequests(stationId?: string | null): RuntimePermissionRequestRecord[] {
-    const rows = (stationId
-      ? this.db
-          .prepare(
-            `SELECT
+    const rows = (
+      stationId
+        ? this.db
+            .prepare(
+              `SELECT
                request_id AS requestId,
                station_id AS stationId,
                payload_json AS payloadJson,
@@ -3157,11 +3856,11 @@ export class SpiraMemoryDatabase {
              FROM runtime_permission_requests
              WHERE status = 'pending' AND station_id = @stationId
              ORDER BY updated_at DESC`,
-          )
-          .all({ stationId })
-      : this.db
-          .prepare(
-            `SELECT
+            )
+            .all({ stationId })
+        : this.db
+            .prepare(
+              `SELECT
                request_id AS requestId,
                station_id AS stationId,
                payload_json AS payloadJson,
@@ -3172,8 +3871,9 @@ export class SpiraMemoryDatabase {
              FROM runtime_permission_requests
              WHERE status = 'pending'
              ORDER BY updated_at DESC`,
-          )
-          .all()) as RuntimePermissionRequestRow[];
+            )
+            .all()
+    ) as RuntimePermissionRequestRow[];
 
     return rows.map(mapRuntimePermissionRequestRow);
   }
@@ -3257,10 +3957,11 @@ export class SpiraMemoryDatabase {
   }
 
   listRuntimeSubagentRuns(stationId?: string | null): RuntimeSubagentRunRecord[] {
-    const rows = (stationId
-      ? this.db
-          .prepare(
-            `SELECT
+    const rows = (
+      stationId
+        ? this.db
+            .prepare(
+              `SELECT
                run_id AS runId,
                station_id AS stationId,
                snapshot_json AS snapshotJson,
@@ -3271,11 +3972,11 @@ export class SpiraMemoryDatabase {
              FROM runtime_subagent_runs
              WHERE station_id = @stationId
              ORDER BY updated_at DESC`,
-          )
-          .all({ stationId })
-      : this.db
-          .prepare(
-            `SELECT
+            )
+            .all({ stationId })
+        : this.db
+            .prepare(
+              `SELECT
                run_id AS runId,
                station_id AS stationId,
                snapshot_json AS snapshotJson,
@@ -3285,8 +3986,9 @@ export class SpiraMemoryDatabase {
                expires_at AS expiresAt
              FROM runtime_subagent_runs
              ORDER BY updated_at DESC`,
-          )
-          .all()) as RuntimeSubagentRunRow[];
+            )
+            .all()
+    ) as RuntimeSubagentRunRow[];
 
     return rows.map(mapRuntimeSubagentRunRow);
   }
@@ -3441,7 +4143,10 @@ export class SpiraMemoryDatabase {
 
     const recoveredStations = this.listRuntimeStationStates().filter(
       (record) =>
-        record.promptInFlight || record.state === "thinking" || record.activeToolCalls.length > 0 || record.abortRequestedAt,
+        record.promptInFlight ||
+        record.state === "thinking" ||
+        record.activeToolCalls.length > 0 ||
+        record.abortRequestedAt,
     );
     for (const record of recoveredStations) {
       this.setSessionState(getPersistedProviderSessionStateKey(record.stationId), null);
@@ -3460,10 +4165,44 @@ export class SpiraMemoryDatabase {
       });
     }
 
+    const unrecoverableHostResources = this.db
+      .prepare(
+        `SELECT
+           resource_id AS resourceId,
+           runtime_session_id AS runtimeSessionId,
+           station_id AS stationId,
+           kind,
+           status,
+           state_json AS stateJson,
+           created_at AS createdAt,
+           updated_at AS updatedAt
+         FROM runtime_host_resources
+         WHERE status IN ('running', 'idle')`,
+      )
+      .all() as RuntimeHostResourceRow[];
+    for (const row of unrecoverableHostResources) {
+      const record = mapRuntimeHostResourceRow(row);
+      this.upsertRuntimeHostResource({
+        resourceId: record.resourceId,
+        runtimeSessionId: record.runtimeSessionId,
+        stationId: record.stationId,
+        kind: record.kind,
+        status: "unrecoverable",
+        state: {
+          ...record.state,
+          status: "unrecoverable",
+          recoveryNote: "The backend restarted before this host resource could be reattached.",
+        },
+        createdAt: record.createdAt,
+        updatedAt: now,
+      });
+    }
+
     return {
       expiredPermissionRequestIds,
       recoveredSubagentRunIds: recoveredRuns.map((record) => record.runId),
       recoveredStationIds: recoveredStations.map((record) => record.stationId),
+      unrecoverableHostResourceIds: unrecoverableHostResources.map((record) => record.resourceId),
     };
   }
 
@@ -3630,13 +4369,15 @@ export class SpiraMemoryDatabase {
     };
   }
 
-  listRepoIntelligence(options: {
-    projectKey?: string | null;
-    repoRelativePaths?: readonly string[];
-    tags?: readonly string[];
-    includeUnapproved?: boolean;
-    limit?: number;
-  } = {}): RepoIntelligenceRecord[] {
+  listRepoIntelligence(
+    options: {
+      projectKey?: string | null;
+      repoRelativePaths?: readonly string[];
+      tags?: readonly string[];
+      includeUnapproved?: boolean;
+      limit?: number;
+    } = {},
+  ): RepoIntelligenceRecord[] {
     const rows = this.db
       .prepare(
         `SELECT
@@ -3768,7 +4509,9 @@ export class SpiraMemoryDatabase {
     return saved;
   }
 
-  seedBuiltinRepoIntelligence(entries: readonly Omit<UpsertRepoIntelligenceInput, "source">[]): RepoIntelligenceRecord[] {
+  seedBuiltinRepoIntelligence(
+    entries: readonly Omit<UpsertRepoIntelligenceInput, "source">[],
+  ): RepoIntelligenceRecord[] {
     this.assertWritable();
     const seed = this.db.transaction((items: readonly Omit<UpsertRepoIntelligenceInput, "source">[]) =>
       items.map((entry) =>
@@ -3804,11 +4547,13 @@ export class SpiraMemoryDatabase {
     });
   }
 
-  listValidationProfiles(options: {
-    projectKey?: string | null;
-    repoRelativePaths?: readonly string[];
-    limit?: number;
-  } = {}): ValidationProfileRecord[] {
+  listValidationProfiles(
+    options: {
+      projectKey?: string | null;
+      repoRelativePaths?: readonly string[];
+      limit?: number;
+    } = {},
+  ): ValidationProfileRecord[] {
     const rows = this.db
       .prepare(
         `SELECT
@@ -3956,7 +4701,9 @@ export class SpiraMemoryDatabase {
     return saved;
   }
 
-  seedBuiltinValidationProfiles(entries: readonly Omit<UpsertValidationProfileInput, "source">[]): ValidationProfileRecord[] {
+  seedBuiltinValidationProfiles(
+    entries: readonly Omit<UpsertValidationProfileInput, "source">[],
+  ): ValidationProfileRecord[] {
     this.assertWritable();
     const seed = this.db.transaction((items: readonly Omit<UpsertValidationProfileInput, "source">[]) =>
       items.map((entry) =>
@@ -3970,11 +4717,13 @@ export class SpiraMemoryDatabase {
     return seed(entries);
   }
 
-  listProofRules(options: {
-    projectKey?: string | null;
-    repoRelativePaths?: readonly string[];
-    limit?: number;
-  } = {}): ProofRuleRecord[] {
+  listProofRules(
+    options: {
+      projectKey?: string | null;
+      repoRelativePaths?: readonly string[];
+      limit?: number;
+    } = {},
+  ): ProofRuleRecord[] {
     const rows = this.db
       .prepare(
         `SELECT
@@ -4809,7 +5558,9 @@ export class SpiraMemoryDatabase {
           proofRequired: input.classification.proofRequired,
           proofArtifactMode: input.classification.proofArtifactMode,
           advisoryProofLevel:
-            typeof input.classification.advisoryProofLevel === "string" ? input.classification.advisoryProofLevel : null,
+            typeof input.classification.advisoryProofLevel === "string"
+              ? input.classification.advisoryProofLevel
+              : null,
           advisoryProofRationale: normalizeTitle(input.classification.advisoryProofRationale),
           rationale: normalizeTitle(input.classification.rationale),
           createdAt: input.classification.createdAt ?? now,

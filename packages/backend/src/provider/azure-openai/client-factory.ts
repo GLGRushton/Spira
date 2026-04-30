@@ -289,6 +289,9 @@ export class AzureOpenAiProviderClient implements ProviderClient {
     turnCancellation: "disconnect-and-reset",
     responseStreaming: "host-buffered",
     usageReporting: "partial",
+    toolManifestMode: "literal",
+    modelSelection: "provider-default",
+    toolCalling: "native",
   } as const;
   private readonly sessions = new Map<string, AzureOpenAiSessionState>();
   private readonly fetchFn: FetchLike;
@@ -502,7 +505,9 @@ export class AzureOpenAiProviderClient implements ProviderClient {
         return {
           resultType: "failure",
           textResultForLlm: permission.feedback?.trim() || `Permission denied for tool ${tool.name}.`,
-          ...(permission.feedback ? { error: permission.feedback } : { error: `Permission denied for tool ${tool.name}.` }),
+          ...(permission.feedback
+            ? { error: permission.feedback }
+            : { error: `Permission denied for tool ${tool.name}.` }),
         };
       }
       if (permission.kind === "user-not-available") {

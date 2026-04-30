@@ -54,7 +54,10 @@ export interface EventMap {
       runId: string;
       roomId: `agent:${string}`;
       allowWrites: boolean;
+      providerId: "copilot" | "azure-openai";
       providerSessionId: string | null;
+      hostManifestHash: string | null;
+      providerProjectionHash: string | null;
     },
   ];
   "subagent:tool-call": [event: SubagentToolCallEvent];

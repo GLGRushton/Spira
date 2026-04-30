@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   getProviderRuntimeFallbackPolicy,
   normalizeProviderUsageSnapshot,
+  requiresProviderManifestProjection,
   shouldPersistProviderSession,
   shouldRequestNativeStreaming,
   shouldUseProviderAbort,
@@ -16,6 +17,9 @@ describe("provider capability fallback policy", () => {
       turnCancellation: "provider-abort",
       responseStreaming: "native",
       usageReporting: "full",
+      toolManifestMode: "projected",
+      modelSelection: "session-scoped",
+      toolCalling: "native",
     } as const;
 
     expect(getProviderRuntimeFallbackPolicy(capabilities)).toEqual({
@@ -23,10 +27,12 @@ describe("provider capability fallback policy", () => {
       cancellation: "provider-abort",
       streaming: "native",
       usage: "full",
+      toolManifest: "projected",
     });
     expect(shouldPersistProviderSession(capabilities)).toBe(true);
     expect(shouldRequestNativeStreaming(capabilities)).toBe(true);
     expect(shouldUseProviderAbort(capabilities)).toBe(true);
+    expect(requiresProviderManifestProjection(capabilities)).toBe(true);
   });
 
   it("maps host-managed capabilities to fallback runtime policies", () => {
@@ -37,6 +43,9 @@ describe("provider capability fallback policy", () => {
       turnCancellation: "disconnect-and-reset",
       responseStreaming: "host-buffered",
       usageReporting: "partial",
+      toolManifestMode: "literal",
+      modelSelection: "provider-default",
+      toolCalling: "native",
     } as const;
 
     expect(getProviderRuntimeFallbackPolicy(capabilities)).toEqual({
@@ -44,10 +53,12 @@ describe("provider capability fallback policy", () => {
       cancellation: "disconnect-and-reset",
       streaming: "host-buffered",
       usage: "partial",
+      toolManifest: "literal",
     });
     expect(shouldPersistProviderSession(capabilities)).toBe(false);
     expect(shouldRequestNativeStreaming(capabilities)).toBe(false);
     expect(shouldUseProviderAbort(capabilities)).toBe(false);
+    expect(requiresProviderManifestProjection(capabilities)).toBe(false);
   });
 
   it("normalizes usage snapshots with policy-aware source defaults", () => {
@@ -60,6 +71,9 @@ describe("provider capability fallback policy", () => {
           turnCancellation: "provider-abort",
           responseStreaming: "native",
           usageReporting: "full",
+          toolManifestMode: "projected",
+          modelSelection: "session-scoped",
+          toolCalling: "native",
         },
         { totalTokens: 42 },
       ),
@@ -77,6 +91,9 @@ describe("provider capability fallback policy", () => {
           turnCancellation: "disconnect-and-reset",
           responseStreaming: "host-buffered",
           usageReporting: "partial",
+          toolManifestMode: "literal",
+          modelSelection: "provider-default",
+          toolCalling: "native",
         },
         null,
       ),

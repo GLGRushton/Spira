@@ -172,6 +172,7 @@ describe("SpiraMemoryDatabase", () => {
     database.upsertPersistedStation({
       stationId: "bravo",
       label: "Bravo",
+      workingDirectory: "C:\\GitHub\\Spira\\apps\\web",
       createdAt: 100,
     });
     database.setSessionState("station:charlie:copilot-session-id", "session-charlie");
@@ -181,10 +182,12 @@ describe("SpiraMemoryDatabase", () => {
       {
         stationId: "charlie",
         label: "Station charlie",
+        workingDirectory: null,
       },
       {
         stationId: "bravo",
         label: "Bravo",
+        workingDirectory: "C:\\GitHub\\Spira\\apps\\web",
         createdAt: 100,
       },
     ]);
@@ -194,6 +197,7 @@ describe("SpiraMemoryDatabase", () => {
       {
         stationId: "charlie",
         label: "Station charlie",
+        workingDirectory: null,
       },
     ]);
   });
@@ -259,6 +263,8 @@ describe("SpiraMemoryDatabase", () => {
       state: "thinking",
       promptInFlight: true,
       activeSessionId: "session-1",
+      hostManifestHash: "host-manifest-1",
+      providerProjectionHash: "projection-1",
       activeToolCalls: [
         {
           callId: "tool-1",
@@ -276,6 +282,8 @@ describe("SpiraMemoryDatabase", () => {
       stationId: "primary",
       state: "thinking",
       promptInFlight: true,
+      hostManifestHash: "host-manifest-1",
+      providerProjectionHash: "projection-1",
       activeToolCalls: [
         {
           callId: "tool-1",
@@ -293,6 +301,8 @@ describe("SpiraMemoryDatabase", () => {
       state: "error",
       promptInFlight: false,
       activeSessionId: null,
+      hostManifestHash: "host-manifest-1",
+      providerProjectionHash: "projection-1",
       activeToolCalls: [],
       abortRequestedAt: null,
       recoveryMessage: "The previous response was interrupted while cancellation was in progress.",
@@ -400,6 +410,8 @@ describe("SpiraMemoryDatabase", () => {
         status: "idle",
         allowWrites: true,
         providerSessionId: "provider-session-2",
+        hostManifestHash: "host-manifest-2",
+        providerProjectionHash: "projection-2",
         activeToolCalls: [],
         toolCalls: [],
         startedAt: 1_000,
@@ -419,8 +431,113 @@ describe("SpiraMemoryDatabase", () => {
       snapshot: {
         status: "idle",
         providerSessionId: "provider-session-2",
+        hostManifestHash: "host-manifest-2",
+        providerProjectionHash: "projection-2",
         summary: "Recovered turn finished.",
       },
+    });
+  });
+
+  it("persists runtime sessions, ledger events, and checkpoints", () => {
+    const database = createTestDatabase();
+
+    database.upsertRuntimeSession({
+      runtimeSessionId: "station:primary",
+      stationId: "primary",
+      kind: "station",
+      contract: {
+        runtimeSessionId: "station:primary",
+        kind: "station",
+        scope: { stationId: "primary" },
+        workingDirectory: "C:\\GitHub\\Spira",
+        hostManifestHash: "host-manifest-1",
+        providerProjectionHash: "projection-1",
+      },
+      createdAt: 1_000,
+      updatedAt: 1_000,
+    });
+    database.appendRuntimeLedgerEvent({
+      eventId: "event-1",
+      runtimeSessionId: "station:primary",
+      stationId: "primary",
+      type: "user.message",
+      payload: {
+        messageId: "user-1",
+        content: "Continue the recovered turn.",
+      },
+      occurredAt: 1_100,
+    });
+    database.upsertRuntimeCheckpoint({
+      checkpointId: "checkpoint-1",
+      runtimeSessionId: "station:primary",
+      stationId: "primary",
+      kind: "session-summary",
+      summary: "Recovered the station runtime.",
+      payload: {
+        checkpointId: "checkpoint-1",
+        kind: "session-summary",
+        summary: "Recovered the station runtime.",
+      },
+      createdAt: 1_200,
+    });
+
+    expect(database.getRuntimeSession("station:primary")).toMatchObject({
+      runtimeSessionId: "station:primary",
+      stationId: "primary",
+      kind: "station",
+    });
+    expect(database.listRuntimeLedgerEvents("station:primary")).toEqual([
+      expect.objectContaining({
+        eventId: "event-1",
+        runtimeSessionId: "station:primary",
+        type: "user.message",
+      }),
+    ]);
+    expect(database.getLatestRuntimeCheckpoint("station:primary")).toMatchObject({
+      checkpointId: "checkpoint-1",
+      runtimeSessionId: "station:primary",
+      summary: "Recovered the station runtime.",
+    });
+  });
+
+  it("marks interrupted host resources as unrecoverable during recovery", () => {
+    const database = createTestDatabase();
+
+    database.upsertRuntimeSession({
+      runtimeSessionId: "station:primary",
+      stationId: "primary",
+      kind: "station",
+      contract: {
+        runtimeSessionId: "station:primary",
+        kind: "station",
+        scope: { stationId: "primary" },
+      },
+      createdAt: 1_000,
+      updatedAt: 1_000,
+    });
+    database.upsertRuntimeHostResource({
+      resourceId: "shell-1",
+      runtimeSessionId: "station:primary",
+      stationId: "primary",
+      kind: "powershell",
+      status: "running",
+      state: {
+        shellId: "shell-1",
+        status: "running",
+      },
+      createdAt: 1_100,
+      updatedAt: 1_100,
+    });
+
+    const recovery = database.recoverInterruptedRuntimeState(2_000);
+
+    expect(recovery.unrecoverableHostResourceIds).toEqual(["shell-1"]);
+    expect(database.getRuntimeHostResource("shell-1")).toMatchObject({
+      resourceId: "shell-1",
+      status: "unrecoverable",
+      state: expect.objectContaining({
+        status: "unrecoverable",
+      }),
     });
   });
 

@@ -17,15 +17,15 @@ import type {
   UpgradeProposal,
 } from "@spira/shared";
 import type { McpToolAggregator } from "../mcp/tool-aggregator.js";
+import { clearStationSessionArtifacts, createStationSessionStorage } from "../runtime/station-session-storage.js";
 import { SubagentLockManager } from "../subagent/lock-manager.js";
 import type { SubagentRegistry } from "../subagent/registry.js";
-import { clearStationSessionArtifacts, createStationSessionStorage } from "../runtime/station-session-storage.js";
 import { SpiraError } from "../util/errors.js";
 import { type EventMap, SpiraEventBus } from "../util/event-bus.js";
 import { setUnrefTimeout } from "../util/timers.js";
 import { buildContinuityPreamble, buildConversationMemoryContent } from "./continuity.js";
 import { CopilotSessionManager, type SessionPersistence } from "./session-manager.js";
-import type { ToolBridgeOptions } from "./tool-bridge.js";
+import type { ToolBridgeOptions } from "../runtime/tool-bridge.js";
 
 export const DEFAULT_STATION_ID = "primary";
 const DEFAULT_STATION_RESPONSE_TIMEOUT_MS = 30 * 60 * 1000;
@@ -100,16 +100,16 @@ interface StationRegistryOptions {
   createSessionManager?: (
     stationId: StationId,
     bus: SpiraEventBus,
-      options: {
-        stationId: StationId;
-        memoryDb: SpiraMemoryDatabase | null;
-        sessionPersistence: SessionPersistence | null;
-        subagentLockManager: SubagentLockManager;
-        subagentRegistry: SubagentRegistry | null;
-        requestedModel?: string | null;
-        additionalInstructions?: string | null;
-        workingDirectory?: string | null;
-        allowUpgradeTools?: boolean;
+    options: {
+      stationId: StationId;
+      memoryDb: SpiraMemoryDatabase | null;
+      sessionPersistence: SessionPersistence | null;
+      subagentLockManager: SubagentLockManager;
+      subagentRegistry: SubagentRegistry | null;
+      requestedModel?: string | null;
+      additionalInstructions?: string | null;
+      workingDirectory?: string | null;
+      allowUpgradeTools?: boolean;
       missionRunId?: string | null;
       listMissionServices?: (runId: string) => Promise<MissionServiceSnapshot>;
       startMissionService?: (runId: string, profileId: string) => Promise<MissionServiceSnapshot>;
@@ -134,6 +134,7 @@ const getStationSessionKey = (stationId: StationId, key: string, legacyKey: stri
 
 export class StationRegistry {
   private readonly stations = new Map<StationId, StationContext>();
+  private readonly closingStations = new Set<StationId>();
   private readonly subagentLockManager = new SubagentLockManager();
   private readonly rootBusDisposers: Array<() => void>;
 
@@ -279,6 +280,7 @@ export class StationRegistry {
       this.options.memoryDb?.upsertPersistedStation({
         stationId,
         label,
+        workingDirectory: createOptions.workingDirectory ?? null,
         createdAt,
       });
     }
@@ -359,33 +361,47 @@ export class StationRegistry {
       return false;
     }
 
-    await station.manager.shutdown();
-    station.pendingToolCalls.clear();
-    this.persistStationConversation(station, null);
-    this.options.memoryDb?.setSessionState(
-      getStationSessionKey(station.stationId, "copilot-session-id", LEGACY_SESSION_STATE_SESSION_ID_KEY),
-      null,
-    );
-    clearStationSessionArtifacts(this.options.memoryDb, station.stationId);
-    this.options.memoryDb?.deletePersistedStation(station.stationId);
-    this.options.memoryDb?.deleteRuntimeStationState(station.stationId);
+    this.closingStations.add(stationId);
+    try {
+      await this.performTerminalStationCleanup(station);
+      this.persistStationConversation(station, null);
+      this.options.memoryDb?.setSessionState(
+        getStationSessionKey(station.stationId, "copilot-session-id", LEGACY_SESSION_STATE_SESSION_ID_KEY),
+        null,
+      );
+      clearStationSessionArtifacts(this.options.memoryDb, station.stationId);
+      this.options.memoryDb?.deletePersistedStation(station.stationId);
+      this.options.memoryDb?.deleteRuntimeStationState(station.stationId);
 
-    for (const dispose of station.disposeHandlers) {
-      dispose();
-    }
-
-    this.stations.delete(stationId);
-    return true;
-  }
-
-  async shutdown(): Promise<void> {
-    for (const station of [...this.stations.values()]) {
-      await station.manager.shutdown();
       for (const dispose of station.disposeHandlers) {
         dispose();
       }
+
+      this.stations.delete(stationId);
+      return true;
+    } finally {
+      this.closingStations.delete(stationId);
     }
-    this.stations.clear();
+  }
+
+  async shutdown(): Promise<void> {
+    const stations = [...this.stations.values()];
+    for (const station of stations) {
+      this.closingStations.add(station.stationId);
+    }
+    try {
+      for (const station of stations) {
+        await this.performTerminalStationCleanup(station);
+        for (const dispose of station.disposeHandlers) {
+          dispose();
+        }
+      }
+      this.stations.clear();
+    } finally {
+      for (const station of stations) {
+        this.closingStations.delete(station.stationId);
+      }
+    }
     for (const dispose of this.rootBusDisposers) {
       dispose();
     }
@@ -590,6 +606,9 @@ export class StationRegistry {
 
   private ensureStation(stationId?: StationId): StationContext {
     const resolvedStationId = stationId ?? DEFAULT_STATION_ID;
+    if (this.closingStations.has(resolvedStationId)) {
+      throw new SpiraError("STATION_CLOSING", `Station ${resolvedStationId} is closing.`);
+    }
     const existing = this.stations.get(resolvedStationId);
     if (existing) {
       return existing;
@@ -604,6 +623,14 @@ export class StationRegistry {
     }
 
     throw new SpiraError("STATION_NOT_FOUND", `Unknown station ${resolvedStationId}`);
+  }
+
+  private async performTerminalStationCleanup(station: StationContext): Promise<void> {
+    const managedRuns = station.manager.listManagedSubagents({ includeCompleted: false });
+    await Promise.all(managedRuns.map((run) => station.manager.stopManagedSubagent(run.runId)));
+    await station.manager.clearSession();
+    await station.manager.shutdown();
+    station.pendingToolCalls.clear();
   }
 
   private attachStationListeners(station: StationContext): Array<() => void> {

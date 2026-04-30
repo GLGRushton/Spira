@@ -6,7 +6,7 @@ import { setUnrefTimeout } from "../util/timers.js";
 import { createAzureOpenAiProviderClient, type AzureOpenAiAuthStrategy } from "./azure-openai/client-factory.js";
 import { createCopilotProviderClient, type CopilotAuthStrategy } from "./copilot/client-factory.js";
 import { getConfiguredProviderId } from "./provider-config.js";
-import type { ProviderClient, ProviderSession, ProviderSessionConfig } from "./types.js";
+import type { ProviderClient, ProviderId, ProviderSession, ProviderSessionConfig } from "./types.js";
 
 export type ProviderAuthStrategy = CopilotAuthStrategy | AzureOpenAiAuthStrategy;
 
@@ -14,7 +14,15 @@ export const createProviderClient = async (
   env: Env,
   logger: Pick<Logger, "info" | "warn">,
 ): Promise<{ client: ProviderClient; strategy: ProviderAuthStrategy }> => {
-  switch (getConfiguredProviderId(env)) {
+  return createProviderClientForProvider(env, getConfiguredProviderId(env), logger);
+};
+
+export const createProviderClientForProvider = async (
+  env: Env,
+  providerId: ProviderId,
+  logger: Pick<Logger, "info" | "warn">,
+): Promise<{ client: ProviderClient; strategy: ProviderAuthStrategy }> => {
+  switch (providerId) {
     case "azure-openai":
       return createAzureOpenAiProviderClient(env, logger);
     case "copilot":
