@@ -294,4 +294,66 @@ describe("AzureOpenAiProviderClient", () => {
 
     await expect(sendPromise).rejects.toThrow("Session not found: disconnected");
   });
+
+  it("logs the provider path whenever a prompt is sent", async () => {
+    const logger = {
+      info: vi.fn(),
+    };
+    const fetchFn = vi.fn().mockResolvedValue(
+      createResponse({
+        id: "resp-log",
+        model: "gpt-4.1",
+        choices: [
+          {
+            message: {
+              role: "assistant",
+              content: "Logged.",
+            },
+            finish_reason: "stop",
+          },
+        ],
+        usage: {
+          prompt_tokens: 4,
+          completion_tokens: 2,
+          total_tokens: 6,
+        },
+      }),
+    );
+    const client = new AzureOpenAiProviderClient(
+      {
+        endpoint: "https://example.openai.azure.com",
+        apiKey: "secret",
+        deployment: "shinra",
+        apiVersion: "2024-10-21",
+        modelLabel: "gpt-4.1",
+        fetchFn: fetchFn as unknown as typeof fetch,
+      },
+      logger,
+    );
+
+    const session = await client.createSession({
+      sessionId: "session-log",
+      clientName: "Spira",
+      streaming: false,
+      systemMessage: {
+        mode: "customize",
+        content: "You are Shinra.",
+      },
+      workingDirectory: "C:\\GitHub\\Spira",
+      tools: [],
+    } satisfies ProviderSessionConfig & { sessionId: string });
+
+    await session.send({ prompt: "Trace the Azure path" });
+
+    expect(logger.info).toHaveBeenCalledWith(
+      {
+        providerId: "azure-openai",
+        sessionId: "session-log",
+        deployment: "shinra",
+        model: "gpt-4.1",
+        promptLength: "Trace the Azure path".length,
+      },
+      "Dispatching prompt through provider",
+    );
+  });
 });

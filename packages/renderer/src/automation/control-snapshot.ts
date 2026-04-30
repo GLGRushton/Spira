@@ -14,6 +14,7 @@ import { useMcpStore } from "../stores/mcp-store.js";
 import { useNavigationStore } from "../stores/navigation-store.js";
 import { usePermissionStore } from "../stores/permission-store.js";
 import { useRoomStore } from "../stores/room-store.js";
+import { useRuntimeConfigStore } from "../stores/runtime-config-store.js";
 import { useSettingsStore } from "../stores/settings-store.js";
 import { getStation, useStationStore } from "../stores/station-store.js";
 import { useSubagentStore } from "../stores/subagent-store.js";
@@ -87,6 +88,7 @@ export const buildSpiraUiSnapshot = (): SpiraUiSnapshot => {
       elevenLabsVoiceId: settings.elevenLabsVoiceId,
       theme: settings.theme,
     },
+    runtimeConfig: useRuntimeConfigStore.getState().summary ?? undefined,
     permissions: usePermissionStore
       .getState()
       .requests.filter((request) => (request.stationId ?? activeStationId) === activeStationId),

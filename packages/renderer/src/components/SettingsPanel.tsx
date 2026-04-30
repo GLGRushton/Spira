@@ -2,13 +2,13 @@ import {
   RUNTIME_CONFIG_KEYS,
   type RuntimeConfigEntrySummary,
   type RuntimeConfigKey,
-  type RuntimeConfigSummary,
   type TtsProvider,
   WAKE_WORD_PROVIDERS,
   type WakeWordProviderSetting,
 } from "@spira/shared";
 import { useEffect, useState } from "react";
 import { useMcpStore } from "../stores/mcp-store.js";
+import { useRuntimeConfigStore } from "../stores/runtime-config-store.js";
 import { useSettingsStore } from "../stores/settings-store.js";
 import styles from "./SettingsPanel.module.css";
 
@@ -63,7 +63,8 @@ export function SettingsPanel() {
   const setOpenWakeWordThreshold = useSettingsStore((store) => store.setOpenWakeWordThreshold);
   const setElevenLabsVoiceId = useSettingsStore((store) => store.setElevenLabsVoiceId);
   const [elevenLabsVoiceIdDraft, setElevenLabsVoiceIdDraft] = useState(elevenLabsVoiceId);
-  const [runtimeConfig, setRuntimeConfig] = useState<RuntimeConfigSummary | null>(null);
+  const runtimeConfig = useRuntimeConfigStore((store) => store.summary);
+  const setRuntimeConfig = useRuntimeConfigStore((store) => store.setSummary);
   const [runtimeConfigDrafts, setRuntimeConfigDrafts] = useState<Partial<Record<RuntimeConfigKey, string>>>({});
   const [runtimeConfigNotice, setRuntimeConfigNotice] = useState<string | null>(null);
   const [activeRuntimeConfigKey, setActiveRuntimeConfigKey] = useState<RuntimeConfigKey | null>(null);
@@ -93,7 +94,7 @@ export function SettingsPanel() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [setRuntimeConfig]);
 
   const handleWakeWordToggle = () => {
     const nextEnabled = !wakeWordEnabled;
@@ -172,7 +173,7 @@ export function SettingsPanel() {
       );
     } catch (error) {
       console.error("Failed to update secure runtime configuration", error);
-      setRuntimeConfigNotice("Failed to update secure runtime configuration.");
+      setRuntimeConfigNotice(error instanceof Error ? error.message : "Failed to update secure runtime configuration.");
     } finally {
       setActiveRuntimeConfigKey(null);
     }
@@ -200,12 +201,15 @@ export function SettingsPanel() {
       }
       const draft = runtimeConfigDrafts[entry.key] ?? "";
       const isBusy = activeRuntimeConfigKey === entry.key;
+      const effectiveDraft = draft || entry.currentValue || (entry.key === "modelProvider" ? "copilot" : "");
+      const currentValueLabel = entry.currentValue ?? (entry.source === "cleared" ? "Cleared" : "Not configured");
       return (
         <div key={entry.key} className={styles.secretCard}>
           <div className={styles.secretMeta}>
             <div>
               <span className={styles.label}>{entry.label}</span>
               <span className={styles.caption}>{entry.description}</span>
+              {!entry.secret ? <span className={styles.caption}>Current value: {currentValueLabel}</span> : null}
             </div>
             <span
               className={`${styles.statusBadge} ${entry.configured ? styles.statusConfigured : styles.statusUnset}`}
@@ -214,21 +218,35 @@ export function SettingsPanel() {
             </span>
           </div>
           <div className={styles.secretControls}>
-            <input
-              className={styles.textInput}
-              type={entry.secret ? "password" : "text"}
-              value={draft}
-              autoComplete="off"
-              spellCheck={false}
-              placeholder={entry.configured ? "Enter a replacement value" : "Enter a value"}
-              onChange={(event) => handleRuntimeConfigDraftChange(entry.key, event.target.value)}
-            />
+            {entry.allowedValues?.length ? (
+              <select
+                className={styles.select}
+                value={effectiveDraft}
+                onChange={(event) => handleRuntimeConfigDraftChange(entry.key, event.target.value)}
+              >
+                {entry.allowedValues.map((value) => (
+                  <option key={value} value={value}>
+                    {value}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <input
+                className={styles.textInput}
+                type={entry.secret ? "password" : "text"}
+                value={draft}
+                autoComplete="off"
+                spellCheck={false}
+                placeholder={entry.configured ? "Enter a replacement value" : "Enter a value"}
+                onChange={(event) => handleRuntimeConfigDraftChange(entry.key, event.target.value)}
+              />
+            )}
             <div className={styles.secretActions}>
               <button
                 type="button"
                 className={styles.ghostButton}
-                disabled={isBusy || !draft.trim()}
-                onClick={() => updateRuntimeConfig(entry.key, draft)}
+                disabled={isBusy || !effectiveDraft.trim() || effectiveDraft === entry.currentValue}
+                onClick={() => updateRuntimeConfig(entry.key, effectiveDraft)}
               >
                 Save
               </button>

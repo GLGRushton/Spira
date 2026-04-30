@@ -1965,6 +1965,53 @@ describe("CopilotSessionManager", () => {
     expect(internals.providerOverride).toBe("azure-openai");
   });
 
+  it("prefers the configured provider over a stale persisted runtime binding after restart", async () => {
+    const runtimeMemory = createRuntimeMemoryDb();
+    const persistedSession = createRuntimeSessionContract({
+      runtimeSessionId: "station:primary",
+      kind: "station",
+      scope: { stationId: "primary" },
+      workingDirectory: "C:\\GitHub\\Spira",
+      hostManifestHash: "host-manifest-1",
+      providerProjectionHash: "projection-1",
+      providerId: "copilot",
+      providerCapabilities: getDefaultProviderCapabilities("copilot"),
+    });
+    runtimeMemory.db.upsertRuntimeSession({
+      runtimeSessionId: "station:primary",
+      stationId: "primary",
+      kind: "station",
+      contract: persistedSession,
+    });
+    const manager = createManager([], {
+      envInput: { SPIRA_MODEL_PROVIDER: "azure-openai" },
+      memoryDb: runtimeMemory.db,
+      stationId: "primary",
+    });
+    const createProviderClientForProvider = vi
+      .spyOn(clientFactory, "createProviderClientForProvider")
+      .mockResolvedValue({
+        client: {
+          providerId: "azure-openai",
+          capabilities: getDefaultProviderCapabilities("azure-openai"),
+          createSession: vi.fn(),
+          resumeSession: vi.fn(),
+          deleteSession: vi.fn(),
+          getAuthStatus: vi.fn(),
+          stop: vi.fn().mockResolvedValue([]),
+        } as never,
+        strategy: "azure-openai-key",
+      });
+
+    await expect((manager as unknown as { createClient(): Promise<unknown> }).createClient()).resolves.toBeDefined();
+
+    expect(createProviderClientForProvider).toHaveBeenCalledWith(
+      expect.any(Object),
+      "azure-openai",
+      expect.any(Object),
+    );
+  });
+
   it.each([
     {
       providerId: "copilot" as const,

@@ -34,6 +34,8 @@ export interface RuntimeConfigEntrySummary {
   configured: boolean;
   source: RuntimeConfigSource;
   secret: boolean;
+  currentValue: string | null;
+  allowedValues?: string[];
 }
 
 export type RuntimeConfigSummary = Record<RuntimeConfigKey, RuntimeConfigEntrySummary>;

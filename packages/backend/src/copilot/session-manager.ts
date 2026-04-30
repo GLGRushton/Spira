@@ -349,13 +349,6 @@ export class CopilotSessionManager {
     this.setMissionProofStrategy = options.setMissionProofStrategy;
     this.recordMissionProofResult = options.recordMissionProofResult;
     this.saveMissionSummary = options.saveMissionSummary;
-    const runtimeSessionId = this.stationId ? getStationRuntimeSessionId(this.stationId) : null;
-    const persistedRuntimeSession = runtimeSessionId ? this.runtimeStore.getRuntimeSession(runtimeSessionId) : null;
-    const persistedProviderId =
-      persistedRuntimeSession?.providerSwitches.at(-1)?.toProviderId ?? persistedRuntimeSession?.providerBinding.providerId;
-    if (persistedProviderId && persistedProviderId !== getConfiguredProviderId(this.env)) {
-      this.providerOverride = persistedProviderId;
-    }
     this.bus.on("mcp:servers-changed", () => {
       this.queueToolRefresh();
     });

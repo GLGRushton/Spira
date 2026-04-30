@@ -63,7 +63,11 @@ import WebSocket from "ws";
 import { setupAutoUpdater } from "./auto-update.js";
 import { type BackendExitInfo, BackendLifecycle } from "./backend-lifecycle.js";
 import { type IpcBridgeHandle, setupIpcBridge } from "./ipc-bridge.js";
-import { coerceStoredRuntimeConfigValue, normalizeRuntimeConfigValue } from "./runtime-config-utils.js";
+import {
+  coerceStoredRuntimeConfigValue,
+  getAllowedRuntimeConfigValues,
+  normalizeRuntimeConfigValue,
+} from "./runtime-config-utils.js";
 import { SpiraUiControlBridge } from "./spira-ui-control-bridge.js";
 import { createTray } from "./tray.js";
 import { UpgradeOrchestrator } from "./upgrade-orchestrator.js";
@@ -498,6 +502,16 @@ const getRuntimeConfigSummary = (): RuntimeConfigSummary =>
       const metadata = RUNTIME_CONFIG_METADATA[key];
       const storedValue = getStoredRuntimeConfig()[key];
       const envValue = process.env[metadata.envKey];
+      const currentValue =
+        metadata.secret
+          ? null
+          : storedValue === null
+            ? null
+            : typeof storedValue === "string" && storedValue.trim()
+              ? storedValue
+              : typeof envValue === "string" && envValue.trim()
+                ? envValue.trim()
+                : null;
       const source =
         storedValue === null
           ? "cleared"
@@ -516,6 +530,8 @@ const getRuntimeConfigSummary = (): RuntimeConfigSummary =>
           configured: source === "stored" || source === "environment",
           source,
           secret: metadata.secret,
+          currentValue,
+          allowedValues: getAllowedRuntimeConfigValues(key),
         },
       ];
     }),
@@ -1702,6 +1718,7 @@ void app.whenReady().then(async () => {
   ipcMain.handle(RUNTIME_CONFIG_SET_CHANNEL, handleSetRuntimeConfig);
   ipcMain.handle(UPGRADE_RESPONSE_CHANNEL, handleUpgradeResponse);
   ipcMain.on(RENDERER_FATAL_CHANNEL, handleRendererFatal);
+  ensureWindow();
 
   if (useExternalBackend()) {
     void waitForExternalBackend(BACKEND_PORT)

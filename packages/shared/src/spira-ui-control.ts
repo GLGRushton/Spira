@@ -3,6 +3,7 @@ import type { ConnectionStatus } from "./electron-api.js";
 import type { McpServerConfig, McpServerUpdateConfig } from "./mcp-types.js";
 import type { McpServerStatus } from "./mcp-types.js";
 import type { PermissionRequestPayload, TtsProvider, UserSettings } from "./protocol.js";
+import type { RuntimeConfigSummary } from "./runtime-config.js";
 import type { SubagentCreateConfig } from "./subagent-types.js";
 import type { SubagentDomain } from "./subagent-types.js";
 import type { SubagentDomainId } from "./subagent-types.js";
@@ -148,6 +149,7 @@ export interface SpiraUiSnapshot {
   assistantState: AssistantState;
   connectionStatus: ConnectionStatus;
   settings: UserSettings;
+  runtimeConfig?: RuntimeConfigSummary;
   permissions: PermissionRequestPayload[];
   upgradeBanner: SpiraUiUpgradeBannerSummary | null;
   protocolBanner: SpiraUiUpgradeBannerSummary | null;

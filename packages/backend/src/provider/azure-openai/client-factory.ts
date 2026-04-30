@@ -85,6 +85,10 @@ const MISSION_SERVICE_TOOL_NAMES = new Set([
   "spira_run_mission_proof",
 ]);
 
+const silentLogger: Pick<Logger, "info"> = {
+  info: () => undefined,
+};
+
 export type AzureOpenAiAuthStrategy = "azure-openai-key";
 
 const trimTrailingSlashes = (value: string): string => value.replace(/\/+$/, "");
@@ -296,7 +300,10 @@ export class AzureOpenAiProviderClient implements ProviderClient {
   private readonly sessions = new Map<string, AzureOpenAiSessionState>();
   private readonly fetchFn: FetchLike;
 
-  constructor(private readonly config: AzureOpenAiClientConfig) {
+  constructor(
+    private readonly config: AzureOpenAiClientConfig,
+    private readonly logger: Pick<Logger, "info"> = silentLogger,
+  ) {
     this.fetchFn = config.fetchFn ?? fetch;
   }
 
@@ -348,6 +355,16 @@ export class AzureOpenAiProviderClient implements ProviderClient {
     }
     const abortController = new AbortController();
     state.abortController = abortController;
+    this.logger.info(
+      {
+        providerId: this.providerId,
+        sessionId: state.sessionId,
+        deployment: this.config.deployment,
+        model: config.model ?? this.config.modelLabel ?? this.config.deployment,
+        promptLength: prompt.length,
+      },
+      "Dispatching prompt through provider",
+    );
     state.messages.push({ role: "user", content: prompt });
     const messageId = randomUUID();
     let accumulatedUsage: ProviderUsageSnapshot | null = null;
@@ -537,7 +554,7 @@ export const createAzureOpenAiProviderClient = async (
   env: Env,
   logger: Pick<Logger, "info">,
 ): Promise<{ client: AzureOpenAiProviderClient; strategy: AzureOpenAiAuthStrategy }> => {
-  const client = new AzureOpenAiProviderClient(resolveAzureConfig(env));
+  const client = new AzureOpenAiProviderClient(resolveAzureConfig(env), logger);
   logger.info(
     {
       providerId: client.providerId,

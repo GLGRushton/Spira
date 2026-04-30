@@ -181,6 +181,65 @@ describe("CopilotProviderClient", () => {
     );
   });
 
+  it("logs the provider path whenever a prompt is sent", async () => {
+    const sdkSend = vi.fn().mockResolvedValue("ok");
+    const logger = {
+      info: vi.fn(),
+    };
+    const sdkClient = {
+      createSession: vi.fn(async (config: ProviderSessionConfig & { sessionId: string }) => ({
+        sessionId: config.sessionId,
+        send: sdkSend,
+        disconnect: vi.fn().mockResolvedValue(undefined),
+      })),
+      capabilities: {
+        persistentSessions: true,
+        abortableTurns: true,
+        sessionResumption: "provider-managed",
+        turnCancellation: "provider-abort",
+        responseStreaming: "native",
+        usageReporting: "full",
+        toolManifestMode: "projected",
+        modelSelection: "session-scoped",
+        toolCalling: "native",
+      },
+      resumeSession: vi.fn(),
+      deleteSession: vi.fn(),
+      getAuthStatus: vi.fn(),
+      stop: vi.fn().mockResolvedValue([]),
+    };
+
+    const client = new CopilotProviderClient(sdkClient as never, logger);
+    const session = await client.createSession({
+      sessionId: "session-trace",
+      clientName: "Spira",
+      model: "gpt-5.4",
+      infiniteSessions: { enabled: true },
+      onEvent: vi.fn(),
+      streaming: true,
+      onPermissionRequest: async () => ({ kind: "approve-once" }),
+      systemMessage: {
+        mode: "customize",
+        content: "You are Shinra.",
+      },
+      workingDirectory: "C:\\GitHub\\Spira",
+      tools: [],
+    });
+
+    await session.send({ prompt: "Trace this prompt" });
+
+    expect(logger.info).toHaveBeenCalledWith(
+      {
+        providerId: "copilot",
+        sessionId: "session-trace",
+        model: "gpt-5.4",
+        promptLength: "Trace this prompt".length,
+      },
+      "Dispatching prompt through provider",
+    );
+    expect(sdkSend).toHaveBeenCalledWith({ prompt: "Trace this prompt" });
+  });
+
   it("passes explicit built-in tool overrides through to the Copilot SDK session config", async () => {
     const sdkClient = {
       createSession: vi.fn(async (config: ProviderSessionConfig & { sessionId: string }) => ({

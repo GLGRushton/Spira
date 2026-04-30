@@ -13,7 +13,7 @@ export const registerConfigurationTools = (server: McpServer): void => {
   server.registerTool(
     "spira_ui_get_settings",
     {
-      description: "Read Spira's current effective settings from the UI state snapshot.",
+      description: "Read Spira's current effective settings and visible runtime configuration from the UI state snapshot.",
       inputSchema: EmptySchema,
       annotations: { readOnlyHint: true, idempotentHint: true },
     },
@@ -23,7 +23,10 @@ export const registerConfigurationTools = (server: McpServer): void => {
         if (result.type !== "snapshot") {
           return errorResult("The Spira UI bridge returned an unexpected response.");
         }
-        return successResult({ settings: result.snapshot.settings }, "Read the current Spira settings.");
+        return successResult(
+          { settings: result.snapshot.settings, runtimeConfig: result.snapshot.runtimeConfig ?? null },
+          "Read the current Spira settings.",
+        );
       } catch (error) {
         return errorResult(error instanceof Error ? error.message : "Failed to read Spira settings.");
       }

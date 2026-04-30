@@ -8,6 +8,7 @@ import {
   type Tool,
   defineTool,
 } from "@github/copilot-sdk";
+import type { Logger } from "pino";
 import type {
   ProviderAuthStatus,
   ProviderClient,
@@ -19,6 +20,10 @@ import type {
   ProviderToolDefinition,
   ProviderUsageSnapshot,
 } from "../types.js";
+
+const silentLogger: Pick<Logger, "info"> = {
+  info: () => undefined,
+};
 
 const toUsageNumber = (value: unknown): number | null =>
   typeof value === "number" && Number.isFinite(value) ? value : null;
@@ -149,13 +154,26 @@ const toCopilotSessionConfig = (config: ProviderSessionConfig): SessionConfig =>
 };
 
 class CopilotProviderSession implements ProviderSession {
-  constructor(private readonly session: CopilotSession) {}
+  constructor(
+    private readonly session: CopilotSession,
+    private readonly logger: Pick<Logger, "info">,
+    private readonly config: ProviderSessionConfig,
+  ) {}
 
   get sessionId(): string {
     return this.session.sessionId;
   }
 
   async send(payload: { prompt: string }): Promise<void> {
+    this.logger.info(
+      {
+        providerId: "copilot",
+        sessionId: this.session.sessionId,
+        model: this.config.model ?? null,
+        promptLength: payload.prompt.length,
+      },
+      "Dispatching prompt through provider",
+    );
     await this.session.send(payload);
   }
 
@@ -187,7 +205,10 @@ export class CopilotProviderClient implements ProviderClient {
     toolCalling: "native",
   } as const;
 
-  constructor(private readonly client: CopilotClient) {}
+  constructor(
+    private readonly client: CopilotClient,
+    private readonly logger: Pick<Logger, "info"> = silentLogger,
+  ) {}
 
   createSession(config: ProviderSessionConfig & { sessionId: string }): Promise<ProviderSession> {
     return this.client
@@ -195,13 +216,13 @@ export class CopilotProviderClient implements ProviderClient {
         ...toCopilotSessionConfig(config),
         sessionId: config.sessionId,
       })
-      .then((session) => new CopilotProviderSession(session));
+      .then((session) => new CopilotProviderSession(session, this.logger, config));
   }
 
   resumeSession(sessionId: string, config: ProviderSessionConfig): Promise<ProviderSession> {
     return this.client
       .resumeSession(sessionId, toCopilotSessionConfig(config))
-      .then((session) => new CopilotProviderSession(session));
+      .then((session) => new CopilotProviderSession(session, this.logger, config));
   }
 
   deleteSession(sessionId: string): Promise<void> {

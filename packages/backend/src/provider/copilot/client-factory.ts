@@ -66,7 +66,7 @@ export const createCopilotProviderClient = async (
         { authType: authStatus.authType ?? "unknown", strategy: "logged-in-user" },
         "Using logged-in Copilot authentication",
       );
-      return { client: new CopilotProviderClient(loggedInClient), strategy: "logged-in-user" };
+      return { client: new CopilotProviderClient(loggedInClient, logger), strategy: "logged-in-user" };
     }
   } catch (error) {
     logger.warn({ error }, "Logged-in Copilot authentication check failed");
@@ -90,7 +90,7 @@ export const createCopilotProviderClient = async (
           { authType: authStatus.authType ?? "unknown", strategy: "github-token" },
           "Using token-based Copilot authentication",
         );
-        return { client: new CopilotProviderClient(tokenClient), strategy: "github-token" };
+        return { client: new CopilotProviderClient(tokenClient, logger), strategy: "github-token" };
       }
 
       await stopRawCopilotClient(tokenClient, logger);
