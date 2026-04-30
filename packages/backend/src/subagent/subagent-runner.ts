@@ -15,7 +15,6 @@ import type {
   SubagentScopeId,
   SubagentToolCallRecord,
 } from "@spira/shared";
-import { approvePermissionOnce, permissionUserNotAvailable } from "../runtime/permission-decisions.js";
 import type { McpToolAggregator } from "../mcp/tool-aggregator.js";
 import {
   getDefaultProviderCapabilities,
@@ -42,29 +41,21 @@ import type {
   ProviderUsageSnapshot,
 } from "../provider/types.js";
 import { getProviderToolManifest } from "../runtime/capability-registry.js";
+import { approvePermissionOnce, permissionUserNotAvailable } from "../runtime/permission-decisions.js";
 import { resolveSubagentProviderBinding } from "../runtime/provider-binding.js";
-import { getStationRuntimeSessionId } from "../runtime/runtime-session-ids.js";
-import {
-  createRuntimeCheckpointPayload,
-  createRuntimeLedgerEvent,
-  type RuntimeCheckpointPayload,
-  type RuntimeLedgerEvent,
-  type RuntimeSessionContract,
-  type RuntimeUsageSummary,
+import type {
+  RuntimeCheckpointPayload,
+  RuntimeLedgerEvent,
+  RuntimeSessionContract,
+  RuntimeUsageSummary,
 } from "../runtime/runtime-contract.js";
-import {
-  buildRuntimeRecoveryContext,
-  buildRuntimeRecoveryPreambleFallback,
-  buildRuntimeRecoverySystemSection,
-  type RuntimeRecoveryContext,
-} from "../runtime/runtime-recovery.js";
 import {
   appendRuntimeLifecycleEvent,
   persistRuntimeCheckpointLifecycle,
   recordRuntimeAssistantMessage,
   recordRuntimeAssistantMessageDelta,
-  recordRuntimeCancellationRequested,
   recordRuntimeCancellationCompleted,
+  recordRuntimeCancellationRequested,
   recordRuntimeProviderBound,
   recordRuntimeRecoveryCompleted,
   recordRuntimeToolExecutionCompleted,
@@ -73,7 +64,14 @@ import {
   recordRuntimeUserMessage,
 } from "../runtime/runtime-lifecycle.js";
 import { executeRuntimePermissionRequest } from "../runtime/runtime-permission-lifecycle.js";
+import {
+  type RuntimeRecoveryContext,
+  buildRuntimeRecoveryContext,
+  buildRuntimeRecoverySystemSection,
+} from "../runtime/runtime-recovery.js";
+import { getStationRuntimeSessionId } from "../runtime/runtime-session-ids.js";
 import { getSubagentRuntimeSessionId } from "../runtime/runtime-session-ids.js";
+import { persistSharedRuntimeSessionState } from "../runtime/runtime-session-state.js";
 import {
   buildRuntimeCancellationState,
   buildRuntimePermissionState,
@@ -81,7 +79,6 @@ import {
   completeRuntimeCancellation,
   requestRuntimeCancellation,
 } from "../runtime/runtime-state-machine.js";
-import { persistSharedRuntimeSessionState } from "../runtime/runtime-session-state.js";
 import type { RuntimeStore } from "../runtime/runtime-store.js";
 import {
   createRuntimeCheckpointFromContract,
@@ -92,7 +89,7 @@ import {
 } from "../runtime/runtime-turn-engine.js";
 import { StreamAssembler } from "../runtime/stream-handler.js";
 import { appRootDir } from "../util/app-paths.js";
-import { CopilotError, formatErrorDetails } from "../util/errors.js";
+import { AssistantError, formatErrorDetails } from "../util/errors.js";
 import type { SpiraEventBus } from "../util/event-bus.js";
 import { createLogger } from "../util/logger.js";
 import { setUnrefTimeout } from "../util/timers.js";
@@ -418,7 +415,9 @@ export class SubagentRunner {
     this.retryDelayMs = options.retryDelayMs ?? RETRY_DELAY_MS;
     this.lockManager = options.lockManager ?? new SubagentLockManager({ now: this.now });
     this.currentProviderOverride =
-      options.initialProviderId && options.initialProviderId !== this.configuredProviderId ? options.initialProviderId : null;
+      options.initialProviderId && options.initialProviderId !== this.configuredProviderId
+        ? options.initialProviderId
+        : null;
   }
 
   private get configuredProviderId() {
@@ -426,7 +425,12 @@ export class SubagentRunner {
   }
 
   private getEffectiveProviderId(liveRun: LiveRunState): ProviderId {
-    return liveRun.client?.providerId ?? liveRun.providerOverride ?? this.currentProviderOverride ?? this.configuredProviderId;
+    return (
+      liveRun.client?.providerId ??
+      liveRun.providerOverride ??
+      this.currentProviderOverride ??
+      this.configuredProviderId
+    );
   }
 
   private getProviderCapabilities(liveRun: LiveRunState) {
@@ -457,7 +461,7 @@ export class SubagentRunner {
         scopedTools.filter((tool) => serverIds.includes(tool.serverId) && allowedToolNames.has(tool.name)),
       executeTool: (name, args) => {
         if (!allowedToolNames.has(name)) {
-          throw new CopilotError(`Tool ${name} is not available to ${this.options.domain.label}.`);
+          throw new AssistantError(`Tool ${name} is not available to ${this.options.domain.label}.`);
         }
         return this.options.toolAggregator.executeTool(name, args);
       },
@@ -476,7 +480,7 @@ export class SubagentRunner {
         filterHostTool: (tool) => liveRun.writesAllowed || READ_ONLY_HOST_TOOL_NAMES.has(tool.name),
         wrapToolExecution: (tool, toolArgs, execute) => {
           if (!liveRun.currentContext) {
-            throw new CopilotError("Delegated subagent run is not ready to execute tools");
+            throw new AssistantError("Delegated subagent run is not ready to execute tools");
           }
           return this.executeToolWithPolicy(liveRun.currentContext, tool, toolArgs, execute, liveRun.writesAllowed);
         },
@@ -560,14 +564,18 @@ export class SubagentRunner {
 
     const scopedMcpTools = this.getScopedDomainTools();
     const writesAllowed = this.options.domain.allowWrites && snapshot.allowWrites === true;
-    const persistedRuntimeSession = this.options.runtimeStore?.getRuntimeSession(getSubagentRuntimeSessionId(snapshot.runId));
+    const persistedRuntimeSession = this.options.runtimeStore?.getRuntimeSession(
+      getSubagentRuntimeSessionId(snapshot.runId),
+    );
     const persistedProviderBinding = this.getPersistedProviderBinding(snapshot, persistedRuntimeSession);
     const persistedProviderId = persistedProviderBinding.providerId;
     const runtimeRecoveryContext = persistedRuntimeSession
       ? buildRuntimeRecoveryContext({
           runtimeSession: persistedRuntimeSession,
-          checkpoint: this.options.runtimeStore?.getLatestRuntimeCheckpoint(getSubagentRuntimeSessionId(snapshot.runId)) ?? null,
-          ledgerEvents: this.options.runtimeStore?.listRuntimeLedgerEvents(getSubagentRuntimeSessionId(snapshot.runId)) ?? [],
+          checkpoint:
+            this.options.runtimeStore?.getLatestRuntimeCheckpoint(getSubagentRuntimeSessionId(snapshot.runId)) ?? null,
+          ledgerEvents:
+            this.options.runtimeStore?.listRuntimeLedgerEvents(getSubagentRuntimeSessionId(snapshot.runId)) ?? [],
         })
       : null;
     const liveRun: LiveRunState = {
@@ -772,10 +780,10 @@ export class SubagentRunner {
         await this.ensureLiveSession(liveRun, context);
         if (liveRun.closed) {
           await this.cleanupLiveSession(liveRun);
-          throw new CopilotError("Subagent run cancelled.");
+          throw new AssistantError("Subagent run cancelled.");
         }
         if (!liveRun.session) {
-          throw new CopilotError("Subagent session is unavailable");
+          throw new AssistantError("Subagent session is unavailable");
         }
 
         await withTimeout(liveRun.session.send({ prompt }), SEND_TIMEOUT_MS, "Timed out while sending a subagent task");
@@ -810,7 +818,7 @@ export class SubagentRunner {
         return envelope;
       } catch (error) {
         const errorRecord: SubagentErrorRecord = {
-          ...(error instanceof CopilotError ? { code: error.code } : {}),
+          ...(error instanceof AssistantError ? { code: error.code } : {}),
           message: error instanceof Error ? error.message : "Subagent execution failed",
           ...(error instanceof Error ? { details: formatErrorDetails(error) } : {}),
         };
@@ -947,16 +955,18 @@ export class SubagentRunner {
     input: string,
   ): Promise<SubagentEnvelope> {
     if (liveRun.closed) {
-      throw new CopilotError("Delegated subagent run is no longer active");
+      throw new AssistantError("Delegated subagent run is no longer active");
     }
     if (liveRun.activeTurnPromise) {
-      throw new CopilotError("Delegated subagent run is still working on a previous turn");
+      throw new AssistantError("Delegated subagent run is still working on a previous turn");
     }
     if (!liveRun.keepAlive) {
-      throw new CopilotError("Delegated subagent run cannot accept follow-up input");
+      throw new AssistantError("Delegated subagent run cannot accept follow-up input");
     }
 
-    const prompt = liveRun.fallbackRecoveryPrompt ? `${liveRun.fallbackRecoveryPrompt}\n\nFollow-up request:\n${input}` : input;
+    const prompt = liveRun.fallbackRecoveryPrompt
+      ? `${liveRun.fallbackRecoveryPrompt}\n\nFollow-up request:\n${input}`
+      : input;
     liveRun.fallbackRecoveryPrompt = null;
     return this.startTurn(liveRun, args, prompt, 0, false, false);
   }
@@ -993,11 +1003,12 @@ export class SubagentRunner {
         ? await _context.clientPromise
         : this.options.getClient
           ? await this.options.getClient()
-        : (await createProviderClientForProvider(this.options.env, this.getEffectiveProviderId(liveRun), logger)).client;
+          : (await createProviderClientForProvider(this.options.env, this.getEffectiveProviderId(liveRun), logger))
+              .client;
     }
     const client = liveRun.client;
     if (!client) {
-      throw new CopilotError("Delegated subagent run could not acquire a provider client");
+      throw new AssistantError("Delegated subagent run could not acquire a provider client");
     }
     const providerLabel = getProviderLabel(this.getEffectiveProviderId(liveRun));
     const manifest = this.getToolManifest(liveRun);
@@ -1045,7 +1056,7 @@ export class SubagentRunner {
     }
     if (liveRun.closed) {
       await this.cleanupLiveSession(liveRun);
-      throw new CopilotError("Subagent run cancelled.");
+      throw new AssistantError("Subagent run cancelled.");
     }
     await this.applyRequestedModel(liveRun);
     liveRun.hostManifestHash = manifest.hostManifestHash;
@@ -1090,7 +1101,8 @@ export class SubagentRunner {
       const session = liveRun.session;
       const client = liveRun.client;
       const providerSessionId =
-        liveRun.providerSessionId ?? (client && session && shouldPersistProviderSession(client.capabilities) ? session.sessionId : null);
+        liveRun.providerSessionId ??
+        (client && session && shouldPersistProviderSession(client.capabilities) ? session.sessionId : null);
       liveRun.session = null;
       liveRun.client = null;
       liveRun.providerSessionId = null;
@@ -1229,7 +1241,9 @@ export class SubagentRunner {
       event,
       now: () => this.now(),
       normalizeUsage: (snapshot) =>
-        liveRun.client ? normalizeProviderUsageSnapshot(liveRun.client.capabilities, snapshot) : (snapshot as ProviderUsageSnapshot),
+        liveRun.client
+          ? normalizeProviderUsageSnapshot(liveRun.client.capabilities, snapshot)
+          : (snapshot as ProviderUsageSnapshot),
       createActiveToolCall: (startEvent, occurredAt) => {
         const tool = toolLookup.get(startEvent.data.toolName);
         return {
@@ -1347,7 +1361,7 @@ export class SubagentRunner {
         this.flushActiveToolCallsAsErrors(context, event.data.message);
         if (!context.completionSettled) {
           context.completionSettled = true;
-          context.rejectCompletion(new CopilotError(event.data.message));
+          context.rejectCompletion(new AssistantError(event.data.message));
         }
         return;
 
@@ -1410,7 +1424,7 @@ export class SubagentRunner {
     }
 
     if (!writesAllowed) {
-      throw new CopilotError(
+      throw new AssistantError(
         `State-changing tool ${tool.name} requires allowWrites to be true for ${this.options.domain.label}.`,
       );
     }
@@ -1424,7 +1438,7 @@ export class SubagentRunner {
         request,
         denial: decision,
       });
-      throw new CopilotError(decision.reason);
+      throw new AssistantError(decision.reason);
     }
 
     this.options.bus.emit("subagent:lock-acquired", {
@@ -1498,7 +1512,7 @@ export class SubagentRunner {
       toolCallId: typeof request.toolCallId === "string" ? request.toolCallId : undefined,
       serverName: typeof request.serverName === "string" ? request.serverName : "Subagent runtime",
       toolName: request.toolName ?? "unknown",
-      toolTitle: typeof request.toolTitle === "string" ? request.toolTitle : request.toolName ?? "unknown",
+      toolTitle: typeof request.toolTitle === "string" ? request.toolTitle : (request.toolName ?? "unknown"),
       args: request.args,
       readOnly: request.readOnly === true,
     };
@@ -1512,7 +1526,9 @@ export class SubagentRunner {
         this.persistRuntimeSession(liveRun);
       },
       onResolved: () => {
-        liveRun.pendingPermissionRequestIds = liveRun.pendingPermissionRequestIds.filter((pendingId) => pendingId !== requestId);
+        liveRun.pendingPermissionRequestIds = liveRun.pendingPermissionRequestIds.filter(
+          (pendingId) => pendingId !== requestId,
+        );
         liveRun.lastPermissionResolvedAt = this.now();
         this.persistRuntimeSession(liveRun);
       },
@@ -1533,12 +1549,16 @@ export class SubagentRunner {
 
   private emitProviderUsage(record: ProviderUsageRecord): void {
     this.options.bus.emit("provider:usage", record);
-    recordRuntimeUsageObserved(this.options.runtimeStore, record.runId ? getSubagentRuntimeSessionId(record.runId) : null, {
-      model: record.model ?? null,
-      totalTokens: record.totalTokens ?? null,
-      source: record.source,
-      observedAt: record.observedAt,
-    });
+    recordRuntimeUsageObserved(
+      this.options.runtimeStore,
+      record.runId ? getSubagentRuntimeSessionId(record.runId) : null,
+      {
+        model: record.model ?? null,
+        totalTokens: record.totalTokens ?? null,
+        source: record.source,
+        observedAt: record.observedAt,
+      },
+    );
     logger.info({ usage: record, runId: record.runId }, "Provider usage observed for subagent run");
   }
 
@@ -1613,10 +1633,7 @@ export class SubagentRunner {
     });
   }
 
-  private appendRuntimeLedgerEvent(
-    liveRun: LiveRunState,
-    event: Omit<RuntimeLedgerEvent, "sessionId">,
-  ): void {
+  private appendRuntimeLedgerEvent(liveRun: LiveRunState, event: Omit<RuntimeLedgerEvent, "sessionId">): void {
     this.appendRuntimeLedgerEventBySessionId(liveRun.runtimeSessionId, event);
   }
 

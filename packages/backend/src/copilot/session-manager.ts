@@ -36,9 +36,9 @@ import {
 import { getConfiguredProviderId, getProviderLabel } from "../provider/provider-config.js";
 import type {
   ProviderClient,
+  ProviderId,
   ProviderPermissionRequest,
   ProviderPermissionResult,
-  ProviderId,
   ProviderSession,
   ProviderSessionConfig,
   ProviderSessionEvent,
@@ -48,31 +48,24 @@ import type {
 } from "../provider/types.js";
 import { buildRuntimeCapabilityRegistry, getProviderToolManifest } from "../runtime/capability-registry.js";
 import {
-  createRuntimeCheckpointPayload,
-  createRuntimeLedgerEvent,
+  approvePermissionOnce,
+  permissionUserNotAvailable,
+  rejectPermission,
+} from "../runtime/permission-decisions.js";
+import {
   type RuntimeCheckpointPayload,
   type RuntimeLedgerEvent,
   type RuntimeSessionContract,
   type RuntimeUsageSummary,
+  createRuntimeLedgerEvent,
 } from "../runtime/runtime-contract.js";
-import { buildRuntimeRecoveryContext, buildRuntimeRecoverySystemSection } from "../runtime/runtime-recovery.js";
-import { getStationRuntimeSessionId } from "../runtime/runtime-session-ids.js";
-import {
-  buildRuntimeCancellationState,
-  buildRuntimePermissionState,
-  buildRuntimeTurnContract,
-  completeRuntimeCancellation,
-  requestRuntimeCancellation,
-} from "../runtime/runtime-state-machine.js";
-import { persistSharedRuntimeSessionState } from "../runtime/runtime-session-state.js";
-import { RuntimeStore } from "../runtime/runtime-store.js";
 import {
   appendRuntimeLifecycleEvent,
   persistRuntimeCheckpointLifecycle,
-  recordRuntimeCancellationCompleted,
-  recordRuntimeCancellationRequested,
   recordRuntimeAssistantMessage,
   recordRuntimeAssistantMessageDelta,
+  recordRuntimeCancellationCompleted,
+  recordRuntimeCancellationRequested,
   recordRuntimeProviderBound,
   recordRuntimeRecoveryCompleted,
   recordRuntimeToolExecutionCompleted,
@@ -81,27 +74,37 @@ import {
   recordRuntimeUserMessage,
 } from "../runtime/runtime-lifecycle.js";
 import { executeRuntimePermissionRequest } from "../runtime/runtime-permission-lifecycle.js";
+import { buildRuntimeRecoveryContext, buildRuntimeRecoverySystemSection } from "../runtime/runtime-recovery.js";
+import { getStationRuntimeSessionId } from "../runtime/runtime-session-ids.js";
+import { persistSharedRuntimeSessionState } from "../runtime/runtime-session-state.js";
+import {
+  buildRuntimeCancellationState,
+  buildRuntimePermissionState,
+  buildRuntimeTurnContract,
+  completeRuntimeCancellation,
+  requestRuntimeCancellation,
+} from "../runtime/runtime-state-machine.js";
+import { RuntimeStore } from "../runtime/runtime-store.js";
 import {
   createRuntimeCheckpointFromContract,
   handleSharedTurnEvent,
   updateRuntimeUsageSummary,
 } from "../runtime/runtime-turn-engine.js";
 import { type StationSessionStorage, createStationSessionStorage } from "../runtime/station-session-storage.js";
+import { StreamAssembler } from "../runtime/stream-handler.js";
+import type { ToolBridgeOptions } from "../runtime/tool-bridge.js";
 import { SubagentLockManager } from "../subagent/lock-manager.js";
 import type { SubagentRegistry } from "../subagent/registry.js";
 import { SubagentRunRegistry } from "../subagent/run-registry.js";
 import { SubagentRunner } from "../subagent/subagent-runner.js";
 import { appRootDir } from "../util/app-paths.js";
-import { CopilotError, formatErrorDetails } from "../util/errors.js";
+import { AssistantError, formatErrorDetails } from "../util/errors.js";
 import type { SpiraEventBus } from "../util/event-bus.js";
 import { createLogger } from "../util/logger.js";
 import { setUnrefTimeout } from "../util/timers.js";
-import { approvePermissionOnce, permissionUserNotAvailable, rejectPermission } from "../runtime/permission-decisions.js";
 import { VOICE_RESPONSE_INSTRUCTIONS, buildOutgoingPrompt, createSessionConfig } from "./session-config.js";
-import { StreamAssembler } from "../runtime/stream-handler.js";
-import type { ToolBridgeOptions } from "../runtime/tool-bridge.js";
 
-const logger = createLogger("copilot-session");
+const logger = createLogger("station-session");
 
 const SESSION_INIT_TIMEOUT_MS = 20_000;
 const SEND_TIMEOUT_MS = 20_000;
@@ -149,7 +152,7 @@ export interface ManagedSubagentLaunch {
   completion: Promise<SubagentRunSnapshot | null>;
 }
 
-type ReportedCopilotError = CopilotError & { reportedToClient?: boolean };
+type ReportedAssistantError = AssistantError & { reportedToClient?: boolean };
 type PendingPermissionRequest = {
   resolve: (result: ProviderPermissionResult) => void;
   timeout: NodeJS.Timeout;
@@ -242,7 +245,7 @@ const isInteractiveHostToolPermissionRequest = (
   args?: Record<string, unknown>;
 } => request.kind === "custom-tool" && INTERACTIVE_HOST_TOOL_NAMES.has(getPermissionToolName(request) ?? "");
 
-export class CopilotSessionManager {
+export class StationSessionManager {
   private client: ProviderClient | null = null;
   private session: ProviderSession | null = null;
   private initializingSession: Promise<ProviderSession> | null = null;
@@ -386,13 +389,13 @@ export class CopilotSessionManager {
     const promptEpoch = this.activePromptEpoch + 1;
     try {
       if (this.shutdownRequested) {
-        throw new CopilotError("Station is shutting down.");
+        throw new AssistantError("Station is shutting down.");
       }
       if (this.currentState === "error") {
         this.transitionTo("idle");
       }
       if (this.currentState === "thinking" || this.promptInFlight) {
-        throw new CopilotError("A response is already in progress.");
+        throw new AssistantError("A response is already in progress.");
       }
       this.activePromptEpoch = promptEpoch;
       this.promptInFlight = true;
@@ -460,7 +463,7 @@ export class CopilotSessionManager {
       );
       await this.invalidateExpiredSession(session);
       if (this.observedToolActivity) {
-        throw new CopilotError(
+        throw new AssistantError(
           `${this.providerLabel} session was lost after tool activity; the turn was not retried automatically.`,
         );
       }
@@ -507,7 +510,10 @@ export class CopilotSessionManager {
           } catch (error) {
             this.runtimeStore.queueProviderSessionCleanup(providerId, sessionId);
             void this.runtimeStore.drainPendingProviderSessionCleanup(this.env);
-            logger.warn({ error, sessionId, providerId }, "Failed to delete provider session during clear; queued cleanup");
+            logger.warn(
+              { error, sessionId, providerId },
+              "Failed to delete provider session during clear; queued cleanup",
+            );
           }
         }
       }
@@ -701,7 +707,7 @@ export class CopilotSessionManager {
     options: { workingDirectory?: string } = {},
   ): ManagedSubagentLaunch {
     if (this.shutdownRequested) {
-      throw new CopilotError("Station is shutting down.");
+      throw new AssistantError("Station is shutting down.");
     }
     const launch = this.createSubagentRunner(domain, options.workingDirectory).launch(args);
     const handle = this.subagentRunRegistry.track(domain.id, args, launch);
@@ -734,10 +740,10 @@ export class CopilotSessionManager {
 
   private async getOrCreateSession(expectedTeardownEpoch?: number): Promise<ProviderSession> {
     if (this.shutdownRequested) {
-      throw new CopilotError("Station is shutting down.");
+      throw new AssistantError("Station is shutting down.");
     }
     if (expectedTeardownEpoch !== undefined && expectedTeardownEpoch !== this.sessionTeardownEpoch) {
-      throw new CopilotError("Station session is being cleared.");
+      throw new AssistantError("Station session is being cleared.");
     }
     if (this.session) {
       return this.session;
@@ -755,7 +761,7 @@ export class CopilotSessionManager {
       const { session, providerId } = await initializingSessionResult;
       if (expectedTeardownEpoch !== undefined && expectedTeardownEpoch !== this.sessionTeardownEpoch) {
         void this.cleanupSessionOpenedDuringTeardown(session, providerId);
-        throw new CopilotError("Station session is being cleared.");
+        throw new AssistantError("Station session is being cleared.");
       }
 
       if (this.initializingSession === initializingSession) {
@@ -993,7 +999,7 @@ export class CopilotSessionManager {
           deltaContent: deltaEvent.data.deltaContent,
           occurredAt,
         });
-        this.bus.emit("copilot:delta", deltaEvent.data.messageId, deltaEvent.data.deltaContent);
+        this.bus.emit("assistant:delta", deltaEvent.data.messageId, deltaEvent.data.deltaContent);
       },
       onAssistantMessage: (messageEvent, fullText, occurredAt) => {
         this.syncRuntimeState();
@@ -1002,7 +1008,7 @@ export class CopilotSessionManager {
           content: fullText,
           occurredAt,
         });
-        this.bus.emit("copilot:response-end", {
+        this.bus.emit("assistant:response-end", {
           messageId: messageEvent.data.messageId,
           text: fullText,
           timestamp: occurredAt,
@@ -1021,7 +1027,7 @@ export class CopilotSessionManager {
           occurredAt,
         });
         this.bus.emit(
-          "copilot:tool-call",
+          "assistant:tool-call",
           startEvent.data.toolCallId,
           startEvent.data.toolName,
           startEvent.data.arguments ?? {},
@@ -1032,12 +1038,12 @@ export class CopilotSessionManager {
         this.syncRuntimeState();
         recordRuntimeToolExecutionCompleted(this.runtimeStore, this.getRuntimeSessionId(), {
           toolCallId: completeEvent.data.toolCallId,
-          success: completeEvent.data.success === false || Boolean(completeEvent.data.error) ? false : true,
+          success: !(completeEvent.data.success === false || Boolean(completeEvent.data.error)),
           result: completeEvent.data.result,
           errorMessage: completeEvent.data.error?.message,
           occurredAt,
         });
-        this.bus.emit("copilot:tool-result", completeEvent.data.toolCallId, completeEvent.data.result ?? null);
+        this.bus.emit("assistant:tool-result", completeEvent.data.toolCallId, completeEvent.data.result ?? null);
       },
       onAssistantUsage: (usage, _usageEvent, occurredAt) => {
         this.runtimeUsageSummary = updateRuntimeUsageSummary(this.runtimeUsageSummary, usage, occurredAt);
@@ -1093,7 +1099,7 @@ export class CopilotSessionManager {
         this.latestUsage = null;
         this.streamAssembler.clear();
         this.bus.emit(
-          "copilot:error",
+          "assistant:error",
           "PROVIDER_SESSION_ERROR",
           event.data.message,
           formatErrorDetails(event.data),
@@ -1184,7 +1190,10 @@ export class CopilotSessionManager {
 
   private async cleanupSessionOpenedDuringTeardown(session: ProviderSession, providerId: ProviderId): Promise<void> {
     await session.disconnect().catch((error) => {
-      logger.warn({ error, sessionId: session.sessionId }, "Failed to disconnect provider session opened during teardown");
+      logger.warn(
+        { error, sessionId: session.sessionId },
+        "Failed to disconnect provider session opened during teardown",
+      );
     });
     if (this.activeSessionId === session.sessionId) {
       this.clearBoundSessionIdentity();
@@ -1210,7 +1219,7 @@ export class CopilotSessionManager {
     const previousState = this.currentState;
     this.currentState = nextState;
     this.syncRuntimeState();
-    this.bus.emit("copilot:state", nextState);
+    this.bus.emit("assistant:state", nextState);
     this.bus.emit("state:change", previousState, nextState);
 
     if (nextState === "idle") {
@@ -1273,18 +1282,18 @@ export class CopilotSessionManager {
     return [...new Set([currentProviderId, ...ALL_PROVIDER_IDS])];
   }
 
-  private reportAndWrapError(error: unknown, fallbackMessage: string): CopilotError {
+  private reportAndWrapError(error: unknown, fallbackMessage: string): AssistantError {
     const wrappedError =
-      error instanceof CopilotError
+      error instanceof AssistantError
         ? error
-        : new CopilotError(error instanceof Error ? error.message : fallbackMessage, error);
+        : new AssistantError(error instanceof Error ? error.message : fallbackMessage, error);
 
     logger.error({ err: wrappedError, details: formatErrorDetails(wrappedError) }, fallbackMessage);
 
     // Skip bus emit if a session.error event already reported to the client
     if (this.currentState !== "error") {
       this.bus.emit(
-        "copilot:error",
+        "assistant:error",
         wrappedError.code,
         wrappedError.message,
         formatErrorDetails(wrappedError),
@@ -1293,7 +1302,7 @@ export class CopilotSessionManager {
     }
     this.transitionTo("error");
 
-    (wrappedError as ReportedCopilotError).reportedToClient = true;
+    (wrappedError as ReportedAssistantError).reportedToClient = true;
 
     return wrappedError;
   }
@@ -1375,14 +1384,14 @@ export class CopilotSessionManager {
       payload,
       now: () => Date.now(),
       onRequested: (permissionPayload) => {
-        this.bus.emit("copilot:permission-request", permissionPayload);
+        this.bus.emit("assistant:permission-request", permissionPayload);
         this.runtimeStore.persistPermissionRequest(permissionPayload);
       },
       onResolved: (status) => {
         this.lastPermissionResolvedAt = Date.now();
         this.runtimeStore.resolvePermissionRequest(requestId, status);
         this.syncRuntimeState();
-        this.bus.emit("copilot:permission-complete", requestId, status);
+        this.bus.emit("assistant:permission-complete", requestId, status);
       },
       decide: () =>
         new Promise<ProviderPermissionResult>((resolve) => {
@@ -1402,8 +1411,8 @@ export class CopilotSessionManager {
     });
   }
 
-  private clearPendingPermissionRequests(result: "denied" | "expired"): void {
-    for (const [requestId, pending] of this.pendingPermissionRequests.entries()) {
+  private clearPendingPermissionRequests(_result: "denied" | "expired"): void {
+    for (const [_requestId, pending] of this.pendingPermissionRequests.entries()) {
       clearTimeout(pending.timeout);
       pending.resolve(permissionUserNotAvailable());
     }
@@ -1497,7 +1506,7 @@ export class CopilotSessionManager {
       resumedAt:
         this.sessionOrigin === "resumed"
           ? Date.now()
-          : overrides.providerBinding?.resumedAt ?? existing?.providerBinding.resumedAt ?? null,
+          : (overrides.providerBinding?.resumedAt ?? existing?.providerBinding.resumedAt ?? null),
       terminatedAt: overrides.providerBinding?.terminatedAt ?? existing?.providerBinding.terminatedAt ?? null,
       artifactRefs: overrides.artifactRefs ?? existing?.artifactRefs,
       checkpointRef: overrides.checkpointRef ?? existing?.checkpointRef ?? null,
@@ -1653,7 +1662,7 @@ export class CopilotSessionManager {
           }
         }
         if (!handler) {
-          throw new CopilotError(`Mission action ${action} is unavailable.`);
+          throw new AssistantError(`Mission action ${action} is unavailable.`);
         }
         return handler(...args);
       };
@@ -1779,7 +1788,7 @@ export class CopilotSessionManager {
 
     const domain = this.getDelegationDomain(domainId);
     if (!domain) {
-      throw new CopilotError(`Unknown subagent domain ${domainId}`);
+      throw new AssistantError(`Unknown subagent domain ${domainId}`);
     }
 
     const runner = this.createSubagentRunner(domain, workingDirectory);
@@ -1816,7 +1825,9 @@ export class CopilotSessionManager {
       .workingDirectory;
     const key = this.getSubagentRunnerKey(domain.id, recoveredWorkingDirectory ?? this.workingDirectory ?? undefined);
     const existingRunner = this.subagentRunners.get(key);
-    const runner = existingRunner ?? this.createSubagentRunner(domain, recoveredWorkingDirectory ?? this.workingDirectory ?? undefined);
+    const runner =
+      existingRunner ??
+      this.createSubagentRunner(domain, recoveredWorkingDirectory ?? this.workingDirectory ?? undefined);
     const recovered = runner.recover(snapshot);
     if (recovered && !existingRunner) {
       this.subagentRunners.set(key, runner);
@@ -1909,7 +1920,7 @@ export class CopilotSessionManager {
           currentToolSignature,
           currentState: this.currentState,
         },
-        "MCP tool inventory changed during an active turn; deferring Copilot session refresh",
+        "MCP tool inventory changed during an active turn; deferring station session refresh",
       );
       return;
     }
@@ -1925,7 +1936,7 @@ export class CopilotSessionManager {
         previousToolSignature: this.registeredToolSignature,
         currentToolSignature,
       },
-      "MCP tool inventory changed; refreshing Copilot session",
+      "MCP tool inventory changed; refreshing station session",
     );
     this.pendingToolRefreshSignature = null;
     const refreshPromise = (async () => {

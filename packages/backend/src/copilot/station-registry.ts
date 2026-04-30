@@ -18,14 +18,14 @@ import type {
 } from "@spira/shared";
 import type { McpToolAggregator } from "../mcp/tool-aggregator.js";
 import { clearStationSessionArtifacts, createStationSessionStorage } from "../runtime/station-session-storage.js";
+import type { ToolBridgeOptions } from "../runtime/tool-bridge.js";
 import { SubagentLockManager } from "../subagent/lock-manager.js";
 import type { SubagentRegistry } from "../subagent/registry.js";
 import { SpiraError } from "../util/errors.js";
 import { type EventMap, SpiraEventBus } from "../util/event-bus.js";
 import { setUnrefTimeout } from "../util/timers.js";
 import { buildContinuityPreamble, buildConversationMemoryContent } from "./continuity.js";
-import { CopilotSessionManager, type SessionPersistence } from "./session-manager.js";
-import type { ToolBridgeOptions } from "../runtime/tool-bridge.js";
+import { type SessionPersistence, StationSessionManager } from "./session-manager.js";
 
 export const DEFAULT_STATION_ID = "primary";
 const DEFAULT_STATION_RESPONSE_TIMEOUT_MS = 30 * 60 * 1000;
@@ -38,7 +38,7 @@ interface StationContext {
   stationId: StationId;
   label: string;
   bus: SpiraEventBus;
-  manager: CopilotSessionManager;
+  manager: StationSessionManager;
   pendingToolCalls: Map<string, Omit<UpsertToolCallInput, "messageId">>;
   activeConversationId: string | null;
   createdAt: number;
@@ -126,7 +126,7 @@ interface StationRegistryOptions {
       recordMissionProofResult?: ToolBridgeOptions["recordMissionProofResult"];
       saveMissionSummary?: ToolBridgeOptions["saveMissionSummary"];
     },
-  ) => CopilotSessionManager;
+  ) => StationSessionManager;
 }
 
 const getStationSessionKey = (stationId: StationId, key: string, legacyKey: string): string =>
@@ -226,7 +226,7 @@ export class StationRegistry {
           recordMissionProofResult: this.options.recordMissionProofResult,
           saveMissionSummary: this.options.saveMissionSummary,
         })
-      : new CopilotSessionManager(
+      : new StationSessionManager(
           bus,
           this.options.env,
           this.options.toolAggregator,
@@ -464,9 +464,9 @@ export class StationRegistry {
 
       const cleanup = () => {
         clearTimeout(timeout);
-        station.bus.off("copilot:response-end", handleResponseEnd);
+        station.bus.off("assistant:response-end", handleResponseEnd);
         station.bus.off("state:change", handleStateChange);
-        station.bus.off("copilot:error", handleError);
+        station.bus.off("assistant:error", handleError);
       };
 
       const finish = (result: AwaitStationResponseResult) => {
@@ -520,9 +520,9 @@ export class StationRegistry {
         fail(new SpiraError(code, message, { details, source }));
       };
 
-      station.bus.on("copilot:response-end", handleResponseEnd);
+      station.bus.on("assistant:response-end", handleResponseEnd);
       station.bus.on("state:change", handleStateChange);
-      station.bus.on("copilot:error", handleError);
+      station.bus.on("assistant:error", handleError);
 
       void this.sendMessage(text, options).catch((error) => {
         fail(error instanceof Error ? error : new Error(String(error)));
@@ -647,7 +647,7 @@ export class StationRegistry {
         station.updatedAt = Date.now();
         this.options.transport.send({ type: "state:change", state: current, stationId: station.stationId });
       }),
-      register("copilot:delta", (messageId: string, delta: string) => {
+      register("assistant:delta", (messageId: string, delta: string) => {
         station.updatedAt = Date.now();
         this.options.transport.send({
           type: "chat:token",
@@ -656,7 +656,7 @@ export class StationRegistry {
           stationId: station.stationId,
         });
       }),
-      register("copilot:response-end", ({ messageId, text, timestamp, autoSpeak }) => {
+      register("assistant:response-end", ({ messageId, text, timestamp, autoSpeak }) => {
         this.persistAssistantMessage(station, messageId, text, timestamp, { autoSpeak });
         this.options.transport.send({
           type: "chat:message",
@@ -698,7 +698,7 @@ export class StationRegistry {
           stationId: station.stationId,
         });
       }),
-      register("copilot:tool-call", (callId: string, toolName: string, args: Record<string, unknown>) => {
+      register("assistant:tool-call", (callId: string, toolName: string, args: Record<string, unknown>) => {
         station.pendingToolCalls.set(callId, {
           callId,
           name: toolName,
@@ -715,7 +715,7 @@ export class StationRegistry {
           stationId: station.stationId,
         });
       }),
-      register("copilot:tool-result", (callId: string, result: unknown) => {
+      register("assistant:tool-result", (callId: string, result: unknown) => {
         const existing = station.pendingToolCalls.get(callId) ?? {
           callId,
           name: "unknown",
@@ -741,11 +741,11 @@ export class StationRegistry {
           stationId: station.stationId,
         });
       }),
-      register("copilot:error", (code: string, message: string, details?: string, source?: string) => {
+      register("assistant:error", (code: string, message: string, details?: string, source?: string) => {
         station.pendingToolCalls.clear();
         this.options.transport.send({ type: "error", code, message, details, source, stationId: station.stationId });
       }),
-      register("copilot:permission-request", (request) => {
+      register("assistant:permission-request", (request) => {
         this.options.transport.send({
           type: "permission:request",
           request: {
@@ -754,7 +754,7 @@ export class StationRegistry {
           },
         });
       }),
-      register("copilot:permission-complete", (requestId: string, result: "approved" | "denied" | "expired") => {
+      register("assistant:permission-complete", (requestId: string, result: "approved" | "denied" | "expired") => {
         this.options.transport.send({
           type: "permission:complete",
           requestId,

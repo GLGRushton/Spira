@@ -2002,7 +2002,7 @@ const handleClientMessage = async (message: ClientMessage): Promise<void> => {
     } catch (error) {
       logger.error(
         { err: error, messageType: message.type, textLength: message.text.length },
-        "Copilot chat request failed",
+        "Assistant chat request failed",
       );
       const alreadyReported =
         error instanceof SpiraError && (error as { reportedToClient?: boolean }).reportedToClient === true;
@@ -2011,7 +2011,7 @@ const handleClientMessage = async (message: ClientMessage): Promise<void> => {
         transport?.send({
           type: "error",
           stationId: message.stationId,
-          ...toErrorPayload(error, "UNKNOWN_ERROR", "Failed to send message to GitHub Copilot", "copilot"),
+          ...toErrorPayload(error, "UNKNOWN_ERROR", "Failed to send message to Shinra", "assistant"),
         });
       }
     }
@@ -2617,7 +2617,7 @@ const bootstrap = async () => {
       logger.error({ err: error, transcriptLength: text.length }, "Failed to forward voice transcript to Copilot");
       transport?.send({
         type: "error",
-        ...toErrorPayload(error, "UNKNOWN_ERROR", "Failed to forward voice transcript to GitHub Copilot", "copilot"),
+        ...toErrorPayload(error, "UNKNOWN_ERROR", "Failed to forward the voice transcript to Shinra", "assistant"),
       });
     });
   });

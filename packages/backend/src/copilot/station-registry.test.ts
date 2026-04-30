@@ -233,9 +233,9 @@ describe("StationRegistry", () => {
     const { registry, transport, managers } = createRegistry();
     registry.createStation({ stationId: DEFAULT_STATION_ID, label: "Primary" });
 
-    managers.get(DEFAULT_STATION_ID)?.bus.emit("copilot:delta", "message-1", "hello");
-    managers.get(DEFAULT_STATION_ID)?.bus.emit("copilot:permission-complete", "perm-1", "approved");
-    managers.get(DEFAULT_STATION_ID)?.bus.emit("copilot:error", "BROKEN", "Boom", "details", "copilot");
+    managers.get(DEFAULT_STATION_ID)?.bus.emit("assistant:delta", "message-1", "hello");
+    managers.get(DEFAULT_STATION_ID)?.bus.emit("assistant:permission-complete", "perm-1", "approved");
+    managers.get(DEFAULT_STATION_ID)?.bus.emit("assistant:error", "BROKEN", "Boom", "details", "assistant");
 
     expect(transport.send).toHaveBeenCalledWith({
       type: "chat:token",
@@ -254,7 +254,7 @@ describe("StationRegistry", () => {
       code: "BROKEN",
       message: "Boom",
       details: "details",
-      source: "copilot",
+      source: "assistant",
       stationId: DEFAULT_STATION_ID,
     });
   });
@@ -437,7 +437,12 @@ describe("StationRegistry", () => {
       code: "STATION_CLOSING",
     });
     expect(releaseClearSession).not.toBeNull();
-    releaseClearSession!();
+    const finishClearSession =
+      releaseClearSession ??
+      (() => {
+        throw new Error("Expected the station clearSession promise to be pending.");
+      });
+    finishClearSession();
     await expect(closePromise).resolves.toBe(true);
   });
 
@@ -639,7 +644,7 @@ describe("StationRegistry", () => {
       continuityPreamble: null,
     });
 
-    manager?.bus.emit("copilot:response-end", {
+    manager?.bus.emit("assistant:response-end", {
       messageId: "assistant-1",
       text: "Done.",
       timestamp: 2_000,

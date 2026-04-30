@@ -25,7 +25,7 @@ export interface EventMap {
   "chat:assistant-message": [
     message: { id: string; text: string; timestamp: number; autoSpeak?: boolean; persist?: boolean },
   ];
-  "copilot:state": [state: AssistantState];
+  "assistant:state": [state: AssistantState];
   "voice:pipeline": [{ state: VoicePipelineState }];
   "voice:muted": [{ muted: boolean }];
   "state:change": [previous: AssistantState, current: AssistantState];
@@ -33,14 +33,14 @@ export interface EventMap {
   "tts:amplitude": [{ amplitude: number }];
   "tts:audio": [{ audioBase64: string; mimeType: "audio/wav" }];
   "voice:transcript": [{ text: string }];
-  "copilot:response-start": [messageId: string];
-  "copilot:delta": [messageId: string, delta: string];
-  "copilot:response-end": [{ text: string; messageId: string; timestamp: number; autoSpeak?: boolean }];
-  "copilot:error": [code: string, message: string, details?: string, source?: string];
-  "copilot:tool-call": [callId: string, toolName: string, args: Record<string, unknown>];
-  "copilot:tool-result": [callId: string, result: unknown];
-  "copilot:permission-request": [request: PermissionRequestPayload];
-  "copilot:permission-complete": [requestId: string, result: "approved" | "denied" | "expired"];
+  "assistant:response-start": [messageId: string];
+  "assistant:delta": [messageId: string, delta: string];
+  "assistant:response-end": [{ text: string; messageId: string; timestamp: number; autoSpeak?: boolean }];
+  "assistant:error": [code: string, message: string, details?: string, source?: string];
+  "assistant:tool-call": [callId: string, toolName: string, args: Record<string, unknown>];
+  "assistant:tool-result": [callId: string, result: unknown];
+  "assistant:permission-request": [request: PermissionRequestPayload];
+  "assistant:permission-complete": [requestId: string, result: "approved" | "denied" | "expired"];
   "provider:usage": [record: ProviderUsageRecord];
   "mcp:server-crashed": [serverId: string];
   "mcp:server-stderr": [serverId: string, line: string];

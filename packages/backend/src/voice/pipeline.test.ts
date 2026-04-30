@@ -186,13 +186,13 @@ describe("VoicePipeline", () => {
     await stt.transcribe.mock.results[0]?.value;
     await flushMicrotasks();
 
-    bus.emit("copilot:response-end", { text: "Done", messageId: "assistant-1", timestamp: Date.now() });
+    bus.emit("assistant:response-end", { text: "Done", messageId: "assistant-1", timestamp: Date.now() });
     await flushMicrotasks();
 
     expect(states.at(-1)).toBe("idle");
   });
 
-  it("waits for Copilot to become idle before recovering after a response", async () => {
+  it("waits for the assistant to become idle before recovering after a response", async () => {
     const capture = new FakeAudioCapture();
     const wakeWord = new FakeWakeWordProvider();
     const stt = new FakeSttProvider();
@@ -216,13 +216,13 @@ describe("VoicePipeline", () => {
     await stt.transcribe.mock.results[0]?.value;
     await flushMicrotasks();
 
-    bus.emit("copilot:state", "speaking");
-    bus.emit("copilot:response-end", { text: "Done", messageId: "assistant-2", timestamp: Date.now() });
+    bus.emit("assistant:state", "speaking");
+    bus.emit("assistant:response-end", { text: "Done", messageId: "assistant-2", timestamp: Date.now() });
     await flushMicrotasks();
 
     expect(states.at(-1)).toBe("thinking");
 
-    bus.emit("copilot:state", "idle");
+    bus.emit("assistant:state", "idle");
     await flushMicrotasks();
 
     expect(states.at(-1)).toBe("idle");

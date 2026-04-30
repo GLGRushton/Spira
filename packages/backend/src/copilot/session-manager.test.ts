@@ -3,9 +3,9 @@ import { describe, expect, it, vi } from "vitest";
 import { getDefaultProviderCapabilities } from "../provider/capability-fallback.js";
 import * as clientFactory from "../provider/client-factory.js";
 import { createRuntimeCheckpointPayload, createRuntimeSessionContract } from "../runtime/runtime-contract.js";
-import { CopilotError } from "../util/errors.js";
+import { AssistantError } from "../util/errors.js";
 import { SpiraEventBus } from "../util/event-bus.js";
-import { CopilotSessionManager } from "./session-manager.js";
+import { StationSessionManager } from "./session-manager.js";
 
 type SessionManagerInternals = {
   session: {
@@ -79,7 +79,7 @@ const createManager = (
       }
     : undefined;
 
-  return new CopilotSessionManager(
+  return new StationSessionManager(
     bus,
     parseEnv(options?.envInput ?? {}),
     aggregator as never,
@@ -200,7 +200,7 @@ const createRuntimeMemoryDb = (initialState: Record<string, unknown> | null = nu
   };
 };
 
-describe("CopilotSessionManager", () => {
+describe("StationSessionManager", () => {
   it("defers MCP session refresh until the active turn becomes idle", async () => {
     const tools: McpTool[] = [
       {
@@ -1281,10 +1281,10 @@ describe("CopilotSessionManager", () => {
     const toolResult = vi.fn();
     const responseEnd = vi.fn();
     const usage = vi.fn();
-    internals.bus.on("copilot:delta", delta);
-    internals.bus.on("copilot:tool-call", toolCall);
-    internals.bus.on("copilot:tool-result", toolResult);
-    internals.bus.on("copilot:response-end", responseEnd);
+    internals.bus.on("assistant:delta", delta);
+    internals.bus.on("assistant:tool-call", toolCall);
+    internals.bus.on("assistant:tool-result", toolResult);
+    internals.bus.on("assistant:response-end", responseEnd);
     internals.bus.on("provider:usage", usage);
     const session = {
       sessionId: "azure-session",
@@ -1600,7 +1600,7 @@ describe("CopilotSessionManager", () => {
     const internals = manager as unknown as SessionManagerInternals;
     const bus = (manager as unknown as { bus: SpiraEventBus }).bus;
     const permissionRequest = vi.fn();
-    bus.on("copilot:permission-request", permissionRequest);
+    bus.on("assistant:permission-request", permissionRequest);
     internals.session = {
       sessionId: "test-session",
       disconnect: vi.fn().mockResolvedValue(undefined),
@@ -1625,7 +1625,7 @@ describe("CopilotSessionManager", () => {
     const internals = manager as unknown as SessionManagerInternals;
     const bus = (manager as unknown as { bus: SpiraEventBus }).bus;
     const permissionRequest = vi.fn();
-    bus.on("copilot:permission-request", permissionRequest);
+    bus.on("assistant:permission-request", permissionRequest);
     internals.session = {
       sessionId: "test-session",
       disconnect: vi.fn().mockResolvedValue(undefined),
@@ -1653,7 +1653,7 @@ describe("CopilotSessionManager", () => {
     const internals = manager as unknown as SessionManagerInternals;
     const bus = (manager as unknown as { bus: SpiraEventBus }).bus;
     const permissionRequest = vi.fn();
-    bus.on("copilot:permission-request", permissionRequest);
+    bus.on("assistant:permission-request", permissionRequest);
     internals.session = {
       sessionId: "test-session",
       disconnect: vi.fn().mockResolvedValue(undefined),
@@ -2041,77 +2041,80 @@ describe("CopilotSessionManager", () => {
         toolCalling: "native" as const,
       },
     },
-  ])("preserves host runtime identity across multi-turn station flows for $providerId", async ({ providerId, capabilities }) => {
-    const runtimeMemory = createRuntimeMemoryDb();
-    const manager = createManager([], {
-      memoryDb: runtimeMemory.db,
-      stationId: "primary",
-      envInput: { SPIRA_MODEL_PROVIDER: providerId },
-    });
-    const internals = manager as unknown as SessionManagerInternals & { bus: SpiraEventBus };
-    const usage = vi.fn();
-    internals.bus.on("provider:usage", usage);
+  ])(
+    "preserves host runtime identity across multi-turn station flows for $providerId",
+    async ({ providerId, capabilities }) => {
+      const runtimeMemory = createRuntimeMemoryDb();
+      const manager = createManager([], {
+        memoryDb: runtimeMemory.db,
+        stationId: "primary",
+        envInput: { SPIRA_MODEL_PROVIDER: providerId },
+      });
+      const internals = manager as unknown as SessionManagerInternals & { bus: SpiraEventBus };
+      const usage = vi.fn();
+      internals.bus.on("provider:usage", usage);
 
-    let turnIndex = 0;
-    const session = {
-      sessionId: `${providerId}-station-session`,
-      send: vi.fn().mockImplementation(async ({ prompt }: { prompt: string }) => {
-        turnIndex += 1;
-        expect(prompt).toBe(turnIndex === 1 ? "First turn" : "Second turn");
-        internals.handleSessionEvent({
-          type: "assistant.message",
-          data: {
-            messageId: `assistant-${turnIndex}`,
-            content: `Reply ${turnIndex}`,
-          },
-        });
-        internals.handleSessionEvent({
-          type: "session.idle",
-          data: {
-            usage: {
-              model: `${providerId}-model`,
-              totalTokens: turnIndex * 10,
-              source: "provider",
+      let turnIndex = 0;
+      const session = {
+        sessionId: `${providerId}-station-session`,
+        send: vi.fn().mockImplementation(async ({ prompt }: { prompt: string }) => {
+          turnIndex += 1;
+          expect(prompt).toBe(turnIndex === 1 ? "First turn" : "Second turn");
+          internals.handleSessionEvent({
+            type: "assistant.message",
+            data: {
+              messageId: `assistant-${turnIndex}`,
+              content: `Reply ${turnIndex}`,
             },
-          },
-        });
-      }),
-      disconnect: vi.fn().mockResolvedValue(undefined),
-    };
-    const client = {
-      providerId,
-      capabilities,
-      resumeSession: vi.fn(),
-      createSession: vi.fn().mockResolvedValue(session),
-      deleteSession: vi.fn(),
-      getAuthStatus: vi.fn(),
-      stop: vi.fn().mockResolvedValue([]),
-    };
-    vi.spyOn(
-      manager as unknown as { getOrCreateClient: () => Promise<typeof client> },
-      "getOrCreateClient",
-    ).mockResolvedValue(client);
-
-    await expect(manager.sendMessage("First turn")).resolves.toBeUndefined();
-    await expect(manager.sendMessage("Second turn")).resolves.toBeUndefined();
-
-    expect(client.createSession).toHaveBeenCalledTimes(1);
-    expect(session.send).toHaveBeenCalledTimes(2);
-    expect(runtimeMemory.runtimeSessions.get("station:primary")).toMatchObject({
-      runtimeSessionId: "station:primary",
-      stationId: "primary",
-      kind: "station",
-      contract: expect.objectContaining({
-        providerBinding: expect.objectContaining({
-          providerId,
+          });
+          internals.handleSessionEvent({
+            type: "session.idle",
+            data: {
+              usage: {
+                model: `${providerId}-model`,
+                totalTokens: turnIndex * 10,
+                source: "provider",
+              },
+            },
+          });
         }),
-      }),
-    });
-    expect(runtimeMemory.runtimeLedgerEvents.filter((event) => event.type === "user.message")).toHaveLength(2);
-    expect(runtimeMemory.runtimeLedgerEvents.filter((event) => event.type === "assistant.message")).toHaveLength(2);
-    expect(runtimeMemory.runtimeLedgerEvents.filter((event) => event.type === "usage.recorded")).toHaveLength(2);
-    expect(usage).toHaveBeenCalledTimes(2);
-  });
+        disconnect: vi.fn().mockResolvedValue(undefined),
+      };
+      const client = {
+        providerId,
+        capabilities,
+        resumeSession: vi.fn(),
+        createSession: vi.fn().mockResolvedValue(session),
+        deleteSession: vi.fn(),
+        getAuthStatus: vi.fn(),
+        stop: vi.fn().mockResolvedValue([]),
+      };
+      vi.spyOn(
+        manager as unknown as { getOrCreateClient: () => Promise<typeof client> },
+        "getOrCreateClient",
+      ).mockResolvedValue(client);
+
+      await expect(manager.sendMessage("First turn")).resolves.toBeUndefined();
+      await expect(manager.sendMessage("Second turn")).resolves.toBeUndefined();
+
+      expect(client.createSession).toHaveBeenCalledTimes(1);
+      expect(session.send).toHaveBeenCalledTimes(2);
+      expect(runtimeMemory.runtimeSessions.get("station:primary")).toMatchObject({
+        runtimeSessionId: "station:primary",
+        stationId: "primary",
+        kind: "station",
+        contract: expect.objectContaining({
+          providerBinding: expect.objectContaining({
+            providerId,
+          }),
+        }),
+      });
+      expect(runtimeMemory.runtimeLedgerEvents.filter((event) => event.type === "user.message")).toHaveLength(2);
+      expect(runtimeMemory.runtimeLedgerEvents.filter((event) => event.type === "assistant.message")).toHaveLength(2);
+      expect(runtimeMemory.runtimeLedgerEvents.filter((event) => event.type === "usage.recorded")).toHaveLength(2);
+      expect(usage).toHaveBeenCalledTimes(2);
+    },
+  );
 
   it("recovers delegated subagents with their persisted working directory", () => {
     const manager = createManager([], { workingDirectory: "C:\\GitHub\\Spira\\station-worktree" } as never);
@@ -2220,7 +2223,7 @@ describe("CopilotSessionManager", () => {
       .spyOn(manager as unknown as { getOrCreateSession: () => Promise<typeof session> }, "getOrCreateSession")
       .mockResolvedValue(session);
 
-    await expect(manager.sendMessage("hello")).rejects.toBeInstanceOf(CopilotError);
+    await expect(manager.sendMessage("hello")).rejects.toBeInstanceOf(AssistantError);
 
     expect(session.disconnect).not.toHaveBeenCalled();
     expect(getOrCreateSessionSpy).toHaveBeenCalledTimes(1);
@@ -2286,7 +2289,7 @@ describe("CopilotSessionManager", () => {
     });
     const internals = manager as unknown as SessionManagerInternals & { bus: SpiraEventBus };
     const delta = vi.fn();
-    internals.bus.on("copilot:delta", delta);
+    internals.bus.on("assistant:delta", delta);
     let rejectStaleSend: ((error: Error) => void) | undefined;
     let staleOnEvent: ((event: { type: string; data: Record<string, unknown> }) => void) | undefined;
     let freshOnEvent: ((event: { type: string; data: Record<string, unknown> }) => void) | undefined;
@@ -2414,7 +2417,7 @@ describe("CopilotSessionManager", () => {
       .mockResolvedValueOnce(staleSession)
       .mockResolvedValueOnce(freshSession);
 
-    await expect(manager.sendMessage("hello")).rejects.toBeInstanceOf(CopilotError);
+    await expect(manager.sendMessage("hello")).rejects.toBeInstanceOf(AssistantError);
 
     expect(getOrCreateSessionSpy).toHaveBeenCalledTimes(1);
     expect(freshSession.send).not.toHaveBeenCalled();
@@ -2467,7 +2470,7 @@ describe("CopilotSessionManager", () => {
 
     internals.session = staleSession;
     internals.activeSessionId = "stale-session";
-    internals.bus.on("copilot:error", reportedError);
+    internals.bus.on("assistant:error", reportedError);
     vi.spyOn(
       manager as unknown as { invalidateExpiredSession: (session: typeof staleSession) => Promise<void> },
       "invalidateExpiredSession",
@@ -2481,5 +2484,4 @@ describe("CopilotSessionManager", () => {
     expect(staleSession.disconnect).toHaveBeenCalledTimes(1);
     expect(reportedError).not.toHaveBeenCalled();
   });
-
 });

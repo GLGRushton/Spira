@@ -34,6 +34,12 @@ export class VoiceError extends SpiraError {
   }
 }
 
+export class AssistantError extends SpiraError {
+  constructor(message: string, cause?: unknown) {
+    super("ASSISTANT_ERROR", message, cause);
+  }
+}
+
 export class CopilotError extends SpiraError {
   constructor(message: string, cause?: unknown) {
     super("COPILOT_ERROR", message, cause);

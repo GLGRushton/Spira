@@ -31,8 +31,8 @@ export class VoicePipeline {
   private lastLevelAt = 0;
   private responseTimer: NodeJS.Timeout | null = null;
   private recoveryTimer: NodeJS.Timeout | null = null;
-  private copilotState: AssistantState = "idle";
-  private waitingForCopilotIdle = false;
+  private assistantState: AssistantState = "idle";
+  private waitingForAssistantIdle = false;
   private unsubscribeFrame: (() => void) | null = null;
   private unsubscribeResponseEnd: (() => void) | null = null;
   private unsubscribeCopilotState: (() => void) | null = null;
@@ -87,26 +87,26 @@ export class VoicePipeline {
       });
 
       const responseEndHandler = (_event: { text: string; messageId: string }) => {
-        void this.handleCopilotResponse().catch((error) => {
-          this.logger.error({ error }, "Voice pipeline failed while handling Copilot response");
+        void this.handleAssistantResponse().catch((error) => {
+          this.logger.error({ error }, "Voice pipeline failed while handling assistant response");
           this.handleError(error);
         });
       };
-      this.bus.on("copilot:response-end", responseEndHandler);
+      this.bus.on("assistant:response-end", responseEndHandler);
       this.unsubscribeResponseEnd = () => {
-        this.bus.off("copilot:response-end", responseEndHandler);
+        this.bus.off("assistant:response-end", responseEndHandler);
       };
 
-      const copilotStateHandler = (state: AssistantState) => {
-        this.copilotState = state;
-        if (state === "idle" && this.waitingForCopilotIdle) {
-          this.waitingForCopilotIdle = false;
+      const assistantStateHandler = (state: AssistantState) => {
+        this.assistantState = state;
+        if (state === "idle" && this.waitingForAssistantIdle) {
+          this.waitingForAssistantIdle = false;
           this.scheduleIdleRecovery();
         }
       };
-      this.bus.on("copilot:state", copilotStateHandler);
+      this.bus.on("assistant:state", assistantStateHandler);
       this.unsubscribeCopilotState = () => {
-        this.bus.off("copilot:state", copilotStateHandler);
+        this.bus.off("assistant:state", assistantStateHandler);
       };
 
       this.capture.start();
@@ -299,11 +299,11 @@ export class VoicePipeline {
         return;
       }
 
-      this.waitingForCopilotIdle = false;
+      this.waitingForAssistantIdle = false;
       this.transitionTo("thinking");
       this.bus.emit("voice:transcript", { text: transcript });
       this.responseTimer = setUnrefTimeout(() => {
-        this.logger.warn("Voice pipeline timed out waiting for Copilot response");
+        this.logger.warn("Voice pipeline timed out waiting for the assistant response");
         this.transitionTo("idle");
       }, THINKING_TIMEOUT_MS);
     } catch (error) {
@@ -314,7 +314,7 @@ export class VoicePipeline {
     }
   }
 
-  private async handleCopilotResponse(): Promise<void> {
+  private async handleAssistantResponse(): Promise<void> {
     if (this.state !== "thinking") {
       return;
     }
@@ -335,7 +335,7 @@ export class VoicePipeline {
 
   private resetToIdle(): void {
     this.resetListeningState();
-    this.waitingForCopilotIdle = false;
+    this.waitingForAssistantIdle = false;
     this.transitionTo("idle");
   }
 
@@ -347,13 +347,13 @@ export class VoicePipeline {
 
   private finishResponseCycle(): void {
     this.wakeWordSuspended = true;
-    if (this.copilotState === "idle") {
-      this.waitingForCopilotIdle = false;
+    if (this.assistantState === "idle") {
+      this.waitingForAssistantIdle = false;
       this.scheduleIdleRecovery();
       return;
     }
 
-    this.waitingForCopilotIdle = true;
+    this.waitingForAssistantIdle = true;
     this.resetListeningState();
     this.transitionTo("thinking");
   }
