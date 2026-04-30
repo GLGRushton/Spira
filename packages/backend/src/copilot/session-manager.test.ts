@@ -2,6 +2,7 @@ import { type McpTool, parseEnv } from "@spira/shared";
 import { describe, expect, it, vi } from "vitest";
 import { getDefaultProviderCapabilities } from "../provider/capability-fallback.js";
 import * as clientFactory from "../provider/client-factory.js";
+import type { ProviderHostContinuityState, ProviderSessionConfig } from "../provider/types.js";
 import { createRuntimeCheckpointPayload, createRuntimeSessionContract } from "../runtime/runtime-contract.js";
 import { AssistantError } from "../util/errors.js";
 import { SpiraEventBus } from "../util/event-bus.js";
@@ -11,6 +12,7 @@ type SessionManagerInternals = {
   session: {
     sessionId: string;
     disconnect: () => Promise<void>;
+    abort?: () => Promise<void>;
     send?: (payload: { prompt: string }) => Promise<void>;
   } | null;
   client: { providerId: string; stop?: () => Promise<unknown> } | null;
@@ -21,7 +23,20 @@ type SessionManagerInternals = {
   registeredToolSignature: string | null;
   pendingToolRefreshSignature: string | null;
   refreshingSessionForToolChanges: Promise<void> | null;
+  activeToolCalls: Map<string, unknown>;
+  hostContinuityState: ProviderHostContinuityState | null;
+  resumableHostContinuityState: ProviderHostContinuityState | null;
+  resumableHostContinuityHostManifestHash: string | null;
+  resumableHostContinuityProjectionHash: string | null;
+  boundHostManifestHash: string | null;
+  boundProviderProjectionHash: string | null;
+  sessionTeardownEpoch: number;
   abortResponse(): Promise<void>;
+  stopTimedOutTurn(session: {
+    sessionId: string;
+    disconnect: () => Promise<void>;
+    abort?: () => Promise<void>;
+  }): Promise<void>;
   createSession(): Promise<{ sessionId: string; disconnect: () => Promise<void> }>;
   refreshSessionForToolChanges(): Promise<void>;
   handleSessionEvent(event: { type: string; data: Record<string, unknown> }): void;
@@ -511,10 +526,10 @@ describe("StationSessionManager", () => {
         providerId: "azure-openai",
         capabilities: {
           persistentSessions: false,
-          abortableTurns: false,
+          abortableTurns: true,
           sessionResumption: "host-managed",
-          turnCancellation: "disconnect-and-reset",
-          responseStreaming: "host-buffered",
+          turnCancellation: "provider-abort",
+          responseStreaming: "native",
           usageReporting: "partial",
           toolManifestMode: "literal",
           modelSelection: "provider-default",
@@ -1199,10 +1214,10 @@ describe("StationSessionManager", () => {
     const client = {
       capabilities: {
         persistentSessions: false,
-        abortableTurns: false,
+        abortableTurns: true,
         sessionResumption: "host-managed",
-        turnCancellation: "disconnect-and-reset",
-        responseStreaming: "host-buffered",
+        turnCancellation: "provider-abort",
+        responseStreaming: "native",
         usageReporting: "partial",
         toolManifestMode: "literal",
         modelSelection: "provider-default",
@@ -1228,7 +1243,7 @@ describe("StationSessionManager", () => {
     expect(persistence.save).toHaveBeenCalledWith(null);
   });
 
-  it("requests host-buffered streaming for providers without native streaming", async () => {
+  it("requests native streaming for providers that support it", async () => {
     const manager = createManager([], {
       envInput: { SPIRA_MODEL_PROVIDER: "azure-openai" },
     });
@@ -1240,10 +1255,10 @@ describe("StationSessionManager", () => {
     const client = {
       capabilities: {
         persistentSessions: false,
-        abortableTurns: false,
+        abortableTurns: true,
         sessionResumption: "host-managed",
-        turnCancellation: "disconnect-and-reset",
-        responseStreaming: "host-buffered",
+        turnCancellation: "provider-abort",
+        responseStreaming: "native",
         usageReporting: "partial",
         toolManifestMode: "literal",
         modelSelection: "provider-default",
@@ -1265,12 +1280,12 @@ describe("StationSessionManager", () => {
 
     expect(client.createSession).toHaveBeenCalledWith(
       expect.objectContaining({
-        streaming: false,
+        streaming: true,
       }),
     );
   });
 
-  it("drives a host-buffered Azure turn through the unchanged station event path", async () => {
+  it("drives a streamed Azure turn through the unchanged station event path", async () => {
     const manager = createManager([], {
       envInput: { SPIRA_MODEL_PROVIDER: "azure-openai" },
       stationId: "primary",
@@ -1335,10 +1350,10 @@ describe("StationSessionManager", () => {
     const client = {
       capabilities: {
         persistentSessions: false,
-        abortableTurns: false,
+        abortableTurns: true,
         sessionResumption: "host-managed",
-        turnCancellation: "disconnect-and-reset",
-        responseStreaming: "host-buffered",
+        turnCancellation: "provider-abort",
+        responseStreaming: "native",
         usageReporting: "partial",
         toolManifestMode: "literal",
         modelSelection: "provider-default",
@@ -1360,7 +1375,7 @@ describe("StationSessionManager", () => {
 
     expect(client.createSession).toHaveBeenCalledWith(
       expect.objectContaining({
-        streaming: false,
+        streaming: true,
       }),
     );
     expect(toolCall).toHaveBeenCalledWith("call-1", "spira_ui_get_snapshot", {});
@@ -1382,7 +1397,7 @@ describe("StationSessionManager", () => {
     );
   });
 
-  it("invalidates non-abortable provider sessions when aborting a response", async () => {
+  it("uses Azure provider abort without clearing the live session", async () => {
     const persistence = {
       load: vi.fn().mockReturnValue(null),
       save: vi.fn(),
@@ -1394,15 +1409,16 @@ describe("StationSessionManager", () => {
     const internals = manager as unknown as SessionManagerInternals;
     const session = {
       sessionId: "azure-session",
+      abort: vi.fn().mockResolvedValue(undefined),
       disconnect: vi.fn().mockResolvedValue(undefined),
     };
     const client = {
       capabilities: {
         persistentSessions: false,
-        abortableTurns: false,
+        abortableTurns: true,
         sessionResumption: "host-managed",
-        turnCancellation: "disconnect-and-reset",
-        responseStreaming: "host-buffered",
+        turnCancellation: "provider-abort",
+        responseStreaming: "native",
         usageReporting: "partial",
         toolManifestMode: "literal",
         modelSelection: "provider-default",
@@ -1418,6 +1434,8 @@ describe("StationSessionManager", () => {
     internals.session = session;
     internals.activeSessionId = "azure-session";
     internals.currentState = "thinking";
+    internals.promptInFlight = true;
+    internals.activeToolCalls.set("call-1", { toolName: "spira_ui_get_snapshot" });
     vi.spyOn(
       manager as unknown as { getOrCreateClient: () => Promise<typeof client> },
       "getOrCreateClient",
@@ -1425,10 +1443,118 @@ describe("StationSessionManager", () => {
 
     await expect(internals.abortResponse()).resolves.toBeUndefined();
 
+    expect(session.abort).toHaveBeenCalledTimes(1);
+    expect(session.disconnect).not.toHaveBeenCalled();
+    expect(client.deleteSession).not.toHaveBeenCalled();
+    expect(internals.activeSessionId).toBe("azure-session");
+    expect(internals.promptInFlight).toBe(false);
+    expect(internals.activeToolCalls.size).toBe(0);
+    expect(persistence.save).not.toHaveBeenCalled();
+  });
+
+  it("deletes a timed-out Azure session from the provider cache", async () => {
+    const manager = createManager([], {
+      envInput: { SPIRA_MODEL_PROVIDER: "azure-openai" },
+    });
+    const internals = manager as unknown as SessionManagerInternals;
+    const session = {
+      sessionId: "azure-timeout",
+      abort: vi.fn().mockResolvedValue(undefined),
+      disconnect: vi.fn().mockResolvedValue(undefined),
+    };
+    const client = {
+      providerId: "azure-openai" as const,
+      capabilities: {
+        persistentSessions: false,
+        abortableTurns: true,
+        sessionResumption: "host-managed" as const,
+        turnCancellation: "provider-abort" as const,
+        responseStreaming: "native" as const,
+        usageReporting: "partial" as const,
+        toolManifestMode: "literal" as const,
+        modelSelection: "provider-default" as const,
+        toolCalling: "native" as const,
+      },
+      resumeSession: vi.fn(),
+      createSession: vi.fn(),
+      deleteSession: vi.fn().mockResolvedValue(undefined),
+      getAuthStatus: vi.fn(),
+      stop: vi.fn().mockResolvedValue([]),
+    };
+
+    internals.session = session;
+    internals.activeSessionId = "azure-timeout";
+    internals.currentState = "thinking";
+    internals.promptInFlight = true;
+    vi.spyOn(
+      manager as unknown as { getOrCreateClient: () => Promise<typeof client> },
+      "getOrCreateClient",
+    ).mockResolvedValue(client);
+
+    await expect(internals.stopTimedOutTurn(session)).resolves.toBeUndefined();
+
+    expect(session.abort).toHaveBeenCalledTimes(1);
     expect(session.disconnect).toHaveBeenCalledTimes(1);
-    expect(client.deleteSession).toHaveBeenCalledWith("azure-session");
-    expect(internals.activeSessionId).toBeNull();
-    expect(persistence.save).toHaveBeenCalledWith(null);
+    expect(client.deleteSession).toHaveBeenCalledWith("azure-timeout");
+  });
+
+  it("restores the last committed host continuity after an Azure timeout", async () => {
+    const runtimeMemory = createRuntimeMemoryDb();
+    const manager = createManager([], {
+      envInput: { SPIRA_MODEL_PROVIDER: "azure-openai" },
+      memoryDb: runtimeMemory.db,
+      stationId: "primary",
+    });
+    const internals = manager as unknown as SessionManagerInternals;
+    const committedContinuity: ProviderHostContinuityState = {
+      providerId: "azure-openai",
+      model: "gpt-4.1",
+      updatedAt: 900,
+      messages: [{ role: "assistant", content: "Committed reply." }],
+    };
+    const interruptedContinuity: ProviderHostContinuityState = {
+      providerId: "azure-openai",
+      model: "gpt-4.1",
+      updatedAt: 1_000,
+      messages: [
+        { role: "assistant", content: "Committed reply." },
+        { role: "user", content: "Interrupted request" },
+      ],
+    };
+    const session = {
+      sessionId: "azure-timeout",
+      abort: vi.fn().mockResolvedValue(undefined),
+      disconnect: vi.fn().mockResolvedValue(undefined),
+    };
+    const client = {
+      providerId: "azure-openai" as const,
+      capabilities: getDefaultProviderCapabilities("azure-openai"),
+      resumeSession: vi.fn(),
+      createSession: vi.fn(),
+      deleteSession: vi.fn().mockResolvedValue(undefined),
+      getAuthStatus: vi.fn(),
+      stop: vi.fn().mockResolvedValue([]),
+    };
+
+    internals.session = session;
+    internals.client = client as never;
+    internals.activeSessionId = "azure-timeout";
+    internals.currentState = "thinking";
+    internals.promptInFlight = true;
+    internals.hostContinuityState = interruptedContinuity;
+    internals.resumableHostContinuityState = committedContinuity;
+    vi.spyOn(
+      manager as unknown as { getOrCreateClient: () => Promise<typeof client> },
+      "getOrCreateClient",
+    ).mockResolvedValue(client);
+
+    await expect(internals.stopTimedOutTurn(session)).resolves.toBeUndefined();
+
+    const persistedRuntimeSession = runtimeMemory.runtimeSessions.get("station:primary");
+    const persistedRuntimeContract = persistedRuntimeSession?.contract as Record<string, unknown> | undefined;
+    expect(internals.hostContinuityState).toEqual(committedContinuity);
+    expect(internals.resumableHostContinuityState).toEqual(committedContinuity);
+    expect(persistedRuntimeContract?.hostContinuity).toEqual(committedContinuity);
   });
 
   it("persists and clears an abort marker around response cancellation", async () => {
@@ -1729,10 +1855,10 @@ describe("StationSessionManager", () => {
       providerId: "azure-openai",
       providerCapabilities: {
         persistentSessions: false,
-        abortableTurns: false,
+        abortableTurns: true,
         sessionResumption: "host-managed",
-        turnCancellation: "disconnect-and-reset",
-        responseStreaming: "host-buffered",
+        turnCancellation: "provider-abort",
+        responseStreaming: "native",
         usageReporting: "partial",
         toolManifestMode: "literal",
         modelSelection: "provider-default",
@@ -1786,10 +1912,10 @@ describe("StationSessionManager", () => {
       providerId: "azure-openai" as const,
       capabilities: {
         persistentSessions: false,
-        abortableTurns: false,
+        abortableTurns: true,
         sessionResumption: "host-managed" as const,
-        turnCancellation: "disconnect-and-reset" as const,
-        responseStreaming: "host-buffered" as const,
+        turnCancellation: "provider-abort" as const,
+        responseStreaming: "native" as const,
         usageReporting: "partial" as const,
         toolManifestMode: "literal" as const,
         modelSelection: "provider-default" as const,
@@ -1831,6 +1957,586 @@ describe("StationSessionManager", () => {
     });
   });
 
+  it("rebuilds a fresh Azure session from persisted host continuity state", async () => {
+    const runtimeMemory = createRuntimeMemoryDb();
+    const manifestSpy = vi
+      .spyOn(
+        StationSessionManager.prototype as unknown as {
+          getCurrentToolManifest: () => { hostManifestHash: string; projectionHash: string };
+        },
+        "getCurrentToolManifest",
+      )
+      .mockReturnValue({
+        hostManifestHash: "host-manifest-1",
+        projectionHash: "projection-1",
+      });
+    const systemHashSpy = vi
+      .spyOn(
+        StationSessionManager.prototype as unknown as { getCurrentSystemMessageHash(): string },
+        "getCurrentSystemMessageHash",
+      )
+      .mockReturnValue("system-hash-1");
+    const runtimeSession = createRuntimeSessionContract({
+      runtimeSessionId: "station:primary",
+      kind: "station",
+      scope: { stationId: "primary" },
+      workingDirectory: "C:\\GitHub\\Spira",
+      hostManifestHash: "host-manifest-1",
+      providerProjectionHash: "projection-1",
+      providerId: "azure-openai",
+      providerCapabilities: getDefaultProviderCapabilities("azure-openai"),
+      hostContinuity: {
+        providerId: "azure-openai",
+        model: "gpt-4.1",
+        systemMessageHash: "system-hash-1",
+        updatedAt: 1_000,
+        messages: [
+          { role: "system", content: "Persisted system." },
+          { role: "user", content: "First request" },
+          { role: "assistant", content: "First reply" },
+        ],
+      },
+    });
+    runtimeMemory.db.upsertRuntimeSession({
+      runtimeSessionId: "station:primary",
+      stationId: "primary",
+      kind: "station",
+      contract: runtimeSession,
+    });
+
+    const manager = createManager([], {
+      envInput: { SPIRA_MODEL_PROVIDER: "azure-openai" },
+      memoryDb: runtimeMemory.db,
+      stationId: "primary",
+    });
+    const session = {
+      sessionId: "azure-session",
+      send: vi.fn().mockResolvedValue(undefined),
+      disconnect: vi.fn().mockResolvedValue(undefined),
+    };
+    const client = {
+      providerId: "azure-openai" as const,
+      capabilities: getDefaultProviderCapabilities("azure-openai"),
+      resumeSession: vi.fn(),
+      createSession: vi.fn().mockResolvedValue(session),
+      deleteSession: vi.fn(),
+      getAuthStatus: vi.fn(),
+      stop: vi.fn().mockResolvedValue([]),
+    };
+    vi.spyOn(
+      manager as unknown as { getOrCreateClient: () => Promise<typeof client> },
+      "getOrCreateClient",
+    ).mockResolvedValue(client);
+    vi.spyOn(
+      manager as unknown as {
+        getCurrentToolManifest: () => { hostManifestHash: string; projectionHash: string };
+      },
+      "getCurrentToolManifest",
+    ).mockReturnValue({
+      hostManifestHash: "host-manifest-1",
+      projectionHash: "projection-1",
+    });
+
+    try {
+      await expect(
+        manager.sendMessage("Second request", {
+          continuityPreamble: "[Recovered conversation memory]\nFallback conversation context.",
+        }),
+      ).resolves.toBeUndefined();
+    } finally {
+      manifestSpy.mockRestore();
+      systemHashSpy.mockRestore();
+    }
+
+    expect(client.createSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        hostContinuity: expect.objectContaining({
+          providerId: "azure-openai",
+          messages: expect.arrayContaining([
+            expect.objectContaining({ role: "user", content: "First request" }),
+            expect.objectContaining({ role: "assistant", content: "First reply" }),
+          ]),
+        }),
+        systemMessage: expect.objectContaining({
+          sections: expect.not.objectContaining({
+            runtime_recovery: expect.anything(),
+          }),
+        }),
+      }),
+    );
+    expect(session.send).toHaveBeenCalledWith({
+      prompt: "Second request",
+    });
+  });
+
+  it("does not reuse interrupted Azure host continuity state for a fresh session", async () => {
+    const runtimeMemory = createRuntimeMemoryDb();
+    const runtimeSession = createRuntimeSessionContract({
+      runtimeSessionId: "station:primary",
+      kind: "station",
+      scope: { stationId: "primary" },
+      workingDirectory: "C:\\GitHub\\Spira",
+      hostManifestHash: "host-manifest-1",
+      providerProjectionHash: "projection-1",
+      providerId: "azure-openai",
+      providerCapabilities: getDefaultProviderCapabilities("azure-openai"),
+      turnState: {
+        state: "thinking",
+        activeToolCallIds: [],
+        lastUserMessageId: "user-1",
+        lastAssistantMessageId: null,
+      },
+      hostContinuity: {
+        providerId: "azure-openai",
+        model: "gpt-4.1",
+        updatedAt: 1_000,
+        messages: [
+          { role: "system", content: "Persisted system." },
+          { role: "user", content: "Interrupted request" },
+        ],
+      },
+    });
+    runtimeMemory.db.upsertRuntimeSession({
+      runtimeSessionId: "station:primary",
+      stationId: "primary",
+      kind: "station",
+      contract: runtimeSession,
+    });
+
+    const manager = createManager([], {
+      envInput: { SPIRA_MODEL_PROVIDER: "azure-openai" },
+      memoryDb: runtimeMemory.db,
+      stationId: "primary",
+    });
+    const session = {
+      sessionId: "azure-session",
+      send: vi.fn().mockResolvedValue(undefined),
+      disconnect: vi.fn().mockResolvedValue(undefined),
+    };
+    const client = {
+      providerId: "azure-openai" as const,
+      capabilities: getDefaultProviderCapabilities("azure-openai"),
+      resumeSession: vi.fn(),
+      createSession: vi.fn().mockResolvedValue(session),
+      deleteSession: vi.fn(),
+      getAuthStatus: vi.fn(),
+      stop: vi.fn().mockResolvedValue([]),
+    };
+    vi.spyOn(
+      manager as unknown as { getOrCreateClient: () => Promise<typeof client> },
+      "getOrCreateClient",
+    ).mockResolvedValue(client);
+    vi.spyOn(
+      manager as unknown as {
+        getCurrentToolManifest: () => { hostManifestHash: string; projectionHash: string };
+      },
+      "getCurrentToolManifest",
+    ).mockReturnValue({
+      hostManifestHash: "host-manifest-1",
+      projectionHash: "projection-1",
+    });
+
+    await expect(manager.sendMessage("Second request")).resolves.toBeUndefined();
+
+    expect(client.createSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        hostContinuity: null,
+      }),
+    );
+  });
+
+  it("reuses committed Azure host continuity after restart from an error state", async () => {
+    const runtimeMemory = createRuntimeMemoryDb();
+    const manifestSpy = vi
+      .spyOn(
+        StationSessionManager.prototype as unknown as {
+          getCurrentToolManifest: () => { hostManifestHash: string; projectionHash: string };
+        },
+        "getCurrentToolManifest",
+      )
+      .mockReturnValue({
+        hostManifestHash: "host-manifest-1",
+        projectionHash: "projection-1",
+      });
+    const systemHashSpy = vi
+      .spyOn(
+        StationSessionManager.prototype as unknown as { getCurrentSystemMessageHash(): string },
+        "getCurrentSystemMessageHash",
+      )
+      .mockReturnValue("system-hash-1");
+    const runtimeSession = createRuntimeSessionContract({
+      runtimeSessionId: "station:primary",
+      kind: "station",
+      scope: { stationId: "primary" },
+      workingDirectory: "C:\\GitHub\\Spira",
+      hostManifestHash: "host-manifest-1",
+      providerProjectionHash: "projection-1",
+      providerId: "azure-openai",
+      providerCapabilities: getDefaultProviderCapabilities("azure-openai"),
+      turnState: {
+        state: "error",
+        activeToolCallIds: [],
+        lastUserMessageId: "user-1",
+        lastAssistantMessageId: "assistant-1",
+      },
+      hostContinuity: {
+        providerId: "azure-openai",
+        model: "gpt-4.1",
+        systemMessageHash: "system-hash-1",
+        updatedAt: 1_000,
+        messages: [
+          { role: "system", content: "Persisted system." },
+          { role: "user", content: "Last committed request" },
+          { role: "assistant", content: "Last committed reply" },
+        ],
+      },
+    });
+    runtimeMemory.db.upsertRuntimeSession({
+      runtimeSessionId: "station:primary",
+      stationId: "primary",
+      kind: "station",
+      contract: runtimeSession,
+    });
+
+    const manager = createManager([], {
+      envInput: { SPIRA_MODEL_PROVIDER: "azure-openai" },
+      memoryDb: runtimeMemory.db,
+      stationId: "primary",
+    });
+    const session = {
+      sessionId: "azure-session",
+      send: vi.fn().mockResolvedValue(undefined),
+      disconnect: vi.fn().mockResolvedValue(undefined),
+    };
+    const client = {
+      providerId: "azure-openai" as const,
+      capabilities: getDefaultProviderCapabilities("azure-openai"),
+      resumeSession: vi.fn(),
+      createSession: vi.fn().mockResolvedValue(session),
+      deleteSession: vi.fn(),
+      getAuthStatus: vi.fn(),
+      stop: vi.fn().mockResolvedValue([]),
+    };
+    vi.spyOn(
+      manager as unknown as { getOrCreateClient: () => Promise<typeof client> },
+      "getOrCreateClient",
+    ).mockResolvedValue(client);
+    vi.spyOn(
+      manager as unknown as {
+        getCurrentToolManifest: () => { hostManifestHash: string; projectionHash: string };
+      },
+      "getCurrentToolManifest",
+    ).mockReturnValue({
+      hostManifestHash: "host-manifest-1",
+      projectionHash: "projection-1",
+    });
+
+    try {
+      await expect(manager.sendMessage("Second request")).resolves.toBeUndefined();
+    } finally {
+      manifestSpy.mockRestore();
+      systemHashSpy.mockRestore();
+    }
+
+    expect(client.createSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        hostContinuity: expect.objectContaining({
+          providerId: "azure-openai",
+          messages: expect.arrayContaining([
+            expect.objectContaining({ role: "user", content: "Last committed request" }),
+            expect.objectContaining({ role: "assistant", content: "Last committed reply" }),
+          ]),
+        }),
+      }),
+    );
+  });
+
+  it("forces a fresh Azure session after session.error so rolled-back continuity is reused", async () => {
+    const manager = createManager([], {
+      envInput: { SPIRA_MODEL_PROVIDER: "azure-openai" },
+      stationId: "primary",
+    });
+    const internals = manager as unknown as SessionManagerInternals;
+    const committedContinuity: ProviderHostContinuityState = {
+      providerId: "azure-openai",
+      model: "gpt-4.1",
+      systemMessageHash: "system-hash-1",
+      updatedAt: 900,
+      messages: [{ role: "assistant", content: "Committed reply." }],
+    };
+    const interruptedContinuity: ProviderHostContinuityState = {
+      providerId: "azure-openai",
+      model: "gpt-4.1",
+      updatedAt: 1_000,
+      messages: [
+        { role: "assistant", content: "Committed reply." },
+        { role: "user", content: "Interrupted request" },
+      ],
+    };
+    const createdSession = {
+      sessionId: "azure-fresh",
+      disconnect: vi.fn().mockResolvedValue(undefined),
+    };
+    const client = {
+      providerId: "azure-openai" as const,
+      capabilities: getDefaultProviderCapabilities("azure-openai"),
+      resumeSession: vi.fn(),
+      createSession: vi.fn().mockResolvedValue(createdSession),
+      deleteSession: vi.fn().mockResolvedValue(undefined),
+      getAuthStatus: vi.fn(),
+      stop: vi.fn().mockResolvedValue([]),
+    };
+
+    internals.client = client as never;
+    internals.session = {
+      sessionId: "azure-session",
+      disconnect: vi.fn().mockResolvedValue(undefined),
+    };
+    internals.activeSessionId = "azure-session";
+    internals.currentState = "thinking";
+    internals.hostContinuityState = interruptedContinuity;
+    internals.resumableHostContinuityState = committedContinuity;
+    internals.resumableHostContinuityHostManifestHash = "host-manifest-1";
+    internals.resumableHostContinuityProjectionHash = "projection-1";
+    vi.spyOn(
+      manager as unknown as { getOrCreateClient: () => Promise<typeof client> },
+      "getOrCreateClient",
+    ).mockResolvedValue(client);
+    vi.spyOn(
+      manager as unknown as { getCurrentSystemMessageHash(): string },
+      "getCurrentSystemMessageHash",
+    ).mockReturnValue("system-hash-1");
+    vi.spyOn(
+      manager as unknown as {
+        getCurrentToolManifest: () => { hostManifestHash: string; projectionHash: string };
+      },
+      "getCurrentToolManifest",
+    ).mockReturnValue({
+      hostManifestHash: "host-manifest-1",
+      projectionHash: "projection-1",
+    });
+
+    internals.handleSessionEvent({
+      type: "session.error",
+      data: {
+        errorType: "internal_error",
+        message: "Azure blew a fuse.",
+      },
+    });
+    await Promise.resolve();
+
+    expect(client.deleteSession).toHaveBeenCalledWith("azure-session");
+    expect(internals.activeSessionId).toBeNull();
+
+    await expect(internals.createSession()).resolves.toBe(createdSession);
+
+    expect(client.resumeSession).not.toHaveBeenCalled();
+    expect(client.createSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        hostContinuity: expect.objectContaining({
+          providerId: "azure-openai",
+          messages: [expect.objectContaining({ role: "assistant", content: "Committed reply." })],
+        }),
+      }),
+    );
+  });
+
+  it("does not reuse in-memory Azure continuity when the tool projection has changed", async () => {
+    const manager = createManager([], {
+      envInput: { SPIRA_MODEL_PROVIDER: "azure-openai" },
+      stationId: "primary",
+    });
+    const internals = manager as unknown as SessionManagerInternals;
+    const createdSession = {
+      sessionId: "azure-fresh",
+      disconnect: vi.fn().mockResolvedValue(undefined),
+    };
+    const client = {
+      providerId: "azure-openai" as const,
+      capabilities: getDefaultProviderCapabilities("azure-openai"),
+      resumeSession: vi.fn(),
+      createSession: vi.fn().mockResolvedValue(createdSession),
+      deleteSession: vi.fn(),
+      getAuthStatus: vi.fn(),
+      stop: vi.fn().mockResolvedValue([]),
+    };
+
+    internals.resumableHostContinuityState = {
+      providerId: "azure-openai",
+      model: "gpt-4.1",
+      updatedAt: 1_000,
+      messages: [{ role: "assistant", content: "Committed reply." }],
+    };
+    internals.resumableHostContinuityHostManifestHash = "old-host-manifest";
+    internals.resumableHostContinuityProjectionHash = "old-projection";
+    vi.spyOn(
+      manager as unknown as { getOrCreateClient: () => Promise<typeof client> },
+      "getOrCreateClient",
+    ).mockResolvedValue(client);
+    vi.spyOn(
+      manager as unknown as {
+        getCurrentToolManifest: () => { hostManifestHash: string; projectionHash: string };
+      },
+      "getCurrentToolManifest",
+    ).mockReturnValue({
+      hostManifestHash: "new-host-manifest",
+      projectionHash: "new-projection",
+    });
+
+    await expect(internals.createSession()).resolves.toBe(createdSession);
+
+    expect(client.createSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        hostContinuity: null,
+      }),
+    );
+  });
+
+  it("clears Azure continuity instead of re-tagging it after session.error with projection drift", async () => {
+    const runtimeMemory = createRuntimeMemoryDb();
+    const manager = createManager([], {
+      envInput: { SPIRA_MODEL_PROVIDER: "azure-openai" },
+      memoryDb: runtimeMemory.db,
+      stationId: "primary",
+    });
+    const internals = manager as unknown as SessionManagerInternals;
+    const client = {
+      providerId: "azure-openai" as const,
+      capabilities: getDefaultProviderCapabilities("azure-openai"),
+      resumeSession: vi.fn(),
+      createSession: vi.fn(),
+      deleteSession: vi.fn().mockResolvedValue(undefined),
+      getAuthStatus: vi.fn(),
+      stop: vi.fn().mockResolvedValue([]),
+    };
+
+    internals.client = client as never;
+    internals.session = {
+      sessionId: "azure-session",
+      disconnect: vi.fn().mockResolvedValue(undefined),
+    };
+    internals.activeSessionId = "azure-session";
+    internals.currentState = "thinking";
+    internals.boundHostManifestHash = "old-host-manifest";
+    internals.boundProviderProjectionHash = "old-projection";
+    internals.hostContinuityState = {
+      providerId: "azure-openai",
+      model: "gpt-4.1",
+      systemMessageHash: "system-hash-1",
+      updatedAt: 1_000,
+      messages: [{ role: "assistant", content: "Committed reply." }],
+    };
+    internals.resumableHostContinuityState = internals.hostContinuityState;
+    internals.resumableHostContinuityHostManifestHash = "old-host-manifest";
+    internals.resumableHostContinuityProjectionHash = "old-projection";
+    vi.spyOn(
+      manager as unknown as { getCurrentSystemMessageHash(): string },
+      "getCurrentSystemMessageHash",
+    ).mockReturnValue("system-hash-1");
+    vi.spyOn(
+      manager as unknown as {
+        getCurrentToolManifest: () => { hostManifestHash: string; projectionHash: string };
+      },
+      "getCurrentToolManifest",
+    ).mockReturnValue({
+      hostManifestHash: "new-host-manifest",
+      projectionHash: "new-projection",
+    });
+
+    internals.handleSessionEvent({
+      type: "session.error",
+      data: {
+        errorType: "internal_error",
+        message: "Azure blew a fuse.",
+      },
+    });
+    await Promise.resolve();
+
+    const persistedRuntimeSession = runtimeMemory.runtimeSessions.get("station:primary");
+    const persistedRuntimeContract = persistedRuntimeSession?.contract as Record<string, unknown> | undefined;
+    expect(persistedRuntimeContract?.hostContinuity).toBeNull();
+  });
+
+  it("persists Azure host continuity snapshots into the runtime session contract", async () => {
+    const runtimeMemory = createRuntimeMemoryDb();
+    const manager = createManager([], {
+      envInput: { SPIRA_MODEL_PROVIDER: "azure-openai" },
+      memoryDb: runtimeMemory.db,
+      stationId: "primary",
+    });
+    const session = {
+      sessionId: "azure-session",
+      send: vi.fn().mockResolvedValue(undefined),
+      disconnect: vi.fn().mockResolvedValue(undefined),
+    };
+    const client = {
+      providerId: "azure-openai" as const,
+      capabilities: getDefaultProviderCapabilities("azure-openai"),
+      resumeSession: vi.fn(),
+      createSession: vi.fn().mockImplementation(async (config: ProviderSessionConfig & { sessionId: string }) => {
+        config.onHostContinuitySnapshot?.({
+          providerId: "azure-openai",
+          model: "gpt-4.1",
+          updatedAt: 1_000,
+          messages: [
+            { role: "system", content: "Persisted system." },
+            { role: "user", content: "First request" },
+            { role: "assistant", content: "First reply" },
+          ],
+        });
+        return session;
+      }),
+      deleteSession: vi.fn(),
+      getAuthStatus: vi.fn(),
+      stop: vi.fn().mockResolvedValue([]),
+    };
+    vi.spyOn(
+      manager as unknown as { getOrCreateClient: () => Promise<typeof client> },
+      "getOrCreateClient",
+    ).mockResolvedValue(client);
+
+    await expect(manager.sendMessage("Second request")).resolves.toBeUndefined();
+
+    const persistedRuntimeSession = runtimeMemory.runtimeSessions.get("station:primary");
+    const persistedRuntimeContract = persistedRuntimeSession?.contract as Record<string, unknown> | undefined;
+    expect(persistedRuntimeSession?.runtimeSessionId).toBe("station:primary");
+    expect(persistedRuntimeContract?.hostContinuity).toMatchObject({
+      providerId: "azure-openai",
+      model: "gpt-4.1",
+      messages: [
+        { role: "system", content: "Persisted system." },
+        { role: "user", content: "First request" },
+        { role: "assistant", content: "First reply" },
+      ],
+    });
+  });
+
+  it("ignores late Azure host continuity snapshots from a torn-down session", () => {
+    const runtimeMemory = createRuntimeMemoryDb();
+    const manager = createManager([], {
+      envInput: { SPIRA_MODEL_PROVIDER: "azure-openai" },
+      memoryDb: runtimeMemory.db,
+      stationId: "primary",
+    });
+    const internals = manager as unknown as SessionManagerInternals;
+    const config = internals.getSessionConfig(undefined, {
+      providerId: "azure-openai",
+      capabilities: getDefaultProviderCapabilities("azure-openai"),
+    }) as ProviderSessionConfig;
+
+    internals.activeSessionId = "azure-session";
+    internals.sessionTeardownEpoch += 1;
+    config.onHostContinuitySnapshot?.({
+      providerId: "azure-openai",
+      model: "gpt-4.1",
+      updatedAt: 1_000,
+      messages: [{ role: "assistant", content: "Too late." }],
+    });
+
+    expect(internals.hostContinuityState).toBeNull();
+    expect(runtimeMemory.runtimeSessions.get("station:primary")).toBeUndefined();
+  });
+
   it("switches providers without changing the host runtime session id", async () => {
     const runtimeMemory = createRuntimeMemoryDb();
     const manager = createManager([], {
@@ -1858,6 +2564,46 @@ describe("StationSessionManager", () => {
         }),
       ]),
     );
+  });
+
+  it("clears persisted Azure host continuity when switching providers", async () => {
+    const runtimeMemory = createRuntimeMemoryDb();
+    const runtimeSession = createRuntimeSessionContract({
+      runtimeSessionId: "station:primary",
+      kind: "station",
+      scope: { stationId: "primary" },
+      workingDirectory: "C:\\GitHub\\Spira",
+      hostManifestHash: "host-manifest-1",
+      providerProjectionHash: "projection-1",
+      providerId: "azure-openai",
+      providerCapabilities: getDefaultProviderCapabilities("azure-openai"),
+      hostContinuity: {
+        providerId: "azure-openai",
+        model: "gpt-4.1",
+        updatedAt: 1_000,
+        messages: [{ role: "assistant", content: "Old Azure reply." }],
+      },
+    });
+    runtimeMemory.db.upsertRuntimeSession({
+      runtimeSessionId: "station:primary",
+      stationId: "primary",
+      kind: "station",
+      contract: runtimeSession,
+    });
+    const manager = createManager([], {
+      memoryDb: runtimeMemory.db,
+      stationId: "primary",
+      envInput: { SPIRA_MODEL_PROVIDER: "azure-openai" },
+    });
+
+    await expect(manager.switchProvider("copilot")).resolves.toBeUndefined();
+
+    const persistedRuntimeSession = runtimeMemory.runtimeSessions.get("station:primary");
+    const persistedRuntimeContract = persistedRuntimeSession?.contract as Record<string, unknown> | undefined;
+    const providerBinding = persistedRuntimeContract?.providerBinding as Record<string, unknown> | undefined;
+    expect(persistedRuntimeSession?.runtimeSessionId).toBe("station:primary");
+    expect(persistedRuntimeContract?.hostContinuity).toBeNull();
+    expect(providerBinding?.providerId).toBe("copilot");
   });
 
   it("deletes the previous provider-managed session before switching providers", async () => {
@@ -2031,10 +2777,10 @@ describe("StationSessionManager", () => {
       providerId: "azure-openai" as const,
       capabilities: {
         persistentSessions: false,
-        abortableTurns: false,
+        abortableTurns: true,
         sessionResumption: "host-managed" as const,
-        turnCancellation: "disconnect-and-reset" as const,
-        responseStreaming: "host-buffered" as const,
+        turnCancellation: "provider-abort" as const,
+        responseStreaming: "native" as const,
         usageReporting: "partial" as const,
         toolManifestMode: "literal" as const,
         modelSelection: "provider-default" as const,
@@ -2214,7 +2960,17 @@ describe("StationSessionManager", () => {
     const internals = manager as unknown as SessionManagerInternals;
     const session = {
       sessionId: "test-session",
-      send: vi.fn().mockRejectedValue(new Error("Boom")),
+      send: vi.fn().mockImplementation(async () => {
+        internals.handleSessionEvent({
+          type: "tool.execution_start",
+          data: {
+            toolCallId: "call-1",
+            toolName: "view",
+            arguments: {},
+          },
+        });
+        throw new Error("Boom");
+      }),
       disconnect: vi.fn().mockResolvedValue(undefined),
     };
 
@@ -2227,6 +2983,210 @@ describe("StationSessionManager", () => {
 
     expect(session.disconnect).not.toHaveBeenCalled();
     expect(getOrCreateSessionSpy).toHaveBeenCalledTimes(1);
+    expect(internals.activeToolCalls.size).toBe(0);
+  });
+
+  it("allows tool-active turns to continue well past twenty seconds", async () => {
+    vi.useFakeTimers();
+    try {
+      const manager = createManager([]);
+      const internals = manager as unknown as SessionManagerInternals;
+      const session = {
+        sessionId: "test-session",
+        send: vi.fn().mockImplementation(
+          () =>
+            new Promise<void>((resolve) => {
+              setTimeout(() => {
+                internals.handleSessionEvent({
+                  type: "tool.execution_start",
+                  data: {
+                    toolCallId: "call-1",
+                    toolName: "view",
+                    arguments: {},
+                  },
+                });
+              }, 10_000);
+              setTimeout(() => {
+                internals.handleSessionEvent({
+                  type: "tool.execution_complete",
+                  data: {
+                    toolCallId: "call-1",
+                    success: true,
+                    result: { lines: 1 },
+                  },
+                });
+              }, 11_000);
+              setTimeout(() => {
+                internals.handleSessionEvent({
+                  type: "assistant.message_delta",
+                  data: {
+                    messageId: "message-1",
+                    deltaContent: "Done.",
+                  },
+                });
+              }, 25_000);
+              setTimeout(() => {
+                internals.handleSessionEvent({
+                  type: "assistant.message",
+                  data: {
+                    messageId: "message-1",
+                    content: "Done.",
+                  },
+                });
+              }, 25_100);
+              setTimeout(() => {
+                internals.handleSessionEvent({
+                  type: "session.idle",
+                  data: {},
+                });
+                resolve();
+              }, 40_000);
+            }),
+        ),
+        disconnect: vi.fn().mockResolvedValue(undefined),
+      };
+
+      internals.session = session;
+
+      const sendPromise = manager.sendMessage("hello");
+      await vi.advanceTimersByTimeAsync(41_000);
+
+      await expect(sendPromise).resolves.toBeUndefined();
+      expect(session.send).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not time out while a tool is still running", async () => {
+    vi.useFakeTimers();
+    try {
+      const manager = createManager([]);
+      const internals = manager as unknown as SessionManagerInternals;
+      const session = {
+        sessionId: "test-session",
+        send: vi.fn().mockImplementation(
+          () =>
+            new Promise<void>((resolve) => {
+              setTimeout(() => {
+                internals.handleSessionEvent({
+                  type: "tool.execution_start",
+                  data: {
+                    toolCallId: "call-1",
+                    toolName: "powershell",
+                    arguments: { command: "pnpm test" },
+                  },
+                });
+              }, 10_000);
+              setTimeout(() => {
+                internals.handleSessionEvent({
+                  type: "tool.execution_complete",
+                  data: {
+                    toolCallId: "call-1",
+                    success: true,
+                    result: { exitCode: 0 },
+                  },
+                });
+              }, 140_000);
+              setTimeout(() => {
+                internals.handleSessionEvent({
+                  type: "session.idle",
+                  data: {},
+                });
+                resolve();
+              }, 141_000);
+            }),
+        ),
+        disconnect: vi.fn().mockResolvedValue(undefined),
+      };
+
+      internals.session = session;
+
+      const sendPromise = manager.sendMessage("hello");
+      await vi.advanceTimersByTimeAsync(142_000);
+
+      await expect(sendPromise).resolves.toBeUndefined();
+      expect(session.disconnect).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("times out stalled turns after activity stops", async () => {
+    vi.useFakeTimers();
+    try {
+      const manager = createManager([]);
+      const internals = manager as unknown as SessionManagerInternals;
+      const session = {
+        sessionId: "test-session",
+        send: vi.fn().mockImplementation(
+          () =>
+            new Promise<void>(() => {
+              setTimeout(() => {
+                internals.handleSessionEvent({
+                  type: "assistant.message_delta",
+                  data: {
+                    messageId: "message-1",
+                    deltaContent: "Working",
+                  },
+                });
+              }, 10_000);
+            }),
+        ),
+        disconnect: vi.fn().mockResolvedValue(undefined),
+      };
+
+      internals.session = session;
+
+      const sendPromise = manager.sendMessage("hello");
+      const sendExpectation = expect(sendPromise).rejects.toThrow("Turn stalled while waiting for activity");
+      await vi.advanceTimersByTimeAsync(131_000);
+
+      await sendExpectation;
+      expect(session.disconnect).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the same watchdog budget across a missing-session retry", async () => {
+    vi.useFakeTimers();
+    try {
+      const manager = createManager([]);
+      const staleSession = {
+        sessionId: "stale-session",
+        send: vi.fn().mockImplementation(
+          () =>
+            new Promise<void>((_resolve, reject) => {
+              setTimeout(() => {
+                reject(new Error("Request session.send failed with message: Session not found: stale-session"));
+              }, 119_000);
+            }),
+        ),
+        disconnect: vi.fn().mockResolvedValue(undefined),
+      };
+      const freshSession = {
+        sessionId: "fresh-session",
+        send: vi.fn().mockImplementation(() => new Promise<void>(() => undefined)),
+        disconnect: vi.fn().mockResolvedValue(undefined),
+      };
+
+      vi.spyOn(manager as unknown as { getOrCreateSession: () => Promise<typeof staleSession> }, "getOrCreateSession")
+        .mockResolvedValueOnce(staleSession)
+        .mockResolvedValueOnce(freshSession);
+
+      const sendPromise = manager.sendMessage("hello");
+      const sendExpectation = expect(sendPromise).rejects.toThrow("Timed out while waiting");
+
+      await vi.advanceTimersByTimeAsync(119_000);
+      await vi.advanceTimersByTimeAsync(2_000);
+
+      await sendExpectation;
+      expect(staleSession.send).toHaveBeenCalledTimes(1);
+      expect(freshSession.send).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("aborts an in-flight response without surfacing an error", async () => {
@@ -2282,7 +3242,7 @@ describe("StationSessionManager", () => {
     expect(internals.currentState).toBe("idle");
   });
 
-  it("allows a fresh Azure turn after abort and ignores stale events from the disconnected session", async () => {
+  it("allows a fresh Azure turn after provider abort on the same session", async () => {
     const manager = createManager([], {
       envInput: { SPIRA_MODEL_PROVIDER: "azure-openai" },
       stationId: "primary",
@@ -2290,64 +3250,54 @@ describe("StationSessionManager", () => {
     const internals = manager as unknown as SessionManagerInternals & { bus: SpiraEventBus };
     const delta = vi.fn();
     internals.bus.on("assistant:delta", delta);
-    let rejectStaleSend: ((error: Error) => void) | undefined;
-    let staleOnEvent: ((event: { type: string; data: Record<string, unknown> }) => void) | undefined;
-    let freshOnEvent: ((event: { type: string; data: Record<string, unknown> }) => void) | undefined;
-    const staleSession = {
-      sessionId: "stale-session",
-      send: vi.fn().mockImplementation(
-        () =>
-          new Promise<void>((_resolve, reject) => {
-            rejectStaleSend = reject;
-          }),
-      ),
-      disconnect: vi.fn().mockResolvedValue(undefined),
-    };
-    const freshSession = {
-      sessionId: "fresh-session",
-      send: vi.fn().mockImplementation(async () => {
-        freshOnEvent?.({
-          type: "assistant.message_delta",
-          data: {
-            messageId: "fresh-1",
-            deltaContent: "Fresh reply",
-          },
-        });
-        freshOnEvent?.({
-          type: "assistant.message",
-          data: {
-            messageId: "fresh-1",
-            content: "Fresh reply",
-          },
-        });
-        freshOnEvent?.({
-          type: "session.idle",
-          data: {},
-        });
-      }),
+    let rejectFirstSend: ((error: Error) => void) | undefined;
+    const session = {
+      sessionId: "azure-session",
+      send: vi
+        .fn()
+        .mockImplementationOnce(
+          () =>
+            new Promise<void>((_resolve, reject) => {
+              rejectFirstSend = reject;
+            }),
+        )
+        .mockImplementationOnce(async () => {
+          internals.handleSessionEvent({
+            type: "assistant.message_delta",
+            data: {
+              messageId: "fresh-1",
+              deltaContent: "Fresh reply",
+            },
+          });
+          internals.handleSessionEvent({
+            type: "assistant.message",
+            data: {
+              messageId: "fresh-1",
+              content: "Fresh reply",
+            },
+          });
+          internals.handleSessionEvent({
+            type: "session.idle",
+            data: {},
+          });
+        }),
+      abort: vi.fn().mockResolvedValue(undefined),
       disconnect: vi.fn().mockResolvedValue(undefined),
     };
     const client = {
       capabilities: {
         persistentSessions: false,
-        abortableTurns: false,
+        abortableTurns: true,
         sessionResumption: "host-managed",
-        turnCancellation: "disconnect-and-reset",
-        responseStreaming: "host-buffered",
+        turnCancellation: "provider-abort",
+        responseStreaming: "native",
         usageReporting: "partial",
         toolManifestMode: "literal",
         modelSelection: "provider-default",
         toolCalling: "native",
       },
       resumeSession: vi.fn(),
-      createSession: vi.fn().mockImplementation(async (config) => {
-        if (!staleOnEvent) {
-          staleOnEvent = config.onEvent;
-          return staleSession;
-        }
-        freshOnEvent = config.onEvent;
-        return freshSession;
-      }),
+      createSession: vi.fn().mockResolvedValue(session),
       deleteSession: vi.fn(),
       getAuthStatus: vi.fn(),
       stop: vi.fn().mockResolvedValue([]),
@@ -2359,23 +3309,78 @@ describe("StationSessionManager", () => {
     ).mockResolvedValue(client);
 
     const firstSend = manager.sendMessage("First");
-    await Promise.resolve();
+    for (let index = 0; index < 5 && session.send.mock.calls.length === 0; index += 1) {
+      await Promise.resolve();
+    }
+    internals.session = session;
     await expect(internals.abortResponse()).resolves.toBeUndefined();
-
     const secondSend = manager.sendMessage("Second");
-    staleOnEvent?.({
-      type: "assistant.message_delta",
-      data: {
-        messageId: "stale-1",
-        deltaContent: "Stale reply",
-      },
-    });
-    rejectStaleSend?.(new Error("Session not found: disconnected"));
-
+    rejectFirstSend?.(new Error("Session not found: disconnected"));
     await expect(firstSend).resolves.toBeUndefined();
     await expect(secondSend).resolves.toBeUndefined();
-    expect(freshSession.send).toHaveBeenCalledTimes(1);
-    expect(delta).not.toHaveBeenCalledWith("stale-1", "Stale reply");
+    expect(session.abort).toHaveBeenCalledTimes(1);
+    expect(session.disconnect).not.toHaveBeenCalled();
+    expect(session.send).toHaveBeenCalledTimes(2);
+    expect(delta).toHaveBeenCalledWith("fresh-1", "Fresh reply");
+  });
+
+  it("restores the last committed host continuity after Azure abort", async () => {
+    const runtimeMemory = createRuntimeMemoryDb();
+    const manager = createManager([], {
+      envInput: { SPIRA_MODEL_PROVIDER: "azure-openai" },
+      memoryDb: runtimeMemory.db,
+      stationId: "primary",
+    });
+    const internals = manager as unknown as SessionManagerInternals;
+    const committedContinuity: ProviderHostContinuityState = {
+      providerId: "azure-openai",
+      model: "gpt-4.1",
+      updatedAt: 900,
+      messages: [{ role: "assistant", content: "Committed reply." }],
+    };
+    const interruptedContinuity: ProviderHostContinuityState = {
+      providerId: "azure-openai",
+      model: "gpt-4.1",
+      updatedAt: 1_000,
+      messages: [
+        { role: "assistant", content: "Committed reply." },
+        { role: "user", content: "Interrupted request" },
+      ],
+    };
+    const session = {
+      sessionId: "azure-session",
+      abort: vi.fn().mockResolvedValue(undefined),
+      disconnect: vi.fn().mockResolvedValue(undefined),
+    };
+    const client = {
+      providerId: "azure-openai" as const,
+      capabilities: getDefaultProviderCapabilities("azure-openai"),
+      resumeSession: vi.fn(),
+      createSession: vi.fn(),
+      deleteSession: vi.fn(),
+      getAuthStatus: vi.fn(),
+      stop: vi.fn().mockResolvedValue([]),
+    };
+
+    internals.session = session;
+    internals.client = client as never;
+    internals.activeSessionId = "azure-session";
+    internals.currentState = "thinking";
+    internals.promptInFlight = true;
+    internals.hostContinuityState = interruptedContinuity;
+    internals.resumableHostContinuityState = committedContinuity;
+    vi.spyOn(
+      manager as unknown as { getOrCreateClient: () => Promise<typeof client> },
+      "getOrCreateClient",
+    ).mockResolvedValue(client);
+
+    await expect(internals.abortResponse()).resolves.toBeUndefined();
+
+    const persistedRuntimeSession = runtimeMemory.runtimeSessions.get("station:primary");
+    const persistedRuntimeContract = persistedRuntimeSession?.contract as Record<string, unknown> | undefined;
+    expect(internals.hostContinuityState).toEqual(committedContinuity);
+    expect(internals.resumableHostContinuityState).toEqual(committedContinuity);
+    expect(persistedRuntimeContract?.hostContinuity).toEqual(committedContinuity);
   });
 
   it("does not retry a missing session after tool activity was already observed", async () => {

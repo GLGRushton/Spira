@@ -1,4 +1,4 @@
-import { createRuntimeSessionContract, type RuntimeSessionContract } from "./runtime-contract.js";
+import { type RuntimeSessionContract, createRuntimeSessionContract } from "./runtime-contract.js";
 import { recordRuntimeSessionCreated, recordRuntimeTurnStateChanged } from "./runtime-lifecycle.js";
 import type { RuntimeStore } from "./runtime-store.js";
 
@@ -9,14 +9,13 @@ const resolveBindingTiming = (
 ): { boundAt: number; bindingRevision: number } => ({
   boundAt:
     existing?.providerBinding.providerSessionId === providerSessionId && providerSessionId
-      ? existing!.providerBinding.boundAt
+      ? (existing?.providerBinding.boundAt ?? now)
       : now,
-  bindingRevision:
-    !providerSessionId
-      ? (existing?.providerBinding.bindingRevision ?? 0)
-      : existing?.providerBinding.providerSessionId === providerSessionId
-        ? existing.providerBinding.bindingRevision
-        : (existing?.providerBinding.bindingRevision ?? -1) + 1,
+  bindingRevision: !providerSessionId
+    ? (existing?.providerBinding.bindingRevision ?? 0)
+    : existing?.providerBinding.providerSessionId === providerSessionId
+      ? existing.providerBinding.bindingRevision
+      : (existing?.providerBinding.bindingRevision ?? -1) + 1,
 });
 
 const didTurnStateChange = (
@@ -55,6 +54,7 @@ export const persistSharedRuntimeSessionState = (
     usageSummary: RuntimeSessionContract["usageSummary"];
     providerSwitches?: RuntimeSessionContract["providerSwitches"];
     now: number;
+    hostContinuity?: RuntimeSessionContract["hostContinuity"];
   },
 ): RuntimeSessionContract | null => {
   if (!runtimeStore) {
@@ -85,6 +85,7 @@ export const persistSharedRuntimeSessionState = (
     usageSummary: input.usageSummary,
     providerSwitches: input.providerSwitches ?? existing?.providerSwitches ?? [],
     bindingRevision,
+    hostContinuity: input.hostContinuity !== undefined ? input.hostContinuity : (existing?.hostContinuity ?? null),
   });
   const persisted = runtimeStore.persistRuntimeSession({
     runtimeSessionId: input.runtimeSessionId,

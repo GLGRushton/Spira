@@ -1,11 +1,11 @@
-import { StreamAssembler } from "./stream-handler.js";
 import type { ProviderSessionEvent, ProviderUsageSnapshot } from "../provider/types.js";
 import {
-  createRuntimeCheckpointPayload,
   type RuntimeCheckpointPayload,
   type RuntimeSessionContract,
   type RuntimeTurnState,
+  createRuntimeCheckpointPayload,
 } from "./runtime-contract.js";
+import type { StreamAssembler } from "./stream-handler.js";
 
 export const appendAssistantDelta = (
   streamAssembler: StreamAssembler,
@@ -106,6 +106,7 @@ export const createRuntimeCheckpointFromContract = (input: {
     cancellationState: input.contract.cancellationState,
     usageSummary: input.contract.usageSummary,
     providerBinding: input.contract.providerBinding,
+    hostContinuity: input.contract.hostContinuity,
   });
 
 export type SharedTurnEventState<TActiveToolCall> = {
@@ -194,11 +195,7 @@ export const handleSharedTurnEvent = <TActiveToolCall, TToolRecord>(input: {
   const occurredAt = input.now();
   switch (input.event.type) {
     case "assistant.message_delta":
-      appendAssistantDelta(
-        input.state.streamAssembler,
-        input.event.data.messageId,
-        input.event.data.deltaContent,
-      );
+      appendAssistantDelta(input.state.streamAssembler, input.event.data.messageId, input.event.data.deltaContent);
       input.state.lastAssistantMessageId = input.event.data.messageId;
       input.onAssistantDelta?.(input.event, occurredAt);
       return true;

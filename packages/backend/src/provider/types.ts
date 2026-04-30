@@ -56,6 +56,36 @@ export type ProviderSystemMessage = {
   sections?: Record<string, ProviderSystemMessageSection>;
 };
 
+export type ProviderHostContinuityToolCall = {
+  id: string;
+  name: string;
+  arguments: string;
+};
+
+export type ProviderHostContinuityMessage =
+  | {
+      role: "system" | "user";
+      content: string;
+    }
+  | {
+      role: "assistant";
+      content: string | null;
+      toolCalls?: ProviderHostContinuityToolCall[];
+    }
+  | {
+      role: "tool";
+      toolCallId: string;
+      content: string;
+    };
+
+export type ProviderHostContinuityState = {
+  providerId: ProviderId;
+  model: string | null;
+  messages: ProviderHostContinuityMessage[];
+  updatedAt: number;
+  systemMessageHash?: string | null;
+};
+
 export type ProviderSessionEvent =
   | {
       type: "assistant.message_delta";
@@ -136,6 +166,8 @@ export type ProviderSessionConfig = {
   systemMessage: ProviderSystemMessage;
   workingDirectory: string;
   tools: ProviderToolDefinition[];
+  hostContinuity?: ProviderHostContinuityState | null;
+  onHostContinuitySnapshot?: (snapshot: ProviderHostContinuityState) => void;
 };
 
 export type ProviderSession = {

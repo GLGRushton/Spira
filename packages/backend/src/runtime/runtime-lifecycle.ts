@@ -204,7 +204,7 @@ export const recordRuntimeRecoveryCompleted = (
   runtimeStore: RuntimeStore | null | undefined,
   runtimeSessionId: string | null,
   input: {
-    recoveredFrom: "provider-session" | "host-checkpoint" | "continuity-preamble";
+    recoveredFrom: "provider-session" | "host-checkpoint" | "continuity-preamble" | "host-transcript";
     success: boolean;
     occurredAt: number;
   },

@@ -1,7 +1,9 @@
+import { createHash } from "node:crypto";
 import { type Env, SUBAGENT_DOMAINS, type SubagentDomain } from "@spira/shared";
 import type { McpToolAggregator } from "../mcp/tool-aggregator.js";
 import type {
   ProviderCapabilities,
+  ProviderHostContinuityState,
   ProviderId,
   ProviderPermissionRequest,
   ProviderPermissionResult,
@@ -10,8 +12,8 @@ import type {
   ProviderSystemMessageSection,
 } from "../provider/types.js";
 import { getProviderToolManifest } from "../runtime/capability-registry.js";
-import { appRootDir } from "../util/app-paths.js";
 import type { ToolBridgeOptions } from "../runtime/tool-bridge.js";
+import { appRootDir } from "../util/app-paths.js";
 
 const SHINRA_PERSONA_INSTRUCTIONS = [
   "You are Shinra, the resident operations intelligence of Spira.",
@@ -120,6 +122,71 @@ export const getUpgradeToolInstructions = (
   return "If you modify local Spira code or configuration and need the app to apply those changes, use the spira_propose_upgrade tool with the changed file paths instead of guessing the restart scope yourself.";
 };
 
+const buildSessionSystemMessage = (options: {
+  env: Env;
+  toolAggregator: McpToolAggregator;
+  toolBridgeOptions: ToolBridgeOptions;
+  additionalInstructions?: string | null;
+  runtimeRecoverySection?: ProviderSystemMessageSection | null;
+}) => {
+  const toolAwarenessInstructions = getToolAwarenessInstructions(
+    options.env,
+    options.toolAggregator,
+    options.toolBridgeOptions.delegationDomains ?? [],
+  );
+  const upgradeToolInstructions = getUpgradeToolInstructions(options.toolBridgeOptions);
+
+  return {
+    mode: "customize" as const,
+    sections: {
+      identity: {
+        action: "replace" as const,
+        content: SHINRA_IDENTITY_SECTION,
+      },
+      tone: {
+        action: "append" as const,
+        content:
+          "Use an elegant, self-possessed, quietly witty tone. Sound like a capable operations prodigy guiding the user through systems and data with confidence.",
+      },
+      custom_instructions: {
+        action: "append" as const,
+        content: [
+          "Prefer short, clear answers. Use the name Shinra naturally when self-identifying, but keep the focus on solving the user's task.",
+          BACKGROUND_AGENT_MODEL_WARNING,
+          upgradeToolInstructions,
+          toolAwarenessInstructions,
+          options.additionalInstructions?.trim() ?? "",
+        ]
+          .filter((section) => section.length > 0)
+          .join("\n\n"),
+      },
+      ...(options.runtimeRecoverySection ? { runtime_recovery: options.runtimeRecoverySection } : {}),
+      last_instructions: {
+        action: "append" as const,
+        content: SHINRA_LAST_INSTRUCTIONS,
+      },
+    },
+    content: SHINRA_PERSONA_INSTRUCTIONS,
+  };
+};
+
+export const getSessionSystemMessageHash = (options: {
+  env: Env;
+  toolAggregator: McpToolAggregator;
+  toolBridgeOptions: ToolBridgeOptions;
+  additionalInstructions?: string | null;
+}): string =>
+  createHash("sha256")
+    .update(
+      JSON.stringify(
+        buildSessionSystemMessage({
+          ...options,
+          runtimeRecoverySection: null,
+        }),
+      ),
+    )
+    .digest("hex");
+
 export const createSessionConfig = (options: {
   env: Env;
   toolAggregator: McpToolAggregator;
@@ -133,14 +200,9 @@ export const createSessionConfig = (options: {
   providerId?: ProviderId;
   providerCapabilities?: ProviderCapabilities;
   runtimeRecoverySection?: ProviderSystemMessageSection | null;
+  hostContinuity?: ProviderHostContinuityState | null;
+  onHostContinuitySnapshot?: ProviderSessionConfig["onHostContinuitySnapshot"];
 }): Omit<ProviderSessionConfig, "sessionId"> => {
-  const toolAwarenessInstructions = getToolAwarenessInstructions(
-    options.env,
-    options.toolAggregator,
-    options.toolBridgeOptions.delegationDomains ?? [],
-  );
-  const upgradeToolInstructions = getUpgradeToolInstructions(options.toolBridgeOptions);
-
   return {
     clientName: "Spira",
     ...(options.model?.trim() ? { model: options.model.trim() } : {}),
@@ -150,38 +212,7 @@ export const createSessionConfig = (options: {
     onEvent: options.onEvent,
     onPermissionRequest: options.onPermissionRequest,
     streaming: options.streaming ?? true,
-    systemMessage: {
-      mode: "customize",
-      sections: {
-        identity: {
-          action: "replace",
-          content: SHINRA_IDENTITY_SECTION,
-        },
-        tone: {
-          action: "append",
-          content:
-            "Use an elegant, self-possessed, quietly witty tone. Sound like a capable operations prodigy guiding the user through systems and data with confidence.",
-        },
-        custom_instructions: {
-          action: "append",
-          content: [
-            "Prefer short, clear answers. Use the name Shinra naturally when self-identifying, but keep the focus on solving the user's task.",
-            BACKGROUND_AGENT_MODEL_WARNING,
-            upgradeToolInstructions,
-            toolAwarenessInstructions,
-            options.additionalInstructions?.trim() ?? "",
-          ]
-            .filter((section) => section.length > 0)
-            .join("\n\n"),
-        },
-        ...(options.runtimeRecoverySection ? { runtime_recovery: options.runtimeRecoverySection } : {}),
-        last_instructions: {
-          action: "append",
-          content: SHINRA_LAST_INSTRUCTIONS,
-        },
-      },
-      content: SHINRA_PERSONA_INSTRUCTIONS,
-    },
+    systemMessage: buildSessionSystemMessage(options),
     workingDirectory: options.workingDirectory?.trim() || appRootDir,
     tools: getProviderToolManifest({
       aggregator: options.toolAggregator,
@@ -189,5 +220,7 @@ export const createSessionConfig = (options: {
       providerId: options.providerId,
       capabilities: options.providerCapabilities,
     }).tools,
+    hostContinuity: options.hostContinuity ?? null,
+    onHostContinuitySnapshot: options.onHostContinuitySnapshot,
   };
 };

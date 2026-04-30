@@ -220,6 +220,7 @@ describe("runtime contract", () => {
       continuityPolicy: "provider-session",
       cancellationPolicy: "provider-abort",
       streamingPolicy: "native",
+      hostContinuity: null,
       providerBinding: {
         providerId: "copilot",
         model: "gpt-5.4",

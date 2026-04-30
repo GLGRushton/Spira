@@ -11,7 +11,6 @@ import {
 import {
   type ClientMessage,
   type ConversationMessage,
-  type ConversationSearchMatch,
   type Env,
   PROTOCOL_VERSION,
   type StoredConversation,
@@ -21,6 +20,7 @@ import {
   parseEnv,
 } from "@spira/shared";
 import { ZodError } from "zod";
+import { handleChatRuntimeMessage } from "./backend/chat-runtime-router.js";
 import { DEFAULT_STATION_ID, StationRegistry } from "./copilot/station-registry.js";
 import { McpClientPool } from "./mcp/client-pool.js";
 import { McpRegistry } from "./mcp/registry.js";
@@ -40,7 +40,7 @@ import { WsServer } from "./server.js";
 import { MANAGED_SQL_SERVER_BUILTIN_SERVER_IDS, buildSqlServerBuiltinMcpServers } from "./sqlserver/builtin.js";
 import { SubagentRegistry } from "./subagent/registry.js";
 import { resolveAppPath } from "./util/app-paths.js";
-import { ConfigError, SpiraError, toErrorPayload } from "./util/errors.js";
+import * as errorUtils from "./util/errors.js";
 import { SpiraEventBus } from "./util/event-bus.js";
 import { createLogger } from "./util/logger.js";
 import { setUnrefTimeout } from "./util/timers.js";
@@ -60,6 +60,8 @@ import {
 } from "./youtrack/builtin.js";
 import { YouTrackService } from "./youtrack/service.js";
 
+const { toErrorPayload } = errorUtils;
+const RuntimeConfigError = errorUtils.ConfigError;
 const logger = createLogger("backend");
 
 let server: WsServer | null = null;
@@ -122,7 +124,7 @@ const createEnv = (): Env => {
     return parseEnv();
   } catch (error) {
     if (error instanceof ZodError) {
-      throw new ConfigError("Invalid backend environment configuration", error);
+      throw new RuntimeConfigError("Invalid backend environment configuration", error);
     }
     throw error;
   }
@@ -524,100 +526,17 @@ const handleClientMessage = async (message: ClientMessage): Promise<void> => {
     return;
   }
 
-  if (message.type === "station:create") {
-    const station = stationRegistry?.createStation({ label: message.label });
-    if (station) {
-      transport?.send({ type: "station:created", station });
-    }
-    return;
-  }
-
-  if (message.type === "station:close") {
-    const closed = await stationRegistry?.closeStation(message.stationId);
-    if (closed) {
-      transport?.send({ type: "station:closed", stationId: message.stationId });
-      return;
-    }
-
-    transport?.send({
-      type: "error",
-      stationId: message.stationId,
-      ...toErrorPayload(
-        new Error(`Unable to close station ${message.stationId}.`),
-        "STATION_CLOSE_FAILED",
-        `Failed to close station ${message.stationId}`,
-        "backend",
-      ),
-    });
-    return;
-  }
-
-  if (message.type === "station:list") {
-    transport?.send({
-      type: "station:list:result",
-      requestId: message.requestId,
-      stations: stationRegistry?.listStations() ?? [],
-    });
-    stationRegistry?.replayRecoveredStationIssues();
-    stationRegistry?.replayManagedSubagentState();
-    return;
-  }
-
-  if (message.type === "conversation:recent:get") {
-    transport?.send({
-      type: "conversation:recent:result",
-      requestId: message.requestId,
-      conversation: mapStoredConversation(memoryDb?.getMostRecentConversation() ?? null),
-    });
-    return;
-  }
-
-  if (message.type === "conversation:list") {
-    const limit = typeof message.limit === "number" ? message.limit : 30;
-    const offset = typeof message.offset === "number" ? message.offset : 0;
-    transport?.send({
-      type: "conversation:list:result",
-      requestId: message.requestId,
-      conversations: (memoryDb?.listConversations(limit, offset) ?? []).map(mapStoredConversationSummary),
-    });
-    return;
-  }
-
-  if (message.type === "conversation:get") {
-    transport?.send({
-      type: "conversation:get:result",
-      requestId: message.requestId,
-      conversation: mapStoredConversation(memoryDb?.getConversation(message.conversationId) ?? null),
-    });
-    return;
-  }
-
-  if (message.type === "conversation:search") {
-    const limit = typeof message.limit === "number" ? message.limit : 20;
-    const matches: ConversationSearchMatch[] = memoryDb?.searchConversationMessages(message.query, limit) ?? [];
-    transport?.send({
-      type: "conversation:search:result",
-      requestId: message.requestId,
-      matches,
-    });
-    return;
-  }
-
-  if (message.type === "conversation:mark-viewed") {
-    transport?.send({
-      type: "conversation:mark-viewed:result",
-      requestId: message.requestId,
-      success: memoryDb?.markConversationViewed(message.conversationId) ?? false,
-    });
-    return;
-  }
-
-  if (message.type === "conversation:archive") {
-    transport?.send({
-      type: "conversation:archive:result",
-      requestId: message.requestId,
-      success: memoryDb?.archiveConversation(message.conversationId) ?? false,
-    });
+  if (
+    await handleChatRuntimeMessage(message, {
+      stationRegistry,
+      memoryDb,
+      transport,
+      ttsPlayback,
+      logger,
+      mapStoredConversation,
+      mapStoredConversationSummary,
+    })
+  ) {
     return;
   }
 
@@ -1993,84 +1912,6 @@ const handleClientMessage = async (message: ClientMessage): Promise<void> => {
     return;
   }
 
-  if (message.type === "chat:send") {
-    try {
-      await stationRegistry?.sendMessage(message.text, {
-        stationId: message.stationId,
-        conversationId: message.conversationId,
-      });
-    } catch (error) {
-      logger.error(
-        { err: error, messageType: message.type, textLength: message.text.length },
-        "Assistant chat request failed",
-      );
-      const alreadyReported =
-        error instanceof SpiraError && (error as { reportedToClient?: boolean }).reportedToClient === true;
-
-      if (!alreadyReported) {
-        transport?.send({
-          type: "error",
-          stationId: message.stationId,
-          ...toErrorPayload(error, "UNKNOWN_ERROR", "Failed to send message to Shinra", "assistant"),
-        });
-      }
-    }
-    return;
-  }
-
-  if (message.type === "chat:abort") {
-    ttsPlayback?.stop();
-    try {
-      await stationRegistry?.abortStation(message.stationId);
-      transport?.send({ type: "chat:abort-complete", stationId: message.stationId ?? DEFAULT_STATION_ID });
-    } catch (error) {
-      logger.error({ err: error, messageType: message.type }, "Failed to abort chat response");
-      transport?.send({
-        type: "error",
-        stationId: message.stationId,
-        ...toErrorPayload(error, "UNKNOWN_ERROR", "Failed to stop the current response", "copilot"),
-      });
-    }
-    return;
-  }
-
-  if (message.type === "chat:reset") {
-    ttsPlayback?.stop();
-    try {
-      await stationRegistry?.resetStation(message.stationId);
-      transport?.send({ type: "chat:reset-complete", stationId: message.stationId ?? DEFAULT_STATION_ID });
-    } catch (error) {
-      logger.error({ err: error, messageType: message.type }, "Failed to clear chat session");
-      transport?.send({
-        type: "error",
-        stationId: message.stationId,
-        ...toErrorPayload(error, "UNKNOWN_ERROR", "Failed to clear chat session", "copilot"),
-      });
-    }
-    return;
-  }
-
-  if (message.type === "chat:new-session") {
-    ttsPlayback?.stop();
-    try {
-      const preservedToMemory =
-        (await stationRegistry?.startNewSession(message.stationId, message.conversationId)) ?? false;
-      transport?.send({
-        type: "chat:new-session-complete",
-        preservedToMemory,
-        stationId: message.stationId ?? DEFAULT_STATION_ID,
-      });
-    } catch (error) {
-      logger.error({ err: error, messageType: message.type }, "Failed to start a new chat session");
-      transport?.send({
-        type: "error",
-        stationId: message.stationId,
-        ...toErrorPayload(error, "UNKNOWN_ERROR", "Failed to start a new chat session", "copilot"),
-      });
-    }
-    return;
-  }
-
   if (message.type === "mcp:add-server") {
     try {
       await mcpRegistry?.addServer(message.config);
@@ -2341,7 +2182,7 @@ const bootstrap = async () => {
   projectRegistry = new ProjectRegistry(memoryDb);
   missionLifecycleService = new MissionLifecycleService(memoryDb, bus, async (runId) => {
     if (!ticketRunService) {
-      throw new ConfigError("Mission proofs are unavailable.");
+      throw new RuntimeConfigError("Mission proofs are unavailable.");
     }
     return ticketRunService.getProofSnapshot(runId);
   });
@@ -2353,22 +2194,22 @@ const bootstrap = async () => {
     bus,
     launchMissionPass: async ({ run, prompt }) => {
       if (!stationRegistry) {
-        throw new ConfigError("Mission station manager is unavailable.");
+        throw new RuntimeConfigError("Mission station manager is unavailable.");
       }
       const workingDirectory = resolveMissionStationWorkingDirectory(run.worktrees);
       if (!workingDirectory) {
-        throw new ConfigError(`Ticket ${run.ticketId} does not have a managed worktree.`);
+        throw new RuntimeConfigError(`Ticket ${run.ticketId} does not have a managed worktree.`);
       }
       const missingWorktrees = run.worktrees.filter((worktree) => !existsSync(worktree.worktreePath));
       if (missingWorktrees.length > 0) {
-        throw new ConfigError(
+        throw new RuntimeConfigError(
           `Ticket ${run.ticketId} is missing managed worktrees for ${missingWorktrees
             .map((worktree) => worktree.repoRelativePath)
             .join(", ")}. Recreate the run before starting work.`,
         );
       }
       if (!existsSync(workingDirectory)) {
-        throw new ConfigError(
+        throw new RuntimeConfigError(
           `Ticket ${run.ticketId} mission workspace is missing at ${workingDirectory}. Recreate the run before starting work.`,
         );
       }
@@ -2399,7 +2240,7 @@ const bootstrap = async () => {
     },
     repairMissionPass: async ({ run, prompt }) => {
       if (!stationRegistry) {
-        throw new ConfigError("Mission station manager is unavailable.");
+        throw new RuntimeConfigError("Mission station manager is unavailable.");
       }
       const stationId = run.stationId ?? buildMissionStationId(run.runId);
       stationRegistry.createStation({
@@ -2422,13 +2263,13 @@ const bootstrap = async () => {
     },
     cancelMissionPass: async (stationId) => {
       if (!stationRegistry) {
-        throw new ConfigError("Mission station manager is unavailable.");
+        throw new RuntimeConfigError("Mission station manager is unavailable.");
       }
       await stationRegistry.abortStation(stationId);
     },
     closeMissionStation: async (stationId) => {
       if (!stationRegistry) {
-        throw new ConfigError("Mission station manager is unavailable.");
+        throw new RuntimeConfigError("Mission station manager is unavailable.");
       }
       const closed = await stationRegistry.closeStation(stationId);
       if (closed) {
@@ -2440,7 +2281,7 @@ const bootstrap = async () => {
     },
     generateCommitDraft: async (input) => {
       if (!stationRegistry) {
-        throw new ConfigError("Mission station manager is unavailable.");
+        throw new RuntimeConfigError("Mission station manager is unavailable.");
       }
       const existingStationId = input.run.stationId;
       const temporaryStationId = existingStationId ? null : `mission-commit:${input.run.runId}`;
@@ -2507,85 +2348,85 @@ const bootstrap = async () => {
     subagentRegistry,
     listMissionServices: async (runId) => {
       if (!missionServiceRegistry) {
-        throw new ConfigError("Mission services are unavailable.");
+        throw new RuntimeConfigError("Mission services are unavailable.");
       }
       return missionServiceRegistry.getSnapshot(runId);
     },
     startMissionService: async (runId, profileId) => {
       if (!missionServiceRegistry) {
-        throw new ConfigError("Mission services are unavailable.");
+        throw new RuntimeConfigError("Mission services are unavailable.");
       }
       return missionServiceRegistry.startService(runId, profileId);
     },
     stopMissionService: async (runId, serviceId) => {
       if (!missionServiceRegistry) {
-        throw new ConfigError("Mission services are unavailable.");
+        throw new RuntimeConfigError("Mission services are unavailable.");
       }
       return missionServiceRegistry.stopService(runId, serviceId);
     },
     listMissionProofs: async (runId) => {
       if (!ticketRunService) {
-        throw new ConfigError("Mission proofs are unavailable.");
+        throw new RuntimeConfigError("Mission proofs are unavailable.");
       }
       return ticketRunService.getProofSnapshot(runId);
     },
     runMissionProof: async (runId, profileId) => {
       if (!ticketRunService) {
-        throw new ConfigError("Mission proofs are unavailable.");
+        throw new RuntimeConfigError("Mission proofs are unavailable.");
       }
       return ticketRunService.runProof(runId, profileId);
     },
     getMissionContext: async (runId) => {
       if (!missionLifecycleService) {
-        throw new ConfigError("Mission lifecycle is unavailable.");
+        throw new RuntimeConfigError("Mission lifecycle is unavailable.");
       }
       return missionLifecycleService.getMissionContext(runId);
     },
     getMissionWorkflowState: (runId) => {
       if (!missionLifecycleService) {
-        throw new ConfigError("Mission lifecycle is unavailable.");
+        throw new RuntimeConfigError("Mission lifecycle is unavailable.");
       }
       return missionLifecycleService.getWorkflowState(runId);
     },
     saveMissionClassification: (runId, classification) => {
       if (!missionLifecycleService) {
-        throw new ConfigError("Mission lifecycle is unavailable.");
+        throw new RuntimeConfigError("Mission lifecycle is unavailable.");
       }
       return missionLifecycleService.saveClassification(runId, classification);
     },
     saveMissionPlan: (runId, plan) => {
       if (!missionLifecycleService) {
-        throw new ConfigError("Mission lifecycle is unavailable.");
+        throw new RuntimeConfigError("Mission lifecycle is unavailable.");
       }
       return missionLifecycleService.savePlan(runId, plan);
     },
     setMissionPhase: (runId, phase) => {
       if (!missionLifecycleService) {
-        throw new ConfigError("Mission lifecycle is unavailable.");
+        throw new RuntimeConfigError("Mission lifecycle is unavailable.");
       }
       return missionLifecycleService.setPhase(runId, phase);
     },
     recordMissionValidation: (runId, validation) => {
       if (!missionLifecycleService) {
-        throw new ConfigError("Mission lifecycle is unavailable.");
+        throw new RuntimeConfigError("Mission lifecycle is unavailable.");
       }
       return missionLifecycleService.recordValidation(runId, validation);
     },
     setMissionProofStrategy: (runId, proofStrategy) => {
       if (!missionLifecycleService) {
-        throw new ConfigError("Mission lifecycle is unavailable.");
+        throw new RuntimeConfigError("Mission lifecycle is unavailable.");
       }
       return missionLifecycleService.setProofStrategy(runId, proofStrategy);
     },
     recordMissionProofResult: (runId, result) => {
       if (!missionLifecycleService) {
-        throw new ConfigError("Mission lifecycle is unavailable.");
+        throw new RuntimeConfigError("Mission lifecycle is unavailable.");
       }
       return missionLifecycleService.recordProofResult(runId, result);
     },
     saveMissionSummary: (runId, missionSummary) => {
       if (!missionLifecycleService) {
-        throw new ConfigError("Mission lifecycle is unavailable.");
+        throw new RuntimeConfigError("Mission lifecycle is unavailable.");
       }
       return missionLifecycleService.saveSummary(runId, missionSummary);
     },
@@ -2669,7 +2510,8 @@ const bootstrap = async () => {
 try {
   await bootstrap();
 } catch (error) {
-  const wrapped = error instanceof ConfigError ? error : new ConfigError("Failed to start backend", error);
+  const wrapped =
+    error instanceof RuntimeConfigError ? error : new RuntimeConfigError("Failed to start backend", error);
   logger.error({ error: wrapped }, wrapped.message);
   scheduleProcessExit("manual", 1);
 }

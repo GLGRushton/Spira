@@ -1,7 +1,8 @@
-import { getProviderRuntimeFallbackPolicy } from "../provider/capability-fallback.js";
 import type { PermissionRequestPayload } from "@spira/shared";
+import { getProviderRuntimeFallbackPolicy } from "../provider/capability-fallback.js";
 import type {
   ProviderCapabilities,
+  ProviderHostContinuityState,
   ProviderId,
   ProviderModelSelectionMode,
   ProviderSessionResumptionMode,
@@ -104,6 +105,7 @@ export type RuntimeCheckpointPayload = RuntimeCheckpointRef & {
   cancellationState: RuntimeCancellationState;
   usageSummary: RuntimeUsageSummary;
   providerBinding: RuntimeProviderBinding;
+  hostContinuity?: ProviderHostContinuityState | null;
 };
 
 export type RuntimePermissionState = {
@@ -304,7 +306,7 @@ export type RuntimeLedgerEvent =
       occurredAt: number;
       type: "recovery.completed";
       payload: {
-        recoveredFrom: "provider-session" | "host-checkpoint" | "continuity-preamble";
+        recoveredFrom: "provider-session" | "host-checkpoint" | "continuity-preamble" | "host-transcript";
         success: boolean;
         details?: string;
       };
@@ -349,6 +351,7 @@ export type RuntimeSessionContract = {
   cancellationPolicy: ProviderTurnCancellationMode;
   streamingPolicy: "native" | "host-buffered";
   providerBinding: RuntimeProviderBinding;
+  hostContinuity: ProviderHostContinuityState | null;
 };
 
 export type ProviderContractFacts = {
@@ -425,6 +428,7 @@ export const createRuntimeSessionContract = (input: {
   usageSummary?: RuntimeUsageSummary;
   providerSwitches?: readonly RuntimeProviderSwitchRecord[];
   bindingRevision?: number;
+  hostContinuity?: ProviderHostContinuityState | null;
 }): RuntimeSessionContract => {
   const runtimePolicy = getProviderRuntimeFallbackPolicy(input.providerCapabilities);
   return {
@@ -486,12 +490,25 @@ export const createRuntimeSessionContract = (input: {
       providerSessionId: input.providerSessionId ?? null,
       manifestMode: input.providerCapabilities.toolManifestMode,
       hostManifestHash: input.hostManifestHash,
-        projectionHash: input.providerProjectionHash,
-        bindingRevision: input.bindingRevision ?? input.providerSwitches?.length ?? 0,
-        boundAt: input.boundAt ?? Date.now(),
-        resumedAt: input.resumedAt ?? null,
-        terminatedAt: input.terminatedAt ?? null,
+      projectionHash: input.providerProjectionHash,
+      bindingRevision: input.bindingRevision ?? input.providerSwitches?.length ?? 0,
+      boundAt: input.boundAt ?? Date.now(),
+      resumedAt: input.resumedAt ?? null,
+      terminatedAt: input.terminatedAt ?? null,
     },
+    hostContinuity: input.hostContinuity
+      ? {
+          ...input.hostContinuity,
+          messages: input.hostContinuity.messages.map((message) =>
+            message.role === "assistant"
+              ? {
+                  ...message,
+                  ...(message.toolCalls ? { toolCalls: message.toolCalls.map((toolCall) => ({ ...toolCall })) } : {}),
+                }
+              : { ...message },
+          ),
+        }
+      : null,
   };
 };
 
@@ -506,6 +523,7 @@ export const createRuntimeCheckpointPayload = (input: {
   cancellationState: RuntimeCancellationState;
   usageSummary: RuntimeUsageSummary;
   providerBinding: RuntimeProviderBinding;
+  hostContinuity?: ProviderHostContinuityState | null;
 }): RuntimeCheckpointPayload => ({
   checkpointId: input.checkpointId,
   kind: input.kind,
@@ -520,6 +538,21 @@ export const createRuntimeCheckpointPayload = (input: {
   cancellationState: { ...input.cancellationState },
   usageSummary: { ...input.usageSummary },
   providerBinding: { ...input.providerBinding },
+  ...(input.hostContinuity
+    ? {
+        hostContinuity: {
+          ...input.hostContinuity,
+          messages: input.hostContinuity.messages.map((message) =>
+            message.role === "assistant"
+              ? {
+                  ...message,
+                  ...(message.toolCalls ? { toolCalls: message.toolCalls.map((toolCall) => ({ ...toolCall })) } : {}),
+                }
+              : { ...message },
+          ),
+        },
+      }
+    : {}),
 });
 
 export const createRuntimeLedgerEvent = (event: RuntimeLedgerEvent): RuntimeLedgerEvent => {

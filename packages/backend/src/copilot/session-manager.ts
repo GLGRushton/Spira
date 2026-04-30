@@ -36,6 +36,7 @@ import {
 import { getConfiguredProviderId, getProviderLabel } from "../provider/provider-config.js";
 import type {
   ProviderClient,
+  ProviderHostContinuityState,
   ProviderId,
   ProviderPermissionRequest,
   ProviderPermissionResult,
@@ -60,8 +61,6 @@ import {
   createRuntimeLedgerEvent,
 } from "../runtime/runtime-contract.js";
 import {
-  appendRuntimeLifecycleEvent,
-  persistRuntimeCheckpointLifecycle,
   recordRuntimeAssistantMessage,
   recordRuntimeAssistantMessageDelta,
   recordRuntimeCancellationCompleted,
@@ -71,25 +70,20 @@ import {
   recordRuntimeToolExecutionCompleted,
   recordRuntimeToolExecutionStarted,
   recordRuntimeUsageObserved,
-  recordRuntimeUserMessage,
 } from "../runtime/runtime-lifecycle.js";
 import { executeRuntimePermissionRequest } from "../runtime/runtime-permission-lifecycle.js";
-import { buildRuntimeRecoveryContext, buildRuntimeRecoverySystemSection } from "../runtime/runtime-recovery.js";
-import { getStationRuntimeSessionId } from "../runtime/runtime-session-ids.js";
-import { persistSharedRuntimeSessionState } from "../runtime/runtime-session-state.js";
-import {
-  buildRuntimeCancellationState,
-  buildRuntimePermissionState,
-  buildRuntimeTurnContract,
-  completeRuntimeCancellation,
-  requestRuntimeCancellation,
-} from "../runtime/runtime-state-machine.js";
+import { completeRuntimeCancellation, requestRuntimeCancellation } from "../runtime/runtime-state-machine.js";
 import { RuntimeStore } from "../runtime/runtime-store.js";
+import { handleSharedTurnEvent, updateRuntimeUsageSummary } from "../runtime/runtime-turn-engine.js";
 import {
-  createRuntimeCheckpointFromContract,
-  handleSharedTurnEvent,
-  updateRuntimeUsageSummary,
-} from "../runtime/runtime-turn-engine.js";
+  appendStationRuntimeLedgerEventIfSession,
+  buildStationRuntimeRecoverySection,
+  createStationRuntimeCheckpoint,
+  getStationManagerRuntimeSessionId,
+  persistStationRuntimeSessionContract,
+  recordStationRuntimeUserMessage,
+  syncStationRuntimeState,
+} from "../runtime/station-runtime-persistence.js";
 import { type StationSessionStorage, createStationSessionStorage } from "../runtime/station-session-storage.js";
 import { StreamAssembler } from "../runtime/stream-handler.js";
 import type { ToolBridgeOptions } from "../runtime/tool-bridge.js";
@@ -102,12 +96,20 @@ import { AssistantError, formatErrorDetails } from "../util/errors.js";
 import type { SpiraEventBus } from "../util/event-bus.js";
 import { createLogger } from "../util/logger.js";
 import { setUnrefTimeout } from "../util/timers.js";
-import { VOICE_RESPONSE_INSTRUCTIONS, buildOutgoingPrompt, createSessionConfig } from "./session-config.js";
+import {
+  VOICE_RESPONSE_INSTRUCTIONS,
+  buildOutgoingPrompt,
+  createSessionConfig,
+  getSessionSystemMessageHash,
+} from "./session-config.js";
 
 const logger = createLogger("station-session");
 
 const SESSION_INIT_TIMEOUT_MS = 20_000;
-const SEND_TIMEOUT_MS = 20_000;
+const TURN_FIRST_ACTIVITY_TIMEOUT_MS = 120_000;
+const TURN_ACTIVITY_TIMEOUT_MS = 120_000;
+const TURN_HARD_TIMEOUT_MS = 15 * 60_000;
+const TURN_WATCHDOG_POLL_MS = 1_000;
 const PERMISSION_REQUEST_TIMEOUT_MS = 60_000;
 const ALL_PROVIDER_IDS: ProviderId[] = ["copilot", "azure-openai"];
 
@@ -156,6 +158,13 @@ type ReportedAssistantError = AssistantError & { reportedToClient?: boolean };
 type PendingPermissionRequest = {
   resolve: (result: ProviderPermissionResult) => void;
   timeout: NodeJS.Timeout;
+};
+
+type ActiveTurnWatchdog = {
+  promptEpoch: number;
+  startedAt: number;
+  lastActivityAt: number;
+  firstActivityAt: number | null;
 };
 
 const getPermissionToolName = (request: ProviderPermissionRequest): string | null =>
@@ -263,6 +272,7 @@ export class StationSessionManager {
   private sessionTeardownEpoch = 0;
   private promptInFlight = false;
   private activePromptEpoch = 0;
+  private activeTurnWatchdog: ActiveTurnWatchdog | null = null;
   private sessionOrigin: "created" | "resumed" | null = null;
   private latestUsage: ProviderUsageSnapshot | null = null;
   private observedToolActivity = false;
@@ -282,7 +292,7 @@ export class StationSessionManager {
   private lastRuntimeUserMessageId: string | null = null;
   private lastRuntimeAssistantMessageId: string | null = null;
   private latestAssistantMessageText: string | null = null;
-  private activeRecoverySource: "host-checkpoint" | "continuity-preamble" | null = null;
+  private activeRecoverySource: "host-checkpoint" | "continuity-preamble" | "host-transcript" | null = null;
   private runtimeUsageSummary: RuntimeUsageSummary = {
     model: null,
     totalTokens: null,
@@ -311,6 +321,10 @@ export class StationSessionManager {
   private readonly setMissionProofStrategy: ToolBridgeOptions["setMissionProofStrategy"];
   private readonly recordMissionProofResult: ToolBridgeOptions["recordMissionProofResult"];
   private readonly saveMissionSummary: ToolBridgeOptions["saveMissionSummary"];
+  private hostContinuityState: ProviderHostContinuityState | null = null;
+  private resumableHostContinuityState: ProviderHostContinuityState | null = null;
+  private resumableHostContinuityHostManifestHash: string | null = null;
+  private resumableHostContinuityProjectionHash: string | null = null;
 
   constructor(
     private readonly bus: SpiraEventBus,
@@ -352,6 +366,23 @@ export class StationSessionManager {
     this.setMissionProofStrategy = options.setMissionProofStrategy;
     this.recordMissionProofResult = options.recordMissionProofResult;
     this.saveMissionSummary = options.saveMissionSummary;
+    const persistedRuntimeSession = this.runtimeStore.getRuntimeSession(this.getRuntimeSessionId() ?? "");
+    const { hostManifestHash, projectionHash } = this.getCurrentToolManifest();
+    const systemMessageHash = this.getCurrentSystemMessageHash();
+    const persistedHostContinuity =
+      persistedRuntimeSession &&
+      (persistedRuntimeSession.turnState.state === "idle" ||
+        persistedRuntimeSession.turnState.state === "completed" ||
+        persistedRuntimeSession.turnState.state === "error") &&
+      persistedRuntimeSession.hostManifestHash === hostManifestHash &&
+      persistedRuntimeSession.providerProjectionHash === projectionHash &&
+      persistedRuntimeSession.hostContinuity?.systemMessageHash === systemMessageHash
+        ? persistedRuntimeSession.hostContinuity
+        : null;
+    this.hostContinuityState = persistedHostContinuity;
+    this.resumableHostContinuityState = persistedHostContinuity;
+    this.resumableHostContinuityHostManifestHash = persistedHostContinuity ? hostManifestHash : null;
+    this.resumableHostContinuityProjectionHash = persistedHostContinuity ? projectionHash : null;
     this.bus.on("mcp:servers-changed", () => {
       this.queueToolRefresh();
     });
@@ -406,7 +437,7 @@ export class StationSessionManager {
       this.transitionTo("thinking");
       this.nextResponseAutoSpeak = autoSpeak;
 
-      await this.sendPromptWithRecovery(text, abortEpoch, teardownEpoch, options);
+      await this.sendPromptWithRecovery(text, abortEpoch, teardownEpoch, promptEpoch, options);
     } catch (error) {
       this.nextResponseAutoSpeak = true;
       if (this.responseAbortEpoch !== abortEpoch) {
@@ -422,6 +453,7 @@ export class StationSessionManager {
       if (this.activePromptEpoch === promptEpoch) {
         this.promptInFlight = false;
         this.observedToolActivity = false;
+        this.clearTurnWatchdog(promptEpoch);
         this.syncRuntimeState();
       }
     }
@@ -431,6 +463,7 @@ export class StationSessionManager {
     text: string,
     abortEpoch: number,
     teardownEpoch: number,
+    promptEpoch: number,
     options: SendPromptOptions,
   ): Promise<void> {
     const hadLiveSession = this.session !== null;
@@ -438,10 +471,10 @@ export class StationSessionManager {
     await this.applyRequestedModel(session);
 
     try {
-      await withTimeout(
+      await this.awaitTurnCompletion(
+        session,
         session.send({ prompt: this.buildOutgoingPrompt(text, options.continuityPreamble ?? null, hadLiveSession) }),
-        SEND_TIMEOUT_MS,
-        `Timed out while sending a message to ${this.providerLabel}`,
+        promptEpoch,
       );
       if (this.activeRecoverySource) {
         this.syncRuntimeState();
@@ -453,6 +486,9 @@ export class StationSessionManager {
         this.activeRecoverySource = null;
       }
     } catch (error) {
+      if (this.responseAbortEpoch !== abortEpoch || this.sessionTeardownEpoch !== teardownEpoch) {
+        throw error;
+      }
       if (!this.isMissingSessionError(error)) {
         throw error;
       }
@@ -474,10 +510,10 @@ export class StationSessionManager {
         logger.info("Skipped retry send because the response was aborted during recovery");
         return;
       }
-      await withTimeout(
+      await this.awaitTurnCompletion(
+        refreshedSession,
         refreshedSession.send({ prompt: this.buildOutgoingPrompt(text, options.continuityPreamble ?? null, false) }),
-        SEND_TIMEOUT_MS,
-        `Timed out while sending a message to ${this.providerLabel}`,
+        promptEpoch,
       );
       if (this.activeRecoverySource) {
         this.syncRuntimeState();
@@ -517,6 +553,7 @@ export class StationSessionManager {
           }
         }
       }
+      this.clearHostContinuityCaches();
       this.clearBoundSessionIdentity();
       this.syncRuntimeState();
       this.abortRequestedAt = null;
@@ -563,6 +600,7 @@ export class StationSessionManager {
       }
     }
     await this.disposeClient();
+    this.clearHostContinuityCaches();
     this.clearBoundSessionIdentity();
     this.providerOverride = providerId;
     await Promise.all([...this.subagentRunners.values()].map((runner) => runner.switchProvider(providerId, reason)));
@@ -615,9 +653,14 @@ export class StationSessionManager {
     const client = await this.getOrCreateClient();
     const liveSession = this.session;
     if (shouldUseProviderAbort(client.capabilities) && liveSession?.abort) {
+      this.activePromptEpoch += 1;
+      this.promptInFlight = false;
+      this.observedToolActivity = false;
       await liveSession.abort();
+      this.restoreCommittedHostContinuity();
       this.clearPendingPermissionRequests("expired");
       this.streamAssembler.clear();
+      this.activeToolCalls.clear();
       this.latestUsage = null;
       const completedCancellation = completeRuntimeCancellation(Date.now());
       this.abortRequestedAt = completedCancellation.requestedAt;
@@ -636,6 +679,7 @@ export class StationSessionManager {
     await this.disconnectSession();
     if (activeSessionId) {
       if (shouldUseProviderAbort(client.capabilities)) {
+        this.restoreCommittedHostContinuity();
         const completedCancellation = completeRuntimeCancellation(Date.now());
         this.abortRequestedAt = completedCancellation.requestedAt;
         this.lastCancellationCompletedAt = completedCancellation.completedAt;
@@ -827,9 +871,10 @@ export class StationSessionManager {
       occurredAt: Date.now(),
     });
     if (this.sessionOrigin === "resumed") {
+      const recoveredFrom = this.activeRecoverySource ?? "provider-session";
       this.syncRuntimeState();
       recordRuntimeRecoveryCompleted(this.runtimeStore, this.getRuntimeSessionId(), {
-        recoveredFrom: "provider-session",
+        recoveredFrom,
         success: true,
         occurredAt: Date.now(),
       });
@@ -915,9 +960,26 @@ export class StationSessionManager {
     this.activeSessionId = sessionId;
     this.boundHostManifestHash = hostManifestHash;
     this.boundProviderProjectionHash = projectionHash;
+    const hostContinuity =
+      client.capabilities.sessionResumption === "host-managed"
+        ? this.getHostContinuitySeed(client.providerId, hostManifestHash, projectionHash)
+        : null;
+    if (hostContinuity) {
+      this.sessionOrigin = "resumed";
+      this.activeRecoverySource = "host-transcript";
+      return createFreshProviderSession(
+        client,
+        this.getSessionConfig(sessionId, client, null, hostContinuity),
+        sessionId,
+      );
+    }
     this.sessionOrigin = "created";
     const recoverySection = this.buildRuntimeRecoverySection();
-    return createFreshProviderSession(client, this.getSessionConfig(sessionId, client, recoverySection), sessionId);
+    return createFreshProviderSession(
+      client,
+      this.getSessionConfig(sessionId, client, recoverySection, null),
+      sessionId,
+    );
   }
 
   private buildOutgoingPrompt(text: string, continuityPreamble: string | null, hadLiveSession: boolean): string {
@@ -933,8 +995,10 @@ export class StationSessionManager {
     expectedSessionId?: string | null,
     provider?: Pick<ProviderClient, "providerId" | "capabilities">,
     runtimeRecoverySection: ProviderSystemMessageSection | null = null,
+    hostContinuity: ProviderHostContinuityState | null = null,
   ): Omit<ProviderSessionConfig, "sessionId"> {
     const toolBridgeOptions = this.getToolBridgeOptions();
+    const expectedTeardownEpoch = this.sessionTeardownEpoch;
     return createSessionConfig({
       env: this.env,
       model: this.requestedModel,
@@ -950,6 +1014,29 @@ export class StationSessionManager {
       providerId: provider?.providerId,
       providerCapabilities: provider?.capabilities,
       runtimeRecoverySection,
+      hostContinuity,
+      onHostContinuitySnapshot: (snapshot) => {
+        if (
+          (expectedSessionId && this.activeSessionId !== expectedSessionId) ||
+          this.sessionTeardownEpoch !== expectedTeardownEpoch
+        ) {
+          return;
+        }
+        this.hostContinuityState = {
+          ...snapshot,
+          systemMessageHash: this.getCurrentSystemMessageHash(),
+        };
+        this.syncRuntimeState();
+      },
+    });
+  }
+
+  private getCurrentSystemMessageHash(): string {
+    return getSessionSystemMessageHash({
+      env: this.env,
+      toolAggregator: this.toolAggregator,
+      toolBridgeOptions: this.getToolBridgeOptions(),
+      additionalInstructions: this.additionalInstructions,
     });
   }
 
@@ -964,6 +1051,125 @@ export class StationSessionManager {
     );
   }
 
+  private beginTurnWatchdog(promptEpoch: number): void {
+    if (this.activeTurnWatchdog?.promptEpoch === promptEpoch) {
+      return;
+    }
+    const now = Date.now();
+    this.activeTurnWatchdog = {
+      promptEpoch,
+      startedAt: now,
+      lastActivityAt: now,
+      firstActivityAt: null,
+    };
+  }
+
+  private clearTurnWatchdog(promptEpoch: number): void {
+    if (this.activeTurnWatchdog?.promptEpoch === promptEpoch) {
+      this.activeTurnWatchdog = null;
+    }
+  }
+
+  private noteTurnActivity(): void {
+    const watchdog = this.activeTurnWatchdog;
+    if (!watchdog || watchdog.promptEpoch !== this.activePromptEpoch) {
+      return;
+    }
+    const now = Date.now();
+    watchdog.lastActivityAt = now;
+    watchdog.firstActivityAt ??= now;
+  }
+
+  private getTurnWatchdogTimeout(promptEpoch: number): AssistantError | null {
+    const watchdog = this.activeTurnWatchdog;
+    if (!watchdog || watchdog.promptEpoch !== promptEpoch) {
+      return null;
+    }
+    const now = Date.now();
+    if (now - watchdog.startedAt >= TURN_HARD_TIMEOUT_MS) {
+      return new AssistantError(`Turn exceeded the maximum duration for ${this.providerLabel}.`);
+    }
+    if (watchdog.firstActivityAt === null) {
+      if (now - watchdog.startedAt >= TURN_FIRST_ACTIVITY_TIMEOUT_MS) {
+        return new AssistantError(`Timed out while waiting for ${this.providerLabel} to begin the turn.`);
+      }
+      return null;
+    }
+    if (this.pendingPermissionRequests.size > 0 || this.activeToolCalls.size > 0) {
+      return null;
+    }
+    if (now - watchdog.lastActivityAt >= TURN_ACTIVITY_TIMEOUT_MS) {
+      return new AssistantError(`Turn stalled while waiting for activity from ${this.providerLabel}.`);
+    }
+    return null;
+  }
+
+  private async stopTimedOutTurn(session: ProviderSession): Promise<void> {
+    const providerId = this.client?.providerId ?? this.providerOverride ?? this.configuredProviderId;
+    const capabilities = this.client?.capabilities ?? getDefaultProviderCapabilities(providerId);
+    const sessionId = session.sessionId;
+    try {
+      if (session.abort && shouldUseProviderAbort(capabilities)) {
+        await session.abort();
+      }
+      await this.invalidateExpiredSession(session);
+      try {
+        await this.deletePersistedSession(sessionId, providerId);
+      } catch (error) {
+        this.runtimeStore.queueProviderSessionCleanup(providerId, sessionId);
+        void this.runtimeStore.drainPendingProviderSessionCleanup(this.env);
+        logger.warn(
+          { error, sessionId, providerId },
+          "Failed to delete provider session after turn timeout; queued cleanup",
+        );
+      }
+    } catch (error) {
+      logger.warn({ error, sessionId: session.sessionId }, "Failed to clean up timed-out turn session");
+    }
+  }
+
+  private async awaitTurnCompletion(
+    session: ProviderSession,
+    sendPromise: Promise<void>,
+    promptEpoch: number,
+  ): Promise<void> {
+    this.beginTurnWatchdog(promptEpoch);
+    let timeoutId: NodeJS.Timeout | null = null;
+    const pending = sendPromise.then(
+      () => ({ kind: "resolved" }) as const,
+      (error) => ({ kind: "rejected", error }) as const,
+    );
+    try {
+      while (true) {
+        const result = await Promise.race([
+          pending,
+          new Promise<{ kind: "tick" }>((resolve) => {
+            timeoutId = setUnrefTimeout(() => resolve({ kind: "tick" }), TURN_WATCHDOG_POLL_MS);
+          }),
+        ]);
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+          timeoutId = null;
+        }
+        if (result.kind === "resolved") {
+          return;
+        }
+        if (result.kind === "rejected") {
+          throw result.error;
+        }
+        const timeoutError = this.getTurnWatchdogTimeout(promptEpoch);
+        if (timeoutError) {
+          await this.stopTimedOutTurn(session);
+          throw timeoutError;
+        }
+      }
+    } finally {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+    }
+  }
+
   private handleSessionEvent(event: ProviderSessionEvent, expectedSessionId?: string): void {
     if (this.session === null && this.initializingSession === null) {
       return;
@@ -971,6 +1177,7 @@ export class StationSessionManager {
     if (expectedSessionId && this.activeSessionId !== expectedSessionId) {
       return;
     }
+    this.noteTurnActivity();
 
     const sharedTurnState = {
       streamAssembler: this.streamAssembler,
@@ -1092,8 +1299,9 @@ export class StationSessionManager {
           "Provider session error",
         );
         // Invalidate the live handle so the next sendMessage can resume or recreate the session.
+        this.restoreCommittedHostContinuity();
         this.clearPendingPermissionRequests("expired");
-        this.session = null;
+        this.invalidateHostManagedSessionAfterTurnError();
         this.activeToolCalls.clear();
         this.abortRequestedAt = null;
         this.latestUsage = null;
@@ -1168,9 +1376,70 @@ export class StationSessionManager {
       return;
     }
 
+    this.restoreCommittedHostContinuity();
+    this.discardHostContinuityOnProjectionDrift();
     await this.disconnectSession();
     this.clearBoundSessionIdentity();
     this.transitionTo("idle");
+  }
+
+  private restoreCommittedHostContinuity(): void {
+    this.hostContinuityState = this.resumableHostContinuityState;
+  }
+
+  private clearHostContinuityCaches(): void {
+    this.hostContinuityState = null;
+    this.resumableHostContinuityState = null;
+    this.resumableHostContinuityHostManifestHash = null;
+    this.resumableHostContinuityProjectionHash = null;
+  }
+
+  private captureResumableHostContinuity(): void {
+    this.resumableHostContinuityState = this.hostContinuityState;
+    if (!this.hostContinuityState) {
+      this.resumableHostContinuityHostManifestHash = null;
+      this.resumableHostContinuityProjectionHash = null;
+      return;
+    }
+    const { hostManifestHash, projectionHash } =
+      this.boundHostManifestHash && this.boundProviderProjectionHash
+        ? {
+            hostManifestHash: this.boundHostManifestHash,
+            projectionHash: this.boundProviderProjectionHash,
+          }
+        : this.getCurrentToolManifest(this.client ?? undefined);
+    this.resumableHostContinuityHostManifestHash = hostManifestHash;
+    this.resumableHostContinuityProjectionHash = projectionHash;
+  }
+
+  private discardHostContinuityOnProjectionDrift(): void {
+    if (!this.hostContinuityState || !this.boundHostManifestHash || !this.boundProviderProjectionHash) {
+      return;
+    }
+    const { hostManifestHash, projectionHash } = this.getCurrentToolManifest(this.client ?? undefined);
+    if (this.boundHostManifestHash !== hostManifestHash || this.boundProviderProjectionHash !== projectionHash) {
+      this.clearHostContinuityCaches();
+    }
+  }
+
+  private invalidateHostManagedSessionAfterTurnError(): void {
+    this.session = null;
+    const sessionId = this.activeSessionId;
+    const providerId = this.client?.providerId ?? this.providerOverride ?? this.configuredProviderId;
+    const capabilities = this.client?.capabilities ?? getDefaultProviderCapabilities(providerId);
+    if (!sessionId || capabilities.sessionResumption !== "host-managed") {
+      return;
+    }
+    this.discardHostContinuityOnProjectionDrift();
+    this.clearBoundSessionIdentity();
+    void this.deletePersistedSession(sessionId, providerId).catch((error) => {
+      this.runtimeStore.queueProviderSessionCleanup(providerId, sessionId);
+      void this.runtimeStore.drainPendingProviderSessionCleanup(this.env);
+      logger.warn(
+        { error, sessionId, providerId },
+        "Failed to delete host-managed provider session after turn error; queued cleanup",
+      );
+    });
   }
 
   private async getOrCreateClient(): Promise<ProviderClient> {
@@ -1218,6 +1487,9 @@ export class StationSessionManager {
 
     const previousState = this.currentState;
     this.currentState = nextState;
+    if (nextState === "idle") {
+      this.captureResumableHostContinuity();
+    }
     this.syncRuntimeState();
     this.bus.emit("assistant:state", nextState);
     this.bus.emit("state:change", previousState, nextState);
@@ -1288,6 +1560,8 @@ export class StationSessionManager {
         ? error
         : new AssistantError(error instanceof Error ? error.message : fallbackMessage, error);
 
+    this.activeToolCalls.clear();
+    this.streamAssembler.clear();
     logger.error({ err: wrappedError, details: formatErrorDetails(wrappedError) }, fallbackMessage);
 
     // Skip bus emit if a session.error event already reported to the client
@@ -1300,6 +1574,8 @@ export class StationSessionManager {
         this.configuredProviderId,
       );
     }
+    this.restoreCommittedHostContinuity();
+    this.invalidateHostManagedSessionAfterTurnError();
     this.transitionTo("error");
 
     (wrappedError as ReportedAssistantError).reportedToClient = true;
@@ -1384,10 +1660,12 @@ export class StationSessionManager {
       payload,
       now: () => Date.now(),
       onRequested: (permissionPayload) => {
+        this.noteTurnActivity();
         this.bus.emit("assistant:permission-request", permissionPayload);
         this.runtimeStore.persistPermissionRequest(permissionPayload);
       },
       onResolved: (status) => {
+        this.noteTurnActivity();
         this.lastPermissionResolvedAt = Date.now();
         this.runtimeStore.resolvePermissionRequest(requestId, status);
         this.syncRuntimeState();
@@ -1406,6 +1684,7 @@ export class StationSessionManager {
           }, PERMISSION_REQUEST_TIMEOUT_MS);
 
           this.pendingPermissionRequests.set(requestId, { resolve, timeout });
+          this.noteTurnActivity();
           this.syncRuntimeState();
         }),
     });
@@ -1449,29 +1728,11 @@ export class StationSessionManager {
   }
 
   private syncRuntimeState(): RuntimeSessionContract | null {
-    const { hostManifestHash, projectionHash } =
-      this.activeSessionId && this.boundHostManifestHash && this.boundProviderProjectionHash
-        ? {
-            hostManifestHash: this.boundHostManifestHash,
-            projectionHash: this.boundProviderProjectionHash,
-          }
-        : this.getCurrentToolManifest();
-    this.runtimeStore.persistStationRuntimeState({
-      state: this.currentState,
-      promptInFlight: this.promptInFlight,
-      providerId: this.configuredProviderId,
-      activeSessionId: this.activeSessionId,
-      hostManifestHash,
-      providerProjectionHash: projectionHash,
-      activeToolCalls: [...this.activeToolCalls.values()],
-      abortRequestedAt: this.abortRequestedAt,
-      recoveryMessage: null,
-    });
-    return this.persistRuntimeSessionContract(hostManifestHash, projectionHash);
+    return syncStationRuntimeState(this.getRuntimePersistenceContext());
   }
 
   private getRuntimeSessionId(): string | null {
-    return this.stationId ? getStationRuntimeSessionId(this.stationId) : null;
+    return getStationManagerRuntimeSessionId(this.stationId);
   }
 
   private getProviderCapabilities() {
@@ -1483,60 +1744,11 @@ export class StationSessionManager {
     projectionHash: string,
     overrides: Partial<RuntimeSessionContract> = {},
   ): RuntimeSessionContract | null {
-    const runtimeSessionId = this.getRuntimeSessionId();
-    if (!runtimeSessionId || !this.stationId) {
-      return null;
-    }
-    const existing = this.runtimeStore.getRuntimeSession(runtimeSessionId);
-    const providerCapabilities = this.getProviderCapabilities();
-    return persistSharedRuntimeSessionState(this.runtimeStore, {
-      runtimeSessionId,
-      stationId: this.stationId,
-      kind: "station",
-      scope: {
-        stationId: this.stationId,
-      },
-      workingDirectory: this.workingDirectory ?? appRootDir,
+    return persistStationRuntimeSessionContract({
+      context: this.getRuntimePersistenceContext(),
       hostManifestHash,
-      providerProjectionHash: projectionHash,
-      providerId: this.configuredProviderId,
-      providerCapabilities,
-      providerSessionId: this.activeSessionId,
-      model: this.runtimeUsageSummary.model ?? this.requestedModel ?? null,
-      resumedAt:
-        this.sessionOrigin === "resumed"
-          ? Date.now()
-          : (overrides.providerBinding?.resumedAt ?? existing?.providerBinding.resumedAt ?? null),
-      terminatedAt: overrides.providerBinding?.terminatedAt ?? existing?.providerBinding.terminatedAt ?? null,
-      artifactRefs: overrides.artifactRefs ?? existing?.artifactRefs,
-      checkpointRef: overrides.checkpointRef ?? existing?.checkpointRef ?? null,
-      turnState:
-        overrides.turnState ??
-        buildRuntimeTurnContract({
-          isThinking: this.currentState === "thinking",
-          activeToolCallIds: [...this.activeToolCalls.keys()],
-          lastUserMessageId: this.lastRuntimeUserMessageId,
-          lastAssistantMessageId: this.lastRuntimeAssistantMessageId,
-          waitingForPermission: this.pendingPermissionRequests.size > 0,
-          isError: this.currentState === "error",
-          isCancelled: Boolean(this.abortRequestedAt),
-        }),
-      permissionState:
-        overrides.permissionState ??
-        buildRuntimePermissionState({
-          pendingRequestIds: [...this.pendingPermissionRequests.keys()],
-          lastResolvedAt: this.lastPermissionResolvedAt,
-        }),
-      cancellationState:
-        overrides.cancellationState ??
-        buildRuntimeCancellationState({
-          requestedAt: this.abortRequestedAt,
-          completedAt: this.lastCancellationCompletedAt,
-          completed: this.abortRequestedAt === null && this.lastCancellationCompletedAt !== null,
-        }),
-      usageSummary: overrides.usageSummary ?? this.runtimeUsageSummary,
-      providerSwitches: overrides.providerSwitches ?? existing?.providerSwitches ?? [],
-      now: Date.now(),
+      projectionHash,
+      overrides,
     });
   }
 
@@ -1544,82 +1756,134 @@ export class StationSessionManager {
     event: Omit<RuntimeLedgerEvent, "sessionId"> | null,
     options: { syncState?: boolean } = {},
   ): void {
-    const runtimeSessionId = this.getRuntimeSessionId();
-    if (!runtimeSessionId || !event) {
-      return;
-    }
-    if (options.syncState !== false) {
-      this.syncRuntimeState();
-    }
-    appendRuntimeLifecycleEvent(this.runtimeStore, runtimeSessionId, event);
+    appendStationRuntimeLedgerEventIfSession(
+      this.runtimeStore,
+      this.getRuntimeSessionId(),
+      event,
+      () => {
+        this.syncRuntimeState();
+      },
+      options,
+    );
   }
 
   private recordRuntimeUserMessage(messageId: string, content: string): void {
-    this.syncRuntimeState();
-    recordRuntimeUserMessage(this.runtimeStore, this.getRuntimeSessionId(), {
+    recordStationRuntimeUserMessage(
+      this.runtimeStore,
+      this.getRuntimeSessionId(),
+      () => {
+        this.syncRuntimeState();
+      },
       messageId,
       content,
-      occurredAt: Date.now(),
-    });
+    );
   }
 
   private createRuntimeCheckpoint(
     kind: RuntimeCheckpointPayload["kind"],
     summary: string,
   ): RuntimeCheckpointPayload | null {
-    const runtimeSessionId = this.getRuntimeSessionId();
-    if (!runtimeSessionId || !this.stationId) {
-      return null;
-    }
-    const contract = this.syncRuntimeState();
-    if (!contract) {
-      return null;
-    }
-    const checkpoint = createRuntimeCheckpointFromContract({
-      checkpointId: randomUUID(),
+    return createStationRuntimeCheckpoint({
+      context: this.getRuntimePersistenceContext(),
       kind,
-      createdAt: Date.now(),
       summary,
-      defaultSummary: "Station runtime checkpoint.",
-      contract,
+      syncRuntimeState: () => this.syncRuntimeState(),
     });
-    const persistedCheckpoint = persistRuntimeCheckpointLifecycle(this.runtimeStore, {
-      runtimeSessionId,
-      checkpoint,
-      scope: {
-        stationId: this.stationId,
-      },
-      persistCheckpointRef: (checkpointRef) =>
-        this.persistRuntimeSessionContract(contract.hostManifestHash, contract.providerProjectionHash, {
-          checkpointRef,
-        }),
-    });
-    return persistedCheckpoint?.checkpointId === checkpoint.checkpointId ? checkpoint : checkpoint;
   }
 
   private buildRuntimeRecoverySection() {
+    const { recoverySection, recoverySource } = buildStationRuntimeRecoverySection({
+      runtimeStore: this.runtimeStore,
+      stationId: this.stationId,
+    });
+    this.activeRecoverySource = recoverySource;
+    return recoverySection;
+  }
+
+  private getHostContinuitySeed(
+    providerId: ProviderId,
+    hostManifestHash: string,
+    projectionHash: string,
+  ): ProviderHostContinuityState | null {
+    const resumableHostContinuity = this.resumableHostContinuityState;
+    const currentSystemMessageHash = this.getCurrentSystemMessageHash();
+    const resumableMatchesCurrentProjection =
+      this.resumableHostContinuityHostManifestHash === hostManifestHash &&
+      this.resumableHostContinuityProjectionHash === projectionHash;
     const runtimeSessionId = this.getRuntimeSessionId();
     if (!runtimeSessionId) {
-      this.activeRecoverySource = null;
-      return null;
+      return resumableHostContinuity?.providerId === providerId &&
+        resumableMatchesCurrentProjection &&
+        resumableHostContinuity.systemMessageHash === currentSystemMessageHash
+        ? resumableHostContinuity
+        : null;
     }
     const runtimeSession = this.runtimeStore.getRuntimeSession(runtimeSessionId);
     if (!runtimeSession) {
-      this.activeRecoverySource = null;
+      return resumableHostContinuity?.providerId === providerId &&
+        resumableMatchesCurrentProjection &&
+        resumableHostContinuity.systemMessageHash === currentSystemMessageHash
+        ? resumableHostContinuity
+        : null;
+    }
+    if (
+      runtimeSession.providerBinding.providerId !== providerId ||
+      runtimeSession.providerBinding.hostManifestHash !== hostManifestHash ||
+      runtimeSession.providerBinding.projectionHash !== projectionHash
+    ) {
       return null;
     }
-    const recoveryContext = buildRuntimeRecoveryContext({
-      runtimeSession,
-      checkpoint: this.runtimeStore.getLatestRuntimeCheckpoint(runtimeSessionId),
-      ledgerEvents: this.runtimeStore.listRuntimeLedgerEvents(runtimeSessionId),
-      runtimeState: this.stationId ? this.runtimeStore.getStationRuntimeState() : null,
-    });
-    if (!recoveryContext) {
-      this.activeRecoverySource = null;
+    if (
+      runtimeSession.turnState.state !== "idle" &&
+      runtimeSession.turnState.state !== "completed" &&
+      runtimeSession.turnState.state !== "error"
+    ) {
+      if (
+        !resumableHostContinuity ||
+        resumableHostContinuity.providerId !== providerId ||
+        !resumableMatchesCurrentProjection ||
+        resumableHostContinuity.systemMessageHash !== currentSystemMessageHash
+      ) {
+        return null;
+      }
+      return resumableHostContinuity;
+    }
+    const hostContinuity = runtimeSession.hostContinuity ?? this.resumableHostContinuityState ?? null;
+    if (
+      !hostContinuity ||
+      hostContinuity.providerId !== providerId ||
+      hostContinuity.systemMessageHash !== currentSystemMessageHash
+    ) {
       return null;
     }
-    this.activeRecoverySource = recoveryContext.source;
-    return buildRuntimeRecoverySystemSection(recoveryContext);
+    return hostContinuity;
+  }
+
+  private getRuntimePersistenceContext() {
+    return {
+      runtimeStore: this.runtimeStore,
+      stationId: this.stationId,
+      workingDirectory: this.workingDirectory,
+      configuredProviderId: this.configuredProviderId,
+      activeSessionId: this.activeSessionId,
+      boundHostManifestHash: this.boundHostManifestHash,
+      boundProviderProjectionHash: this.boundProviderProjectionHash,
+      currentState: this.currentState,
+      promptInFlight: this.promptInFlight,
+      activeToolCalls: this.activeToolCalls,
+      abortRequestedAt: this.abortRequestedAt,
+      requestedModel: this.requestedModel,
+      runtimeUsageSummary: this.runtimeUsageSummary,
+      sessionOrigin: this.sessionOrigin,
+      lastRuntimeUserMessageId: this.lastRuntimeUserMessageId,
+      lastRuntimeAssistantMessageId: this.lastRuntimeAssistantMessageId,
+      pendingPermissionRequests: this.pendingPermissionRequests,
+      lastPermissionResolvedAt: this.lastPermissionResolvedAt,
+      lastCancellationCompletedAt: this.lastCancellationCompletedAt,
+      hostContinuity: this.hostContinuityState,
+      getProviderCapabilities: () => this.getProviderCapabilities(),
+      getCurrentToolManifest: () => this.getCurrentToolManifest(),
+    };
   }
 
   private getCurrentToolManifest(provider?: Pick<ProviderClient, "providerId" | "capabilities">) {
@@ -1899,6 +2163,7 @@ export class StationSessionManager {
             }
           }
         } finally {
+          this.clearHostContinuityCaches();
           this.clearBoundSessionIdentity();
           this.syncRuntimeState();
         }
@@ -1948,6 +2213,7 @@ export class StationSessionManager {
             this.client?.providerId ?? this.providerOverride ?? this.configuredProviderId,
           )
         : [];
+      this.clearHostContinuityCaches();
       this.clearBoundSessionIdentity();
       await this.disconnectSession();
       if (sessionId) {

@@ -4,10 +4,10 @@ export const getDefaultProviderCapabilities = (providerId: ProviderId): Provider
   providerId === "azure-openai"
     ? {
         persistentSessions: false,
-        abortableTurns: false,
+        abortableTurns: true,
         sessionResumption: "host-managed",
-        turnCancellation: "disconnect-and-reset",
-        responseStreaming: "host-buffered",
+        turnCancellation: "provider-abort",
+        responseStreaming: "native",
         usageReporting: "none",
         toolManifestMode: "literal",
         modelSelection: "provider-default",
