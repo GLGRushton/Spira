@@ -1,6 +1,7 @@
+import { parseEnv } from "@spira/shared";
 import { describe, expect, it, vi } from "vitest";
 import type { ProviderSessionConfig, ProviderSessionEvent } from "../types.js";
-import { AzureOpenAiProviderClient } from "./client-factory.js";
+import { AzureOpenAiProviderClient, createAzureOpenAiProviderClient } from "./client-factory.js";
 
 const textEncoder = new TextEncoder();
 
@@ -766,5 +767,532 @@ describe("AzureOpenAiProviderClient", () => {
       },
       "Dispatching prompt through provider",
     );
+  });
+
+  it("escalates the experimental Azure provider to its configured fallback deployment", async () => {
+    const onEvent = vi.fn<(event: ProviderSessionEvent) => void>();
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(
+        createResponse({
+          id: "resp-empty",
+          model: "gpt-4.1-mini",
+          choices: [
+            {
+              message: {
+                role: "assistant",
+                content: "",
+              },
+              finish_reason: "stop",
+            },
+          ],
+          usage: {
+            prompt_tokens: 5,
+            completion_tokens: 0,
+            total_tokens: 5,
+          },
+        }),
+      )
+      .mockResolvedValueOnce(
+        createResponse({
+          id: "resp-escalated",
+          model: "gpt-4.1",
+          choices: [
+            {
+              message: {
+                role: "assistant",
+                content: "Escalated answer.",
+              },
+              finish_reason: "stop",
+            },
+          ],
+          usage: {
+            prompt_tokens: 9,
+            completion_tokens: 3,
+            total_tokens: 12,
+          },
+        }),
+      );
+    const client = new AzureOpenAiProviderClient({
+      providerId: "azure-openai-escalation",
+      endpoint: "https://example.openai.azure.com",
+      apiKey: "secret",
+      deployment: "shinra-mini",
+      escalationDeployment: "shinra-full",
+      apiVersion: "2024-10-21",
+      modelLabel: "gpt-4.1-mini",
+      escalationModelLabel: "gpt-4.1",
+      fetchFn: fetchFn as unknown as typeof fetch,
+    });
+    const onHostContinuitySnapshot = vi.fn();
+
+    const session = await client.createSession({
+      sessionId: "session-escalation",
+      clientName: "Spira",
+      streaming: false,
+      systemMessage: {
+        mode: "customize",
+        content: "You are Shinra.",
+      },
+      onEvent,
+      onHostContinuitySnapshot,
+      workingDirectory: "C:\\GitHub\\Spira",
+      tools: [],
+    } satisfies ProviderSessionConfig & { sessionId: string });
+
+    await session.send({ prompt: "Escalate if needed" });
+
+    expect(String(fetchFn.mock.calls[0]?.[0])).toContain("/deployments/shinra-mini/");
+    expect(String(fetchFn.mock.calls[1]?.[0])).toContain("/deployments/shinra-full/");
+    expect(onHostContinuitySnapshot).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        providerId: "azure-openai-escalation",
+        model: "gpt-4.1",
+      }),
+    );
+    expect(onEvent).toHaveBeenCalledWith({
+      type: "session.idle",
+      data: {
+        usage: expect.objectContaining({
+          totalTokens: 17,
+          inputTokens: 14,
+          outputTokens: 3,
+          model: "gpt-4.1",
+          source: "provider",
+          latencyMs: expect.any(Number),
+        }),
+      },
+    });
+  });
+
+  it("requires the escalation deployment when the experimental Azure provider is selected", async () => {
+    await expect(
+      createAzureOpenAiProviderClient(
+        parseEnv({
+          SPIRA_MODEL_PROVIDER: "azure-openai-escalation",
+          AZURE_OPENAI_API_KEY: "secret",
+          AZURE_OPENAI_ENDPOINT: "https://example.openai.azure.com",
+          AZURE_OPENAI_DEPLOYMENT: "shinra-mini",
+        }),
+        { info: vi.fn() },
+        "azure-openai-escalation",
+      ),
+    ).rejects.toThrow(
+      "AZURE_OPENAI_ESCALATION_DEPLOYMENT is required when SPIRA_MODEL_PROVIDER=azure-openai-escalation.",
+    );
+  });
+
+  it("keeps the escalated deployment when resuming an experimental Azure session from continuity", async () => {
+    const fetchFn = vi.fn().mockResolvedValue(
+      createResponse({
+        id: "resp-resume",
+        model: "gpt-4.1",
+        choices: [
+          {
+            message: {
+              role: "assistant",
+              content: "Resumed.",
+            },
+            finish_reason: "stop",
+          },
+        ],
+        usage: {
+          prompt_tokens: 7,
+          completion_tokens: 2,
+          total_tokens: 9,
+        },
+      }),
+    );
+    const client = new AzureOpenAiProviderClient({
+      providerId: "azure-openai-escalation",
+      endpoint: "https://example.openai.azure.com",
+      apiKey: "secret",
+      deployment: "shinra-mini",
+      escalationDeployment: "shinra-full",
+      apiVersion: "2024-10-21",
+      modelLabel: "gpt-4.1-mini",
+      escalationModelLabel: "gpt-4.1",
+      fetchFn: fetchFn as unknown as typeof fetch,
+    });
+
+    await client.createSession({
+      sessionId: "session-resume",
+      clientName: "Spira",
+      streaming: false,
+      systemMessage: {
+        mode: "customize",
+        content: "You are Shinra.",
+      },
+      workingDirectory: "C:\\GitHub\\Spira",
+      tools: [],
+    } satisfies ProviderSessionConfig & { sessionId: string });
+
+    const resumed = await client.resumeSession("session-resume", {
+      clientName: "Spira",
+      streaming: false,
+      systemMessage: {
+        mode: "customize",
+        content: "You are Shinra.",
+      },
+      hostContinuity: {
+        providerId: "azure-openai-escalation",
+        model: "gpt-4.1",
+        deployment: "shinra-full",
+        updatedAt: 1,
+        messages: [
+          { role: "system", content: "Persisted system." },
+          { role: "user", content: "Earlier prompt" },
+        ],
+      },
+      workingDirectory: "C:\\GitHub\\Spira",
+      tools: [],
+    });
+
+    await resumed.send({ prompt: "Resume the escalated session" });
+
+    expect(String(fetchFn.mock.calls[0]?.[0])).toContain("/deployments/shinra-full/");
+  });
+
+  it("keeps a resumed base Azure session on the base deployment even when labels match", async () => {
+    const fetchFn = vi.fn().mockResolvedValue(
+      createResponse({
+        id: "resp-resume-base",
+        model: "gpt-4.1",
+        choices: [
+          {
+            message: {
+              role: "assistant",
+              content: "Still on base.",
+            },
+            finish_reason: "stop",
+          },
+        ],
+        usage: {
+          prompt_tokens: 7,
+          completion_tokens: 2,
+          total_tokens: 9,
+        },
+      }),
+    );
+    const client = new AzureOpenAiProviderClient({
+      providerId: "azure-openai-escalation",
+      endpoint: "https://example.openai.azure.com",
+      apiKey: "secret",
+      deployment: "shinra-mini",
+      escalationDeployment: "shinra-full",
+      apiVersion: "2024-10-21",
+      modelLabel: "gpt-4.1",
+      escalationModelLabel: "gpt-4.1",
+      fetchFn: fetchFn as unknown as typeof fetch,
+    });
+
+    await client.createSession({
+      sessionId: "session-resume-base",
+      clientName: "Spira",
+      streaming: false,
+      systemMessage: {
+        mode: "customize",
+        content: "You are Shinra.",
+      },
+      workingDirectory: "C:\\GitHub\\Spira",
+      tools: [],
+    } satisfies ProviderSessionConfig & { sessionId: string });
+
+    const resumed = await client.resumeSession("session-resume-base", {
+      clientName: "Spira",
+      streaming: false,
+      systemMessage: {
+        mode: "customize",
+        content: "You are Shinra.",
+      },
+      hostContinuity: {
+        providerId: "azure-openai-escalation",
+        model: "gpt-4.1",
+        deployment: "shinra-mini",
+        updatedAt: 1,
+        messages: [
+          { role: "system", content: "Persisted system." },
+          { role: "user", content: "Earlier prompt" },
+        ],
+      },
+      workingDirectory: "C:\\GitHub\\Spira",
+      tools: [],
+    });
+
+    await resumed.send({ prompt: "Resume the base session" });
+
+    expect(String(fetchFn.mock.calls[0]?.[0])).toContain("/deployments/shinra-mini/");
+  });
+
+  it("preserves the in-memory base deployment when legacy continuity omits deployment metadata", async () => {
+    const fetchFn = vi.fn().mockResolvedValue(
+      createResponse({
+        id: "resp-resume-base-legacy",
+        model: "gpt-4.1",
+        choices: [
+          {
+            message: {
+              role: "assistant",
+              content: "Still on base.",
+            },
+            finish_reason: "stop",
+          },
+        ],
+        usage: {
+          prompt_tokens: 7,
+          completion_tokens: 2,
+          total_tokens: 9,
+        },
+      }),
+    );
+    const client = new AzureOpenAiProviderClient({
+      providerId: "azure-openai-escalation",
+      endpoint: "https://example.openai.azure.com",
+      apiKey: "secret",
+      deployment: "shinra-mini",
+      escalationDeployment: "shinra-full",
+      apiVersion: "2024-10-21",
+      modelLabel: "gpt-4.1",
+      escalationModelLabel: "gpt-4.1",
+      fetchFn: fetchFn as unknown as typeof fetch,
+    });
+
+    await client.createSession({
+      sessionId: "session-resume-base-legacy",
+      clientName: "Spira",
+      streaming: false,
+      systemMessage: {
+        mode: "customize",
+        content: "You are Shinra.",
+      },
+      workingDirectory: "C:\\GitHub\\Spira",
+      tools: [],
+    } satisfies ProviderSessionConfig & { sessionId: string });
+
+    const resumed = await client.resumeSession("session-resume-base-legacy", {
+      clientName: "Spira",
+      streaming: false,
+      systemMessage: {
+        mode: "customize",
+        content: "You are Shinra.",
+      },
+      hostContinuity: {
+        providerId: "azure-openai-escalation",
+        model: "gpt-4.1",
+        updatedAt: 1,
+        messages: [
+          { role: "system", content: "Persisted system." },
+          { role: "user", content: "Earlier prompt" },
+        ],
+      },
+      workingDirectory: "C:\\GitHub\\Spira",
+      tools: [],
+    });
+
+    await resumed.send({ prompt: "Resume the legacy base session" });
+
+    expect(String(fetchFn.mock.calls[0]?.[0])).toContain("/deployments/shinra-mini/");
+  });
+
+  it("does not let a model label suppress Azure escalation routing", async () => {
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(
+        createResponse({
+          id: "resp-empty-model",
+          model: "gpt-4.1-mini",
+          choices: [
+            {
+              message: {
+                role: "assistant",
+                content: "",
+              },
+              finish_reason: "stop",
+            },
+          ],
+          usage: {
+            prompt_tokens: 4,
+            completion_tokens: 0,
+            total_tokens: 4,
+          },
+        }),
+      )
+      .mockResolvedValueOnce(
+        createResponse({
+          id: "resp-escalated-model",
+          model: "gpt-4.1",
+          choices: [
+            {
+              message: {
+                role: "assistant",
+                content: "Escalated despite the label.",
+              },
+              finish_reason: "stop",
+            },
+          ],
+          usage: {
+            prompt_tokens: 6,
+            completion_tokens: 2,
+            total_tokens: 8,
+          },
+        }),
+      );
+    const client = new AzureOpenAiProviderClient({
+      providerId: "azure-openai-escalation",
+      endpoint: "https://example.openai.azure.com",
+      apiKey: "secret",
+      deployment: "shinra-mini",
+      escalationDeployment: "shinra-full",
+      apiVersion: "2024-10-21",
+      modelLabel: "gpt-4.1-mini",
+      escalationModelLabel: "gpt-4.1",
+      fetchFn: fetchFn as unknown as typeof fetch,
+    });
+
+    const session = await client.createSession({
+      sessionId: "session-model-label",
+      clientName: "Spira",
+      model: "user-requested-label",
+      streaming: false,
+      systemMessage: {
+        mode: "customize",
+        content: "You are Shinra.",
+      },
+      workingDirectory: "C:\\GitHub\\Spira",
+      tools: [],
+    } satisfies ProviderSessionConfig & { sessionId: string });
+
+    await session.send({ prompt: "Escalate even with a model label present" });
+
+    expect(String(fetchFn.mock.calls[0]?.[0])).toContain("/deployments/shinra-mini/");
+    expect(String(fetchFn.mock.calls[1]?.[0])).toContain("/deployments/shinra-full/");
+  });
+
+  it("starts fresh experimental Azure sessions on the base deployment even when both labels match", async () => {
+    const fetchFn = vi.fn().mockResolvedValue(
+      createResponse({
+        id: "resp-base",
+        model: "gpt-4.1",
+        choices: [
+          {
+            message: {
+              role: "assistant",
+              content: "Base deployment first.",
+            },
+            finish_reason: "stop",
+          },
+        ],
+        usage: {
+          prompt_tokens: 5,
+          completion_tokens: 2,
+          total_tokens: 7,
+        },
+      }),
+    );
+    const client = new AzureOpenAiProviderClient({
+      providerId: "azure-openai-escalation",
+      endpoint: "https://example.openai.azure.com",
+      apiKey: "secret",
+      deployment: "shinra-mini",
+      escalationDeployment: "shinra-full",
+      apiVersion: "2024-10-21",
+      modelLabel: "gpt-4.1",
+      escalationModelLabel: "gpt-4.1",
+      fetchFn: fetchFn as unknown as typeof fetch,
+    });
+
+    const session = await client.createSession({
+      sessionId: "session-same-labels",
+      clientName: "Spira",
+      streaming: false,
+      systemMessage: {
+        mode: "customize",
+        content: "You are Shinra.",
+      },
+      workingDirectory: "C:\\GitHub\\Spira",
+      tools: [],
+    } satisfies ProviderSessionConfig & { sessionId: string });
+
+    await session.send({ prompt: "Stay on the base deployment first" });
+
+    expect(String(fetchFn.mock.calls[0]?.[0])).toContain("/deployments/shinra-mini/");
+  });
+
+  it("does not replay an Azure tool turn on the escalation deployment after a later provider error", async () => {
+    const handler = vi.fn(async () => ({
+      resultType: "success" as const,
+      textResultForLlm: '{"activeView":"bridge"}',
+    }));
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(
+        createResponse({
+          id: "resp-tool",
+          model: "gpt-4.1-mini",
+          choices: [
+            {
+              message: {
+                role: "assistant",
+                content: "Let me check.",
+                tool_calls: [
+                  {
+                    id: "call-1",
+                    type: "function",
+                    function: {
+                      name: "spira_ui_get_snapshot",
+                      arguments: "{}",
+                    },
+                  },
+                ],
+              },
+              finish_reason: "tool_calls",
+            },
+          ],
+          usage: {
+            prompt_tokens: 8,
+            completion_tokens: 2,
+            total_tokens: 10,
+          },
+        }),
+      )
+      .mockResolvedValueOnce(createResponse({ error: "busy" }, 503));
+    const client = new AzureOpenAiProviderClient({
+      providerId: "azure-openai-escalation",
+      endpoint: "https://example.openai.azure.com",
+      apiKey: "secret",
+      deployment: "shinra-mini",
+      escalationDeployment: "shinra-full",
+      apiVersion: "2024-10-21",
+      modelLabel: "gpt-4.1-mini",
+      escalationModelLabel: "gpt-4.1",
+      fetchFn: fetchFn as unknown as typeof fetch,
+    });
+
+    const session = await client.createSession({
+      sessionId: "session-tool-error",
+      clientName: "Spira",
+      streaming: false,
+      systemMessage: {
+        mode: "customize",
+        content: "You are Shinra.",
+      },
+      workingDirectory: "C:\\GitHub\\Spira",
+      tools: [
+        {
+          name: "spira_ui_get_snapshot",
+          description: "Read Spira snapshot.",
+          parameters: { type: "object", properties: {}, additionalProperties: false },
+          handler,
+        },
+      ],
+    } satisfies ProviderSessionConfig & { sessionId: string });
+
+    await expect(session.send({ prompt: "Do not replay tools" })).rejects.toThrow(
+      "Azure OpenAI request failed with 503",
+    );
+    expect(fetchFn).toHaveBeenCalledTimes(2);
+    expect(String(fetchFn.mock.calls[0]?.[0])).toContain("/deployments/shinra-mini/");
+    expect(String(fetchFn.mock.calls[1]?.[0])).toContain("/deployments/shinra-mini/");
+    expect(handler).toHaveBeenCalledTimes(1);
   });
 });

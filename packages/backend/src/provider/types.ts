@@ -1,4 +1,6 @@
-export type ProviderId = "copilot" | "azure-openai";
+import type { ModelProviderId } from "@spira/shared";
+
+export type ProviderId = ModelProviderId;
 
 export type ProviderAuthStatus = {
   isAuthenticated: boolean;
@@ -28,6 +30,15 @@ export type ProviderUsageRecord = {
   latencyMs?: ProviderUsageSnapshot["latencyMs"];
   observedAt: number;
   source: ProviderUsageSnapshot["source"];
+};
+
+export type ProviderSessionEscalationResult = {
+  status: "escalated" | "already-escalated";
+  providerId: ProviderId;
+  fromModel: string | null;
+  toModel: string;
+  fromDeployment?: string | null;
+  toDeployment?: string | null;
 };
 
 export type ProviderToolResultObject = {
@@ -81,6 +92,7 @@ export type ProviderHostContinuityMessage =
 export type ProviderHostContinuityState = {
   providerId: ProviderId;
   model: string | null;
+  deployment?: string | null;
   messages: ProviderHostContinuityMessage[];
   updatedAt: number;
   systemMessageHash?: string | null;
@@ -174,6 +186,7 @@ export type ProviderSession = {
   sessionId: string;
   send(payload: { prompt: string }): Promise<void>;
   setModel?(model: string): Promise<void>;
+  escalate?(): Promise<ProviderSessionEscalationResult>;
   abort?(): Promise<void>;
   disconnect(): Promise<void>;
 };

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  getDefaultProviderCapabilities,
   getProviderRuntimeFallbackPolicy,
   normalizeProviderUsageSnapshot,
   requiresProviderManifestProjection,
@@ -100,6 +101,41 @@ describe("provider capability fallback policy", () => {
     ).toMatchObject({
       totalTokens: null,
       source: "unknown",
+    });
+  });
+
+  it("treats openai as host-managed with session-scoped model selection", () => {
+    const capabilities = getProviderRuntimeFallbackPolicy({
+      persistentSessions: false,
+      abortableTurns: true,
+      sessionResumption: "host-managed",
+      turnCancellation: "provider-abort",
+      responseStreaming: "native",
+      usageReporting: "partial",
+      toolManifestMode: "literal",
+      modelSelection: "session-scoped",
+      toolCalling: "native",
+    });
+
+    expect(capabilities).toEqual({
+      continuity: "host-continuity",
+      cancellation: "provider-abort",
+      streaming: "native",
+      usage: "partial",
+      toolManifest: "literal",
+    });
+  });
+
+  it("maps escalation providers to the same baseline capability families", () => {
+    expect(getDefaultProviderCapabilities("openai-escalation")).toMatchObject({
+      sessionResumption: "host-managed",
+      modelSelection: "session-scoped",
+      usageReporting: "partial",
+    });
+    expect(getDefaultProviderCapabilities("azure-openai-escalation")).toMatchObject({
+      sessionResumption: "host-managed",
+      modelSelection: "provider-default",
+      usageReporting: "partial",
     });
   });
 });

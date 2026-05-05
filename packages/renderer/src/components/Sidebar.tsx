@@ -12,7 +12,7 @@ interface SidebarProps {
 }
 
 const items: Array<{ id: SidebarView; label: string; caption: string }> = [
-  { id: "ship", label: "Ship", caption: "Deck overview" },
+  { id: "ship", label: "Ship", caption: "Deck navigation" },
   { id: "operations", label: "Operations", caption: "Command stations" },
   { id: "bridge", label: "Bridge", caption: "Mission control + Shinra" },
   { id: "barracks", label: "Barracks", caption: "Delegation roster" },

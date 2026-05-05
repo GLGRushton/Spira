@@ -6,7 +6,13 @@ import { DEFAULT_STATION_ID, StationRegistry } from "./station-registry.js";
 type FakeConversation = {
   id: string;
   title: string | null;
-  messages: Array<{ id: string; role: "user" | "assistant"; content: string; timestamp: number }>;
+  messages: Array<{
+    id: string;
+    role: "user" | "assistant";
+    content: string;
+    model?: string | null;
+    timestamp: number;
+  }>;
 };
 
 class FakeMemoryDb {
@@ -64,6 +70,7 @@ class FakeMemoryDb {
     conversationId: string;
     role: "user" | "assistant";
     content: string;
+    model?: string | null;
     timestamp: number;
     autoSpeak?: boolean;
     wasAborted?: boolean;
@@ -80,6 +87,7 @@ class FakeMemoryDb {
       id: input.id,
       role: input.role,
       content: input.content,
+      model: input.model ?? null,
       timestamp: input.timestamp,
     });
   }
@@ -280,6 +288,75 @@ describe("StationRegistry", () => {
       observedAt: 1_000,
       source: "provider",
       stationId: DEFAULT_STATION_ID,
+    });
+  });
+
+  it("forwards assistant model metadata through chat transport and persistence", () => {
+    const { registry, managers, transport, memoryDb } = createRegistry();
+    registry.createStation({ stationId: DEFAULT_STATION_ID, label: "Primary" });
+
+    managers.get(DEFAULT_STATION_ID)?.bus.emit("assistant:response-end", {
+      messageId: "assistant-model-1",
+      text: "Escalation confirmed.",
+      timestamp: 2_000,
+      model: "gpt-5.4",
+    });
+
+    expect(transport.send).toHaveBeenCalledWith({
+      type: "chat:message",
+      stationId: DEFAULT_STATION_ID,
+      message: {
+        id: "assistant-model-1",
+        role: "assistant",
+        content: "Escalation confirmed.",
+        model: "gpt-5.4",
+        timestamp: 2_000,
+        autoSpeak: undefined,
+      },
+    });
+    expect(memoryDb.getConversation("conversation-1")?.messages).toContainEqual({
+      id: "assistant-model-1",
+      role: "assistant",
+      content: "Escalation confirmed.",
+      model: "gpt-5.4",
+      timestamp: 2_000,
+    });
+  });
+
+  it("updates assistant model metadata when observed usage arrives after the reply", () => {
+    const { registry, managers, transport, memoryDb } = createRegistry();
+    registry.createStation({ stationId: DEFAULT_STATION_ID, label: "Primary" });
+
+    managers.get(DEFAULT_STATION_ID)?.bus.emit("assistant:response-end", {
+      messageId: "assistant-model-2",
+      text: "Fallback label first.",
+      timestamp: 3_000,
+      model: "fallback-model",
+    });
+    managers.get(DEFAULT_STATION_ID)?.bus.emit("assistant:message-model", {
+      messageId: "assistant-model-2",
+      text: "Fallback label first.",
+      timestamp: 3_000,
+      model: "gpt-5.4",
+    });
+
+    expect(transport.send).toHaveBeenCalledWith({
+      type: "chat:message",
+      stationId: DEFAULT_STATION_ID,
+      message: {
+        id: "assistant-model-2",
+        role: "assistant",
+        content: "Fallback label first.",
+        model: "gpt-5.4",
+        timestamp: 3_000,
+      },
+    });
+    expect(memoryDb.getConversation("conversation-1")?.messages).toContainEqual({
+      id: "assistant-model-2",
+      role: "assistant",
+      content: "Fallback label first.",
+      model: "gpt-5.4",
+      timestamp: 3_000,
     });
   });
 

@@ -39,7 +39,13 @@ interface ChatStore {
   addUserMessage: (text: string, stationId?: StationId) => void;
   startAssistantMessage: (id: string, stationId?: StationId) => void;
   appendDelta: (id: string, delta: string, stationId?: StationId) => void;
-  finaliseMessage: (id: string, content: string, autoSpeak?: boolean, stationId?: StationId) => void;
+  finaliseMessage: (
+    id: string,
+    content: string,
+    autoSpeak?: boolean,
+    model?: string | null,
+    stationId?: StationId,
+  ) => void;
   completeMessage: (id: string, stationId?: StationId) => void;
   abortStreamingMessage: (stationId?: StationId) => void;
   clearStreamingState: (stationId?: StationId) => void;
@@ -336,7 +342,7 @@ export const useChatStore = create<ChatStore>((set) => ({
       }),
     );
   },
-  finaliseMessage: (id, content, autoSpeak, stationId) => {
+  finaliseMessage: (id, content, autoSpeak, model, stationId) => {
     const resolvedStationId = resolveStationId(stationId);
     set((state) =>
       updateSessionState(state, resolvedStationId, (session) => {
@@ -350,7 +356,8 @@ export const useChatStore = create<ChatStore>((set) => ({
               content,
               isStreaming: false,
               wasAborted: false,
-              autoSpeak,
+              autoSpeak: autoSpeak ?? message.autoSpeak,
+              model: model ?? message.model ?? null,
             })),
           ),
           isStreaming: false,

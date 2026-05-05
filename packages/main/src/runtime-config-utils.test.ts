@@ -15,12 +15,15 @@ describe("runtime-config-utils", () => {
   it("normalizes model provider aliases to canonical values", () => {
     expect(normalizeRuntimeConfigValue("modelProvider", "azure")).toBe("azure-openai");
     expect(normalizeRuntimeConfigValue("modelProvider", "azure-ai")).toBe("azure-openai");
+    expect(normalizeRuntimeConfigValue("modelProvider", "azure openai escalation")).toBe("azure-openai-escalation");
     expect(normalizeRuntimeConfigValue("modelProvider", "github-copilot")).toBe("copilot");
+    expect(normalizeRuntimeConfigValue("modelProvider", "open ai")).toBe("openai");
+    expect(normalizeRuntimeConfigValue("modelProvider", "open ai escalation")).toBe("openai-escalation");
   });
 
   it("rejects invalid model providers", () => {
     expect(() => normalizeRuntimeConfigValue("modelProvider", "gpt-5.4")).toThrow(
-      'Invalid model provider. Use "copilot" or "azure-openai".',
+      'Invalid model provider. Use "copilot", "azure-openai", "azure-openai-escalation", "openai", or "openai-escalation".',
     );
   });
 
@@ -39,7 +42,13 @@ describe("runtime-config-utils", () => {
   });
 
   it("returns allowed values for model provider", () => {
-    expect(getAllowedRuntimeConfigValues("modelProvider")).toEqual(["copilot", "azure-openai"]);
+    expect(getAllowedRuntimeConfigValues("modelProvider")).toEqual([
+      "copilot",
+      "azure-openai",
+      "azure-openai-escalation",
+      "openai",
+      "openai-escalation",
+    ]);
     expect(getAllowedRuntimeConfigValues("githubToken")).toBeUndefined();
   });
 });

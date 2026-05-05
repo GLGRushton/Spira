@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import BetterSqlite3 from "better-sqlite3";
 import { afterEach, describe, expect, it } from "vitest";
 import { SpiraMemoryDatabase } from "./database.js";
 import { getSpiraMemoryDbPath } from "./path.js";
@@ -47,6 +48,7 @@ describe("SpiraMemoryDatabase", () => {
       conversationId,
       role: "assistant",
       content: "SQLite with FTS5 is a strong fit for searchable conversations.",
+      model: "gpt-5.4",
       timestamp: 2_000,
       autoSpeak: true,
     });
@@ -68,6 +70,7 @@ describe("SpiraMemoryDatabase", () => {
     expect(searchResults[0]?.conversationId).toBe(conversationId);
     expect(conversation?.messages).toHaveLength(2);
     expect(conversation?.messages[1]?.autoSpeak).toBe(true);
+    expect(conversation?.messages[1]?.model).toBe("gpt-5.4");
     expect(conversation?.messages[1]?.toolCalls).toMatchObject([
       {
         callId: "call-1",
@@ -262,6 +265,7 @@ describe("SpiraMemoryDatabase", () => {
       stationId: "primary",
       state: "thinking",
       promptInFlight: true,
+      providerId: "openai",
       activeSessionId: "session-1",
       hostManifestHash: "host-manifest-1",
       providerProjectionHash: "projection-1",
@@ -282,6 +286,7 @@ describe("SpiraMemoryDatabase", () => {
       stationId: "primary",
       state: "thinking",
       promptInFlight: true,
+      providerId: "openai",
       hostManifestHash: "host-manifest-1",
       providerProjectionHash: "projection-1",
       activeToolCalls: [
@@ -348,11 +353,11 @@ describe("SpiraMemoryDatabase", () => {
     });
 
     database.appendProviderUsageRecord({
-      provider: "copilot",
+      provider: "openai",
       stationId: "primary",
       runId: "run-1",
       sessionId: "session-1",
-      model: "gpt-5.4",
+      model: "gpt-5.5",
       inputTokens: 12,
       outputTokens: 4,
       totalTokens: 16,
@@ -371,7 +376,7 @@ describe("SpiraMemoryDatabase", () => {
     ]);
     expect(database.listProviderUsageRecords()).toMatchObject([
       {
-        provider: "copilot",
+        provider: "openai",
         stationId: "primary",
         runId: "run-1",
         sessionId: "session-1",
@@ -436,6 +441,117 @@ describe("SpiraMemoryDatabase", () => {
         summary: "Recovered turn finished.",
       },
     });
+  });
+
+  it("accepts escalation providers in provider usage records", () => {
+    const database = createTestDatabase();
+
+    database.appendProviderUsageRecord({
+      provider: "openai-escalation",
+      sessionId: "session-openai-escalation",
+      observedAt: 1_000,
+      source: "provider",
+    });
+    database.appendProviderUsageRecord({
+      provider: "azure-openai-escalation",
+      sessionId: "session-azure-openai-escalation",
+      observedAt: 2_000,
+      source: "provider",
+    });
+
+    expect(database.listProviderUsageRecords()).toMatchObject([
+      {
+        provider: "azure-openai-escalation",
+        sessionId: "session-azure-openai-escalation",
+      },
+      {
+        provider: "openai-escalation",
+        sessionId: "session-openai-escalation",
+      },
+    ]);
+  });
+
+  it("migrates v24 provider usage records to allow escalation providers", () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "spira-memory-db-migration-"));
+    tempDirs.push(tempDir);
+    const databasePath = getSpiraMemoryDbPath(tempDir);
+    const rawDb = new BetterSqlite3(databasePath);
+    rawDb.exec(`
+      CREATE TABLE messages (
+        id TEXT PRIMARY KEY,
+        conversation_id TEXT NOT NULL,
+        role TEXT NOT NULL,
+        content TEXT NOT NULL,
+        was_aborted INTEGER NOT NULL DEFAULT 0,
+        auto_speak INTEGER NOT NULL DEFAULT 0,
+        timestamp INTEGER NOT NULL
+      );
+      CREATE TABLE provider_usage_records (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        provider TEXT NOT NULL CHECK(provider IN ('copilot', 'azure-openai', 'openai')),
+        station_id TEXT,
+        run_id TEXT,
+        session_id TEXT,
+        model TEXT,
+        input_tokens INTEGER,
+        output_tokens INTEGER,
+        total_tokens INTEGER,
+        estimated_cost_usd REAL,
+        latency_ms INTEGER,
+        observed_at INTEGER NOT NULL,
+        source TEXT NOT NULL CHECK(source IN ('provider', 'estimated', 'unknown'))
+      );
+      INSERT INTO provider_usage_records (
+        provider,
+        station_id,
+        run_id,
+        session_id,
+        model,
+        input_tokens,
+        output_tokens,
+        total_tokens,
+        estimated_cost_usd,
+        latency_ms,
+        observed_at,
+        source
+      ) VALUES (
+        'openai',
+        'primary',
+        'run-1',
+        'session-1',
+        'gpt-5.4',
+        12,
+        4,
+        16,
+        NULL,
+        NULL,
+        1000,
+        'provider'
+      );
+      PRAGMA user_version = 24;
+    `);
+    rawDb.close();
+
+    const database = SpiraMemoryDatabase.open(databasePath);
+    openDatabases.push(database);
+
+    database.appendProviderUsageRecord({
+      provider: "openai-escalation",
+      sessionId: "session-openai-escalation",
+      observedAt: 2_000,
+      source: "provider",
+    });
+
+    expect(database.listProviderUsageRecords()).toMatchObject([
+      {
+        provider: "openai-escalation",
+        sessionId: "session-openai-escalation",
+      },
+      {
+        provider: "openai",
+        sessionId: "session-1",
+      },
+    ]);
   });
 
   it("persists runtime sessions, ledger events, and checkpoints", () => {

@@ -1,7 +1,15 @@
 import { z } from "zod";
+import { MODEL_PROVIDERS } from "./model-provider.js";
 
 type EnvInput = Record<string, string | undefined>;
 const defaultEnvInput: EnvInput = (globalThis as { process?: { env?: EnvInput } }).process?.env ?? {};
+const BlankStringAsUndefinedSchema = z.preprocess((value) => {
+  if (typeof value !== "string") {
+    return value;
+  }
+  const trimmed = value.trim();
+  return trimmed === "" ? undefined : trimmed;
+}, z.string().optional());
 const BooleanEnvFlagSchema = z
   .enum(["true", "false"])
   .default("false")
@@ -49,16 +57,13 @@ export const McpServersFileSchema = z.object({
 });
 
 /** Validates environment variables loaded from .env */
-const ModelProviderSchema = z.preprocess(
-  (value) => {
-    if (typeof value !== "string") {
-      return value;
-    }
-    const trimmed = value.trim();
-    return trimmed === "" ? undefined : trimmed;
-  },
-  z.enum(["copilot", "azure-openai"]).default("copilot"),
-);
+const ModelProviderSchema = z.preprocess((value) => {
+  if (typeof value !== "string") {
+    return value;
+  }
+  const trimmed = value.trim();
+  return trimmed === "" ? undefined : trimmed;
+}, z.enum(MODEL_PROVIDERS).default("copilot"));
 
 export const EnvSchema = z.object({
   SPIRA_MODEL_PROVIDER: ModelProviderSchema,
@@ -66,8 +71,14 @@ export const EnvSchema = z.object({
   AZURE_OPENAI_API_KEY: z.string().optional(),
   AZURE_OPENAI_ENDPOINT: z.string().url().optional(),
   AZURE_OPENAI_DEPLOYMENT: z.string().optional(),
+  AZURE_OPENAI_ESCALATION_DEPLOYMENT: z.string().optional(),
   AZURE_OPENAI_API_VERSION: z.string().default("2024-10-21"),
   AZURE_OPENAI_MODEL: z.string().optional(),
+  AZURE_OPENAI_ESCALATION_MODEL: z.string().optional(),
+  OPENAI_API_KEY: z.string().optional(),
+  OPENAI_BASE_URL: BlankStringAsUndefinedSchema.pipe(z.string().url().optional()),
+  OPENAI_MODEL: BlankStringAsUndefinedSchema.pipe(z.string().default("gpt-5.4")),
+  OPENAI_ESCALATION_MODEL: BlankStringAsUndefinedSchema.pipe(z.string().optional()),
   MISSION_GITHUB_TOKEN: z.string().optional(),
   YOUTRACK_BASE_URL: z.string().optional(),
   YOUTRACK_TOKEN: z.string().optional(),

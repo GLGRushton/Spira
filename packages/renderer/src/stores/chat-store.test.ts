@@ -60,6 +60,22 @@ describe("chat-store", () => {
     ]);
   });
 
+  it("stores assistant model metadata on completed replies", () => {
+    const chat = useChatStore.getState();
+
+    chat.startAssistantMessage("assistant-1");
+    chat.finaliseMessage("assistant-1", "Escalation confirmed.", true, "gpt-5.4");
+
+    expect(getChatSession(useChatStore.getState(), PRIMARY_STATION_ID).messages).toMatchObject([
+      {
+        id: "assistant-1",
+        role: "assistant",
+        content: "Escalation confirmed.",
+        model: "gpt-5.4",
+      },
+    ]);
+  });
+
   it("hydrates persisted messages as completed transcript entries", () => {
     useChatStore.getState().hydrateMessages([
       {

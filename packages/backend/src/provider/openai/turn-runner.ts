@@ -7,24 +7,24 @@ import type {
   ProviderToolResultObject,
   ProviderUsageSnapshot,
 } from "../types.js";
-import type { AzureOpenAiClientConfig, AzureOpenAiSessionState } from "./session-state.js";
+import type { OpenAiClientConfig, OpenAiSessionState } from "./session-state.js";
 import {
   accumulateUsageSnapshots,
-  beginAzureTurnMessages,
-  finishAzureTurnMessages,
+  beginOpenAiTurnMessages,
+  finishOpenAiTurnMessages,
   getAssistantMessage,
   getPermissionRequest,
   getUsageSnapshot,
   isAbortError,
   parseToolArguments,
-  publishAzureHostContinuity,
-  rollbackAzureTurnMessages,
+  publishOpenAiHostContinuity,
+  rollbackOpenAiTurnMessages,
   toToolResultMessage,
-  tryEscalateAzureSession,
+  tryEscalateOpenAiSession,
 } from "./session-state.js";
-import { requestAzureOpenAiCompletion } from "./transport.js";
+import { requestOpenAiCompletion } from "./transport.js";
 
-export const executeAzureOpenAiTool = async (
+export const executeOpenAiTool = async (
   tool: ProviderToolDefinition,
   toolCallId: string,
   args: Record<string, unknown>,
@@ -53,27 +53,27 @@ export const executeAzureOpenAiTool = async (
   try {
     return await tool.handler(args);
   } catch (error) {
-    throw new ProviderError(`Azure OpenAI tool ${tool.name} failed`, error);
+    throw new ProviderError(`OpenAI tool ${tool.name} failed`, error);
   }
 };
 
-export const assertAzureSessionConnected = (signal?: AbortSignal): void => {
+export const assertOpenAiSessionConnected = (signal?: AbortSignal): void => {
   if (signal?.aborted) {
     throw new ProviderError("Session not found: disconnected");
   }
 };
 
-const assertActiveAzureTurn = (state: AzureOpenAiSessionState, turnGeneration: number, signal?: AbortSignal): void => {
+const assertActiveOpenAiTurn = (state: OpenAiSessionState, turnGeneration: number, signal?: AbortSignal): void => {
   if (state.turnGeneration !== turnGeneration || signal?.aborted) {
     throw new ProviderError("Session not found: disconnected");
   }
 };
 
-const isRetryableAzureRequestError = (error: unknown): boolean => {
+const isRetryableOpenAiRequestError = (error: unknown): boolean => {
   if (!(error instanceof Error)) {
     return false;
   }
-  const match = error.message.match(/Azure OpenAI request failed with (\d+)/);
+  const match = error.message.match(/OpenAI request failed with (\d+)/);
   if (!match) {
     return false;
   }
@@ -100,28 +100,28 @@ const withTurnExecutionContext = (
   return Object.assign(new Error(String(error)), { executedToolCalls, accumulatedUsage });
 };
 
-const getAzureEscalationReason = (error: unknown): string | null => {
+const getOpenAiEscalationReason = (error: unknown): string | null => {
   if (!(error instanceof Error)) {
     return null;
   }
-  if (error.message === "Azure OpenAI returned no completion message.") {
+  if (error.message === "OpenAI returned no completion message.") {
     return "empty-response";
   }
-  if (error.message === "Azure OpenAI returned an empty assistant response.") {
+  if (error.message === "OpenAI returned an empty assistant response.") {
     return "empty-response";
   }
-  if (error.message === "Azure OpenAI exceeded the maximum tool-call iterations for a single turn.") {
+  if (error.message === "OpenAI exceeded the maximum tool-call iterations for a single turn.") {
     return "tool-iteration-limit";
   }
-  if (isRetryableAzureRequestError(error)) {
+  if (isRetryableOpenAiRequestError(error)) {
     return "retryable-provider-error";
   }
   return null;
 };
 
-const runAzureOpenAiTurnOnce = async (
-  clientConfig: AzureOpenAiClientConfig,
-  state: AzureOpenAiSessionState,
+const runOpenAiTurnOnce = async (
+  clientConfig: OpenAiClientConfig,
+  state: OpenAiSessionState,
   config: ProviderSessionConfig,
   prompt: string,
   logger: { info(entry: object, message: string): void },
@@ -132,13 +132,12 @@ const runAzureOpenAiTurnOnce = async (
   }
   const abortController = new AbortController();
   state.abortController = abortController;
-  const turnGeneration = beginAzureTurnMessages(state, prompt);
+  const turnGeneration = beginOpenAiTurnMessages(state, prompt);
   logger.info(
     {
       providerId: state.providerId,
       sessionId: state.sessionId,
-      deployment: state.currentDeployment,
-      model: state.hostContinuityModel ?? config.model ?? clientConfig.modelLabel ?? state.currentDeployment,
+      model: state.currentModel ?? clientConfig.defaultModel,
       promptLength: prompt.length,
     },
     "Dispatching prompt through provider",
@@ -158,7 +157,7 @@ const runAzureOpenAiTurnOnce = async (
       const startedAt = Date.now();
       let emittedStreamDelta = false;
       const messageId = randomUUID();
-      const response = await requestAzureOpenAiCompletion(clientConfig, state, config.tools, {
+      const response = await requestOpenAiCompletion(clientConfig, state, config.tools, {
         signal: abortController.signal,
         streaming: config.streaming === true,
         onContentDelta: (deltaContent) => {
@@ -172,9 +171,9 @@ const runAzureOpenAiTurnOnce = async (
           });
         },
       });
-      assertActiveAzureTurn(state, turnGeneration, abortController.signal);
+      assertActiveOpenAiTurn(state, turnGeneration, abortController.signal);
       accumulatedUsage = accumulateUsageSnapshots(accumulatedUsage, {
-        ...getUsageSnapshot(response, state.hostContinuityModel ?? clientConfig.modelLabel ?? state.currentDeployment),
+        ...getUsageSnapshot(response, state.currentModel ?? clientConfig.defaultModel),
         latencyMs: Date.now() - startedAt,
       });
       const assistantMessage = getAssistantMessage(response);
@@ -186,7 +185,7 @@ const runAzureOpenAiTurnOnce = async (
         content: assistantMessage.content ?? null,
         ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
       });
-      publishAzureHostContinuity(state);
+      publishOpenAiHostContinuity(state);
 
       if (toolCalls.length > 0) {
         if (assistantContent.trim()) {
@@ -210,8 +209,8 @@ const runAzureOpenAiTurnOnce = async (
 
         for (const toolCall of toolCalls) {
           executedToolCalls = true;
-          assertActiveAzureTurn(state, turnGeneration, abortController.signal);
-          assertAzureSessionConnected(abortController.signal);
+          assertActiveOpenAiTurn(state, turnGeneration, abortController.signal);
+          assertOpenAiSessionConnected(abortController.signal);
           const tool = config.tools.find((entry) => entry.name === toolCall.function.name);
           const args = parseToolArguments(toolCall.function.arguments, toolCall.function.name);
           emitTurnEvent({
@@ -224,15 +223,15 @@ const runAzureOpenAiTurnOnce = async (
           });
 
           const result = tool
-            ? await executeAzureOpenAiTool(tool, toolCall.id, args, config)
+            ? await executeOpenAiTool(tool, toolCall.id, args, config)
             : {
                 resultType: "failure" as const,
                 textResultForLlm: `Tool ${toolCall.function.name} is not registered in Spira.`,
                 error: `Unknown tool ${toolCall.function.name}`,
               };
 
-          assertActiveAzureTurn(state, turnGeneration, abortController.signal);
-          assertAzureSessionConnected(abortController.signal);
+          assertActiveOpenAiTurn(state, turnGeneration, abortController.signal);
+          assertOpenAiSessionConnected(abortController.signal);
           emitTurnEvent({
             type: "tool.execution_complete",
             data: {
@@ -248,18 +247,18 @@ const runAzureOpenAiTurnOnce = async (
             tool_call_id: toolCall.id,
             content: toToolResultMessage(result),
           });
-          publishAzureHostContinuity(state);
+          publishOpenAiHostContinuity(state);
         }
 
         continue;
       }
 
       if (!assistantContent.trim()) {
-        throw new ProviderError("Azure OpenAI returned an empty assistant response.");
+        throw new ProviderError("OpenAI returned an empty assistant response.");
       }
 
-      assertActiveAzureTurn(state, turnGeneration, abortController.signal);
-      assertAzureSessionConnected(abortController.signal);
+      assertActiveOpenAiTurn(state, turnGeneration, abortController.signal);
+      assertOpenAiSessionConnected(abortController.signal);
       if (!emittedStreamDelta) {
         emitTurnEvent({
           type: "assistant.message_delta",
@@ -286,7 +285,7 @@ const runAzureOpenAiTurnOnce = async (
       return;
     }
   } catch (error) {
-    rollbackAzureTurnMessages(state, turnGeneration);
+    rollbackOpenAiTurnMessages(state, turnGeneration);
     if (abortController.signal.aborted || isAbortError(error)) {
       throw withTurnExecutionContext(
         new ProviderError("Session not found: disconnected", error),
@@ -297,35 +296,35 @@ const runAzureOpenAiTurnOnce = async (
     throw withTurnExecutionContext(error, executedToolCalls, accumulatedUsage);
   } finally {
     if (turnCompleted) {
-      finishAzureTurnMessages(state, turnGeneration);
+      finishOpenAiTurnMessages(state, turnGeneration);
     }
     if (state.abortController === abortController) {
       state.abortController = null;
     }
   }
 
-  rollbackAzureTurnMessages(state, turnGeneration);
+  rollbackOpenAiTurnMessages(state, turnGeneration);
   throw withTurnExecutionContext(
-    new ProviderError("Azure OpenAI exceeded the maximum tool-call iterations for a single turn."),
+    new ProviderError("OpenAI exceeded the maximum tool-call iterations for a single turn."),
     executedToolCalls,
     accumulatedUsage,
   );
 };
 
-export const runAzureOpenAiTurn = async (
-  clientConfig: AzureOpenAiClientConfig,
-  state: AzureOpenAiSessionState,
+export const runOpenAiTurn = async (
+  clientConfig: OpenAiClientConfig,
+  state: OpenAiSessionState,
   config: ProviderSessionConfig,
   prompt: string,
   logger: { info(entry: object, message: string): void },
 ): Promise<void> => {
   let accumulatedUsage: ProviderUsageSnapshot | null = null;
   try {
-    await runAzureOpenAiTurnOnce(clientConfig, state, config, prompt, logger, accumulatedUsage);
+    await runOpenAiTurnOnce(clientConfig, state, config, prompt, logger, accumulatedUsage);
   } catch (error) {
     accumulatedUsage = getAccumulatedUsage(error);
-    const reason = hasExecutedToolCalls(error) ? null : getAzureEscalationReason(error);
-    const escalation = reason ? tryEscalateAzureSession(state) : null;
+    const reason = hasExecutedToolCalls(error) ? null : getOpenAiEscalationReason(error);
+    const escalation = reason ? tryEscalateOpenAiSession(state) : null;
     if (!reason || !escalation) {
       throw error;
     }
@@ -335,13 +334,11 @@ export const runAzureOpenAiTurn = async (
         providerId: state.providerId,
         sessionId: state.sessionId,
         reason,
-        fromDeployment: escalation.fromDeployment,
-        toDeployment: escalation.toDeployment,
         fromModel: escalation.fromModel,
         toModel: escalation.toModel,
       },
       "Escalating provider session",
     );
-    await runAzureOpenAiTurnOnce(clientConfig, state, config, prompt, logger, accumulatedUsage);
+    await runOpenAiTurnOnce(clientConfig, state, config, prompt, logger, accumulatedUsage);
   }
 };

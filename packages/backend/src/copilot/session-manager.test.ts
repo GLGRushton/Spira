@@ -14,6 +14,7 @@ type SessionManagerInternals = {
     disconnect: () => Promise<void>;
     abort?: () => Promise<void>;
     send?: (payload: { prompt: string }) => Promise<void>;
+    escalate?: () => Promise<Record<string, unknown>>;
   } | null;
   client: { providerId: string; stop?: () => Promise<unknown> } | null;
   activeSessionId: string | null;
@@ -45,7 +46,7 @@ type SessionManagerInternals = {
   getSessionConfig(
     expectedSessionId?: string | null,
     provider?: {
-      providerId: "copilot" | "azure-openai";
+      providerId: "copilot" | "azure-openai" | "azure-openai-escalation" | "openai" | "openai-escalation";
       capabilities: {
         persistentSessions: boolean;
         abortableTurns: boolean;
@@ -58,7 +59,7 @@ type SessionManagerInternals = {
         toolCalling: "native" | "none";
       };
     },
-  ): { tools: Array<{ name: string }> };
+  ): { tools: Array<{ name: string; handler: (args: Record<string, unknown>) => Promise<Record<string, unknown>> }> };
 };
 
 const createManager = (
@@ -75,6 +76,7 @@ const createManager = (
     memoryDb?: Record<string, unknown> | null;
     stationId?: string;
     requestedModel?: string | null;
+    missionRunId?: string | null;
   },
 ) => {
   const bus = new SpiraEventBus();
@@ -91,6 +93,7 @@ const createManager = (
         memoryDb: options.memoryDb as never,
         stationId: options.stationId,
         requestedModel: options.requestedModel,
+        missionRunId: options.missionRunId ?? undefined,
       }
     : undefined;
 
@@ -487,6 +490,71 @@ describe("StationSessionManager", () => {
     const toolNames = internals.getSessionConfig().tools.map((tool) => tool.name);
 
     expect(toolNames).not.toContain("spira_propose_upgrade");
+  });
+
+  it("exposes the manual escalation tool only for the primary escalation station", () => {
+    const escalationManager = createManager([], {
+      envInput: { SPIRA_MODEL_PROVIDER: "openai-escalation" },
+      stationId: "primary",
+    });
+    const normalManager = createManager([], {
+      envInput: { SPIRA_MODEL_PROVIDER: "openai" },
+      stationId: "primary",
+    });
+    const secondaryStationManager = createManager([], {
+      envInput: { SPIRA_MODEL_PROVIDER: "openai-escalation" },
+      stationId: "bravo",
+    });
+    const missionStationManager = createManager([], {
+      envInput: { SPIRA_MODEL_PROVIDER: "openai-escalation" },
+      stationId: "primary",
+      missionRunId: "run-1",
+    });
+    const escalationInternals = escalationManager as unknown as SessionManagerInternals;
+    const normalInternals = normalManager as unknown as SessionManagerInternals;
+    const secondaryStationInternals = secondaryStationManager as unknown as SessionManagerInternals;
+    const missionStationInternals = missionStationManager as unknown as SessionManagerInternals;
+
+    expect(escalationInternals.getSessionConfig().tools.map((tool) => tool.name)).toContain("spira_escalate_session");
+    expect(normalInternals.getSessionConfig().tools.map((tool) => tool.name)).not.toContain("spira_escalate_session");
+    expect(secondaryStationInternals.getSessionConfig().tools.map((tool) => tool.name)).not.toContain(
+      "spira_escalate_session",
+    );
+    expect(missionStationInternals.getSessionConfig().tools.map((tool) => tool.name)).not.toContain(
+      "spira_escalate_session",
+    );
+  });
+
+  it("routes the manual escalation tool through the active session", async () => {
+    const manager = createManager([], {
+      envInput: { SPIRA_MODEL_PROVIDER: "openai-escalation" },
+      stationId: "primary",
+    });
+    const internals = manager as unknown as SessionManagerInternals;
+    const escalate = vi.fn().mockResolvedValue({
+      status: "escalated",
+      providerId: "openai-escalation",
+      fromModel: "gpt-5.4-mini",
+      toModel: "gpt-5.4",
+    });
+    internals.session = {
+      sessionId: "escalation-session",
+      disconnect: vi.fn().mockResolvedValue(undefined),
+      escalate,
+    };
+
+    const tool = internals.getSessionConfig().tools.find((entry) => entry.name === "spira_escalate_session");
+
+    expect(tool).toBeDefined();
+    if (!tool) {
+      throw new Error("Expected spira_escalate_session to be available.");
+    }
+    await expect(tool.handler({})).resolves.toMatchObject({
+      resultType: "success",
+      textResultForLlm:
+        '{"status":"escalated","providerId":"openai-escalation","fromModel":"gpt-5.4-mini","toModel":"gpt-5.4"}',
+    });
+    expect(escalate).toHaveBeenCalledTimes(1);
   });
 
   it("omits duplicated host tools when using the copilot provider", () => {
@@ -1397,6 +1465,81 @@ describe("StationSessionManager", () => {
     );
   });
 
+  it("includes the current runtime model on final assistant responses when available", () => {
+    const manager = createManager([], {
+      envInput: { SPIRA_MODEL_PROVIDER: "openai-escalation" },
+      stationId: "primary",
+    });
+    const internals = manager as unknown as SessionManagerInternals & { bus: SpiraEventBus };
+    const responseEnd = vi.fn();
+    internals.session = {
+      sessionId: "openai-session",
+      disconnect: vi.fn().mockResolvedValue(undefined),
+    };
+    internals.hostContinuityState = {
+      providerId: "openai-escalation",
+      model: "gpt-5.4",
+      updatedAt: 1_000,
+      messages: [],
+    };
+    internals.bus.on("assistant:response-end", responseEnd);
+
+    internals.handleSessionEvent({
+      type: "assistant.message",
+      data: {
+        messageId: "assistant-2",
+        content: "Escalation confirmed.",
+      },
+    });
+
+    expect(responseEnd).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: "assistant-2",
+        text: "Escalation confirmed.",
+        model: "gpt-5.4",
+      }),
+    );
+  });
+
+  it("publishes an assistant model update when observed usage arrives after the reply", () => {
+    const manager = createManager([], {
+      envInput: { SPIRA_MODEL_PROVIDER: "openai-escalation" },
+      stationId: "primary",
+    });
+    const internals = manager as unknown as SessionManagerInternals & { bus: SpiraEventBus };
+    const modelUpdate = vi.fn();
+    internals.session = {
+      sessionId: "openai-session",
+      disconnect: vi.fn().mockResolvedValue(undefined),
+    };
+    internals.bus.on("assistant:message-model", modelUpdate);
+
+    internals.handleSessionEvent({
+      type: "assistant.message",
+      data: {
+        messageId: "assistant-3",
+        content: "Observed model arrives later.",
+      },
+    });
+    internals.handleSessionEvent({
+      type: "session.idle",
+      data: {
+        usage: {
+          model: "gpt-5.4",
+          totalTokens: 42,
+          source: "provider",
+        },
+      },
+    });
+
+    expect(modelUpdate).toHaveBeenCalledWith({
+      messageId: "assistant-3",
+      text: "Observed model arrives later.",
+      timestamp: expect.any(Number),
+      model: "gpt-5.4",
+    });
+  });
+
   it("uses Azure provider abort without clearing the live session", async () => {
     const persistence = {
       load: vi.fn().mockReturnValue(null),
@@ -1768,6 +1911,36 @@ describe("StationSessionManager", () => {
     expect(requestPayload).toMatchObject({
       serverName: "Spira host runtime",
       toolName: "apply_patch",
+      readOnly: false,
+    });
+    expect(manager.resolvePermissionRequest(requestPayload.requestId, true)).toBe(true);
+    await expect(response).resolves.toEqual({ kind: "approve-once" });
+  });
+
+  it("requires interactive approval for the manual escalation tool", async () => {
+    const manager = createManager([], {
+      envInput: { SPIRA_MODEL_PROVIDER: "openai-escalation" },
+    });
+    const internals = manager as unknown as SessionManagerInternals;
+    const bus = (manager as unknown as { bus: SpiraEventBus }).bus;
+    const permissionRequest = vi.fn();
+    bus.on("assistant:permission-request", permissionRequest);
+    internals.session = {
+      sessionId: "test-session",
+      disconnect: vi.fn().mockResolvedValue(undefined),
+    };
+
+    const response = internals.handlePermissionRequest({
+      kind: "custom-tool",
+      toolName: "spira_escalate_session",
+      toolCallId: "call-2",
+      args: {},
+    });
+    const requestPayload = permissionRequest.mock.calls[0]?.[0];
+
+    expect(requestPayload).toMatchObject({
+      serverName: "Spira host runtime",
+      toolName: "spira_escalate_session",
       readOnly: false,
     });
     expect(manager.resolvePermissionRequest(requestPayload.requestId, true)).toBe(true);

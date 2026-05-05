@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import type { ToolBridgeOptions } from "./tool-bridge.js";
 import type { McpToolAggregator } from "../mcp/tool-aggregator.js";
-import { requiresProviderManifestProjection } from "../provider/capability-fallback.js";
 import type { ProviderCapabilities, ProviderId, ProviderToolDefinition } from "../provider/types.js";
 import { buildRuntimeCapabilityDefinitions } from "./capability-tools.js";
 import type { RuntimeCapabilitySource } from "./runtime-contract.js";
@@ -77,16 +76,14 @@ export const buildRuntimeCapabilityRegistry = (
 export const projectRuntimeCapabilityRegistry = (
   registry: RuntimeCapabilityRegistry,
   providerId?: ProviderId,
-  capabilities?: ProviderCapabilities,
+  _capabilities?: ProviderCapabilities,
   options?: {
     preserveCapabilityIds?: readonly string[];
   },
 ): ProviderToolManifest => {
-  const shouldProject =
-    providerId !== undefined && capabilities !== undefined && requiresProviderManifestProjection(capabilities);
   const preservedCapabilityIds = new Set(options?.preserveCapabilityIds ?? []);
 
-  const suppressedCapabilityIds = shouldProject
+  const suppressedCapabilityIds = providerId
     ? registry.entries
         .filter(
           (entry) => entry.suppressForProviders.includes(providerId) && !preservedCapabilityIds.has(entry.capabilityId),
@@ -94,7 +91,7 @@ export const projectRuntimeCapabilityRegistry = (
         .map((entry) => entry.capabilityId)
     : [];
 
-  const projectedEntries = shouldProject
+  const projectedEntries = providerId
     ? registry.entries.filter(
         (entry) => !entry.suppressForProviders.includes(providerId) || preservedCapabilityIds.has(entry.capabilityId),
       )

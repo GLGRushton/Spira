@@ -96,6 +96,33 @@ describe("runtime capability registry", () => {
     expect(manifest.suppressedCapabilityIds).toEqual([]);
   });
 
+  it("suppresses spira_propose_upgrade for escalation providers even on literal manifests", () => {
+    const manifest = getProviderToolManifest({
+      aggregator: createAggregator(),
+      options: {
+        workingDirectory: "C:\\GitHub\\Spira",
+        requestUpgradeProposal: async () => undefined,
+      },
+      providerId: "openai-escalation",
+      capabilities: {
+        persistentSessions: false,
+        abortableTurns: true,
+        sessionResumption: "host-managed",
+        turnCancellation: "provider-abort",
+        responseStreaming: "native",
+        usageReporting: "partial",
+        toolManifestMode: "literal",
+        modelSelection: "session-scoped",
+        toolCalling: "native",
+      },
+    });
+
+    const toolNames = manifest.tools.map((tool) => tool.name);
+
+    expect(toolNames).not.toContain("spira_propose_upgrade");
+    expect(manifest.suppressedCapabilityIds).toContain("spira_propose_upgrade");
+  });
+
   it("threads runtime host-resource persistence through the manifest builder path", async () => {
     const persistedResources: Array<Record<string, unknown>> = [];
     const manifest = getProviderToolManifest({

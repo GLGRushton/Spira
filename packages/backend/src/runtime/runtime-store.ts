@@ -5,33 +5,35 @@ import type {
   PersistedRuntimeHostResourceRecord,
   PersistedRuntimeLedgerEventRecord,
   PersistedRuntimeSessionRecord,
-  RuntimeStationStateRecord,
-  RuntimeHostResourceStatus,
   RuntimePermissionRequestStatus,
   RuntimeRecoverySummary,
+  RuntimeStationStateRecord,
   SpiraMemoryDatabase,
   UpsertRuntimeHostResourceInput,
-  UpsertRuntimeStationStateInput,
   UpsertRuntimePermissionRequestInput,
   UpsertRuntimeSessionInput,
+  UpsertRuntimeStationStateInput,
   UpsertRuntimeSubagentRunInput,
 } from "@spira/memory-db";
 import type { Env, PermissionRequestPayload, StationId, SubagentRunSnapshot } from "@spira/shared";
 import { createProviderClientForProvider, stopProviderClient } from "../provider/client-factory.js";
-import type { ProviderUsageRecord } from "../provider/types.js";
+import type { ProviderId, ProviderUsageRecord } from "../provider/types.js";
 import { createLogger } from "../util/logger.js";
-import type {
-  RuntimeCheckpointPayload,
-  RuntimeLedgerEvent,
-  RuntimeSessionContract,
-} from "./runtime-contract.js";
-import { createRuntimeLedgerEvent } from "./runtime-contract.js";
 import { resolveSubagentProviderBinding } from "./provider-binding.js";
+import type { RuntimeCheckpointPayload, RuntimeLedgerEvent, RuntimeSessionContract } from "./runtime-contract.js";
+import { createRuntimeLedgerEvent } from "./runtime-contract.js";
 import { getStationRuntimeSessionId, getSubagentRuntimeSessionId } from "./runtime-session-ids.js";
 
 const logger = createLogger("runtime-store");
 const PENDING_PROVIDER_SESSION_CLEANUP_KEY = "runtime.provider-session-cleanup";
-type PendingProviderSessionCleanup = { providerId: "copilot" | "azure-openai"; sessionId: string };
+const VALID_PROVIDER_IDS = new Set<ProviderId>([
+  "copilot",
+  "azure-openai",
+  "azure-openai-escalation",
+  "openai",
+  "openai-escalation",
+]);
+type PendingProviderSessionCleanup = { providerId: ProviderId; sessionId: string };
 const collectErrorMessages = (error: unknown, depth = 0): string[] => {
   if (depth > 5 || error === null || error === undefined) {
     return [];
@@ -87,23 +89,26 @@ export class RuntimeStore {
         unrecoverableHostResourceIds: [],
       };
     }
-    const orphanedProviderSessions = this.mergePendingProviderSessionCleanup(
-      this.getPendingProviderSessionCleanup(memoryDb),
-      memoryDb
-        .listRuntimeStationStates()
-        .filter(
-          (record) =>
-            record.activeSessionId &&
-            record.providerId &&
-            (record.promptInFlight ||
-              record.state === "thinking" ||
-              record.activeToolCalls.length > 0 ||
-              record.abortRequestedAt),
-        )
-        .map((record) => ({
-          providerId: record.providerId!,
-          sessionId: record.activeSessionId!,
-        })),
+    const orphanedProviderSessions = RuntimeStore.mergePendingProviderSessionCleanup(
+      RuntimeStore.getPendingProviderSessionCleanup(memoryDb),
+      memoryDb.listRuntimeStationStates().flatMap((record) => {
+        if (
+          !record.activeSessionId ||
+          !record.providerId ||
+          (!record.promptInFlight &&
+            record.state !== "thinking" &&
+            record.activeToolCalls.length === 0 &&
+            !record.abortRequestedAt)
+        ) {
+          return [];
+        }
+        return [
+          {
+            providerId: record.providerId,
+            sessionId: record.activeSessionId,
+          },
+        ];
+      }),
       memoryDb
         .listRuntimeSubagentRuns()
         .filter((record) => record.snapshot.status === "running")
@@ -112,7 +117,7 @@ export class RuntimeStore {
           const contract = (runtimeSession?.contract ?? null) as Partial<RuntimeSessionContract> | null;
           const stationRuntimeSession =
             record.stationId !== null && record.stationId !== undefined
-              ? memoryDb.getRuntimeSession(getStationRuntimeSessionId(record.stationId))?.contract ?? null
+              ? (memoryDb.getRuntimeSession(getStationRuntimeSessionId(record.stationId))?.contract ?? null)
               : null;
           const { providerId, providerSessionId } = resolveSubagentProviderBinding(
             record.snapshot,
@@ -127,20 +132,19 @@ export class RuntimeStore {
               "providerSwitches" in stationRuntimeSession
               ? {
                   providerBinding: stationRuntimeSession.providerBinding as RuntimeSessionContract["providerBinding"],
-                  providerSwitches: stationRuntimeSession.providerSwitches as RuntimeSessionContract["providerSwitches"],
+                  providerSwitches:
+                    stationRuntimeSession.providerSwitches as RuntimeSessionContract["providerSwitches"],
                 }
               : null,
           );
-          return providerId && providerSessionId
-            ? [{ providerId, sessionId: providerSessionId }]
-            : [];
+          return providerId && providerSessionId ? [{ providerId, sessionId: providerSessionId }] : [];
         }),
     );
     const summary = memoryDb.recoverInterruptedRuntimeState(now);
     const remainingCleanup = env
-      ? await this.cleanupProviderSessions(orphanedProviderSessions, env)
+      ? await RuntimeStore.cleanupProviderSessions(orphanedProviderSessions, env)
       : orphanedProviderSessions;
-    this.setPendingProviderSessionCleanup(memoryDb, remainingCleanup);
+    RuntimeStore.setPendingProviderSessionCleanup(memoryDb, remainingCleanup);
     for (const resourceId of summary.unrecoverableHostResourceIds) {
       const resource = memoryDb.getRuntimeHostResource(resourceId);
       if (!resource || resource.kind !== "powershell") {
@@ -177,8 +181,12 @@ export class RuntimeStore {
     return summary;
   }
 
-  queueProviderSessionCleanup(providerId: "copilot" | "azure-openai", sessionId: string): void {
-    if (!this.memoryDb || typeof this.memoryDb.getSessionState !== "function" || typeof this.memoryDb.setSessionState !== "function") {
+  queueProviderSessionCleanup(providerId: ProviderId, sessionId: string): void {
+    if (
+      !this.memoryDb ||
+      typeof this.memoryDb.getSessionState !== "function" ||
+      typeof this.memoryDb.setSessionState !== "function"
+    ) {
       return;
     }
     const merged = RuntimeStore.mergePendingProviderSessionCleanup(
@@ -188,8 +196,12 @@ export class RuntimeStore {
     RuntimeStore.setPendingProviderSessionCleanup(this.memoryDb, merged);
   }
 
-  clearPendingProviderSessionCleanup(providerId: "copilot" | "azure-openai", sessionId: string): void {
-    if (!this.memoryDb || typeof this.memoryDb.getSessionState !== "function" || typeof this.memoryDb.setSessionState !== "function") {
+  clearPendingProviderSessionCleanup(providerId: ProviderId, sessionId: string): void {
+    if (
+      !this.memoryDb ||
+      typeof this.memoryDb.getSessionState !== "function" ||
+      typeof this.memoryDb.setSessionState !== "function"
+    ) {
       return;
     }
     const remaining = RuntimeStore.getPendingProviderSessionCleanup(this.memoryDb).filter(
@@ -218,7 +230,8 @@ export class RuntimeStore {
         }
         const remaining = await RuntimeStore.cleanupProviderSessions(queued, env);
         const cleared = queued.filter(
-          (record) => !remaining.some((candidate) => RuntimeStore.isSamePendingProviderSessionCleanup(record, candidate)),
+          (record) =>
+            !remaining.some((candidate) => RuntimeStore.isSamePendingProviderSessionCleanup(record, candidate)),
         );
         const preserved = RuntimeStore.getPendingProviderSessionCleanup(memoryDb).filter(
           (record) => !cleared.some((candidate) => RuntimeStore.isSamePendingProviderSessionCleanup(record, candidate)),
@@ -363,9 +376,7 @@ export class RuntimeStore {
     return record ? this.toRuntimeCheckpointPayload(record) : null;
   }
 
-  upsertRuntimeHostResource(
-    input: UpsertRuntimeHostResourceInput,
-  ): PersistedRuntimeHostResourceRecord | null {
+  upsertRuntimeHostResource(input: UpsertRuntimeHostResourceInput): PersistedRuntimeHostResourceRecord | null {
     if (!this.memoryDb) {
       return null;
     }
@@ -459,13 +470,13 @@ export class RuntimeStore {
           typeof entry !== "object" ||
           !("providerId" in entry) ||
           !("sessionId" in entry) ||
-          (entry.providerId !== "copilot" && entry.providerId !== "azure-openai") ||
+          !VALID_PROVIDER_IDS.has(entry.providerId as ProviderId) ||
           typeof entry.sessionId !== "string" ||
           entry.sessionId.trim().length === 0
         ) {
           return [];
         }
-        return [{ providerId: entry.providerId, sessionId: entry.sessionId.trim() }];
+        return [{ providerId: entry.providerId as ProviderId, sessionId: entry.sessionId.trim() }];
       });
     } catch {
       return [];
@@ -479,10 +490,7 @@ export class RuntimeStore {
     if (typeof memoryDb.setSessionState !== "function") {
       return;
     }
-    memoryDb.setSessionState(
-      PENDING_PROVIDER_SESSION_CLEANUP_KEY,
-      cleanup.length > 0 ? JSON.stringify(cleanup) : null,
-    );
+    memoryDb.setSessionState(PENDING_PROVIDER_SESSION_CLEANUP_KEY, cleanup.length > 0 ? JSON.stringify(cleanup) : null);
   }
 
   private static mergePendingProviderSessionCleanup(
@@ -508,12 +516,12 @@ export class RuntimeStore {
     active: Promise<void> | null;
     requested: boolean;
   } {
-    const existing = this.pendingProviderSessionCleanupDrains.get(memoryDb);
+    const existing = RuntimeStore.pendingProviderSessionCleanupDrains.get(memoryDb);
     if (existing) {
       return existing;
     }
     const created = { active: null, requested: false };
-    this.pendingProviderSessionCleanupDrains.set(memoryDb, created);
+    RuntimeStore.pendingProviderSessionCleanupDrains.set(memoryDb, created);
     return created;
   }
 
@@ -521,7 +529,7 @@ export class RuntimeStore {
     sessions: PendingProviderSessionCleanup[],
     env: Env,
   ): Promise<PendingProviderSessionCleanup[]> {
-    const cleanupByProvider = new Map<"copilot" | "azure-openai", Set<string>>();
+    const cleanupByProvider = new Map<ProviderId, Set<string>>();
     for (const session of sessions) {
       const bucket = cleanupByProvider.get(session.providerId) ?? new Set<string>();
       bucket.add(session.sessionId);
@@ -532,16 +540,16 @@ export class RuntimeStore {
       let client: Awaited<ReturnType<typeof createProviderClientForProvider>>["client"] | null = null;
       try {
         client = (await createProviderClientForProvider(env, providerId, logger)).client;
-          for (const sessionId of sessionIds) {
-            try {
-              await client.deleteSession(sessionId);
-            } catch (error) {
-              if (isMissingProviderSessionError(error)) {
-                continue;
-              }
-              logger.warn(
-                { error, providerId, sessionId },
-                "Failed to delete orphaned provider-managed session during runtime recovery",
+        for (const sessionId of sessionIds) {
+          try {
+            await client.deleteSession(sessionId);
+          } catch (error) {
+            if (isMissingProviderSessionError(error)) {
+              continue;
+            }
+            logger.warn(
+              { error, providerId, sessionId },
+              "Failed to delete orphaned provider-managed session during runtime recovery",
             );
             remaining.push({ providerId, sessionId });
           }

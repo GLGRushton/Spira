@@ -58,8 +58,12 @@ describe("session-config", () => {
 
   it("advertises spira_propose_upgrade only when upgrade proposals are available", () => {
     expect(getUpgradeToolInstructions({})).toBe("");
-    expect(getUpgradeToolInstructions({ requestUpgradeProposal: async () => undefined })).toContain(
+    expect(getUpgradeToolInstructions({ requestUpgradeProposal: async () => undefined }, "openai-escalation")).toBe("");
+    expect(getUpgradeToolInstructions({ requestUpgradeProposal: async () => undefined }, "openai")).toContain(
       "spira_propose_upgrade",
+    );
+    expect(getUpgradeToolInstructions({ requestUpgradeProposal: async () => undefined }, "openai")).toContain(
+      "Do not use it to ask for model escalation",
     );
   });
 
@@ -77,5 +81,25 @@ describe("session-config", () => {
     expect(config.systemMessage.sections?.custom_instructions?.content).toContain(
       "Do not claim a specific background-agent model actually ran unless a returned tool result explicitly confirms it.",
     );
+  });
+
+  it("steers file edits toward apply_patch and away from partial write_file overwrites", () => {
+    const config = createSessionConfig({
+      env: parseEnv({}),
+      toolAggregator: {
+        getTools: () => [],
+      } as never,
+      toolBridgeOptions: {},
+      onEvent: () => undefined,
+      onPermissionRequest: async () => ({ kind: "approve-once" }),
+    });
+
+    expect(config.systemMessage.sections?.custom_instructions?.content).toContain(
+      "use apply_patch for targeted edits to existing files",
+    );
+    expect(config.systemMessage.sections?.custom_instructions?.content).toContain(
+      "Do not use write_file for partial edits to an existing file.",
+    );
+    expect(config.systemMessage.sections?.custom_instructions?.content).toContain("overwriteExisting: true");
   });
 });

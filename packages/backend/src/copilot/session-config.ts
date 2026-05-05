@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { type Env, SUBAGENT_DOMAINS, type SubagentDomain } from "@spira/shared";
 import type { McpToolAggregator } from "../mcp/tool-aggregator.js";
+import { isEscalationProvider } from "../provider/provider-config.js";
 import type {
   ProviderCapabilities,
   ProviderHostContinuityState,
@@ -39,6 +40,13 @@ const BACKGROUND_AGENT_MODEL_WARNING = [
   "Background agent tooling may accept a requested model ID, but the host runtime can still fall back to its default model.",
   "Do not claim a specific background-agent model actually ran unless a returned tool result explicitly confirms it.",
   "Until then, describe the model as requested or unconfirmed rather than as executed fact.",
+].join("\n");
+
+const HOST_EDITING_TOOL_INSTRUCTIONS = [
+  "For file changes, use apply_patch for targeted edits to existing files. It accepts the standard *** Begin Patch / *** End Patch format and git-style unified diff.",
+  "Use write_file only to create a new file, append content, or intentionally replace an entire file.",
+  "Do not use write_file for partial edits to an existing file.",
+  "If you intentionally replace an existing file with write_file, set overwriteExisting: true. expectedSha256 is optional when you need a cheap guard against stale content.",
 ].join("\n");
 
 export const VOICE_RESPONSE_INSTRUCTIONS = [
@@ -114,12 +122,31 @@ export const getToolAwarenessInstructions = (
 
 export const getUpgradeToolInstructions = (
   toolBridgeOptions: Pick<ToolBridgeOptions, "requestUpgradeProposal">,
+  providerId?: ProviderId,
 ): string => {
-  if (!toolBridgeOptions.requestUpgradeProposal) {
+  if (!toolBridgeOptions.requestUpgradeProposal || isEscalationProvider(providerId)) {
     return "";
   }
 
-  return "If you modify local Spira code or configuration and need the app to apply those changes, use the spira_propose_upgrade tool with the changed file paths instead of guessing the restart scope yourself.";
+  return [
+    "If you have already modified local Spira code or configuration and need the app to apply those actual changes, use the spira_propose_upgrade tool with the changed file paths instead of guessing the restart scope yourself.",
+    "Do not use it to ask for model escalation, hand work off to a higher-capability model, or submit a speculative list of likely files.",
+  ].join(" ");
+};
+
+export const getSessionEscalationToolInstructions = (
+  toolBridgeOptions: Pick<ToolBridgeOptions, "requestSessionEscalation">,
+  providerId?: ProviderId,
+): string => {
+  if (!toolBridgeOptions.requestSessionEscalation || !isEscalationProvider(providerId)) {
+    return "";
+  }
+
+  return [
+    "If spira_escalate_session is available, treat it as a diagnostic escape hatch for the current station session.",
+    "Use it only when the user explicitly asks to escalate this session.",
+    "Do not use it automatically, do not use it for subagents, and do not treat it as a substitute for the normal failure-triggered escalation path.",
+  ].join(" ");
 };
 
 const buildSessionSystemMessage = (options: {
@@ -127,6 +154,7 @@ const buildSessionSystemMessage = (options: {
   toolAggregator: McpToolAggregator;
   toolBridgeOptions: ToolBridgeOptions;
   additionalInstructions?: string | null;
+  providerId?: ProviderId;
   runtimeRecoverySection?: ProviderSystemMessageSection | null;
 }) => {
   const toolAwarenessInstructions = getToolAwarenessInstructions(
@@ -134,7 +162,11 @@ const buildSessionSystemMessage = (options: {
     options.toolAggregator,
     options.toolBridgeOptions.delegationDomains ?? [],
   );
-  const upgradeToolInstructions = getUpgradeToolInstructions(options.toolBridgeOptions);
+  const upgradeToolInstructions = getUpgradeToolInstructions(options.toolBridgeOptions, options.providerId);
+  const sessionEscalationToolInstructions = getSessionEscalationToolInstructions(
+    options.toolBridgeOptions,
+    options.providerId,
+  );
 
   return {
     mode: "customize" as const,
@@ -153,7 +185,9 @@ const buildSessionSystemMessage = (options: {
         content: [
           "Prefer short, clear answers. Use the name Shinra naturally when self-identifying, but keep the focus on solving the user's task.",
           BACKGROUND_AGENT_MODEL_WARNING,
+          HOST_EDITING_TOOL_INSTRUCTIONS,
           upgradeToolInstructions,
+          sessionEscalationToolInstructions,
           toolAwarenessInstructions,
           options.additionalInstructions?.trim() ?? "",
         ]
@@ -175,6 +209,7 @@ export const getSessionSystemMessageHash = (options: {
   toolAggregator: McpToolAggregator;
   toolBridgeOptions: ToolBridgeOptions;
   additionalInstructions?: string | null;
+  providerId?: ProviderId;
 }): string =>
   createHash("sha256")
     .update(

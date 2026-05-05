@@ -20,8 +20,14 @@ const AI_PROVIDER_RUNTIME_CONFIG_KEYS: RuntimeConfigKey[] = [
   "azureOpenAiApiKey",
   "azureOpenAiEndpoint",
   "azureOpenAiDeployment",
+  "azureOpenAiEscalationDeployment",
   "azureOpenAiApiVersion",
   "azureOpenAiModel",
+  "azureOpenAiEscalationModel",
+  "openAiApiKey",
+  "openAiBaseUrl",
+  "openAiModel",
+  "openAiEscalationModel",
 ];
 const AI_PROVIDER_RUNTIME_CONFIG_KEY_SET = new Set<RuntimeConfigKey>(AI_PROVIDER_RUNTIME_CONFIG_KEYS);
 const SQL_SERVER_RUNTIME_CONFIG_KEYS: RuntimeConfigKey[] = [

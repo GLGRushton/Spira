@@ -38,6 +38,28 @@ export const registerCoreSpiraUiTools = (server: McpServer): void => {
   );
 
   server.registerTool(
+    "spira_ui_get_context",
+    {
+      description:
+        "Read a compact operations summary of Spira's active UI state, including chat activity, prompts, and problematic MCP or agent room states.",
+      inputSchema: EmptySchema,
+      annotations: { readOnlyHint: true, idempotentHint: false },
+    },
+    async () => {
+      try {
+        const result = await callSpiraUiBridge({ kind: "get-context" });
+        if (result.type !== "context") {
+          return errorResult("The Spira UI bridge returned an unexpected response.");
+        }
+
+        return successResult(result, "Read the current compact Spira UI context.");
+      } catch (error) {
+        return errorResult(error instanceof Error ? error.message : "Failed to read the Spira UI context.");
+      }
+    },
+  );
+
+  server.registerTool(
     "spira_ui_get_snapshot",
     {
       description:

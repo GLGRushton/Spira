@@ -8,6 +8,7 @@ export type {
 } from "./conversation-types.js";
 export type { ChatMessage, ToolCallStatus } from "./chat-types.js";
 export type { Env, McpServersFile } from "./config-schema.js";
+export type { ModelProviderId } from "./model-provider.js";
 export type {
   ProjectRepoMappingSummary,
   ProjectRepoMappingsSnapshot,
@@ -190,6 +191,8 @@ export type {
   SpiraUiBridgeResponse,
   SpiraUiBridgeResult,
   SpiraUiCapabilities,
+  SpiraUiContext,
+  SpiraUiContextPermissionSummary,
   SpiraUiCreateSubagentConfig,
   SpiraUiChatTranscript,
   SpiraUiChatSummary,
@@ -226,6 +229,7 @@ export {
 } from "./service-profile-types.js";
 export { SUBAGENT_DOMAIN_IDS, SUBAGENT_SCOPE_IDS } from "./subagent-types.js";
 export { SUBAGENT_DOMAINS } from "./subagent-types.js";
+export { MODEL_PROVIDERS } from "./model-provider.js";
 export {
   TICKET_RUN_ATTEMPT_STATUSES,
   TICKET_RUN_CLEANUP_STATES,

@@ -33,14 +33,14 @@ import type {
   TicketRunGitStateResult,
   TicketRunMissionEventSummary,
   TicketRunMissionTimelineResult,
-  TicketRunRepoIntelligenceCandidatesResult,
-  TicketRunRepoIntelligenceEntrySummary,
   TicketRunProofRunSummary,
   TicketRunProofSnapshot,
   TicketRunProofSnapshotResult,
   TicketRunProofSummary,
   TicketRunPullRequestLinks,
   TicketRunPushAction,
+  TicketRunRepoIntelligenceCandidatesResult,
+  TicketRunRepoIntelligenceEntrySummary,
   TicketRunReviewRepoEntry,
   TicketRunReviewRepoState,
   TicketRunReviewSnapshot,
@@ -81,6 +81,7 @@ const DEFAULT_GIT_COMMAND_MAX_BUFFER_BYTES = 20 * 1024 * 1024;
 const GITHUB_HTTP_EXTRAHEADER_CONFIG_KEY = "http.https://github.com/.extraheader";
 const GITHUB_CREDENTIAL_PROMPT_DISABLED_PATTERN =
   /Cannot prompt because user interactivity has been disabled|terminal prompts disabled|could not read Username for 'https:\/\/github\.com'/iu;
+const GIT_FAILURE_NOISE_PATTERNS = [/^Git command (?:failed|timed out) in .+?: git /iu, /^Command failed:\s*git\b/iu];
 
 export interface GitCommandResult {
   stdout: string;
@@ -221,6 +222,71 @@ const isGitHubCredentialPromptFailure = (error: unknown): boolean => {
   const text =
     error instanceof Error ? `${error.message}\n${error.stack ?? ""}` : typeof error === "string" ? error : "";
   return text.length > 0 && GITHUB_CREDENTIAL_PROMPT_DISABLED_PATTERN.test(text);
+};
+
+const collectNestedGitErrorText = (error: unknown, seen = new Set<object>()): string[] => {
+  if (typeof error === "string") {
+    return [error];
+  }
+
+  if (!(error instanceof Error) && (typeof error !== "object" || error === null)) {
+    return [];
+  }
+
+  const parts: string[] = [];
+  if (error instanceof Error) {
+    parts.push(error.message);
+  }
+
+  if (typeof error === "object" && error !== null) {
+    if (seen.has(error)) {
+      return parts;
+    }
+    seen.add(error);
+
+    const stderr = "stderr" in error && typeof error.stderr === "string" ? error.stderr : null;
+    const stdout = "stdout" in error && typeof error.stdout === "string" ? error.stdout : null;
+    if (stderr) {
+      parts.push(stderr);
+    }
+    if (stdout) {
+      parts.push(stdout);
+    }
+
+    if ("cause" in error && error.cause !== undefined) {
+      parts.push(...collectNestedGitErrorText(error.cause, seen));
+    }
+  }
+
+  return parts;
+};
+
+const extractGitFailureDetail = (error: unknown): string | null => {
+  const lines = collectNestedGitErrorText(error)
+    .flatMap((part) => part.split(/\r?\n/u))
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .filter((line) => !line.startsWith("at "))
+    .filter((line) => !GIT_FAILURE_NOISE_PATTERNS.some((pattern) => pattern.test(line)));
+
+  if (lines.length === 0) {
+    return null;
+  }
+
+  const uniqueLines = [...new Set(lines)];
+  const emphasizedLines = uniqueLines.filter(
+    (line) =>
+      /^(?:fatal|remote|error|warning|hint):/iu.test(line) ||
+      /(authentication failed|repository not found|access denied|permission denied|terminal prompts disabled|could not read username|cannot prompt|not a git repository|no url found for submodule path|did not contain)/iu.test(
+        line,
+      ),
+  );
+  const detail = (emphasizedLines.length > 0 ? emphasizedLines : uniqueLines)
+    .slice(0, 3)
+    .join(" ")
+    .replace(/\s+/gu, " ")
+    .trim();
+  return detail.length > 0 ? detail : null;
 };
 
 const stripInlineGitConfigs = (args: readonly string[]): string[] => {
@@ -1221,7 +1287,7 @@ export class TicketRunService {
                 updatedAt: cancelledAt,
               }
             : attempt,
-          ),
+        ),
       });
       this.recordMissionEvent(cancelledRun, cancelledRun.missionPhase, "attempt-cancelled", {
         attemptId: latestAttempt.attemptId,
@@ -1320,7 +1386,9 @@ export class TicketRunService {
       const run = this.getFreshRun(runId);
       const entry = memoryDb.getRepoIntelligenceEntry(entryId);
       if (!entry || !entry.tags.includes(`run:${runId}`) || entry.source !== "learned") {
-        throw new ConfigError(`Mission ${run.ticketId} does not expose a learned repo intelligence candidate named ${entryId}.`);
+        throw new ConfigError(
+          `Mission ${run.ticketId} does not expose a learned repo intelligence candidate named ${entryId}.`,
+        );
       }
 
       const approvedEntry = memoryDb.setRepoIntelligenceApproval(entryId, true);
@@ -2014,11 +2082,15 @@ export class TicketRunService {
         "--recursive",
       ]);
     } catch (error) {
+      const detail = extractGitFailureDetail(error);
+      const detailSentence = detail ? ` Git reported: ${detail}${/[.!?]$/u.test(detail) ? "" : "."}` : "";
+      const missionGitTokenHint =
+        !missionGitToken && isGitHubCredentialPromptFailure(error)
+          ? " Set a mission GitHub PAT in Settings so Spira can clone private GitHub submodules."
+          : "";
       throw new SpiraError(
         "MISSIONS_SUBMODULE_UPDATE_FAILED",
-        !missionGitToken && isGitHubCredentialPromptFailure(error)
-          ? `Failed to hydrate submodules for ${worktree.repoRelativePath}. Set a mission GitHub PAT in Settings so Spira can clone private GitHub submodules.`
-          : `Failed to hydrate submodules for ${worktree.repoRelativePath}.`,
+        `Failed to hydrate submodules for ${worktree.repoRelativePath}.${detailSentence}${missionGitTokenHint}`,
         error,
       );
     }
@@ -2214,7 +2286,7 @@ export class TicketRunService {
                 updatedAt: completedAt,
               }
             : attempt,
-          ),
+        ),
       });
       this.recordMissionEvent(updatedRun, updatedRun.missionPhase, "attempt-finished", {
         attemptId,
@@ -3659,7 +3731,9 @@ export class TicketRunService {
     if (!memoryDb) {
       return;
     }
-    const entries = buildLearnedRepoIntelligenceCandidates(run).map((candidate) => memoryDb.upsertRepoIntelligence(candidate));
+    const entries = buildLearnedRepoIntelligenceCandidates(run).map((candidate) =>
+      memoryDb.upsertRepoIntelligence(candidate),
+    );
     if (entries.length === 0) {
       return;
     }

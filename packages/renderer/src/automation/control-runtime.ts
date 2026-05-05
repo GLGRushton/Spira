@@ -8,7 +8,7 @@ import {
   type SpiraUiCapabilities,
 } from "@spira/shared";
 import { performSpiraUiAction } from "./control-actions.js";
-import { buildSpiraUiChatTranscript, buildSpiraUiSnapshot } from "./control-snapshot.js";
+import { buildSpiraUiChatTranscript, buildSpiraUiContext, buildSpiraUiSnapshot } from "./control-snapshot.js";
 import { waitForSpiraUiCondition } from "./control-waits.js";
 
 let spiraUiControlReady = false;
@@ -39,6 +39,11 @@ const handleSpiraUiCommand = async (command: SpiraUiBridgeCommand): Promise<Spir
       return {
         type: "capabilities",
         capabilities: getCapabilities(),
+      };
+    case "get-context":
+      return {
+        type: "context",
+        context: buildSpiraUiContext(),
       };
     case "get-snapshot":
       return {

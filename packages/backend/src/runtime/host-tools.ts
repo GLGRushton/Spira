@@ -1,6 +1,6 @@
-import { randomUUID } from "node:crypto";
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
+import { createHash, randomUUID } from "node:crypto";
+import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { ProviderToolDefinition, ProviderToolResultObject } from "../provider/types.js";
 import { createRuntimeLedgerEvent } from "./runtime-contract.js";
@@ -138,7 +138,9 @@ const formatDirectoryTree = async (targetPath: string, depth = 0, maxDepth = 2):
   const entries = await readdir(targetPath, { withFileTypes: true });
   const visibleEntries = entries
     .filter((entry) => !isHiddenEntry(entry.name))
-    .sort((left, right) => Number(right.isDirectory()) - Number(left.isDirectory()) || left.name.localeCompare(right.name));
+    .sort(
+      (left, right) => Number(right.isDirectory()) - Number(left.isDirectory()) || left.name.localeCompare(right.name),
+    );
   const lines: string[] = [];
   for (const entry of visibleEntries) {
     const prefix = depth === 0 ? "" : `${"  ".repeat(depth)}- `;
@@ -378,12 +380,60 @@ const renderRg = async (root: string, args: Record<string, unknown>): Promise<un
 };
 
 type ParsedPatch =
-  | { type: "add"; path: string; lines: string[] }
+  | { type: "add"; path: string; lines: string[]; endsWithNewline?: boolean | null }
   | { type: "delete"; path: string }
-  | { type: "update"; path: string; moveTo?: string; hunks: Array<{ lines: string[] }> };
+  | {
+      type: "copy";
+      path: string;
+      copyTo: string;
+      hunks: Array<{ lines: string[] }>;
+      endsWithNewline?: boolean | null;
+    }
+  | {
+      type: "update";
+      path: string;
+      moveTo?: string;
+      hunks: Array<{ lines: string[] }>;
+      endsWithNewline?: boolean | null;
+    };
 
-const parsePatch = (patch: string): ParsedPatch[] => {
-  const lines = normalizeLineEndings(patch).split("\n");
+const GIT_DIFF_METADATA_PREFIXES = [
+  "diff --git ",
+  "index ",
+  "new file mode ",
+  "deleted file mode ",
+  "old mode ",
+  "new mode ",
+  "similarity index ",
+  "dissimilarity index ",
+  "rename from ",
+  "rename to ",
+  "copy from ",
+  "copy to ",
+];
+
+const isGitDiffMetadataLine = (line: string): boolean =>
+  GIT_DIFF_METADATA_PREFIXES.some((prefix) => line.startsWith(prefix));
+
+const parseGitDiffPath = (value: string): string => {
+  const trimmed = value.trim();
+  const headerValue = trimmed.includes("\t") ? trimmed.slice(0, trimmed.indexOf("\t")) : trimmed;
+  const unquoted =
+    headerValue.startsWith('"') && headerValue.endsWith('"')
+      ? headerValue.slice(1, Math.max(1, headerValue.length - 1))
+      : headerValue;
+  if (unquoted === "/dev/null") {
+    return unquoted;
+  }
+  return unquoted.replace(/^[ab]\//, "");
+};
+
+const extractAddedLines = (hunks: Array<{ lines: string[] }>): string[] =>
+  hunks.flatMap((hunk) =>
+    hunk.lines.filter((line) => line.startsWith(" ") || line.startsWith("+")).map((line) => line.slice(1)),
+  );
+
+const parseStructuredPatch = (lines: string[]): ParsedPatch[] => {
   if (lines[0] !== "*** Begin Patch") {
     throw new Error("Patch must begin with *** Begin Patch");
   }
@@ -458,6 +508,192 @@ const parsePatch = (patch: string): ParsedPatch[] => {
   throw new Error("Patch is missing *** End Patch");
 };
 
+const parseGitUnifiedDiff = (lines: string[]): ParsedPatch[] => {
+  const operations: ParsedPatch[] = [];
+  let index = 0;
+  while (index < lines.length) {
+    let copyFrom: string | null = null;
+    let copyTo: string | null = null;
+    let renameFrom: string | null = null;
+    let renameTo: string | null = null;
+    while (index < lines.length) {
+      const line = lines[index];
+      if (!line) {
+        index += 1;
+        continue;
+      }
+      if (line.startsWith("diff --git ") && ((copyFrom && copyTo) || (renameFrom && renameTo))) {
+        break;
+      }
+      if (line.startsWith("copy from ")) {
+        copyFrom = line.slice("copy from ".length).trim();
+        index += 1;
+        continue;
+      }
+      if (line.startsWith("copy to ")) {
+        copyTo = line.slice("copy to ".length).trim();
+        index += 1;
+        continue;
+      }
+      if (line.startsWith("rename from ")) {
+        renameFrom = line.slice("rename from ".length).trim();
+        index += 1;
+        continue;
+      }
+      if (line.startsWith("rename to ")) {
+        renameTo = line.slice("rename to ".length).trim();
+        index += 1;
+        continue;
+      }
+      if (isGitDiffMetadataLine(line)) {
+        index += 1;
+        continue;
+      }
+      break;
+    }
+    if (index >= lines.length) {
+      if (copyFrom && copyTo) {
+        operations.push({
+          type: "copy",
+          path: copyFrom,
+          copyTo,
+          hunks: [],
+          endsWithNewline: null,
+        });
+      }
+      if (renameFrom && renameTo) {
+        operations.push({
+          type: "update",
+          path: renameFrom,
+          moveTo: renameTo,
+          hunks: [],
+          endsWithNewline: null,
+        });
+      }
+      break;
+    }
+    const line = lines[index];
+    if (!line.startsWith("--- ")) {
+      if (copyFrom && copyTo) {
+        operations.push({
+          type: "copy",
+          path: copyFrom,
+          copyTo,
+          hunks: [],
+          endsWithNewline: null,
+        });
+        continue;
+      }
+      if (renameFrom && renameTo) {
+        operations.push({
+          type: "update",
+          path: renameFrom,
+          moveTo: renameTo,
+          hunks: [],
+          endsWithNewline: null,
+        });
+        continue;
+      }
+      throw new Error(`Unsupported patch line: ${line}`);
+    }
+    const oldPath = parseGitDiffPath(line.slice(4));
+    index += 1;
+    if (!lines[index]?.startsWith("+++ ")) {
+      throw new Error(`Unified diff is missing the +++ header for ${oldPath}.`);
+    }
+    const newPath = parseGitDiffPath(lines[index].slice(4));
+    index += 1;
+    const hunks: Array<{ lines: string[] }> = [];
+    let currentHunk: string[] | null = null;
+    let endsWithNewline = true;
+    while (index < lines.length) {
+      const currentLine = lines[index];
+      if (currentLine.startsWith("--- ") || currentLine.startsWith("diff --git ")) {
+        break;
+      }
+      if (!currentLine || isGitDiffMetadataLine(currentLine)) {
+        index += 1;
+        continue;
+      }
+      if (currentLine.startsWith("@@")) {
+        if (currentHunk) {
+          hunks.push({ lines: currentHunk });
+        }
+        currentHunk = [];
+        index += 1;
+        continue;
+      }
+      if (currentLine === "\\ No newline at end of file") {
+        const previousLine = currentHunk?.[currentHunk.length - 1] ?? "";
+        if (previousLine.startsWith("+") || previousLine.startsWith(" ")) {
+          endsWithNewline = false;
+        }
+        index += 1;
+        continue;
+      }
+      if (!currentHunk) {
+        throw new Error(`Unsupported patch line: ${currentLine}`);
+      }
+      if (!currentLine.startsWith(" ") && !currentLine.startsWith("+") && !currentLine.startsWith("-")) {
+        throw new Error(`Unsupported patch line: ${currentLine}`);
+      }
+      currentHunk.push(currentLine);
+      index += 1;
+    }
+    if (currentHunk) {
+      hunks.push({ lines: currentHunk });
+    }
+    if (oldPath === "/dev/null") {
+      if (newPath === "/dev/null") {
+        throw new Error("Unified diff cannot use /dev/null for both file headers.");
+      }
+      operations.push({
+        type: "add",
+        path: newPath,
+        lines: extractAddedLines(hunks),
+        endsWithNewline,
+      });
+      continue;
+    }
+    if (newPath === "/dev/null") {
+      operations.push({ type: "delete", path: oldPath });
+      continue;
+    }
+    if (copyFrom && copyTo) {
+      operations.push({
+        type: "copy",
+        path: copyFrom,
+        copyTo,
+        hunks,
+        endsWithNewline,
+      });
+      continue;
+    }
+    operations.push({
+      type: "update",
+      path: oldPath,
+      ...(oldPath !== newPath ? { moveTo: newPath } : {}),
+      hunks,
+      endsWithNewline,
+    });
+  }
+  return operations;
+};
+
+const parsePatch = (patch: string): ParsedPatch[] => {
+  const lines = normalizeLineEndings(patch).split("\n");
+  if (lines[0] === "*** Begin Patch") {
+    return parseStructuredPatch(lines);
+  }
+  if (
+    lines.some((line) => line.startsWith("diff --git ")) ||
+    (lines.some((line) => line.startsWith("--- ")) && lines.some((line) => line.startsWith("+++ ")))
+  ) {
+    return parseGitUnifiedDiff(lines);
+  }
+  throw new Error("Patch must begin with *** Begin Patch or a git-style unified diff header.");
+};
+
 const findHunkStart = (sourceLines: string[], oldLines: string[], startIndex: number): number => {
   if (oldLines.length === 0) {
     return startIndex;
@@ -471,8 +707,16 @@ const findHunkStart = (sourceLines: string[], oldLines: string[], startIndex: nu
   return -1;
 };
 
-const applyPatchToContent = (content: string, hunks: Array<{ lines: string[] }>): string => {
+const applyPatchToContent = (
+  content: string,
+  hunks: Array<{ lines: string[] }>,
+  endsWithNewline: boolean | null = null,
+): string => {
   const sourceLines = splitLines(content);
+  const originalEndsWithNewline = content.endsWith("\n");
+  if (originalEndsWithNewline && sourceLines[sourceLines.length - 1] === "") {
+    sourceLines.pop();
+  }
   const workingLines = [...sourceLines];
   let searchStart = 0;
   for (const hunk of hunks) {
@@ -489,7 +733,21 @@ const applyPatchToContent = (content: string, hunks: Array<{ lines: string[] }>)
     workingLines.splice(startIndex, oldLines.length, ...newLines);
     searchStart = startIndex + newLines.length;
   }
-  return `${workingLines.join("\n")}${content.endsWith("\n") ? "\n" : ""}`;
+  const shouldEndWithNewline = endsWithNewline ?? originalEndsWithNewline;
+  return `${workingLines.join("\n")}${shouldEndWithNewline ? "\n" : ""}`;
+};
+
+const hashContent = (value: string): string => createHash("sha256").update(value).digest("hex");
+
+const readTextFileIfExists = async (targetPath: string): Promise<string | null> => {
+  try {
+    return await readFile(targetPath, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return null;
+    }
+    throw error;
+  }
 };
 
 const applyPatchToWorkspace = async (root: string, patchText: string): Promise<unknown> => {
@@ -500,7 +758,13 @@ const applyPatchToWorkspace = async (root: string, patchText: string): Promise<u
       case "add": {
         const targetPath = resolveWorkspacePath(root, operation.path);
         await ensureParentDirectory(targetPath);
-        await writeFile(targetPath, `${operation.lines.join("\n")}\n`, "utf8");
+        await writeFile(
+          targetPath,
+          operation.lines.length === 0
+            ? ""
+            : `${operation.lines.join("\n")}${operation.endsWithNewline === false ? "" : "\n"}`,
+          "utf8",
+        );
         changedFiles.push(targetPath);
         break;
       }
@@ -513,7 +777,7 @@ const applyPatchToWorkspace = async (root: string, patchText: string): Promise<u
       case "update": {
         const targetPath = resolveWorkspacePath(root, operation.path);
         const current = await readFile(targetPath, "utf8");
-        const updated = applyPatchToContent(current, operation.hunks);
+        const updated = applyPatchToContent(current, operation.hunks, operation.endsWithNewline ?? null);
         await ensureParentDirectory(targetPath);
         await writeFile(targetPath, updated, "utf8");
         changedFiles.push(targetPath);
@@ -523,6 +787,16 @@ const applyPatchToWorkspace = async (root: string, patchText: string): Promise<u
           await rename(targetPath, movedPath);
           changedFiles.push(movedPath);
         }
+        break;
+      }
+      case "copy": {
+        const sourcePath = resolveWorkspacePath(root, operation.path);
+        const copiedPath = resolveWorkspacePath(root, operation.copyTo);
+        const current = await readFile(sourcePath, "utf8");
+        const updated = applyPatchToContent(current, operation.hunks, operation.endsWithNewline ?? null);
+        await ensureParentDirectory(copiedPath);
+        await writeFile(copiedPath, updated, "utf8");
+        changedFiles.push(copiedPath);
         break;
       }
     }
@@ -698,7 +972,10 @@ class PowerShellSessionManager {
       record.persist?.(record);
     }
     const serialized = this.serialize(record);
-    if (!record.process && (record.status === "completed" || record.status === "failed" || record.status === "stopped")) {
+    if (
+      !record.process &&
+      (record.status === "completed" || record.status === "failed" || record.status === "stopped")
+    ) {
       this.discardTerminalSnapshot(sessionKey);
     }
     return serialized;
@@ -781,11 +1058,7 @@ class PowerShellSessionManager {
     return record;
   }
 
-  private getReadable(
-    sessionKey: string,
-    shellId: string,
-    runtimeSessionId?: string | null,
-  ): PowerShellSessionRecord {
+  private getReadable(sessionKey: string, shellId: string, runtimeSessionId?: string | null): PowerShellSessionRecord {
     const active = this.sessions.get(sessionKey);
     if (active && active.runtimeSessionId === (runtimeSessionId ?? null)) {
       return active;
@@ -972,7 +1245,10 @@ export const createHostTools = (options: {
   stationId?: string | null;
 }): ProviderToolDefinition[] => {
   const shouldPersistPowerShellResource = (state: PowerShellResourceState): boolean =>
-    !(state.mode === "sync" && (state.status === "completed" || state.status === "failed" || state.status === "cancelled"));
+    !(
+      state.mode === "sync" &&
+      (state.status === "completed" || state.status === "failed" || state.status === "cancelled")
+    );
   const deletePersistedPowerShellResource = (shellId: string): void => {
     if (!options.runtimeStore || !options.runtimeSessionId) {
       return;
@@ -992,13 +1268,13 @@ export const createHostTools = (options: {
         ? "cancelled"
         : state.status === "idle"
           ? "idle"
-        : state.status === "failed"
-          ? "failed"
-          : state.status === "completed"
-            ? "completed"
-            : state.status === "unrecoverable"
-              ? "unrecoverable"
-              : "running";
+          : state.status === "failed"
+            ? "failed"
+            : state.status === "completed"
+              ? "completed"
+              : state.status === "unrecoverable"
+                ? "unrecoverable"
+                : "running";
     options.runtimeStore.upsertRuntimeHostResource({
       resourceId: getPowerShellResourceId(options.runtimeSessionId, state.shellId),
       runtimeSessionId: options.runtimeSessionId,
@@ -1119,13 +1395,26 @@ export const createHostTools = (options: {
     },
     {
       name: "write_file",
-      description: "Write or append text to a file inside the current working directory.",
+      description:
+        "Create a new file, append text, or intentionally replace an entire file when overwriteExisting is true. Do not use write_file for partial edits to existing files.",
       parameters: {
         type: "object",
         properties: {
-          path: { type: "string" },
-          content: { type: "string" },
-          append: { type: "boolean" },
+          path: {
+            type: "string",
+            description: "Path to create, append to, or fully replace inside the working directory.",
+          },
+          content: { type: "string", description: "The full text to write or append." },
+          append: { type: "boolean", description: "Append content instead of replacing the file." },
+          overwriteExisting: {
+            type: "boolean",
+            description: "Required when intentionally replacing an existing file with the full provided content.",
+          },
+          expectedSha256: {
+            type: "string",
+            description:
+              "Optional SHA-256 of the current file content to guard an intentional overwrite against stale state.",
+          },
         },
         required: ["path", "content"],
         additionalProperties: false,
@@ -1138,10 +1427,26 @@ export const createHostTools = (options: {
           }
           const targetPath = resolveWorkspacePath(options.workingDirectory, requestedPath);
           const content = typeof args.content === "string" ? args.content : JSON.stringify(args.content, null, 2);
+          const append = getBoolean(args.append);
+          const overwriteExisting = getBoolean(args.overwriteExisting);
+          const expectedSha256 = getString(args.expectedSha256)?.toLowerCase() ?? null;
+          const current = await readTextFileIfExists(targetPath);
+          if (expectedSha256 && current === null) {
+            throw new Error("write_file expectedSha256 was provided, but the target file does not exist.");
+          }
+          if (current !== null && expectedSha256 && hashContent(current) !== expectedSha256) {
+            throw new Error(
+              "write_file refused to overwrite because expectedSha256 did not match the current file content.",
+            );
+          }
+          if (current !== null && !append && !overwriteExisting) {
+            throw new Error(
+              "write_file replaces the entire file. Use apply_patch for partial edits, or set overwriteExisting: true for an intentional full rewrite.",
+            );
+          }
           await ensureParentDirectory(targetPath);
-          if (getBoolean(args.append)) {
-            const current = await readFile(targetPath, "utf8").catch(() => "");
-            await writeFile(targetPath, `${current}${content}`, "utf8");
+          if (append) {
+            await writeFile(targetPath, `${current ?? ""}${content}`, "utf8");
           } else {
             await writeFile(targetPath, content, "utf8");
           }
@@ -1154,11 +1459,15 @@ export const createHostTools = (options: {
     {
       name: "apply_patch",
       description:
-        "Apply a structured patch to files inside the current working directory using the standard *** Begin Patch / *** End Patch format.",
+        "Apply targeted file edits inside the working directory using either the standard *** Begin Patch / *** End Patch format or a git-style unified diff.",
       parameters: {
         type: "object",
         properties: {
-          patch: { type: "string" },
+          patch: {
+            type: "string",
+            description:
+              "A structured Spira patch or a git-style unified diff. Prefer apply_patch over write_file for partial edits to existing files.",
+          },
         },
         required: ["patch"],
         additionalProperties: false,
@@ -1295,19 +1604,17 @@ export const createHostTools = (options: {
           if (!shellId) {
             throw new Error("stop_powershell requires shellId.");
           }
-          const result = (await powerShellSessions
-            .stop(shellId, options.runtimeSessionId)
-            .catch(async () => {
-              const persisted = getPersistedPowerShellResource(shellId);
-              if (!persisted) {
-                throw new Error(`PowerShell session ${shellId} was not found.`);
-              }
-              if ((persisted.status !== "running" && persisted.status !== "idle") || persisted.pid === null) {
-                throw new Error(`PowerShell session ${shellId} is not running.`);
-              }
-              await stopWindowsProcessTree(persisted.pid);
-              return { ...persisted, status: "cancelled", updatedAt: Date.now(), exitCode: null };
-            })) as PowerShellResourceState;
+          const result = (await powerShellSessions.stop(shellId, options.runtimeSessionId).catch(async () => {
+            const persisted = getPersistedPowerShellResource(shellId);
+            if (!persisted) {
+              throw new Error(`PowerShell session ${shellId} was not found.`);
+            }
+            if ((persisted.status !== "running" && persisted.status !== "idle") || persisted.pid === null) {
+              throw new Error(`PowerShell session ${shellId} is not running.`);
+            }
+            await stopWindowsProcessTree(persisted.pid);
+            return { ...persisted, status: "cancelled", updatedAt: Date.now(), exitCode: null };
+          })) as PowerShellResourceState;
           persistPowerShellResource({ ...result, status: "cancelled" });
           return toSuccess(result);
         } catch (error) {

@@ -104,6 +104,51 @@ export interface SpiraUiAssistantDockSummary {
   indicators?: string[];
 }
 
+export interface SpiraUiContextPermissionSummary {
+  requestId: string;
+  toolName?: string;
+  action?: string;
+  stationId?: string;
+}
+
+export interface SpiraUiContext {
+  activeView: SpiraUiView;
+  activeMissionRoom?: MissionUiRoom;
+  assistantState: AssistantState;
+  connectionStatus: ConnectionStatus;
+  chat: {
+    isStreaming: boolean;
+    isAborting: boolean;
+    isResetConfirming: boolean;
+    isResetting: boolean;
+    hasDraft: boolean;
+    draftLength: number;
+    messageCount: number;
+    lastUserMessage?: SpiraUiMessageSummary;
+    lastAssistantMessage?: SpiraUiMessageSummary;
+    awaitingQuestion?: SpiraUiMessageSummary;
+  };
+  permissions: {
+    count: number;
+    requests: SpiraUiContextPermissionSummary[];
+  };
+  banners: {
+    upgradeVisible: boolean;
+    protocolVisible: boolean;
+    upgradeBanner: SpiraUiUpgradeBannerSummary | null;
+    protocolBanner: SpiraUiUpgradeBannerSummary | null;
+  };
+  mcp: {
+    total: number;
+    problematic: McpServerStatus[];
+  };
+  agentRooms: {
+    total: number;
+    problematic: SpiraUiAgentRoomSummary[];
+  };
+  assistantDock: SpiraUiAssistantDockSummary;
+}
+
 export interface SpiraUiAgentRoomSummary {
   roomId: `agent:${string}`;
   label: string;
@@ -208,6 +253,7 @@ export type SpiraUiWaitCondition =
 export type SpiraUiBridgeCommand =
   | { kind: "ping" }
   | { kind: "get-capabilities" }
+  | { kind: "get-context" }
   | { kind: "get-snapshot" }
   | { kind: "get-chat-messages"; limit?: number }
   | { kind: "perform-action"; action: SpiraUiAction }
@@ -216,6 +262,7 @@ export type SpiraUiBridgeCommand =
 export type SpiraUiBridgeResult =
   | { type: "pong"; capabilities: SpiraUiCapabilities }
   | { type: "capabilities"; capabilities: SpiraUiCapabilities }
+  | { type: "context"; context: SpiraUiContext }
   | { type: "snapshot"; snapshot: SpiraUiSnapshot }
   | { type: "chat-messages"; transcript: SpiraUiChatTranscript }
   | { type: "action-result"; action: SpiraUiActionType; snapshot: SpiraUiSnapshot }

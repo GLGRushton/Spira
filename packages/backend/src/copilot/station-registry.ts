@@ -65,6 +65,7 @@ export interface AwaitStationResponseResult {
   messageId: string;
   timestamp: number;
   autoSpeak?: boolean;
+  model?: string | null;
 }
 
 interface EmitAssistantMessageOptions {
@@ -72,6 +73,7 @@ interface EmitAssistantMessageOptions {
   persist?: boolean;
   timestamp?: number;
   messageId?: string;
+  model?: string | null;
 }
 
 interface StationRegistryOptions {
@@ -601,6 +603,7 @@ export class StationRegistry {
       timestamp: options.timestamp ?? Date.now(),
       autoSpeak: options.autoSpeak,
       persist: options.persist,
+      ...(options.model ? { model: options.model } : {}),
     });
   }
 
@@ -656,8 +659,8 @@ export class StationRegistry {
           stationId: station.stationId,
         });
       }),
-      register("assistant:response-end", ({ messageId, text, timestamp, autoSpeak }) => {
-        this.persistAssistantMessage(station, messageId, text, timestamp, { autoSpeak });
+      register("assistant:response-end", ({ messageId, text, timestamp, autoSpeak, model }) => {
+        this.persistAssistantMessage(station, messageId, text, timestamp, { autoSpeak, model });
         this.options.transport.send({
           type: "chat:message",
           stationId: station.stationId,
@@ -667,6 +670,7 @@ export class StationRegistry {
             content: text,
             timestamp,
             autoSpeak,
+            ...(model ? { model } : {}),
           },
         });
         this.options.transport.send({
@@ -676,9 +680,9 @@ export class StationRegistry {
           stationId: station.stationId,
         });
       }),
-      register("chat:assistant-message", ({ id, text, timestamp, autoSpeak, persist }) => {
+      register("chat:assistant-message", ({ id, text, timestamp, autoSpeak, persist, model }) => {
         if (persist !== false) {
-          this.persistAssistantMessage(station, id, text, timestamp, { autoSpeak });
+          this.persistAssistantMessage(station, id, text, timestamp, { autoSpeak, model });
         }
         this.options.transport.send({
           type: "chat:message",
@@ -689,6 +693,7 @@ export class StationRegistry {
             content: text,
             timestamp,
             autoSpeak,
+            ...(model ? { model } : {}),
           },
         });
         this.options.transport.send({
@@ -696,6 +701,20 @@ export class StationRegistry {
           conversationId: id,
           messageId: id,
           stationId: station.stationId,
+        });
+      }),
+      register("assistant:message-model", ({ messageId, text, timestamp, model }) => {
+        this.persistAssistantMessage(station, messageId, text, timestamp, { model });
+        this.options.transport.send({
+          type: "chat:message",
+          stationId: station.stationId,
+          message: {
+            id: messageId,
+            role: "assistant",
+            content: text,
+            timestamp,
+            model,
+          },
         });
       }),
       register("assistant:tool-call", (callId: string, toolName: string, args: Record<string, unknown>) => {
@@ -927,7 +946,7 @@ export class StationRegistry {
     id: string,
     text: string,
     timestamp: number,
-    options: { autoSpeak?: boolean; wasAborted?: boolean } = {},
+    options: { autoSpeak?: boolean; wasAborted?: boolean; model?: string | null } = {},
   ): void {
     const conversationId = this.ensureActiveConversation(station, timestamp);
     if (!this.options.memoryDb || !conversationId) {
@@ -939,6 +958,7 @@ export class StationRegistry {
       conversationId,
       role: "assistant",
       content: text,
+      model: options.model ?? null,
       timestamp,
       autoSpeak: options.autoSpeak,
       wasAborted: options.wasAborted,

@@ -3,12 +3,13 @@ import type { Env } from "@spira/shared";
 import type { Logger } from "pino";
 import { ProviderError } from "../util/errors.js";
 import { setUnrefTimeout } from "../util/timers.js";
-import { createAzureOpenAiProviderClient, type AzureOpenAiAuthStrategy } from "./azure-openai/client-factory.js";
-import { createCopilotProviderClient, type CopilotAuthStrategy } from "./copilot/client-factory.js";
+import { type AzureOpenAiAuthStrategy, createAzureOpenAiProviderClient } from "./azure-openai/client-factory.js";
+import { type CopilotAuthStrategy, createCopilotProviderClient } from "./copilot/client-factory.js";
+import { type OpenAiAuthStrategy, createOpenAiProviderClient } from "./openai/client-factory.js";
 import { getConfiguredProviderId } from "./provider-config.js";
 import type { ProviderClient, ProviderId, ProviderSession, ProviderSessionConfig } from "./types.js";
 
-export type ProviderAuthStrategy = CopilotAuthStrategy | AzureOpenAiAuthStrategy;
+export type ProviderAuthStrategy = CopilotAuthStrategy | AzureOpenAiAuthStrategy | OpenAiAuthStrategy;
 
 export const createProviderClient = async (
   env: Env,
@@ -24,17 +25,17 @@ export const createProviderClientForProvider = async (
 ): Promise<{ client: ProviderClient; strategy: ProviderAuthStrategy }> => {
   switch (providerId) {
     case "azure-openai":
-      return createAzureOpenAiProviderClient(env, logger);
-    case "copilot":
+    case "azure-openai-escalation":
+      return createAzureOpenAiProviderClient(env, logger, providerId);
+    case "openai":
+    case "openai-escalation":
+      return createOpenAiProviderClient(env, logger, providerId);
     default:
       return createCopilotProviderClient(env, logger);
   }
 };
 
-export const stopProviderClient = async (
-  client: ProviderClient,
-  logger: Pick<Logger, "warn">,
-): Promise<void> => {
+export const stopProviderClient = async (client: ProviderClient, logger: Pick<Logger, "warn">): Promise<void> => {
   try {
     const stopErrors = await client.stop();
     if (stopErrors.length > 0) {

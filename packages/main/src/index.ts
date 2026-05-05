@@ -288,7 +288,8 @@ const RUNTIME_CONFIG_METADATA: Record<
   modelProvider: {
     envKey: "SPIRA_MODEL_PROVIDER",
     label: "Model provider",
-    description: 'Selects the active provider adapter for Shinra turns, such as "copilot" or "azure-openai".',
+    description:
+      'Selects the active provider adapter for Shinra turns, such as "copilot", "azure-openai", "azure-openai-escalation", "openai", or "openai-escalation".',
     secret: false,
   },
   githubToken: {
@@ -315,6 +316,12 @@ const RUNTIME_CONFIG_METADATA: Record<
     description: "The Azure OpenAI deployment name that backs Shinra's turns.",
     secret: false,
   },
+  azureOpenAiEscalationDeployment: {
+    envKey: "AZURE_OPENAI_ESCALATION_DEPLOYMENT",
+    label: "Azure OpenAI escalation deployment",
+    description: "The Azure OpenAI deployment used by the experimental escalation provider after it promotes a session.",
+    secret: false,
+  },
   azureOpenAiApiVersion: {
     envKey: "AZURE_OPENAI_API_VERSION",
     label: "Azure OpenAI API version",
@@ -326,6 +333,37 @@ const RUNTIME_CONFIG_METADATA: Record<
     label: "Azure OpenAI model label",
     description:
       "Optional model label for telemetry and diagnostics when the deployment name is not descriptive enough.",
+    secret: false,
+  },
+  azureOpenAiEscalationModel: {
+    envKey: "AZURE_OPENAI_ESCALATION_MODEL",
+    label: "Azure OpenAI escalation model label",
+    description:
+      "Optional telemetry label for the experimental Azure escalation deployment when its deployment name is not descriptive enough.",
+    secret: false,
+  },
+  openAiApiKey: {
+    envKey: "OPENAI_API_KEY",
+    label: "OpenAI API key",
+    description: "Used when the OpenAI provider adapter is selected.",
+    secret: true,
+  },
+  openAiBaseUrl: {
+    envKey: "OPENAI_BASE_URL",
+    label: "OpenAI base URL",
+    description: "Optional OpenAI-compatible base URL. Leave unset to use https://api.openai.com/v1.",
+    secret: false,
+  },
+  openAiModel: {
+    envKey: "OPENAI_MODEL",
+    label: "OpenAI default model",
+    description: "Default OpenAI model for Shinra turns when no explicit requested model is supplied.",
+    secret: false,
+  },
+  openAiEscalationModel: {
+    envKey: "OPENAI_ESCALATION_MODEL",
+    label: "OpenAI escalation model",
+    description: "The OpenAI model used by the experimental escalation provider after it promotes a session.",
     secret: false,
   },
   missionGitHubToken: {
@@ -502,16 +540,15 @@ const getRuntimeConfigSummary = (): RuntimeConfigSummary =>
       const metadata = RUNTIME_CONFIG_METADATA[key];
       const storedValue = getStoredRuntimeConfig()[key];
       const envValue = process.env[metadata.envKey];
-      const currentValue =
-        metadata.secret
+      const currentValue = metadata.secret
+        ? null
+        : storedValue === null
           ? null
-          : storedValue === null
-            ? null
-            : typeof storedValue === "string" && storedValue.trim()
-              ? storedValue
-              : typeof envValue === "string" && envValue.trim()
-                ? envValue.trim()
-                : null;
+          : typeof storedValue === "string" && storedValue.trim()
+            ? storedValue
+            : typeof envValue === "string" && envValue.trim()
+              ? envValue.trim()
+              : null;
       const source =
         storedValue === null
           ? "cleared"

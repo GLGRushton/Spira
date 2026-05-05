@@ -1,23 +1,23 @@
 import { ProviderError } from "../../util/errors.js";
 import type { ProviderToolDefinition } from "../types.js";
 import type {
-  AzureOpenAiChatResponse,
-  AzureOpenAiChatStreamChunk,
-  AzureOpenAiClientConfig,
-  AzureOpenAiSessionState,
-  AzureOpenAiToolCall,
+  OpenAiChatResponse,
+  OpenAiChatStreamChunk,
+  OpenAiClientConfig,
+  OpenAiSessionState,
+  OpenAiToolCall,
 } from "./session-state.js";
-import { toAzureTools } from "./session-state.js";
+import { toOpenAiTools } from "./session-state.js";
 
-type RequestAzureOpenAiCompletionOptions = {
+type RequestOpenAiCompletionOptions = {
   signal?: AbortSignal;
   streaming?: boolean;
   onContentDelta?: (deltaContent: string) => void;
 };
 
 const appendToolCallDelta = (
-  toolCalls: AzureOpenAiToolCall[],
-  deltas: NonNullable<NonNullable<AzureOpenAiChatStreamChunk["choices"]>[number]["delta"]>["tool_calls"],
+  toolCalls: OpenAiToolCall[],
+  deltas: NonNullable<NonNullable<OpenAiChatStreamChunk["choices"]>[number]["delta"]>["tool_calls"],
 ): void => {
   if (!deltas) {
     return;
@@ -44,8 +44,8 @@ const appendToolCallDelta = (
 };
 
 const getStreamingResponseChoice = (
-  response: AzureOpenAiChatResponse,
-): NonNullable<AzureOpenAiChatResponse["choices"]>[number] => {
+  response: OpenAiChatResponse,
+): NonNullable<OpenAiChatResponse["choices"]>[number] => {
   if (!response.choices?.[0]) {
     response.choices = [
       {
@@ -68,8 +68,8 @@ const getStreamingResponseChoice = (
 };
 
 const applyStreamChunk = (
-  response: AzureOpenAiChatResponse,
-  chunk: AzureOpenAiChatStreamChunk,
+  response: OpenAiChatResponse,
+  chunk: OpenAiChatStreamChunk,
   onContentDelta?: (deltaContent: string) => void,
 ): void => {
   response.id ??= chunk.id;
@@ -111,10 +111,10 @@ const applyStreamChunk = (
   }
 };
 
-const finalizeStreamResponse = (response: AzureOpenAiChatResponse): AzureOpenAiChatResponse => {
+const finalizeStreamResponse = (response: OpenAiChatResponse): OpenAiChatResponse => {
   const choice = response.choices?.[0];
   if (!choice?.message) {
-    throw new ProviderError("Azure OpenAI returned no completion message.");
+    throw new ProviderError("OpenAI returned no completion message.");
   }
   if (!choice.message.tool_calls?.length) {
     choice.message.tool_calls = undefined;
@@ -125,16 +125,16 @@ const finalizeStreamResponse = (response: AzureOpenAiChatResponse): AzureOpenAiC
   return response;
 };
 
-const readAzureOpenAiStreamResponse = async (
+const readOpenAiStreamResponse = async (
   response: Response,
   onContentDelta?: (deltaContent: string) => void,
-): Promise<AzureOpenAiChatResponse> => {
+): Promise<OpenAiChatResponse> => {
   if (!response.body) {
-    throw new ProviderError("Azure OpenAI returned no response body for a streaming request.");
+    throw new ProviderError("OpenAI returned no response body for a streaming request.");
   }
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
-  const accumulated: AzureOpenAiChatResponse = {};
+  const accumulated: OpenAiChatResponse = {};
   let buffer = "";
   let streamDone = false;
 
@@ -153,7 +153,7 @@ const readAzureOpenAiStreamResponse = async (
       streamDone = true;
       return;
     }
-    const chunk = JSON.parse(payload) as AzureOpenAiChatStreamChunk;
+    const chunk = JSON.parse(payload) as OpenAiChatStreamChunk;
     applyStreamChunk(accumulated, chunk, onContentDelta);
   };
 
@@ -180,27 +180,30 @@ const readAzureOpenAiStreamResponse = async (
   return finalizeStreamResponse(accumulated);
 };
 
-export const requestAzureOpenAiCompletion = async (
-  config: AzureOpenAiClientConfig,
-  state: AzureOpenAiSessionState,
+export const requestOpenAiCompletion = async (
+  config: OpenAiClientConfig,
+  state: OpenAiSessionState,
   tools: readonly ProviderToolDefinition[],
-  options: RequestAzureOpenAiCompletionOptions = {},
-): Promise<AzureOpenAiChatResponse> => {
-  const url = new URL(`${config.endpoint}/openai/deployments/${encodeURIComponent(state.currentDeployment)}/chat/completions`);
-  url.searchParams.set("api-version", config.apiVersion);
+  options: RequestOpenAiCompletionOptions = {},
+): Promise<OpenAiChatResponse> => {
+  if (!state.currentModel) {
+    throw new ProviderError("OpenAI requires a model before sending a prompt.");
+  }
 
-  const response = await (config.fetchFn ?? fetch)(url, {
+  const response = await (config.fetchFn ?? fetch)(`${config.baseUrl}/chat/completions`, {
     method: "POST",
     headers: {
-      "api-key": config.apiKey,
+      authorization: `Bearer ${config.apiKey}`,
       "content-type": "application/json",
     },
     body: JSON.stringify({
+      model: state.currentModel,
       messages: state.messages,
       stream: options.streaming === true,
+      ...(options.streaming ? { stream_options: { include_usage: true } } : {}),
       ...(tools.length > 0
         ? {
-            tools: toAzureTools(tools),
+            tools: toOpenAiTools(tools),
             tool_choice: "auto",
           }
         : {}),
@@ -211,13 +214,13 @@ export const requestAzureOpenAiCompletion = async (
   if (!response.ok) {
     const body = await response.text().catch(() => "");
     throw new ProviderError(
-      `Azure OpenAI request failed with ${response.status} ${response.statusText}${body ? `: ${body}` : ""}`,
+      `OpenAI request failed with ${response.status} ${response.statusText}${body ? `: ${body}` : ""}`,
     );
   }
 
   if (options.streaming) {
-    return readAzureOpenAiStreamResponse(response, options.onContentDelta);
+    return readOpenAiStreamResponse(response, options.onContentDelta);
   }
 
-  return (await response.json()) as AzureOpenAiChatResponse;
+  return (await response.json()) as OpenAiChatResponse;
 };

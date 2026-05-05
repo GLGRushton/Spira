@@ -3,6 +3,7 @@ import type { RuntimeStationToolCallRecord, SpiraMemoryDatabase } from "@spira/m
 import type {
   AssistantState,
   Env,
+  ModelProviderId,
   PermissionRequestPayload,
   StationId,
   SubagentDelegationArgs,
@@ -33,7 +34,7 @@ import {
   stopProviderClient,
   withTimeout,
 } from "../provider/client-factory.js";
-import { getConfiguredProviderId, getProviderLabel } from "../provider/provider-config.js";
+import { getConfiguredProviderId, getProviderLabel, isEscalationProvider } from "../provider/provider-config.js";
 import type {
   ProviderClient,
   ProviderHostContinuityState,
@@ -42,6 +43,7 @@ import type {
   ProviderPermissionResult,
   ProviderSession,
   ProviderSessionConfig,
+  ProviderSessionEscalationResult,
   ProviderSessionEvent,
   ProviderSystemMessageSection,
   ProviderUsageRecord,
@@ -111,7 +113,13 @@ const TURN_ACTIVITY_TIMEOUT_MS = 120_000;
 const TURN_HARD_TIMEOUT_MS = 15 * 60_000;
 const TURN_WATCHDOG_POLL_MS = 1_000;
 const PERMISSION_REQUEST_TIMEOUT_MS = 60_000;
-const ALL_PROVIDER_IDS: ProviderId[] = ["copilot", "azure-openai"];
+const ALL_PROVIDER_IDS: ProviderId[] = [
+  "copilot",
+  "azure-openai",
+  "azure-openai-escalation",
+  "openai",
+  "openai-escalation",
+] satisfies ModelProviderId[];
 
 export interface SessionPersistence {
   load(): string | null;
@@ -221,6 +229,7 @@ const INTERACTIVE_HOST_TOOL_NAMES = new Set([
   "powershell",
   "write_powershell",
   "stop_powershell",
+  "spira_escalate_session",
   "spira_session_set_plan",
   "spira_session_set_scratchpad",
   "spira_session_set_context",
@@ -291,6 +300,7 @@ export class StationSessionManager {
   private lastPermissionResolvedAt: number | null = null;
   private lastRuntimeUserMessageId: string | null = null;
   private lastRuntimeAssistantMessageId: string | null = null;
+  private lastRuntimeAssistantMessageTimestamp: number | null = null;
   private latestAssistantMessageText: string | null = null;
   private activeRecoverySource: "host-checkpoint" | "continuity-preamble" | "host-transcript" | null = null;
   private runtimeUsageSummary: RuntimeUsageSummary = {
@@ -404,6 +414,10 @@ export class StationSessionManager {
 
   private get providerLabel(): string {
     return getProviderLabel(this.configuredProviderId);
+  }
+
+  private getCurrentAssistantModel(): string | null {
+    return this.latestUsage?.model ?? this.runtimeUsageSummary.model ?? this.hostContinuityState?.model ?? null;
   }
 
   async sendMessage(text: string, options: SendPromptOptions = {}): Promise<void> {
@@ -1037,6 +1051,7 @@ export class StationSessionManager {
       toolAggregator: this.toolAggregator,
       toolBridgeOptions: this.getToolBridgeOptions(),
       additionalInstructions: this.additionalInstructions,
+      providerId: this.configuredProviderId,
     });
   }
 
@@ -1049,6 +1064,16 @@ export class StationSessionManager {
       SESSION_INIT_TIMEOUT_MS,
       `Timed out while selecting station model ${this.requestedModel}`,
     );
+  }
+
+  private async requestSessionEscalation(): Promise<ProviderSessionEscalationResult> {
+    if (!isEscalationProvider(this.configuredProviderId)) {
+      throw new AssistantError("Manual escalation is unavailable for the active provider.");
+    }
+    if (!this.session?.escalate) {
+      throw new AssistantError("The active provider session cannot be escalated manually.");
+    }
+    return await this.session.escalate();
   }
 
   private beginTurnWatchdog(promptEpoch: number): void {
@@ -1215,11 +1240,13 @@ export class StationSessionManager {
           content: fullText,
           occurredAt,
         });
+        this.lastRuntimeAssistantMessageTimestamp = occurredAt;
         this.bus.emit("assistant:response-end", {
           messageId: messageEvent.data.messageId,
           text: fullText,
           timestamp: occurredAt,
           autoSpeak: this.nextResponseAutoSpeak,
+          ...(this.getCurrentAssistantModel() ? { model: this.getCurrentAssistantModel() } : {}),
         });
         this.nextResponseAutoSpeak = true;
         this.syncRuntimeState();
@@ -1271,6 +1298,19 @@ export class StationSessionManager {
           source: usage.source,
         });
         this.runtimeUsageSummary = updateRuntimeUsageSummary(this.runtimeUsageSummary, usage, occurredAt);
+        if (
+          usage.model &&
+          this.lastRuntimeAssistantMessageId &&
+          this.latestAssistantMessageText &&
+          this.lastRuntimeAssistantMessageTimestamp !== null
+        ) {
+          this.bus.emit("assistant:message-model", {
+            messageId: this.lastRuntimeAssistantMessageId,
+            text: this.latestAssistantMessageText,
+            timestamp: this.lastRuntimeAssistantMessageTimestamp,
+            model: usage.model,
+          });
+        }
         if (this.currentState === "thinking") {
           this.abortRequestedAt = null;
           this.transitionTo("idle");
@@ -1938,6 +1978,8 @@ export class StationSessionManager {
     );
     const missionScoped = this.missionRunId !== null;
     const delegationEnabled = connectedDelegationDomains.length > 0;
+    const manualSessionEscalationEnabled =
+      this.stationId === "primary" && !missionScoped && isEscalationProvider(this.configuredProviderId);
     return {
       workingDirectory: this.workingDirectory ?? appRootDir,
       sessionStorage: this.sessionStorage,
@@ -1948,6 +1990,11 @@ export class StationSessionManager {
         ? {
             requestUpgradeProposal: this.requestUpgradeProposal,
             applyHotCapabilityUpgrade: this.applyHotCapabilityUpgrade,
+          }
+        : {}),
+      ...(manualSessionEscalationEnabled
+        ? {
+            requestSessionEscalation: () => this.requestSessionEscalation(),
           }
         : {}),
       ...(missionScoped && this.listMissionServices

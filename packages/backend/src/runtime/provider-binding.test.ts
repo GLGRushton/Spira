@@ -183,4 +183,26 @@ describe("provider-binding", () => {
       providerProjectionHash: "snapshot-projection-hash",
     });
   });
+
+  it("preserves escalation provider ids in explicit snapshot bindings", () => {
+    const binding = resolveSubagentProviderBinding(
+      {
+        providerId: "openai-escalation",
+        providerSessionId: "openai-escalation-session",
+        hostManifestHash: "snapshot-host-hash",
+        providerProjectionHash: "snapshot-projection-hash",
+        startedAt: 1_000,
+        updatedAt: 1_500,
+        completedAt: 1_500,
+      },
+      null,
+    );
+
+    expect(binding).toEqual({
+      providerId: "openai-escalation",
+      providerSessionId: "openai-escalation-session",
+      hostManifestHash: "snapshot-host-hash",
+      providerProjectionHash: "snapshot-projection-hash",
+    });
+  });
 });

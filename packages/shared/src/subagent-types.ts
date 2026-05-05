@@ -1,4 +1,5 @@
 import type { ToolCallStatus } from "./chat-types.js";
+import type { ModelProviderId } from "./model-provider.js";
 
 export const SUBAGENT_DOMAIN_IDS = ["windows", "spira", "nexus", "data-entry", "code-review"] as const;
 export type BuiltinSubagentDomainId = (typeof SUBAGENT_DOMAIN_IDS)[number];
@@ -163,7 +164,7 @@ export interface SubagentRunSnapshot {
   roomId: `agent:${string}`;
   domain: SubagentDomainId;
   task: string;
-  providerId?: "copilot" | "azure-openai";
+  providerId?: ModelProviderId;
   requestedModel?: string;
   observedModel?: string;
   status: SubagentRunStatus;

@@ -55,6 +55,7 @@ export interface ToolBridgeOptions {
   stationId?: string | null;
   requestUpgradeProposal?: (proposal: UpgradeProposal) => Promise<void> | void;
   applyHotCapabilityUpgrade?: () => Promise<void> | void;
+  requestSessionEscalation?: () => Promise<unknown>;
   includeServerIds?: readonly string[];
   excludeServerIds?: readonly string[];
   delegationDomains?: readonly SubagentDomain[];
@@ -438,6 +439,27 @@ export const buildUpgradeProposalTool = (
     } catch (error) {
       logger.error({ error }, "Failed to apply or propose upgrade");
       return toFailureResult("spira_propose_upgrade", error);
+    }
+  },
+});
+
+export const buildSessionEscalationTool = (
+  requestSessionEscalation: NonNullable<ToolBridgeOptions["requestSessionEscalation"]>,
+): ProviderToolDefinition => ({
+  name: "spira_escalate_session",
+  description:
+    "Escalate the active station session to its configured escalation model or deployment. Use only when the user explicitly asks.",
+  parameters: {
+    type: "object",
+    properties: {},
+    additionalProperties: false,
+  },
+  handler: async () => {
+    try {
+      return toSuccessResult(await requestSessionEscalation());
+    } catch (error) {
+      logger.error({ error }, "Failed to escalate the active station session");
+      return toFailureResult("spira_escalate_session", error);
     }
   },
 });

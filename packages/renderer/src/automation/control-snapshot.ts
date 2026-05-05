@@ -3,6 +3,7 @@ import {
   SPIRA_UI_CONTROL_BRIDGE_VERSION,
   SPIRA_UI_ROOT_VIEWS,
   getMissionRunIdFromView,
+  type SpiraUiContext,
   type SpiraUiChatTranscript,
   type SpiraUiMessageSummary,
   type SpiraUiSnapshot,
@@ -127,5 +128,52 @@ export const buildSpiraUiSnapshot = (): SpiraUiSnapshot => {
       isAborting: chat.isAborting,
       isResetting: chat.isResetting,
     }),
+  };
+};
+
+export const buildSpiraUiContext = (): SpiraUiContext => {
+  const snapshot = buildSpiraUiSnapshot();
+
+  return {
+    activeView: snapshot.activeView,
+    activeMissionRoom: snapshot.activeMissionRoom,
+    assistantState: snapshot.assistantState,
+    connectionStatus: snapshot.connectionStatus,
+    chat: {
+      isStreaming: snapshot.chat.isStreaming,
+      isAborting: snapshot.chat.isAborting,
+      isResetConfirming: snapshot.chat.isResetConfirming,
+      isResetting: snapshot.chat.isResetting,
+      hasDraft: snapshot.chat.draft.trim().length > 0,
+      draftLength: snapshot.chat.draft.length,
+      messageCount: snapshot.chat.messageCount,
+      lastUserMessage: snapshot.chat.lastUserMessage,
+      lastAssistantMessage: snapshot.chat.lastAssistantMessage,
+      awaitingQuestion: snapshot.chat.awaitingQuestion,
+    },
+    permissions: {
+      count: snapshot.permissions.length,
+      requests: snapshot.permissions.map((request) => ({
+        requestId: request.requestId,
+        toolName: request.toolName,
+        action: request.action,
+        stationId: request.stationId,
+      })),
+    },
+    banners: {
+      upgradeVisible: snapshot.upgradeBanner !== null,
+      protocolVisible: snapshot.protocolBanner !== null,
+      upgradeBanner: snapshot.upgradeBanner,
+      protocolBanner: snapshot.protocolBanner,
+    },
+    mcp: {
+      total: snapshot.mcpServers.length,
+      problematic: snapshot.mcpServers.filter((server) => server.state === "error" || server.state === "disconnected"),
+    },
+    agentRooms: {
+      total: snapshot.agentRooms.length,
+      problematic: snapshot.agentRooms.filter((room) => room.status === "launching" || room.status === "error"),
+    },
+    assistantDock: snapshot.assistantDock,
   };
 };

@@ -5,6 +5,7 @@ import type {
   AssistantState,
   McpServerConfig,
   McpServerSource,
+  ModelProviderId,
   PermissionRequestPayload,
   SubagentDomain,
   SubagentRunSnapshot,
@@ -40,6 +41,7 @@ import type {
   YouTrackStateMapping,
 } from "@spira/shared";
 import {
+  MODEL_PROVIDERS,
   TICKET_RUN_ATTEMPT_STATUSES,
   TICKET_RUN_CLEANUP_STATES,
   TICKET_RUN_MISSION_CLASSIFICATIONS,
@@ -107,6 +109,7 @@ export interface ConversationMessageRecord {
   conversationId: string;
   role: ConversationRole;
   content: string;
+  model: string | null;
   timestamp: number;
   wasAborted: boolean;
   autoSpeak: boolean;
@@ -148,6 +151,7 @@ export interface AppendConversationMessageInput {
   conversationId: string;
   role: ConversationRole;
   content: string;
+  model?: string | null;
   timestamp: number;
   wasAborted?: boolean;
   autoSpeak?: boolean;
@@ -217,7 +221,7 @@ export interface UpsertRuntimeSubagentRunInput {
 
 export interface PersistedProviderUsageRecord {
   id: number;
-  provider: "copilot" | "azure-openai";
+  provider: ModelProviderId;
   stationId: string | null;
   runId: string | null;
   sessionId: string | null;
@@ -257,7 +261,7 @@ export interface RuntimeStationStateRecord {
   stationId: string;
   state: AssistantState;
   promptInFlight: boolean;
-  providerId: "copilot" | "azure-openai" | null;
+  providerId: ModelProviderId | null;
   activeSessionId: string | null;
   hostManifestHash: string | null;
   providerProjectionHash: string | null;
@@ -272,7 +276,7 @@ export interface UpsertRuntimeStationStateInput {
   stationId: string;
   state: AssistantState;
   promptInFlight: boolean;
-  providerId?: "copilot" | "azure-openai" | null;
+  providerId?: ModelProviderId | null;
   activeSessionId?: string | null;
   hostManifestHash?: string | null;
   providerProjectionHash?: string | null;
@@ -698,6 +702,7 @@ interface ConversationMessageRow {
   conversationId: string;
   role: string;
   content: string;
+  model: string | null;
   timestamp: number;
   wasAborted: number;
   autoSpeak: number;
@@ -1060,6 +1065,8 @@ interface SubagentConfigRow {
   createdAt: number;
   updatedAt: number;
 }
+
+const SQLITE_MODEL_PROVIDER_CHECK_VALUES = MODEL_PROVIDERS.map((provider) => `'${provider}'`).join(", ");
 
 const MIGRATIONS: MigrationDefinition[] = [
   {
@@ -1761,6 +1768,118 @@ const MIGRATIONS: MigrationDefinition[] = [
       "CREATE INDEX idx_runtime_host_resources_station_v23 ON runtime_host_resources(station_id, updated_at DESC)",
     ],
   },
+  {
+    version: 24,
+    statements: [
+      "ALTER TABLE provider_usage_records RENAME TO provider_usage_records_v23",
+      `CREATE TABLE provider_usage_records (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        provider TEXT NOT NULL CHECK(provider IN ('copilot', 'azure-openai', 'openai')),
+        station_id TEXT,
+        run_id TEXT,
+        session_id TEXT,
+        model TEXT,
+        input_tokens INTEGER,
+        output_tokens INTEGER,
+        total_tokens INTEGER,
+        estimated_cost_usd REAL,
+        latency_ms INTEGER,
+        observed_at INTEGER NOT NULL,
+        source TEXT NOT NULL CHECK(source IN ('provider', 'estimated', 'unknown'))
+      )`,
+      `INSERT INTO provider_usage_records (
+         id,
+         provider,
+         station_id,
+         run_id,
+         session_id,
+         model,
+         input_tokens,
+         output_tokens,
+         total_tokens,
+         estimated_cost_usd,
+         latency_ms,
+         observed_at,
+         source
+       )
+       SELECT
+         id,
+         provider,
+         station_id,
+         run_id,
+         session_id,
+         model,
+         input_tokens,
+         output_tokens,
+         total_tokens,
+         estimated_cost_usd,
+         latency_ms,
+         observed_at,
+         source
+       FROM provider_usage_records_v23`,
+      "DROP TABLE provider_usage_records_v23",
+      "CREATE INDEX idx_provider_usage_records_scope_v24 ON provider_usage_records(provider, station_id, run_id, observed_at DESC)",
+      "CREATE INDEX idx_provider_usage_records_session_v24 ON provider_usage_records(session_id, observed_at DESC)",
+    ],
+  },
+  {
+    version: 25,
+    statements: [
+      "ALTER TABLE provider_usage_records RENAME TO provider_usage_records_v24",
+      `CREATE TABLE provider_usage_records (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        provider TEXT NOT NULL CHECK(provider IN (${SQLITE_MODEL_PROVIDER_CHECK_VALUES})),
+        station_id TEXT,
+        run_id TEXT,
+        session_id TEXT,
+        model TEXT,
+        input_tokens INTEGER,
+        output_tokens INTEGER,
+        total_tokens INTEGER,
+        estimated_cost_usd REAL,
+        latency_ms INTEGER,
+        observed_at INTEGER NOT NULL,
+        source TEXT NOT NULL CHECK(source IN ('provider', 'estimated', 'unknown'))
+      )`,
+      `INSERT INTO provider_usage_records (
+         id,
+         provider,
+         station_id,
+         run_id,
+         session_id,
+         model,
+         input_tokens,
+         output_tokens,
+         total_tokens,
+         estimated_cost_usd,
+         latency_ms,
+         observed_at,
+         source
+       )
+       SELECT
+         id,
+         provider,
+         station_id,
+         run_id,
+         session_id,
+         model,
+         input_tokens,
+         output_tokens,
+         total_tokens,
+         estimated_cost_usd,
+         latency_ms,
+         observed_at,
+         source
+       FROM provider_usage_records_v24`,
+      "DROP TABLE provider_usage_records_v24",
+      "CREATE INDEX idx_provider_usage_records_scope_v25 ON provider_usage_records(provider, station_id, run_id, observed_at DESC)",
+      "CREATE INDEX idx_provider_usage_records_session_v25 ON provider_usage_records(session_id, observed_at DESC)",
+    ],
+  },
+  {
+    version: 26,
+    statements: ["ALTER TABLE messages ADD COLUMN model TEXT"],
+  },
 ];
 
 type SqliteDatabase = InstanceType<typeof BetterSqlite3>;
@@ -1797,6 +1916,11 @@ const normalizeTitle = (value: string | null | undefined): string | null => {
 };
 
 const normalizeText = (value: string | null | undefined): string => (typeof value === "string" ? value.trim() : "");
+
+const MODEL_PROVIDER_ID_SET = new Set<ModelProviderId>(MODEL_PROVIDERS);
+
+const normalizeModelProviderId = (value: unknown): ModelProviderId | null =>
+  typeof value === "string" && MODEL_PROVIDER_ID_SET.has(value as ModelProviderId) ? (value as ModelProviderId) : null;
 
 const parseStringArray = (value: string | null, fallback: string[] = []): string[] => {
   const parsed = tryParseJson(value);
@@ -1942,7 +2066,7 @@ const mapRuntimeHostResourceRow = (row: RuntimeHostResourceRow): PersistedRuntim
 
 const mapProviderUsageRecordRow = (row: ProviderUsageRecordRow): PersistedProviderUsageRecord => ({
   id: Number(row.id),
-  provider: row.provider === "azure-openai" ? "azure-openai" : "copilot",
+  provider: normalizeModelProviderId(row.provider) ?? "copilot",
   stationId: row.stationId === null ? null : String(row.stationId),
   runId: row.runId === null ? null : String(row.runId),
   sessionId: row.sessionId === null ? null : String(row.sessionId),
@@ -2739,21 +2863,23 @@ export class SpiraMemoryDatabase {
 
     this.db
       .prepare(
-        `INSERT INTO messages (id, conversation_id, role, content, was_aborted, auto_speak, timestamp)
-         VALUES (@id, @conversationId, @role, @content, @wasAborted, @autoSpeak, @timestamp)
+        `INSERT INTO messages (id, conversation_id, role, content, model, was_aborted, auto_speak, timestamp)
+         VALUES (@id, @conversationId, @role, @content, @model, @wasAborted, @autoSpeak, @timestamp)
          ON CONFLICT(id) DO UPDATE SET
-           conversation_id = excluded.conversation_id,
-           role = excluded.role,
-           content = excluded.content,
-           was_aborted = excluded.was_aborted,
-           auto_speak = excluded.auto_speak,
-           timestamp = excluded.timestamp`,
+            conversation_id = excluded.conversation_id,
+            role = excluded.role,
+            content = excluded.content,
+            model = excluded.model,
+            was_aborted = excluded.was_aborted,
+            auto_speak = excluded.auto_speak,
+            timestamp = excluded.timestamp`,
       )
       .run({
         id: input.id,
         conversationId: input.conversationId,
         role: input.role,
         content: input.content,
+        model: input.model ?? null,
         wasAborted: input.wasAborted === true ? 1 : 0,
         autoSpeak: input.autoSpeak === true ? 1 : 0,
         timestamp: input.timestamp,
@@ -2924,6 +3050,7 @@ export class SpiraMemoryDatabase {
            conversation_id AS conversationId,
            role,
            content,
+           model,
            timestamp,
            was_aborted AS wasAborted,
            auto_speak AS autoSpeak
@@ -2937,6 +3064,7 @@ export class SpiraMemoryDatabase {
       conversationId: String(row.conversationId),
       role: String(row.role) as ConversationRole,
       content: String(row.content),
+      model: row.model === null ? null : String(row.model),
       timestamp: Number(row.timestamp),
       wasAborted: toBoolean(Number(row.wasAborted)),
       autoSpeak: toBoolean(Number(row.autoSpeak)),
@@ -3242,13 +3370,7 @@ export class SpiraMemoryDatabase {
       stationId,
       state: input.state,
       promptInFlight: input.promptInFlight,
-      providerId:
-        input.providerId ??
-        (parsedExisting?.providerId === "azure-openai"
-          ? "azure-openai"
-          : parsedExisting?.providerId === "copilot"
-            ? "copilot"
-            : null),
+      providerId: input.providerId ?? normalizeModelProviderId(parsedExisting?.providerId),
       activeSessionId: input.activeSessionId ?? null,
       hostManifestHash:
         normalizeTitle(input.hostManifestHash) ??
@@ -3316,7 +3438,7 @@ export class SpiraMemoryDatabase {
           ? parsed.state
           : "idle",
       promptInFlight: parsed?.promptInFlight === true,
-      providerId: parsed?.providerId === "azure-openai" ? "azure-openai" : parsed?.providerId === "copilot" ? "copilot" : null,
+      providerId: normalizeModelProviderId(parsed?.providerId),
       activeSessionId: typeof parsed?.activeSessionId === "string" ? parsed.activeSessionId : null,
       hostManifestHash: typeof parsed?.hostManifestHash === "string" ? parsed.hostManifestHash : null,
       providerProjectionHash: typeof parsed?.providerProjectionHash === "string" ? parsed.providerProjectionHash : null,
@@ -3422,7 +3544,7 @@ export class SpiraMemoryDatabase {
         runId: normalizeText(input.runId ?? null) || null,
         kind: input.kind,
         contractJson: serializeJson(input.contract),
-        createdAt: existing?.createdAt ?? (input.createdAt ?? updatedAt),
+        createdAt: existing?.createdAt ?? input.createdAt ?? updatedAt,
         updatedAt,
       });
 
@@ -3707,7 +3829,7 @@ export class SpiraMemoryDatabase {
         kind: input.kind,
         status: input.status,
         stateJson: serializeJson(input.state),
-        createdAt: existing?.createdAt ?? (input.createdAt ?? updatedAt),
+        createdAt: existing?.createdAt ?? input.createdAt ?? updatedAt,
         updatedAt,
       });
 

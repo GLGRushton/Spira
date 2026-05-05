@@ -449,6 +449,33 @@ describe("RuntimeStore", () => {
     expect(database.getSessionState("runtime.provider-session-cleanup")).toBeNull();
   });
 
+  it("accepts escalation providers in the pending cleanup queue", async () => {
+    const { database } = openRuntimeStore();
+    const deleteSession = vi.fn().mockResolvedValue(undefined);
+    vi.spyOn(clientFactory, "createProviderClientForProvider").mockImplementation(async (_env, providerId) => ({
+      client: {
+        providerId,
+        capabilities: getDefaultProviderCapabilities(providerId),
+        createSession: vi.fn(),
+        resumeSession: vi.fn(),
+        deleteSession,
+        getAuthStatus: vi.fn(),
+        stop: vi.fn().mockResolvedValue([]),
+      } as never,
+      strategy: {} as never,
+    }));
+
+    database.setSessionState(
+      "runtime.provider-session-cleanup",
+      JSON.stringify([{ providerId: "openai-escalation", sessionId: "queued-escalation-session" }]),
+    );
+
+    await RuntimeStore.recoverInterruptedState(database, parseEnv({}), 2000);
+
+    expect(deleteSession).toHaveBeenCalledWith("queued-escalation-session");
+    expect(database.getSessionState("runtime.provider-session-cleanup")).toBeNull();
+  });
+
   it("preserves cleanup entries queued during an active drain", async () => {
     const { database, runtimeStore } = openRuntimeStore();
     let releaseFirstSessionDelete: (() => void) | null = null;

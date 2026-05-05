@@ -4,6 +4,7 @@ import type {
   ClientMessage,
   McpServerStatus,
   MissionServiceSnapshot,
+  ModelProviderId,
   PermissionRequestPayload,
   SubagentCompletedEvent,
   SubagentDeltaEvent,
@@ -23,7 +24,14 @@ import type { ProviderUsageRecord } from "../provider/types.js";
 
 export interface EventMap {
   "chat:assistant-message": [
-    message: { id: string; text: string; timestamp: number; autoSpeak?: boolean; persist?: boolean },
+    message: {
+      id: string;
+      text: string;
+      timestamp: number;
+      autoSpeak?: boolean;
+      persist?: boolean;
+      model?: string | null;
+    },
   ];
   "assistant:state": [state: AssistantState];
   "voice:pipeline": [{ state: VoicePipelineState }];
@@ -35,7 +43,10 @@ export interface EventMap {
   "voice:transcript": [{ text: string }];
   "assistant:response-start": [messageId: string];
   "assistant:delta": [messageId: string, delta: string];
-  "assistant:response-end": [{ text: string; messageId: string; timestamp: number; autoSpeak?: boolean }];
+  "assistant:response-end": [
+    { text: string; messageId: string; timestamp: number; autoSpeak?: boolean; model?: string | null },
+  ];
+  "assistant:message-model": [{ messageId: string; text: string; timestamp: number; model: string }];
   "assistant:error": [code: string, message: string, details?: string, source?: string];
   "assistant:tool-call": [callId: string, toolName: string, args: Record<string, unknown>];
   "assistant:tool-result": [callId: string, result: unknown];
@@ -54,7 +65,7 @@ export interface EventMap {
       runId: string;
       roomId: `agent:${string}`;
       allowWrites: boolean;
-      providerId: "copilot" | "azure-openai";
+      providerId: ModelProviderId;
       providerSessionId: string | null;
       hostManifestHash: string | null;
       providerProjectionHash: string | null;

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -25,11 +26,174 @@ describe("createHostTools", () => {
     expect(applyPatch).toBeDefined();
 
     const result = await applyPatch!.handler({
-      patch: "*** Begin Patch\n*** Update File: sample.txt\n@@\n alpha\n-beta\n+gamma\n*** End of File\n*** End Patch\n",
+      patch:
+        "*** Begin Patch\n*** Update File: sample.txt\n@@\n alpha\n-beta\n+gamma\n*** End of File\n*** End Patch\n",
     });
 
     expect(parseToolResult<{ changedFiles: string[] }>(result).changedFiles).toContain(filePath);
     await expect(readFile(filePath, "utf8")).resolves.toBe("alpha\ngamma");
+  });
+
+  it("accepts git-style unified diffs for apply_patch", async () => {
+    workspacePath = await mkdtemp(path.join(tmpdir(), "spira-host-tools-"));
+    const filePath = path.join(workspacePath, "sample.txt");
+    await writeFile(filePath, "alpha\nbeta\n", "utf8");
+
+    const applyPatch = createHostTools({ workingDirectory: workspacePath }).find((tool) => tool.name === "apply_patch");
+    expect(applyPatch).toBeDefined();
+
+    const result = await applyPatch!.handler({
+      patch: "--- a/sample.txt\n+++ b/sample.txt\n@@ -1,2 +1,2 @@\n alpha\n-beta\n+gamma\n",
+    });
+
+    expect(parseToolResult<{ changedFiles: string[] }>(result).changedFiles).toContain(filePath);
+    await expect(readFile(filePath, "utf8")).resolves.toBe("alpha\ngamma\n");
+  });
+
+  it("supports rename-only git diffs for apply_patch", async () => {
+    workspacePath = await mkdtemp(path.join(tmpdir(), "spira-host-tools-"));
+    const oldPath = path.join(workspacePath, "old.txt");
+    const newPath = path.join(workspacePath, "new.txt");
+    await writeFile(oldPath, "alpha\n", "utf8");
+
+    const applyPatch = createHostTools({ workingDirectory: workspacePath }).find((tool) => tool.name === "apply_patch");
+    expect(applyPatch).toBeDefined();
+
+    const result = await applyPatch!.handler({
+      patch: "diff --git a/old.txt b/new.txt\nsimilarity index 100%\nrename from old.txt\nrename to new.txt\n",
+    });
+
+    expect(parseToolResult<{ changedFiles: string[] }>(result).changedFiles).toEqual(
+      expect.arrayContaining([oldPath, newPath]),
+    );
+    await expect(readFile(newPath, "utf8")).resolves.toBe("alpha\n");
+    await expect(readFile(oldPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("applies rename-only git diffs before later file entries in the same patch", async () => {
+    workspacePath = await mkdtemp(path.join(tmpdir(), "spira-host-tools-"));
+    const oldPath = path.join(workspacePath, "old.txt");
+    const newPath = path.join(workspacePath, "new.txt");
+    const samplePath = path.join(workspacePath, "sample.txt");
+    await writeFile(oldPath, "alpha\n", "utf8");
+    await writeFile(samplePath, "beta\n", "utf8");
+
+    const applyPatch = createHostTools({ workingDirectory: workspacePath }).find((tool) => tool.name === "apply_patch");
+    expect(applyPatch).toBeDefined();
+
+    const result = await applyPatch!.handler({
+      patch:
+        "diff --git a/old.txt b/new.txt\nsimilarity index 100%\nrename from old.txt\nrename to new.txt\ndiff --git a/sample.txt b/sample.txt\n--- a/sample.txt\n+++ b/sample.txt\n@@ -1 +1 @@\n-beta\n+gamma\n",
+    });
+
+    expect(parseToolResult<{ changedFiles: string[] }>(result).changedFiles).toEqual(
+      expect.arrayContaining([oldPath, newPath, samplePath]),
+    );
+    await expect(readFile(newPath, "utf8")).resolves.toBe("alpha\n");
+    await expect(readFile(oldPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(readFile(samplePath, "utf8")).resolves.toBe("gamma\n");
+  });
+
+  it("preserves the source file for git copy diffs", async () => {
+    workspacePath = await mkdtemp(path.join(tmpdir(), "spira-host-tools-"));
+    const sourcePath = path.join(workspacePath, "a.txt");
+    const copiedPath = path.join(workspacePath, "b.txt");
+    await writeFile(sourcePath, "alpha\nbeta\n", "utf8");
+
+    const applyPatch = createHostTools({ workingDirectory: workspacePath }).find((tool) => tool.name === "apply_patch");
+    expect(applyPatch).toBeDefined();
+
+    const result = await applyPatch!.handler({
+      patch:
+        "diff --git a/a.txt b/b.txt\nsimilarity index 75%\ncopy from a.txt\ncopy to b.txt\n--- a/a.txt\n+++ b/b.txt\n@@ -1,2 +1,2 @@\n alpha\n-beta\n+gamma\n",
+    });
+
+    expect(parseToolResult<{ changedFiles: string[] }>(result).changedFiles).toContain(copiedPath);
+    await expect(readFile(sourcePath, "utf8")).resolves.toBe("alpha\nbeta\n");
+    await expect(readFile(copiedPath, "utf8")).resolves.toBe("alpha\ngamma\n");
+  });
+
+  it("creates zero-byte files for empty git-style file additions", async () => {
+    workspacePath = await mkdtemp(path.join(tmpdir(), "spira-host-tools-"));
+    const filePath = path.join(workspacePath, "empty.txt");
+
+    const applyPatch = createHostTools({ workingDirectory: workspacePath }).find((tool) => tool.name === "apply_patch");
+    expect(applyPatch).toBeDefined();
+
+    await expect(
+      applyPatch!.handler({
+        patch: "diff --git a/empty.txt b/empty.txt\nnew file mode 100644\n--- /dev/null\n+++ b/empty.txt\n",
+      }),
+    ).resolves.toMatchObject({
+      resultType: "success",
+    });
+    await expect(readFile(filePath, "utf8")).resolves.toBe("");
+  });
+
+  it("preserves unified-diff requests to remove the final newline", async () => {
+    workspacePath = await mkdtemp(path.join(tmpdir(), "spira-host-tools-"));
+    const filePath = path.join(workspacePath, "sample.txt");
+    await writeFile(filePath, "hello\n", "utf8");
+
+    const applyPatch = createHostTools({ workingDirectory: workspacePath }).find((tool) => tool.name === "apply_patch");
+    expect(applyPatch).toBeDefined();
+
+    await expect(
+      applyPatch!.handler({
+        patch: "--- a/sample.txt\n+++ b/sample.txt\n@@ -1 +1 @@\n-hello\n+hello\n\\ No newline at end of file\n",
+      }),
+    ).resolves.toMatchObject({
+      resultType: "success",
+    });
+    await expect(readFile(filePath, "utf8")).resolves.toBe("hello");
+  });
+
+  it("requires explicit overwriteExisting for full write_file rewrites", async () => {
+    workspacePath = await mkdtemp(path.join(tmpdir(), "spira-host-tools-"));
+    const filePath = path.join(workspacePath, "sample.txt");
+    await writeFile(filePath, "alpha\nbeta\n", "utf8");
+
+    const writeTool = createHostTools({ workingDirectory: workspacePath }).find((tool) => tool.name === "write_file");
+    expect(writeTool).toBeDefined();
+
+    await expect(writeTool!.handler({ path: "sample.txt", content: "gamma\n" })).resolves.toMatchObject({
+      resultType: "failure",
+      error: expect.stringContaining("Use apply_patch for partial edits"),
+    });
+    await expect(readFile(filePath, "utf8")).resolves.toBe("alpha\nbeta\n");
+  });
+
+  it("supports guarded write_file overwrites with overwriteExisting and expectedSha256", async () => {
+    workspacePath = await mkdtemp(path.join(tmpdir(), "spira-host-tools-"));
+    const filePath = path.join(workspacePath, "sample.txt");
+    const originalContent = "alpha\nbeta\n";
+    await writeFile(filePath, originalContent, "utf8");
+
+    const writeTool = createHostTools({ workingDirectory: workspacePath }).find((tool) => tool.name === "write_file");
+    expect(writeTool).toBeDefined();
+
+    await expect(
+      writeTool!.handler({
+        path: "sample.txt",
+        content: "gamma\n",
+        overwriteExisting: true,
+        expectedSha256: "deadbeef",
+      }),
+    ).resolves.toMatchObject({
+      resultType: "failure",
+      error: expect.stringContaining("expectedSha256 did not match"),
+    });
+    await expect(
+      writeTool!.handler({
+        path: "sample.txt",
+        content: "gamma\n",
+        overwriteExisting: true,
+        expectedSha256: createHash("sha256").update(originalContent).digest("hex"),
+      }),
+    ).resolves.toMatchObject({
+      resultType: "success",
+    });
+    await expect(readFile(filePath, "utf8")).resolves.toBe("gamma\n");
   });
 
   it("does not retain completed sync PowerShell sessions", async () => {
@@ -273,7 +437,7 @@ describe("createHostTools", () => {
     await expect(
       powershell!.handler({
         command:
-          'node -e "process.stdin.on(\'data\', (chunk) => { console.log(Array.from(chunk).join(\',\')); process.exit(0); })"',
+          "node -e \"process.stdin.on('data', (chunk) => { console.log(Array.from(chunk).join(',')); process.exit(0); })\"",
         description: "Capture arrow-key bytes",
         shellId: "arrow-session",
         mode: "async",
@@ -282,11 +446,11 @@ describe("createHostTools", () => {
     ).resolves.toMatchObject({
       resultType: "success",
     });
-    await expect(writePowerShell!.handler({ shellId: "arrow-session", input: "{up}", delay: 1 })).resolves.toMatchObject(
-      {
-        resultType: "success",
-      },
-    );
+    await expect(
+      writePowerShell!.handler({ shellId: "arrow-session", input: "{up}", delay: 1 }),
+    ).resolves.toMatchObject({
+      resultType: "success",
+    });
     await expect(readPowerShell!.handler({ shellId: "arrow-session", delay: 0 })).resolves.toMatchObject({
       resultType: "success",
       textResultForLlm: expect.stringContaining("27,91,65"),
@@ -389,13 +553,7 @@ describe("createHostTools", () => {
             runtimeSessionId: input.runtimeSessionId as string,
             stationId: (input.stationId as string | null | undefined) ?? null,
             kind: input.kind as string,
-            status: input.status as
-              | "running"
-              | "idle"
-              | "completed"
-              | "failed"
-              | "unrecoverable"
-              | "cancelled",
+            status: input.status as "running" | "idle" | "completed" | "failed" | "unrecoverable" | "cancelled",
             state: input.state as Record<string, unknown>,
             createdAt: 1000,
             updatedAt: 1001,
@@ -408,13 +566,7 @@ describe("createHostTools", () => {
             runtimeSessionId: entry.runtimeSessionId as string,
             stationId: (entry.stationId as string | null | undefined) ?? null,
             kind: entry.kind as string,
-            status: entry.status as
-              | "running"
-              | "idle"
-              | "completed"
-              | "failed"
-              | "unrecoverable"
-              | "cancelled",
+            status: entry.status as "running" | "idle" | "completed" | "failed" | "unrecoverable" | "cancelled",
             state: entry.state as Record<string, unknown>,
             createdAt: 1000,
             updatedAt: 1001,

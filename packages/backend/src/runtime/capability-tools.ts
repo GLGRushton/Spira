@@ -1,3 +1,9 @@
+import type { McpToolAggregator } from "../mcp/tool-aggregator.js";
+import { ESCALATION_PROVIDER_IDS } from "../provider/provider-config.js";
+import type { ProviderId, ProviderToolDefinition, ProviderToolResultObject } from "../provider/types.js";
+import { createLogger } from "../util/logger.js";
+import { createHostTools } from "./host-tools.js";
+import type { RuntimeCapabilitySource } from "./runtime-contract.js";
 import {
   type ToolBridgeOptions,
   buildDelegationTool,
@@ -12,6 +18,7 @@ import {
   buildSaveClassificationTool,
   buildSavePlanTool,
   buildSaveSummaryTool,
+  buildSessionEscalationTool,
   buildSetProofStrategyTool,
   buildStartMissionServiceTool,
   buildStopMissionServiceTool,
@@ -21,11 +28,6 @@ import {
   buildWriteSubagentTool,
   filterMissionScopedMcpTools,
 } from "./tool-bridge.js";
-import type { McpToolAggregator } from "../mcp/tool-aggregator.js";
-import type { ProviderId, ProviderToolDefinition, ProviderToolResultObject } from "../provider/types.js";
-import { createLogger } from "../util/logger.js";
-import { createHostTools } from "./host-tools.js";
-import type { RuntimeCapabilitySource } from "./runtime-contract.js";
 
 const logger = createLogger("capability-tools");
 
@@ -154,7 +156,15 @@ export const buildRuntimeCapabilityDefinitions = (
       capabilityId: "spira_propose_upgrade",
       source: "synthetic-tool",
       tool: buildUpgradeProposalTool(options.requestUpgradeProposal, options.applyHotCapabilityUpgrade),
-      suppressForProviders: [],
+      suppressForProviders: [...ESCALATION_PROVIDER_IDS],
+    });
+  }
+  if (options.requestSessionEscalation) {
+    definitions.push({
+      capabilityId: "spira_escalate_session",
+      source: "synthetic-tool",
+      tool: buildSessionEscalationTool(options.requestSessionEscalation),
+      suppressForProviders: ["copilot", "azure-openai", "openai"],
     });
   }
   const delegateToDomain = options.delegateToDomain;

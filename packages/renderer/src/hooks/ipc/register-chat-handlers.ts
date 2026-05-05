@@ -16,7 +16,13 @@ export interface ChatHandlerActions {
   addUserMessage: (text: string, stationId?: string) => void;
   startAssistantMessage: (id: string, stationId?: string) => void;
   appendDelta: (id: string, delta: string, stationId?: string) => void;
-  finaliseMessage: (id: string, content: string, autoSpeak?: boolean, stationId?: string) => void;
+  finaliseMessage: (
+    id: string,
+    content: string,
+    autoSpeak?: boolean,
+    model?: string | null,
+    stationId?: string,
+  ) => void;
   completeMessage: (id: string, stationId?: string) => void;
   abortStreamingMessage: (stationId?: string) => void;
   clearStreamingState: (stationId?: string) => void;
@@ -219,7 +225,7 @@ export const registerChatHandlers = (
       if (message.role === "assistant") {
         chatDeltaBatcher.dropConversation(message.id, resolvedStationId);
         actions.markStationActivity(resolvedStationId, message.timestamp);
-        actions.finaliseMessage(message.id, message.content, message.autoSpeak, resolvedStationId);
+        actions.finaliseMessage(message.id, message.content, message.autoSpeak, message.model, resolvedStationId);
         if (
           useSettingsStore.getState().voiceEnabled &&
           message.autoSpeak !== false &&

@@ -11,6 +11,7 @@ export interface ConversationMessage {
   id: string;
   role: "user" | "assistant";
   content: string;
+  model?: string | null;
   isStreaming?: boolean;
   wasAborted?: boolean;
   autoSpeak?: boolean;

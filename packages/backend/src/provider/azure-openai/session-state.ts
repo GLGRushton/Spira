@@ -3,6 +3,7 @@ import { ConfigError, ProviderError } from "../../util/errors.js";
 import type {
   ProviderHostContinuityMessage,
   ProviderHostContinuityState,
+  ProviderId,
   ProviderPermissionRequest,
   ProviderSessionConfig,
   ProviderSystemMessage,
@@ -12,6 +13,7 @@ import type {
 } from "../types.js";
 
 export type FetchLike = typeof fetch;
+export type AzureOpenAiProviderId = Extract<ProviderId, "azure-openai" | "azure-openai-escalation">;
 
 export type AzureOpenAiMessage =
   | {
@@ -90,20 +92,28 @@ export type AzureOpenAiChatStreamChunk = {
 
 export type AzureOpenAiSessionState = {
   sessionId: string;
+  providerId: AzureOpenAiProviderId;
   messages: AzureOpenAiMessage[];
   abortController: AbortController | null;
   turnGeneration: number;
   activeTurnMessageStartIndex: number | null;
+  currentDeployment: string;
   hostContinuityModel: string | null;
+  escalationDeployment: string | null;
+  escalationModelLabel: string | null;
+  autoEscalationEnabled: boolean;
   onHostContinuitySnapshot: ((snapshot: ProviderHostContinuityState) => void) | null;
 };
 
 export type AzureOpenAiClientConfig = {
+  providerId?: AzureOpenAiProviderId;
   endpoint: string;
   apiKey: string;
   deployment: string;
+  escalationDeployment?: string | null;
   apiVersion: string;
   modelLabel?: string | null;
+  escalationModelLabel?: string | null;
   fetchFn?: FetchLike;
 };
 
@@ -122,57 +132,106 @@ export const flattenSystemMessage = (message: ProviderSystemMessage): string => 
   return [message.content, ...sections].filter((entry) => entry.trim().length > 0).join("\n\n");
 };
 
+const getAzureRouteLabel = (deployment: string, modelLabel: string | null | undefined): string =>
+  modelLabel?.trim() || deployment;
+
+export const resolveAzureCurrentDeployment = (
+  providerId: AzureOpenAiProviderId,
+  continuityModel: string,
+  deployment: string,
+  modelLabel: string | null,
+  escalationDeployment: string | null,
+  escalationModelLabel: string | null,
+): string => {
+  if (providerId !== "azure-openai-escalation" || !escalationDeployment) {
+    return deployment;
+  }
+
+  const baseRouteLabel = getAzureRouteLabel(deployment, modelLabel);
+  const escalationRouteLabel = getAzureRouteLabel(escalationDeployment, escalationModelLabel);
+  return escalationRouteLabel !== baseRouteLabel && continuityModel === escalationRouteLabel
+    ? escalationDeployment
+    : deployment;
+};
+
 export const createAzureOpenAiSessionState = (
   config: ProviderSessionConfig & { sessionId: string },
-  hostContinuityModel: string | null,
-): AzureOpenAiSessionState => ({
-  sessionId: config.sessionId,
-  messages:
-    config.hostContinuity?.providerId === "azure-openai" && config.hostContinuity.messages.length > 0
-      ? config.hostContinuity.messages.map((message): AzureOpenAiMessage => {
-          switch (message.role) {
-            case "assistant":
-              return {
-                role: "assistant",
-                content: message.content,
-                ...(message.toolCalls
-                  ? {
-                      tool_calls: message.toolCalls.map((toolCall) => ({
-                        id: toolCall.id,
-                        type: "function",
-                        function: {
-                          name: toolCall.name,
-                          arguments: toolCall.arguments,
-                        },
-                      })),
-                    }
-                  : {}),
-              };
-            case "tool":
-              return {
-                role: "tool",
-                tool_call_id: message.toolCallId,
-                content: message.content,
-              };
-            default:
-              return {
-                role: message.role,
-                content: message.content,
-              };
-          }
-        })
-      : [
-          {
-            role: "system",
-            content: flattenSystemMessage(config.systemMessage),
-          },
-        ],
-  abortController: null,
-  turnGeneration: 0,
-  activeTurnMessageStartIndex: null,
-  hostContinuityModel: config.hostContinuity?.model ?? hostContinuityModel,
-  onHostContinuitySnapshot: config.onHostContinuitySnapshot ?? null,
-});
+  providerId: AzureOpenAiProviderId,
+  deployment: string,
+  modelLabel: string | null,
+  escalationDeployment: string | null,
+  escalationModelLabel: string | null,
+): AzureOpenAiSessionState => {
+  const continuityModel =
+    config.hostContinuity?.providerId === providerId
+      ? (config.hostContinuity.model ?? getAzureRouteLabel(deployment, modelLabel))
+      : getAzureRouteLabel(deployment, modelLabel);
+  const currentDeployment =
+    config.hostContinuity?.providerId === providerId
+      ? config.hostContinuity.deployment?.trim() ||
+        resolveAzureCurrentDeployment(
+          providerId,
+          continuityModel,
+          deployment,
+          modelLabel,
+          escalationDeployment,
+          escalationModelLabel,
+        )
+      : deployment;
+  return {
+    sessionId: config.sessionId,
+    providerId,
+    messages:
+      config.hostContinuity?.providerId === providerId && config.hostContinuity.messages.length > 0
+        ? config.hostContinuity.messages.map((message): AzureOpenAiMessage => {
+            switch (message.role) {
+              case "assistant":
+                return {
+                  role: "assistant",
+                  content: message.content,
+                  ...(message.toolCalls
+                    ? {
+                        tool_calls: message.toolCalls.map((toolCall) => ({
+                          id: toolCall.id,
+                          type: "function",
+                          function: {
+                            name: toolCall.name,
+                            arguments: toolCall.arguments,
+                          },
+                        })),
+                      }
+                    : {}),
+                };
+              case "tool":
+                return {
+                  role: "tool",
+                  tool_call_id: message.toolCallId,
+                  content: message.content,
+                };
+              default:
+                return {
+                  role: message.role,
+                  content: message.content,
+                };
+            }
+          })
+        : [
+            {
+              role: "system",
+              content: flattenSystemMessage(config.systemMessage),
+            },
+          ],
+    abortController: null,
+    turnGeneration: 0,
+    activeTurnMessageStartIndex: null,
+    currentDeployment,
+    hostContinuityModel: continuityModel,
+    escalationDeployment,
+    escalationModelLabel,
+    autoEscalationEnabled: escalationDeployment !== null,
+    onHostContinuitySnapshot: config.onHostContinuitySnapshot ?? null,
+  };
+};
 
 const toHostContinuityMessage = (message: AzureOpenAiMessage): ProviderHostContinuityMessage =>
   message.role === "assistant"
@@ -202,11 +261,79 @@ const toHostContinuityMessage = (message: AzureOpenAiMessage): ProviderHostConti
 
 export const publishAzureHostContinuity = (state: AzureOpenAiSessionState): void => {
   state.onHostContinuitySnapshot?.({
-    providerId: "azure-openai",
+    providerId: state.providerId,
     model: state.hostContinuityModel,
+    deployment: state.currentDeployment,
     messages: state.messages.map((message) => toHostContinuityMessage(message)),
     updatedAt: Date.now(),
   });
+};
+
+export const tryEscalateAzureSession = (
+  state: AzureOpenAiSessionState,
+): { fromDeployment: string; toDeployment: string; fromModel: string | null; toModel: string } | null => {
+  if (
+    !state.autoEscalationEnabled ||
+    !state.escalationDeployment ||
+    state.currentDeployment === state.escalationDeployment
+  ) {
+    return null;
+  }
+
+  const fromDeployment = state.currentDeployment;
+  const fromModel = state.hostContinuityModel;
+  const toDeployment = state.escalationDeployment;
+  const toModel = getAzureRouteLabel(toDeployment, state.escalationModelLabel);
+  state.currentDeployment = toDeployment;
+  state.hostContinuityModel = toModel;
+  state.autoEscalationEnabled = false;
+  publishAzureHostContinuity(state);
+  return {
+    fromDeployment,
+    toDeployment,
+    fromModel,
+    toModel,
+  };
+};
+
+export const escalateAzureSession = (
+  state: AzureOpenAiSessionState,
+): {
+  status: "escalated" | "already-escalated";
+  fromDeployment: string;
+  toDeployment: string;
+  fromModel: string | null;
+  toModel: string;
+} => {
+  if (!state.escalationDeployment) {
+    throw new ProviderError("Azure OpenAI escalation is unavailable for this session.");
+  }
+
+  const toDeployment = state.escalationDeployment;
+  const toModel = getAzureRouteLabel(toDeployment, state.escalationModelLabel);
+  if (state.currentDeployment === toDeployment) {
+    return {
+      status: "already-escalated",
+      fromDeployment: state.currentDeployment,
+      toDeployment,
+      fromModel: state.hostContinuityModel,
+      toModel,
+    };
+  }
+
+  const fromDeployment = state.currentDeployment;
+  const fromModel = state.hostContinuityModel;
+  state.currentDeployment = toDeployment;
+  state.hostContinuityModel = toModel;
+  state.autoEscalationEnabled = false;
+  publishAzureHostContinuity(state);
+  return {
+    status: "escalated",
+    fromDeployment,
+    toDeployment,
+    fromModel,
+    toModel,
+  };
 };
 
 export const beginAzureTurnMessages = (state: AzureOpenAiSessionState, prompt: string): number => {
@@ -372,27 +499,40 @@ export const isAbortError = (error: unknown): boolean =>
     error.message.includes("aborted") ||
     error.message.includes("The operation was aborted"));
 
-export const resolveAzureConfig = (env: Env): Omit<AzureOpenAiClientConfig, "fetchFn"> => {
+export const resolveAzureConfig = (
+  providerId: AzureOpenAiProviderId,
+  env: Env,
+): Omit<AzureOpenAiClientConfig, "fetchFn"> => {
   const endpoint = env.AZURE_OPENAI_ENDPOINT?.trim() ?? "";
   const apiKey = env.AZURE_OPENAI_API_KEY?.trim() ?? "";
   const deployment = env.AZURE_OPENAI_DEPLOYMENT?.trim() ?? "";
+  const escalationDeployment = env.AZURE_OPENAI_ESCALATION_DEPLOYMENT?.trim() ?? "";
   const apiVersion = env.AZURE_OPENAI_API_VERSION.trim();
 
   if (!endpoint) {
-    throw new ConfigError("AZURE_OPENAI_ENDPOINT is required when SPIRA_MODEL_PROVIDER=azure-openai.");
+    throw new ConfigError(`AZURE_OPENAI_ENDPOINT is required when SPIRA_MODEL_PROVIDER=${providerId}.`);
   }
   if (!apiKey) {
-    throw new ConfigError("AZURE_OPENAI_API_KEY is required when SPIRA_MODEL_PROVIDER=azure-openai.");
+    throw new ConfigError(`AZURE_OPENAI_API_KEY is required when SPIRA_MODEL_PROVIDER=${providerId}.`);
   }
   if (!deployment) {
-    throw new ConfigError("AZURE_OPENAI_DEPLOYMENT is required when SPIRA_MODEL_PROVIDER=azure-openai.");
+    throw new ConfigError(`AZURE_OPENAI_DEPLOYMENT is required when SPIRA_MODEL_PROVIDER=${providerId}.`);
+  }
+  if (providerId === "azure-openai-escalation" && !escalationDeployment) {
+    throw new ConfigError(
+      "AZURE_OPENAI_ESCALATION_DEPLOYMENT is required when SPIRA_MODEL_PROVIDER=azure-openai-escalation.",
+    );
   }
 
   return {
+    providerId,
     endpoint: trimTrailingSlashes(endpoint),
     apiKey,
     deployment,
+    escalationDeployment: providerId === "azure-openai-escalation" ? escalationDeployment : null,
     apiVersion,
     modelLabel: env.AZURE_OPENAI_MODEL?.trim() || null,
+    escalationModelLabel:
+      providerId === "azure-openai-escalation" ? env.AZURE_OPENAI_ESCALATION_MODEL?.trim() || null : null,
   };
 };

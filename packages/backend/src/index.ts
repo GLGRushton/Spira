@@ -148,6 +148,7 @@ const mapStoredConversationMessage = (message: ConversationMessageRecord): Conve
     id: message.id,
     role: message.role,
     content: message.content,
+    model: message.model,
     timestamp: message.timestamp,
     wasAborted: message.wasAborted,
     autoSpeak: message.autoSpeak,

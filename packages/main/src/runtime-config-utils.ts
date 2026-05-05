@@ -1,15 +1,24 @@
-import type { RuntimeConfigKey } from "@spira/shared";
+import { MODEL_PROVIDERS, type ModelProviderId, type RuntimeConfigKey } from "@spira/shared";
 
-const MODEL_PROVIDER_ALIASES = new Map<string, "copilot" | "azure-openai">([
+const MODEL_PROVIDER_ALIASES = new Map<string, ModelProviderId>([
   ["copilot", "copilot"],
   ["github-copilot", "copilot"],
   ["azure", "azure-openai"],
   ["azure-ai", "azure-openai"],
   ["azure-openai", "azure-openai"],
   ["azure openai", "azure-openai"],
+  ["azure-openai-escalation", "azure-openai-escalation"],
+  ["azure openai escalation", "azure-openai-escalation"],
+  ["azure-ai-escalation", "azure-openai-escalation"],
+  ["azure escalation", "azure-openai-escalation"],
+  ["openai", "openai"],
+  ["open ai", "openai"],
+  ["openai-escalation", "openai-escalation"],
+  ["open ai escalation", "openai-escalation"],
+  ["openai escalation", "openai-escalation"],
 ]);
 
-export const MODEL_PROVIDER_RUNTIME_CONFIG_VALUES = ["copilot", "azure-openai"] as const;
+export const MODEL_PROVIDER_RUNTIME_CONFIG_VALUES = MODEL_PROVIDERS;
 
 const normalizeStringValue = (value: unknown): string | null | undefined => {
   if (value === null) {
@@ -24,9 +33,7 @@ const normalizeStringValue = (value: unknown): string | null | undefined => {
   return trimmed ? trimmed : null;
 };
 
-const normalizeModelProviderValue = (
-  value: string | null | undefined,
-): "copilot" | "azure-openai" | undefined => {
+const normalizeModelProviderValue = (value: string | null | undefined): ModelProviderId | undefined => {
   if (value === undefined) {
     return undefined;
   }
@@ -40,7 +47,9 @@ const normalizeModelProviderValue = (
     return canonical;
   }
 
-  throw new Error('Invalid model provider. Use "copilot" or "azure-openai".');
+  throw new Error(
+    'Invalid model provider. Use "copilot", "azure-openai", "azure-openai-escalation", "openai", or "openai-escalation".',
+  );
 };
 
 export const normalizeRuntimeConfigValue = (key: RuntimeConfigKey, value: unknown): string | null | undefined => {

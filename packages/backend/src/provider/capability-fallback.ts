@@ -1,29 +1,41 @@
 import type { ProviderCapabilities, ProviderId, ProviderUsageSnapshot } from "./types.js";
 
 export const getDefaultProviderCapabilities = (providerId: ProviderId): ProviderCapabilities =>
-  providerId === "azure-openai"
+  providerId === "azure-openai" || providerId === "azure-openai-escalation"
     ? {
         persistentSessions: false,
         abortableTurns: true,
         sessionResumption: "host-managed",
         turnCancellation: "provider-abort",
         responseStreaming: "native",
-        usageReporting: "none",
+        usageReporting: "partial",
         toolManifestMode: "literal",
         modelSelection: "provider-default",
         toolCalling: "native",
       }
-    : {
-        persistentSessions: true,
-        abortableTurns: true,
-        sessionResumption: "provider-managed",
-        turnCancellation: "provider-abort",
-        responseStreaming: "native",
-        usageReporting: "full",
-        toolManifestMode: "projected",
-        modelSelection: "session-scoped",
-        toolCalling: "native",
-      };
+    : providerId === "openai" || providerId === "openai-escalation"
+      ? {
+          persistentSessions: false,
+          abortableTurns: true,
+          sessionResumption: "host-managed",
+          turnCancellation: "provider-abort",
+          responseStreaming: "native",
+          usageReporting: "partial",
+          toolManifestMode: "literal",
+          modelSelection: "session-scoped",
+          toolCalling: "native",
+        }
+      : {
+          persistentSessions: true,
+          abortableTurns: true,
+          sessionResumption: "provider-managed",
+          turnCancellation: "provider-abort",
+          responseStreaming: "native",
+          usageReporting: "full",
+          toolManifestMode: "projected",
+          modelSelection: "session-scoped",
+          toolCalling: "native",
+        };
 
 export type ProviderRuntimeFallbackPolicy = {
   continuity: "provider-session" | "host-continuity";

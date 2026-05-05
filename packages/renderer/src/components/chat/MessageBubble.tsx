@@ -20,6 +20,10 @@ export const MessageBubble = memo(function MessageBubble({
   onRetry,
 }: MessageBubbleProps) {
   const isUser = message.role === "user";
+  const assistantLabel =
+    !isUser && typeof message.model === "string" && message.model.trim().length > 0
+      ? `SPIRA - ${message.model.trim()}`
+      : "SPIRA";
   const [copyState, setCopyState] = useState<"idle" | "copied" | "error">("idle");
   const copyResetTimeoutRef = useRef<number | null>(null);
 
@@ -58,7 +62,7 @@ export const MessageBubble = memo(function MessageBubble({
     >
       <div className={styles.headerRow}>
         <div className={styles.metaGroup}>
-          <div className={styles.meta}>{isUser ? "USER" : "SPIRA"}</div>
+          <div className={styles.meta}>{isUser ? "USER" : assistantLabel}</div>
           {isAwaitingReply ? <div className={styles.questionPill}>Awaiting reply</div> : null}
         </div>
         <div className={styles.messageActions}>

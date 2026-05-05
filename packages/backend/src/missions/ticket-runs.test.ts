@@ -4,6 +4,7 @@ import path from "node:path";
 import { SpiraMemoryDatabase, getSpiraMemoryDbPath } from "@spira/memory-db";
 import type { TicketRunSummary } from "@spira/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { SpiraError } from "../util/errors.js";
 import { TicketRunService, buildTicketRunBranchName, buildTicketRunWorktreePath } from "./ticket-runs.js";
 
 const tempDirs: string[] = [];
@@ -404,7 +405,9 @@ describe("TicketRunService", () => {
     });
 
     expect(result.run.status).toBe("error");
-    expect(result.run.statusMessage).toBe("Failed to hydrate submodules for service-api.");
+    expect(result.run.statusMessage).toBe(
+      "Failed to hydrate submodules for service-api. Git reported: Submodule auth failed.",
+    );
     expect(gitRunner).toHaveBeenNthCalledWith(1, "C:\\Repos\\service-api", [
       "branch",
       "--list",
@@ -512,7 +515,7 @@ describe("TicketRunService", () => {
 
     expect(result.run.status).toBe("error");
     expect(result.run.statusMessage).toBe(
-      "Failed to hydrate submodules for service-api. Set a mission GitHub PAT in Settings so Spira can clone private GitHub submodules.",
+      "Failed to hydrate submodules for service-api. Git reported: fatal: Cannot prompt because user interactivity has been disabled. fatal: could not read Username for 'https://github.com': terminal prompts disabled. Set a mission GitHub PAT in Settings so Spira can clone private GitHub submodules.",
     );
     expect(gitRunner).toHaveBeenNthCalledWith(3, worktreePath, ["submodule", "update", "--init", "--recursive"]);
     expect(gitRunner).toHaveBeenNthCalledWith(6, "C:\\Repos\\service-api", [
@@ -521,6 +524,88 @@ describe("TicketRunService", () => {
       "feat/spi-153-private-submodule-auth",
     ]);
     expect(gitRunner).toHaveBeenCalledTimes(6);
+  });
+
+  it("surfaces nested git stderr details when submodule hydration fails", async () => {
+    const database = createTestDatabase();
+    const worktreePath = path.join("C:\\Repos", ".spira-worktrees", "spi-156", "service-api");
+    let branchCreated = false;
+    const gitRunner = vi.fn().mockImplementation(async (cwd: string, args: readonly string[]) => {
+      const command = args.join(" ");
+      if (
+        cwd === "C:\\Repos\\service-api" &&
+        command === "branch --list --format=%(refname:short) feat/spi-156-nested-submodule-error"
+      ) {
+        return { stdout: branchCreated ? "feat/spi-156-nested-submodule-error\n" : "", stderr: "" };
+      }
+      if (
+        cwd === "C:\\Repos\\service-api" &&
+        command === `worktree add -b feat/spi-156-nested-submodule-error ${worktreePath}`
+      ) {
+        branchCreated = true;
+        return { stdout: "", stderr: "" };
+      }
+      if (cwd === worktreePath && command === "submodule update --init --recursive") {
+        throw new SpiraError(
+          "TICKET_RUN_GIT_ERROR",
+          `Git command failed in ${worktreePath}: git submodule update --init --recursive`,
+          Object.assign(new Error("Command failed: git submodule update --init --recursive"), {
+            stderr:
+              "remote: Repository not found.\nfatal: Authentication failed for 'https://github.com/example/private-submodule.git/'\n",
+          }),
+        );
+      }
+      if (cwd === "C:\\Repos\\service-api" && command === `worktree remove --force ${worktreePath}`) {
+        return { stdout: "", stderr: "" };
+      }
+      if (cwd === "C:\\Repos\\service-api" && command === "branch -D feat/spi-156-nested-submodule-error") {
+        branchCreated = false;
+        return { stdout: "", stderr: "" };
+      }
+      throw new Error(`Unexpected git command in ${cwd}: ${command}`);
+    });
+    const service = new TicketRunService({
+      memoryDb: database,
+      logger: createLogger(),
+      projectRegistry: {
+        getSnapshot: async () => ({
+          workspaceRoot: "C:\\Repos",
+          repos: [
+            {
+              name: "service-api",
+              relativePath: "service-api",
+              absolutePath: "C:\\Repos\\service-api",
+              hasSubmodules: true,
+              mappedProjectKeys: ["SPI"],
+            },
+          ],
+          mappings: [
+            {
+              projectKey: "SPI",
+              repoRelativePaths: ["service-api"],
+              missingRepoRelativePaths: [],
+              updatedAt: 100,
+            },
+          ],
+        }),
+      },
+      youTrackService: null,
+      runGitCommand: gitRunner,
+      runIdFactory: () => "run-1",
+      now: () => 1234,
+    });
+
+    const result = await service.startRun({
+      ticketId: "SPI-156",
+      ticketSummary: "Nested submodule error",
+      ticketUrl: "https://example.youtrack.cloud/issue/SPI-156",
+      projectKey: "SPI",
+    });
+
+    expect(result.run.status).toBe("error");
+    expect(result.run.statusMessage).toBe(
+      "Failed to hydrate submodules for service-api. Git reported: remote: Repository not found. fatal: Authentication failed for 'https://github.com/example/private-submodule.git/'.",
+    );
   });
 
   it("reuses an existing local mission branch when recreating a missing worktree", async () => {
@@ -1579,7 +1664,9 @@ describe("TicketRunService", () => {
       statusMessage: "Mission closed.",
       commitMessageDraft: null,
     });
-    expect(database.listRepoIntelligence({ projectKey: "SPI", includeUnapproved: true, tags: ["run:run-1"] })).toMatchObject([
+    expect(
+      database.listRepoIntelligence({ projectKey: "SPI", includeUnapproved: true, tags: ["run:run-1"] }),
+    ).toMatchObject([
       {
         source: "learned",
         approved: false,
@@ -1684,9 +1771,11 @@ describe("TicketRunService", () => {
     await expect(service.getRepoIntelligenceCandidates("run-1")).resolves.toMatchObject({
       entries: [{ id: "learned-run-1-service-api", approved: false }],
     });
-    await expect(service.approveRepoIntelligenceCandidate("run-1", "learned-run-1-service-api")).resolves.toMatchObject({
-      entry: { id: "learned-run-1-service-api", approved: true },
-    });
+    await expect(service.approveRepoIntelligenceCandidate("run-1", "learned-run-1-service-api")).resolves.toMatchObject(
+      {
+        entry: { id: "learned-run-1-service-api", approved: true },
+      },
+    );
     expect(database.getRepoIntelligenceEntry("learned-run-1-service-api")).toMatchObject({
       approved: true,
     });

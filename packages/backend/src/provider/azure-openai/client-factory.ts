@@ -1,14 +1,18 @@
 import type { Env } from "@spira/shared";
 import type { Logger } from "pino";
 import { ProviderError } from "../../util/errors.js";
+import { getDefaultProviderCapabilities } from "../capability-fallback.js";
 import type { ProviderAuthStatus, ProviderClient, ProviderSession, ProviderSessionConfig } from "../types.js";
 import {
   type AzureOpenAiClientConfig,
+  type AzureOpenAiProviderId,
   type AzureOpenAiSessionState,
   abortAzureTurn,
   createAzureOpenAiSessionState,
+  escalateAzureSession,
   publishAzureHostContinuity,
   resolveAzureConfig,
+  resolveAzureCurrentDeployment,
   trimTrailingSlashes,
 } from "./session-state.js";
 import { runAzureOpenAiTurn } from "./turn-runner.js";
@@ -40,6 +44,16 @@ class AzureOpenAiProviderSession implements ProviderSession {
     await this.client.runTurn(this.state, this.config, payload.prompt);
   }
 
+  escalate() {
+    if (this.disconnected) {
+      throw new ProviderError("Session not found: disconnected");
+    }
+    return Promise.resolve({
+      providerId: this.state.providerId,
+      ...escalateAzureSession(this.state),
+    });
+  }
+
   abort(): Promise<void> {
     abortAzureTurn(this.state);
     return Promise.resolve();
@@ -52,27 +66,27 @@ class AzureOpenAiProviderSession implements ProviderSession {
 }
 
 export class AzureOpenAiProviderClient implements ProviderClient {
-  readonly providerId = "azure-openai" as const;
-  readonly capabilities = {
-    persistentSessions: false,
-    abortableTurns: true,
-    sessionResumption: "host-managed",
-    turnCancellation: "provider-abort",
-    responseStreaming: "native",
-    usageReporting: "partial",
-    toolManifestMode: "literal",
-    modelSelection: "provider-default",
-    toolCalling: "native",
-  } as const;
+  readonly providerId: AzureOpenAiProviderId;
+  readonly capabilities;
   private readonly sessions = new Map<string, AzureOpenAiSessionState>();
 
   constructor(
     private readonly config: AzureOpenAiClientConfig,
     private readonly logger: Pick<Logger, "info"> = silentLogger,
-  ) {}
+  ) {
+    this.providerId = config.providerId ?? "azure-openai";
+    this.capabilities = getDefaultProviderCapabilities(this.providerId);
+  }
 
   async createSession(config: ProviderSessionConfig & { sessionId: string }): Promise<ProviderSession> {
-    const state = createAzureOpenAiSessionState(config, config.model ?? this.config.modelLabel ?? null);
+    const state = createAzureOpenAiSessionState(
+      config,
+      this.providerId,
+      this.config.deployment,
+      this.config.modelLabel ?? null,
+      this.config.escalationDeployment ?? null,
+      this.config.escalationModelLabel ?? null,
+    );
     publishAzureHostContinuity(state);
     this.sessions.set(config.sessionId, state);
     return new AzureOpenAiProviderSession(state, config, this);
@@ -86,6 +100,17 @@ export class AzureOpenAiProviderClient implements ProviderClient {
 
     state.onHostContinuitySnapshot = config.onHostContinuitySnapshot ?? null;
     state.hostContinuityModel = config.hostContinuity?.model ?? config.model ?? this.config.modelLabel ?? null;
+    state.currentDeployment =
+      config.hostContinuity?.deployment?.trim() ||
+      state.currentDeployment ||
+      resolveAzureCurrentDeployment(
+        this.providerId,
+        state.hostContinuityModel ?? this.config.deployment,
+        this.config.deployment,
+        this.config.modelLabel ?? null,
+        this.config.escalationDeployment ?? null,
+        this.config.escalationModelLabel ?? null,
+      );
     publishAzureHostContinuity(state);
     return new AzureOpenAiProviderSession(state, config, this);
   }
@@ -116,13 +141,16 @@ export class AzureOpenAiProviderClient implements ProviderClient {
 export const createAzureOpenAiProviderClient = async (
   env: Env,
   logger: Pick<Logger, "info">,
+  providerId: AzureOpenAiProviderId = "azure-openai",
 ): Promise<{ client: AzureOpenAiProviderClient; strategy: AzureOpenAiAuthStrategy }> => {
-  const client = new AzureOpenAiProviderClient(resolveAzureConfig(env), logger);
+  const clientConfig = resolveAzureConfig(providerId, env);
+  const client = new AzureOpenAiProviderClient(clientConfig, logger);
   logger.info(
     {
       providerId: client.providerId,
       endpoint: trimTrailingSlashes(env.AZURE_OPENAI_ENDPOINT?.trim() ?? ""),
-      deployment: env.AZURE_OPENAI_DEPLOYMENT?.trim() ?? "",
+      deployment: clientConfig.deployment,
+      ...(clientConfig.escalationDeployment ? { escalationDeployment: clientConfig.escalationDeployment } : {}),
       strategy: "azure-openai-key",
     },
     "Using Azure OpenAI provider authentication",
