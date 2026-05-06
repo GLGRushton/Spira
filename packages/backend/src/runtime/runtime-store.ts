@@ -20,8 +20,14 @@ import { createProviderClientForProvider, stopProviderClient } from "../provider
 import type { ProviderId, ProviderUsageRecord } from "../provider/types.js";
 import { createLogger } from "../util/logger.js";
 import { resolveSubagentProviderBinding } from "./provider-binding.js";
-import type { RuntimeCheckpointPayload, RuntimeLedgerEvent, RuntimeSessionContract } from "./runtime-contract.js";
-import { createRuntimeLedgerEvent } from "./runtime-contract.js";
+import {
+  type RuntimeCheckpointPayload,
+  type RuntimeLedgerEvent,
+  type RuntimeSessionContract,
+  createDefaultRuntimeWorkflowState,
+  createRuntimeLedgerEvent,
+  normalizeRuntimeWorkflowState,
+} from "./runtime-contract.js";
 import { getStationRuntimeSessionId, getSubagentRuntimeSessionId } from "./runtime-session-ids.js";
 
 const logger = createLogger("runtime-store");
@@ -288,6 +294,13 @@ export class RuntimeStore {
     this.memoryDb?.resolveRuntimePermissionRequest(requestId, status, resolvedAt);
   }
 
+  listPendingPermissionRequestIds(): string[] {
+    if (!this.memoryDb || typeof this.memoryDb.listPendingRuntimePermissionRequests !== "function") {
+      return [];
+    }
+    return this.memoryDb.listPendingRuntimePermissionRequests(this.stationId).map((record) => record.requestId);
+  }
+
   listPersistedSubagentRuns(): SubagentRunSnapshot[] {
     return (this.memoryDb?.listRuntimeSubagentRuns(this.stationId) ?? []).map((record) => record.snapshot);
   }
@@ -417,11 +430,25 @@ export class RuntimeStore {
   }
 
   private toRuntimeSessionContract(record: PersistedRuntimeSessionRecord): RuntimeSessionContract {
-    return record.contract as unknown as RuntimeSessionContract;
+    const contract = record.contract as Partial<RuntimeSessionContract>;
+    return {
+      ...contract,
+      workflowState:
+        "workflowState" in contract && contract.workflowState
+          ? normalizeRuntimeWorkflowState(contract.workflowState as RuntimeSessionContract["workflowState"])
+          : createDefaultRuntimeWorkflowState(),
+    } as RuntimeSessionContract;
   }
 
   private toRuntimeCheckpointPayload(record: PersistedRuntimeCheckpointRecord): RuntimeCheckpointPayload {
-    return record.payload as unknown as RuntimeCheckpointPayload;
+    const payload = record.payload as Partial<RuntimeCheckpointPayload>;
+    return {
+      ...payload,
+      workflowState:
+        "workflowState" in payload && payload.workflowState
+          ? normalizeRuntimeWorkflowState(payload.workflowState as RuntimeCheckpointPayload["workflowState"])
+          : createDefaultRuntimeWorkflowState(),
+    } as RuntimeCheckpointPayload;
   }
 
   private toRuntimeLedgerEvent(record: PersistedRuntimeLedgerEventRecord): RuntimeLedgerEvent {

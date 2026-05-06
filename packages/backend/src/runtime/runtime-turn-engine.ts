@@ -102,6 +102,7 @@ export const createRuntimeCheckpointFromContract = (input: {
     summary: input.summary.trim().slice(0, 500) || input.defaultSummary,
     artifactRefs: input.contract.artifactRefs,
     turnState: input.contract.turnState,
+    workflowState: input.contract.workflowState,
     permissionState: input.contract.permissionState,
     cancellationState: input.contract.cancellationState,
     usageSummary: input.contract.usageSummary,

@@ -87,9 +87,10 @@ export interface StationSummary {
   createdAt: number;
   updatedAt: number;
   isStreaming: boolean;
+  workSession?: import("./work-session-types.js").WorkSessionSummary | null;
 }
 
-export const PROTOCOL_VERSION = 18;
+export const PROTOCOL_VERSION = 19;
 
 export const TTS_PROVIDERS = ["elevenlabs", "kokoro"] as const;
 export type TtsProvider = (typeof TTS_PROVIDERS)[number];

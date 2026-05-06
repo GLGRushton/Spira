@@ -8,6 +8,7 @@ import type { SubagentCreateConfig } from "./subagent-types.js";
 import type { SubagentDomain } from "./subagent-types.js";
 import type { SubagentDomainId } from "./subagent-types.js";
 import type { UpgradeScope } from "./upgrade.js";
+import type { WorkSessionSummary } from "./work-session-types.js";
 
 export const SPIRA_UI_CONTROL_BRIDGE_VERSION = 1;
 export const SPIRA_UI_ROOT_VIEWS = [
@@ -116,6 +117,7 @@ export interface SpiraUiContext {
   activeMissionRoom?: MissionUiRoom;
   assistantState: AssistantState;
   connectionStatus: ConnectionStatus;
+  workSession: WorkSessionSummary | null;
   chat: {
     isStreaming: boolean;
     isAborting: boolean;
@@ -193,6 +195,7 @@ export interface SpiraUiSnapshot {
   window: SpiraUiWindowSummary;
   assistantState: AssistantState;
   connectionStatus: ConnectionStatus;
+  workSession: WorkSessionSummary | null;
   settings: UserSettings;
   runtimeConfig?: RuntimeConfigSummary;
   permissions: PermissionRequestPayload[];

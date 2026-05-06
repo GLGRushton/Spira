@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { getDefaultProviderCapabilities } from "../provider/capability-fallback.js";
 import * as clientFactory from "../provider/client-factory.js";
 import { createRuntimeSessionContract } from "./runtime-contract.js";
+import { persistSharedRuntimeSessionState } from "./runtime-session-state.js";
 import { RuntimeStore } from "./runtime-store.js";
 
 const tempDirs: string[] = [];
@@ -104,6 +105,201 @@ describe("RuntimeStore", () => {
         }),
       ]),
     );
+  });
+
+  it("backfills workflow state when loading pre-upgrade runtime records", () => {
+    const { database, runtimeStore } = openRuntimeStore();
+    const runtimeSessionId = "station:primary";
+    const runtimeSession = createRuntimeSessionContract({
+      runtimeSessionId,
+      kind: "station",
+      scope: { stationId: "primary" },
+      workingDirectory: "C:\\GitHub\\Spira",
+      hostManifestHash: "host-hash",
+      providerProjectionHash: "projection-hash",
+      providerId: "copilot",
+      providerCapabilities: getDefaultProviderCapabilities("copilot"),
+      providerSessionId: "provider-1",
+      model: "gpt-5.4",
+      boundAt: 1_000,
+    });
+
+    const { workflowState: _workflowState, ...legacyContract } = runtimeSession;
+    database.upsertRuntimeSession({
+      runtimeSessionId,
+      stationId: "primary",
+      kind: "station",
+      contract: legacyContract,
+      createdAt: 1_000,
+      updatedAt: 1_000,
+    });
+
+    database.upsertRuntimeCheckpoint({
+      checkpointId: "checkpoint-legacy",
+      runtimeSessionId,
+      stationId: "primary",
+      kind: "session-summary",
+      summary: "Legacy checkpoint",
+      payload: {
+        checkpointId: "checkpoint-legacy",
+        kind: "session-summary",
+        createdAt: 1_000,
+        summary: "Legacy checkpoint",
+        artifactRefs: runtimeSession.artifactRefs,
+        turnState: runtimeSession.turnState,
+        permissionState: runtimeSession.permissionState,
+        cancellationState: runtimeSession.cancellationState,
+        usageSummary: runtimeSession.usageSummary,
+        providerBinding: runtimeSession.providerBinding,
+      },
+      createdAt: 1_000,
+    });
+
+    expect(runtimeStore.getRuntimeSession(runtimeSessionId)?.workflowState).toEqual({
+      phase: "intake",
+      status: "idle",
+      summary: null,
+      updatedAt: null,
+      phaseHistory: [],
+      handoffs: [],
+      blockedBy: null,
+      review: {
+        status: "idle",
+        attempt: 0,
+        runId: null,
+        summary: null,
+        failureReason: null,
+        lastUpdatedAt: null,
+      },
+    });
+    expect(runtimeStore.getLatestRuntimeCheckpoint(runtimeSessionId)?.workflowState).toEqual({
+      phase: "intake",
+      status: "idle",
+      summary: null,
+      updatedAt: null,
+      phaseHistory: [],
+      handoffs: [],
+      blockedBy: null,
+      review: {
+        status: "idle",
+        attempt: 0,
+        runId: null,
+        summary: null,
+        failureReason: null,
+        lastUpdatedAt: null,
+      },
+    });
+  });
+
+  it("normalizes partial workflow state when re-persisting loaded runtime sessions", () => {
+    const { database, runtimeStore } = openRuntimeStore();
+    const runtimeSessionId = "station:primary";
+    const runtimeSession = createRuntimeSessionContract({
+      runtimeSessionId,
+      kind: "station",
+      scope: { stationId: "primary" },
+      workingDirectory: "C:\\GitHub\\Spira",
+      hostManifestHash: "host-hash",
+      providerProjectionHash: "projection-hash",
+      providerId: "copilot",
+      providerCapabilities: getDefaultProviderCapabilities("copilot"),
+      providerSessionId: "provider-1",
+      model: "gpt-5.4-mini",
+      boundAt: 1_000,
+    });
+
+    database.upsertRuntimeSession({
+      runtimeSessionId,
+      stationId: "primary",
+      kind: "station",
+      contract: {
+        ...runtimeSession,
+        workflowState: {
+          phase: "implement",
+          status: "active",
+          summary: "Working through the patch.",
+          updatedAt: 100,
+          blockedBy: {
+            kind: "approval",
+            reason: "Waiting for approval",
+            blockedAt: 90,
+          },
+          phaseHistory: [
+            {
+              phase: "review",
+              status: "blocked",
+              startedAt: 80,
+              updatedAt: 85,
+              blockedBy: {
+                kind: "review",
+                reason: "Legacy partial entry",
+                blockedAt: 85,
+              },
+            },
+          ],
+        },
+      },
+      createdAt: 1_000,
+      updatedAt: 1_000,
+    });
+
+    const loaded = runtimeStore.getRuntimeSession(runtimeSessionId);
+    expect(loaded?.workflowState).toEqual({
+      phase: "implement",
+      status: "active",
+      summary: "Working through the patch.",
+      updatedAt: 100,
+      phaseHistory: [
+        {
+          phase: "review",
+          status: "blocked",
+          startedAt: 80,
+          updatedAt: 85,
+          blockedBy: {
+            kind: "review",
+            reason: "Legacy partial entry",
+            pendingRequestIds: [],
+            blockedAt: 85,
+          },
+        },
+      ],
+      handoffs: [],
+      blockedBy: {
+        kind: "approval",
+        reason: "Waiting for approval",
+        pendingRequestIds: [],
+        blockedAt: 90,
+      },
+      review: {
+        status: "idle",
+        attempt: 0,
+        runId: null,
+        summary: null,
+        failureReason: null,
+        lastUpdatedAt: null,
+      },
+    });
+
+    expect(() =>
+      persistSharedRuntimeSessionState(runtimeStore, {
+        runtimeSessionId,
+        stationId: "primary",
+        kind: "station",
+        scope: { stationId: "primary" },
+        workingDirectory: "C:\\GitHub\\Spira",
+        hostManifestHash: "host-hash",
+        providerProjectionHash: "projection-hash",
+        providerId: "copilot",
+        providerCapabilities: getDefaultProviderCapabilities("copilot"),
+        providerSessionId: "provider-1",
+        model: "gpt-5.4",
+        turnState: { state: "thinking", activeToolCallIds: [] },
+        permissionState: { status: "idle", pendingRequestIds: [] },
+        cancellationState: { status: "idle" },
+        usageSummary: { model: "gpt-5.4", totalTokens: 24, lastObservedAt: 200, source: "provider" },
+        now: 200,
+      }),
+    ).not.toThrow();
   });
 
   it("deletes orphaned provider-managed sessions during restart recovery", async () => {
@@ -478,12 +674,13 @@ describe("RuntimeStore", () => {
 
   it("preserves cleanup entries queued during an active drain", async () => {
     const { database, runtimeStore } = openRuntimeStore();
-    let releaseFirstSessionDelete: (() => void) | null = null;
+    let resolveFirstSessionDelete = () => {};
+    const firstSessionDelete = new Promise<void>((resolve) => {
+      resolveFirstSessionDelete = () => resolve();
+    });
     const deleteSession = vi.fn((sessionId: string) => {
       if (sessionId === "first-session") {
-        return new Promise<void>((resolve) => {
-          releaseFirstSessionDelete = resolve;
-        });
+        return firstSessionDelete;
       }
       if (sessionId === "second-session") {
         return Promise.reject(new Error("delete failed"));
@@ -508,8 +705,7 @@ describe("RuntimeStore", () => {
     await vi.waitFor(() => expect(deleteSession).toHaveBeenCalledWith("first-session"));
 
     runtimeStore.queueProviderSessionCleanup("copilot", "second-session");
-    expect(releaseFirstSessionDelete).not.toBeNull();
-    releaseFirstSessionDelete!();
+    resolveFirstSessionDelete();
     await drainPromise;
 
     expect(database.getSessionState("runtime.provider-session-cleanup")).toBe(

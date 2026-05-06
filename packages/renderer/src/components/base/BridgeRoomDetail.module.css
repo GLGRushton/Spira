@@ -200,6 +200,52 @@
   line-height: 1.5;
 }
 
+.workSessionCard {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid rgba(141, 214, 234, 0.18);
+  border-radius: var(--radius-sm);
+  background: linear-gradient(180deg, rgba(10, 18, 38, 0.86), rgba(8, 12, 30, 0.72));
+}
+
+.workSessionHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.workSessionEyebrow {
+  color: var(--accent-amber);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.workSessionBadge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 18px;
+  padding: 0 8px;
+  border: 1px solid rgba(141, 214, 234, 0.24);
+  border-radius: 999px;
+  background: rgba(141, 214, 234, 0.1);
+  color: var(--accent-cyan);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.workSessionSummary {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .live .orbAura {
   opacity: 1;
   transform: translate(-50%, -50%) scale(1.06);

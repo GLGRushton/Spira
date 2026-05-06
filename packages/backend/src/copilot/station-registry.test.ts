@@ -191,6 +191,7 @@ type FakeManager = {
   resolvePermissionRequest: ReturnType<typeof vi.fn>;
   stopManagedSubagent: ReturnType<typeof vi.fn>;
   listManagedSubagents: ReturnType<typeof vi.fn>;
+  getWorkSessionSummary: ReturnType<typeof vi.fn>;
 };
 
 const createRegistry = () => {
@@ -227,6 +228,7 @@ const createRegistry = () => {
         resolvePermissionRequest: vi.fn().mockReturnValue(false),
         stopManagedSubagent: vi.fn().mockResolvedValue(null),
         listManagedSubagents: vi.fn().mockReturnValue([]),
+        getWorkSessionSummary: vi.fn().mockReturnValue(null),
       };
       managers.set(stationId, manager);
       return manager as never;
@@ -237,6 +239,30 @@ const createRegistry = () => {
 };
 
 describe("StationRegistry", () => {
+  it("includes work-session summary in station listings", () => {
+    const { registry, managers } = createRegistry();
+    registry.createStation({ stationId: DEFAULT_STATION_ID, label: "Primary" });
+    managers.get(DEFAULT_STATION_ID)?.getWorkSessionSummary.mockReturnValue({
+      mode: "work-session",
+      active: true,
+      phase: "classify",
+      summary: "WorkSession activated.",
+      updatedAt: 123,
+    });
+
+    expect(registry.listStations()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          stationId: DEFAULT_STATION_ID,
+          workSession: expect.objectContaining({
+            mode: "work-session",
+            phase: "classify",
+          }),
+        }),
+      ]),
+    );
+  });
+
   it("forwards station-scoped transport events with stationId", () => {
     const { registry, transport, managers } = createRegistry();
     registry.createStation({ stationId: DEFAULT_STATION_ID, label: "Primary" });
@@ -552,10 +578,10 @@ describe("StationRegistry", () => {
 
     await registry.shutdown();
 
-    expect(managers.get(DEFAULT_STATION_ID)?.clearSession).toHaveBeenCalledTimes(1);
+    expect(managers.get(DEFAULT_STATION_ID)?.clearSession).not.toHaveBeenCalled();
     expect(managers.get(DEFAULT_STATION_ID)?.stopManagedSubagent).toHaveBeenCalledWith("run-primary");
     expect(managers.get(DEFAULT_STATION_ID)?.shutdown).toHaveBeenCalledTimes(1);
-    expect(managers.get("bravo")?.clearSession).toHaveBeenCalledTimes(1);
+    expect(managers.get("bravo")?.clearSession).not.toHaveBeenCalled();
     expect(managers.get("bravo")?.stopManagedSubagent).toHaveBeenCalledWith("run-bravo");
     expect(managers.get("bravo")?.shutdown).toHaveBeenCalledTimes(1);
   });

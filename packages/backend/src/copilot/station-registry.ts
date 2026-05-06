@@ -365,7 +365,7 @@ export class StationRegistry {
 
     this.closingStations.add(stationId);
     try {
-      await this.performTerminalStationCleanup(station);
+      await this.performTerminalStationCleanup(station, { clearSession: true });
       this.persistStationConversation(station, null);
       this.options.memoryDb?.setSessionState(
         getStationSessionKey(station.stationId, "copilot-session-id", LEGACY_SESSION_STATE_SESSION_ID_KEY),
@@ -393,7 +393,7 @@ export class StationRegistry {
     }
     try {
       for (const station of stations) {
-        await this.performTerminalStationCleanup(station);
+        await this.performTerminalStationCleanup(station, { clearSession: false });
         for (const dispose of station.disposeHandlers) {
           dispose();
         }
@@ -628,10 +628,15 @@ export class StationRegistry {
     throw new SpiraError("STATION_NOT_FOUND", `Unknown station ${resolvedStationId}`);
   }
 
-  private async performTerminalStationCleanup(station: StationContext): Promise<void> {
+  private async performTerminalStationCleanup(
+    station: StationContext,
+    options: { clearSession: boolean },
+  ): Promise<void> {
     const managedRuns = station.manager.listManagedSubagents({ includeCompleted: false });
     await Promise.all(managedRuns.map((run) => station.manager.stopManagedSubagent(run.runId)));
-    await station.manager.clearSession();
+    if (options.clearSession) {
+      await station.manager.clearSession();
+    }
     await station.manager.shutdown();
     station.pendingToolCalls.clear();
   }
@@ -833,6 +838,7 @@ export class StationRegistry {
       createdAt: station.createdAt,
       updatedAt: station.updatedAt,
       isStreaming: station.state === "thinking",
+      workSession: station.manager.getWorkSessionSummary(),
     };
   }
 

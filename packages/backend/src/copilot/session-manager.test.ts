@@ -1,9 +1,20 @@
-import { type McpTool, parseEnv } from "@spira/shared";
+import {
+  type McpTool,
+  type SubagentDomain,
+  type WorkSessionClassification,
+  type WorkSessionSnapshot,
+  parseEnv,
+} from "@spira/shared";
 import { describe, expect, it, vi } from "vitest";
+import { createWorkSessionStorage, isWorkSessionSnapshot } from "../coding/work-session-storage.js";
 import { getDefaultProviderCapabilities } from "../provider/capability-fallback.js";
 import * as clientFactory from "../provider/client-factory.js";
 import type { ProviderHostContinuityState, ProviderSessionConfig } from "../provider/types.js";
-import { createRuntimeCheckpointPayload, createRuntimeSessionContract } from "../runtime/runtime-contract.js";
+import {
+  type RuntimeWorkflowState,
+  createRuntimeCheckpointPayload,
+  createRuntimeSessionContract,
+} from "../runtime/runtime-contract.js";
 import { AssistantError } from "../util/errors.js";
 import { SpiraEventBus } from "../util/event-bus.js";
 import { StationSessionManager } from "./session-manager.js";
@@ -31,6 +42,7 @@ type SessionManagerInternals = {
   resumableHostContinuityProjectionHash: string | null;
   boundHostManifestHash: string | null;
   boundProviderProjectionHash: string | null;
+  workflowState: RuntimeWorkflowState;
   sessionTeardownEpoch: number;
   abortResponse(): Promise<void>;
   stopTimedOutTurn(session: {
@@ -112,7 +124,9 @@ const createRuntimeMemoryDb = (initialState: Record<string, unknown> | null = nu
   const runtimeSessions = new Map<string, Record<string, unknown>>();
   const runtimeLedgerEvents: Array<Record<string, unknown>> = [];
   const runtimeCheckpoints = new Map<string, Record<string, unknown>>();
-  const sessionState = new Map<string, string | null>();
+  const runtimePermissionRequests = new Map<string, Record<string, unknown>>();
+  const runtimeSubagentRuns = new Map<string, Record<string, unknown>>();
+  const sessionState = new Map<string, unknown>();
   return {
     runtimeStates,
     runtimeSessions,
@@ -120,7 +134,7 @@ const createRuntimeMemoryDb = (initialState: Record<string, unknown> | null = nu
     runtimeCheckpoints,
     sessionState,
     db: {
-      listRuntimeSubagentRuns: () => [],
+      listRuntimeSubagentRuns: () => [...runtimeSubagentRuns.values()],
       upsertRuntimeStationState: (input: Record<string, unknown>) => {
         runtimeStates.push(input);
         return input;
@@ -201,13 +215,50 @@ const createRuntimeMemoryDb = (initialState: Record<string, unknown> | null = nu
         [...runtimeCheckpoints.values()]
           .filter((checkpoint) => checkpoint.runtimeSessionId === runtimeSessionId)
           .sort((left, right) => Number(right.createdAt ?? 0) - Number(left.createdAt ?? 0))[0] ?? null,
-      upsertRuntimePermissionRequest: vi.fn(),
-      resolveRuntimePermissionRequest: vi.fn(),
+      upsertRuntimePermissionRequest: vi.fn((input: Record<string, unknown>) => {
+        const record = {
+          requestId: input.requestId,
+          stationId: input.stationId ?? null,
+          payload: input.payload,
+          status: "pending",
+          createdAt: input.createdAt ?? 1,
+          resolvedAt: null,
+        };
+        runtimePermissionRequests.set(String(input.requestId), record);
+        return record;
+      }),
+      listPendingRuntimePermissionRequests: (stationId?: string | null) =>
+        [...runtimePermissionRequests.values()].filter(
+          (record) =>
+            record.status === "pending" &&
+            (stationId === undefined || stationId === null || record.stationId === stationId),
+        ),
+      resolveRuntimePermissionRequest: vi.fn((requestId: string, status: string, resolvedAt: number) => {
+        const record = runtimePermissionRequests.get(requestId);
+        if (!record) {
+          return false;
+        }
+        runtimePermissionRequests.set(requestId, {
+          ...record,
+          status,
+          resolvedAt,
+        });
+        return true;
+      }),
       appendProviderUsageRecord: vi.fn(),
-      deleteRuntimeSubagentRun: vi.fn(),
-      upsertRuntimeSubagentRun: vi.fn(),
+      deleteRuntimeSubagentRun: vi.fn((runId: string) => runtimeSubagentRuns.delete(runId)),
+      upsertRuntimeSubagentRun: vi.fn((input: Record<string, unknown>) => {
+        const record = {
+          runId: input.runId,
+          stationId: input.stationId ?? null,
+          snapshot: input.snapshot,
+          createdAt: input.createdAt ?? 1,
+        };
+        runtimeSubagentRuns.set(String(input.runId), record);
+        return record;
+      }),
       getSessionState: (key: string) => sessionState.get(key) ?? null,
-      setSessionState: (key: string, value: string | null) => {
+      setSessionState: (key: string, value: unknown) => {
         if (value === null) {
           sessionState.delete(key);
           return;
@@ -217,6 +268,72 @@ const createRuntimeMemoryDb = (initialState: Record<string, unknown> | null = nu
     },
   };
 };
+
+describe("work-session storage", () => {
+  it("accepts legacy snapshots that do not include closure fields", () => {
+    expect(
+      isWorkSessionSnapshot({
+        sessionId: "work-session",
+        stationId: "station-alpha",
+        taskText: "Implement the bridge UI badge in the renderer file",
+        currentPhase: "validate",
+        classification: {
+          intent: "edit",
+          explicitWorkIntent: true,
+          requiresRepoContext: true,
+          confidence: "heuristic",
+        },
+        phaseHistory: [],
+        searchTerms: ["bridge", "renderer"],
+        candidateFiles: ["packages/renderer/src/components/base/BridgeRoomDetail.tsx"],
+        createdAt: 1,
+        updatedAt: 2,
+      }),
+    ).toBe(true);
+  });
+
+  it("round-trips snapshots that include closure fields", () => {
+    const memory = createRuntimeMemoryDb();
+    const storage = createWorkSessionStorage(memory.db as never, "station-alpha");
+    const snapshot: WorkSessionSnapshot = {
+      sessionId: "work-session",
+      stationId: "station-alpha",
+      taskText: "Implement the bridge UI badge in the renderer file",
+      currentPhase: "validate",
+      classification: {
+        intent: "edit",
+        explicitWorkIntent: true,
+        requiresRepoContext: true,
+        confidence: "heuristic",
+      },
+      phaseHistory: [],
+      searchTerms: ["bridge", "renderer"],
+      candidateFiles: ["packages/renderer/src/components/base/BridgeRoomDetail.tsx"],
+      selectedFiles: ["packages/renderer/src/components/base/BridgeRoomDetail.tsx"],
+      summary: "Validation passed; ready for review.",
+      planSummary: "Plan ready.",
+      patchAttempts: [],
+      changedFiles: ["packages/renderer/src/components/base/BridgeRoomDetail.tsx"],
+      validationResults: [],
+      pendingValidationShellId: null,
+      pendingValidationCommand: null,
+      fixIterationCount: 0,
+      repeatFailureCount: 0,
+      lastValidationFingerprint: null,
+      readyForReview: true,
+      reviewSummary: "Review completed.",
+      completedAt: 10,
+      stalledReason: null,
+      stalledAt: null,
+      createdAt: 1,
+      updatedAt: 10,
+    };
+
+    storage.save(snapshot);
+
+    expect(storage.load()).toEqual(snapshot);
+  });
+});
 
 describe("StationSessionManager", () => {
   it("defers MCP session refresh until the active turn becomes idle", async () => {
@@ -557,6 +674,692 @@ describe("StationSessionManager", () => {
     expect(escalate).toHaveBeenCalledTimes(1);
   });
 
+  it("persists an escalate-and-continue handoff for the active workflow phase", async () => {
+    const runtimeMemory = createRuntimeMemoryDb();
+    const manager = createManager([], {
+      envInput: { SPIRA_MODEL_PROVIDER: "openai-escalation" },
+      stationId: "primary",
+      memoryDb: runtimeMemory.db,
+    });
+    const internals = manager as unknown as SessionManagerInternals;
+    const escalate = vi.fn().mockResolvedValue({
+      status: "escalated",
+      providerId: "openai-escalation",
+      fromModel: "gpt-5.4-mini",
+      toModel: "gpt-5.4",
+    });
+    internals.currentState = "thinking";
+    internals.session = {
+      sessionId: "escalation-session",
+      disconnect: vi.fn().mockResolvedValue(undefined),
+      escalate,
+    };
+
+    const tool = internals.getSessionConfig().tools.find((entry) => entry.name === "spira_escalate_session");
+
+    expect(tool).toBeDefined();
+    if (!tool) {
+      throw new Error("Expected spira_escalate_session to be available.");
+    }
+
+    await tool.handler({});
+
+    expect(runtimeMemory.runtimeSessions.get("station:primary")).toMatchObject({
+      contract: {
+        usageSummary: {
+          model: "gpt-5.4",
+          source: "estimated",
+        },
+        providerBinding: {
+          model: "gpt-5.4",
+        },
+        workflowState: {
+          phase: "implement",
+          status: "active",
+          summary: "Escalated from gpt-5.4-mini to gpt-5.4; continuing implement.",
+          handoffs: [
+            expect.objectContaining({
+              kind: "model-escalation",
+              phase: "implement",
+              continuationMode: "continue-current-phase",
+              fromModel: "gpt-5.4-mini",
+              toModel: "gpt-5.4",
+            }),
+          ],
+        },
+      },
+    });
+  });
+
+  it("preserves the current workflow phase when persisting a manual escalation handoff", async () => {
+    const runtimeMemory = createRuntimeMemoryDb();
+    runtimeMemory.db.upsertRuntimeSession({
+      runtimeSessionId: "station:primary",
+      stationId: "primary",
+      kind: "station",
+      contract: createRuntimeSessionContract({
+        runtimeSessionId: "station:primary",
+        kind: "station",
+        scope: { stationId: "primary" },
+        workingDirectory: "C:\\GitHub\\Spira",
+        hostManifestHash: "host-hash",
+        providerProjectionHash: "projection-hash",
+        providerId: "openai-escalation",
+        providerCapabilities: getDefaultProviderCapabilities("openai-escalation"),
+        providerSessionId: "escalation-session",
+        model: "gpt-5.4-mini",
+        workflowState: {
+          phase: "review",
+          status: "active",
+          summary: "Review is underway.",
+          updatedAt: 100,
+          phaseHistory: [],
+          handoffs: [],
+          blockedBy: null,
+          review: {
+            status: "running",
+            attempt: 1,
+            runId: "agent:review-1",
+            summary: "Review launched.",
+            failureReason: null,
+            lastUpdatedAt: 100,
+          },
+        },
+      }),
+    });
+    const manager = createManager([], {
+      envInput: { SPIRA_MODEL_PROVIDER: "openai-escalation" },
+      stationId: "primary",
+      memoryDb: runtimeMemory.db,
+    });
+    const internals = manager as unknown as SessionManagerInternals;
+    internals.session = {
+      sessionId: "escalation-session",
+      disconnect: vi.fn().mockResolvedValue(undefined),
+      escalate: vi.fn().mockResolvedValue({
+        status: "escalated",
+        providerId: "openai-escalation",
+        fromModel: "gpt-5.4-mini",
+        toModel: "gpt-5.4",
+      }),
+    };
+
+    const tool = internals.getSessionConfig().tools.find((entry) => entry.name === "spira_escalate_session");
+
+    expect(tool).toBeDefined();
+    if (!tool) {
+      throw new Error("Expected spira_escalate_session to be available.");
+    }
+
+    await tool.handler({});
+
+    expect(runtimeMemory.runtimeSessions.get("station:primary")).toMatchObject({
+      contract: {
+        workflowState: {
+          phase: "review",
+          status: "active",
+          handoffs: [
+            expect.objectContaining({
+              kind: "model-escalation",
+              phase: "review",
+              toModel: "gpt-5.4",
+            }),
+          ],
+          review: {
+            status: "running",
+            attempt: 1,
+            runId: "agent:review-1",
+          },
+        },
+      },
+    });
+  });
+
+  it("preserves non-approval workflow blocks during manual escalation", async () => {
+    const runtimeMemory = createRuntimeMemoryDb();
+    runtimeMemory.db.upsertRuntimePermissionRequest({
+      requestId: "perm-1",
+      stationId: "primary",
+      payload: {
+        requestId: "perm-1",
+        stationId: "primary",
+        kind: "custom-tool",
+        toolName: "apply_patch",
+        args: {},
+        readOnly: false,
+      },
+      createdAt: 95,
+    });
+    runtimeMemory.db.upsertRuntimeSession({
+      runtimeSessionId: "station:primary",
+      stationId: "primary",
+      kind: "station",
+      contract: createRuntimeSessionContract({
+        runtimeSessionId: "station:primary",
+        kind: "station",
+        scope: { stationId: "primary" },
+        workingDirectory: "C:\\GitHub\\Spira",
+        hostManifestHash: "host-hash",
+        providerProjectionHash: "projection-hash",
+        providerId: "openai-escalation",
+        providerCapabilities: getDefaultProviderCapabilities("openai-escalation"),
+        providerSessionId: "escalation-session",
+        model: "gpt-5.4-mini",
+        workflowState: {
+          phase: "review",
+          status: "blocked",
+          summary: "Waiting for review feedback.",
+          updatedAt: 100,
+          phaseHistory: [
+            {
+              phase: "review",
+              status: "blocked",
+              summary: "Waiting for review feedback.",
+              providerId: "openai-escalation",
+              model: "gpt-5.4-mini",
+              startedAt: 90,
+              updatedAt: 100,
+              completedAt: null,
+              blockedBy: {
+                kind: "review",
+                reason: "Awaiting reviewer results.",
+                pendingRequestIds: [],
+                blockedAt: 100,
+              },
+            },
+          ],
+          handoffs: [],
+          blockedBy: null,
+          review: {
+            status: "running",
+            attempt: 1,
+            runId: "agent:review-1",
+            summary: "Review launched.",
+            failureReason: null,
+            lastUpdatedAt: 100,
+          },
+        },
+      }),
+    });
+    const manager = createManager([], {
+      envInput: { SPIRA_MODEL_PROVIDER: "openai-escalation" },
+      stationId: "primary",
+      memoryDb: runtimeMemory.db,
+    });
+    const internals = manager as unknown as SessionManagerInternals;
+    internals.session = {
+      sessionId: "escalation-session",
+      disconnect: vi.fn().mockResolvedValue(undefined),
+      escalate: vi.fn().mockResolvedValue({
+        status: "escalated",
+        providerId: "openai-escalation",
+        fromModel: "gpt-5.4-mini",
+        toModel: "gpt-5.4",
+      }),
+    };
+
+    const tool = internals.getSessionConfig().tools.find((entry) => entry.name === "spira_escalate_session");
+
+    expect(tool).toBeDefined();
+    if (!tool) {
+      throw new Error("Expected spira_escalate_session to be available.");
+    }
+
+    await tool.handler({});
+
+    expect(runtimeMemory.runtimeSessions.get("station:primary")).toMatchObject({
+      contract: {
+        workflowState: {
+          phase: "review",
+          status: "blocked",
+          summary: "Escalated from gpt-5.4-mini to gpt-5.4; review remains blocked by review.",
+          blockedBy: {
+            kind: "review",
+            reason: "Awaiting reviewer results.",
+            pendingRequestIds: [],
+          },
+          phaseHistory: [
+            expect.objectContaining({
+              phase: "review",
+              status: "blocked",
+              blockedBy: {
+                kind: "review",
+                reason: "Awaiting reviewer results.",
+                pendingRequestIds: [],
+                blockedAt: 100,
+              },
+            }),
+          ],
+        },
+      },
+    });
+  });
+
+  it("preserves persisted approval blocking across restart-time syncs while requests remain pending", () => {
+    const runtimeMemory = createRuntimeMemoryDb();
+    runtimeMemory.db.upsertRuntimePermissionRequest({
+      requestId: "perm-approval",
+      stationId: "primary",
+      payload: {
+        requestId: "perm-approval",
+        stationId: "primary",
+        kind: "custom-tool",
+        toolName: "apply_patch",
+        args: {},
+        readOnly: false,
+      },
+      createdAt: 95,
+    });
+    runtimeMemory.db.upsertRuntimeSession({
+      runtimeSessionId: "station:primary",
+      stationId: "primary",
+      kind: "station",
+      contract: createRuntimeSessionContract({
+        runtimeSessionId: "station:primary",
+        kind: "station",
+        scope: { stationId: "primary" },
+        workingDirectory: "C:\\GitHub\\Spira",
+        hostManifestHash: "host-hash",
+        providerProjectionHash: "projection-hash",
+        providerId: "openai-escalation",
+        providerCapabilities: getDefaultProviderCapabilities("openai-escalation"),
+        providerSessionId: "escalation-session",
+        model: "gpt-5.4",
+        workflowState: {
+          phase: "implement",
+          status: "blocked",
+          summary: "Waiting on approval.",
+          updatedAt: 100,
+          phaseHistory: [
+            {
+              phase: "implement",
+              status: "blocked",
+              summary: "Waiting on approval.",
+              providerId: "openai-escalation",
+              model: "gpt-5.4",
+              startedAt: 90,
+              updatedAt: 100,
+              completedAt: null,
+              blockedBy: {
+                kind: "approval",
+                reason: "Waiting for approval.",
+                pendingRequestIds: ["perm-approval"],
+                blockedAt: 100,
+              },
+            },
+          ],
+          handoffs: [],
+          blockedBy: {
+            kind: "approval",
+            reason: "Waiting for approval.",
+            pendingRequestIds: ["perm-approval"],
+            blockedAt: 100,
+          },
+          review: {
+            status: "idle",
+            attempt: 0,
+            runId: null,
+            summary: null,
+            failureReason: null,
+            lastUpdatedAt: null,
+          },
+        },
+      }),
+    });
+
+    const manager = createManager([], {
+      envInput: { SPIRA_MODEL_PROVIDER: "openai-escalation" },
+      stationId: "primary",
+      memoryDb: runtimeMemory.db,
+    });
+    const internals = manager as unknown as SessionManagerInternals & { syncRuntimeState: () => void };
+
+    internals.syncRuntimeState();
+
+    expect(runtimeMemory.runtimeSessions.get("station:primary")).toMatchObject({
+      contract: {
+        workflowState: {
+          phase: "implement",
+          status: "blocked",
+          blockedBy: {
+            kind: "approval",
+            pendingRequestIds: ["perm-approval"],
+          },
+        },
+      },
+    });
+  });
+
+  it("derives the active blocked phase from open phase history when legacy root workflow fields are incomplete", async () => {
+    const runtimeMemory = createRuntimeMemoryDb();
+    const runtimeSession = createRuntimeSessionContract({
+      runtimeSessionId: "station:primary",
+      kind: "station",
+      scope: { stationId: "primary" },
+      workingDirectory: "C:\\GitHub\\Spira",
+      hostManifestHash: "host-hash",
+      providerProjectionHash: "projection-hash",
+      providerId: "openai-escalation",
+      providerCapabilities: getDefaultProviderCapabilities("openai-escalation"),
+      providerSessionId: "escalation-session",
+      model: "gpt-5.4-mini",
+      boundAt: 100,
+    });
+    runtimeMemory.db.upsertRuntimeSession({
+      runtimeSessionId: "station:primary",
+      stationId: "primary",
+      kind: "station",
+      contract: {
+        ...runtimeSession,
+        workflowState: {
+          status: "blocked",
+          summary: "Legacy blocked review state.",
+          updatedAt: 100,
+          phaseHistory: [
+            {
+              phase: "review",
+              status: "blocked",
+              summary: "Legacy blocked review state.",
+              providerId: "openai-escalation",
+              model: "gpt-5.4-mini",
+              startedAt: 90,
+              updatedAt: 100,
+              completedAt: null,
+              blockedBy: {
+                kind: "review",
+                reason: "Awaiting reviewer results.",
+                pendingRequestIds: [],
+                blockedAt: 100,
+              },
+            },
+          ],
+          handoffs: [],
+          blockedBy: null,
+          review: runtimeSession.workflowState.review,
+        },
+      },
+    });
+    const manager = createManager([], {
+      envInput: { SPIRA_MODEL_PROVIDER: "openai-escalation" },
+      stationId: "primary",
+      memoryDb: runtimeMemory.db,
+    });
+    const internals = manager as unknown as SessionManagerInternals;
+    internals.session = {
+      sessionId: "escalation-session",
+      disconnect: vi.fn().mockResolvedValue(undefined),
+      escalate: vi.fn().mockResolvedValue({
+        status: "escalated",
+        providerId: "openai-escalation",
+        fromModel: "gpt-5.4-mini",
+        toModel: "gpt-5.4",
+      }),
+    };
+
+    const tool = internals.getSessionConfig().tools.find((entry) => entry.name === "spira_escalate_session");
+
+    expect(tool).toBeDefined();
+    if (!tool) {
+      throw new Error("Expected spira_escalate_session to be available.");
+    }
+
+    await tool.handler({});
+
+    expect(runtimeMemory.runtimeSessions.get("station:primary")).toMatchObject({
+      contract: {
+        workflowState: {
+          phase: "review",
+          status: "blocked",
+          blockedBy: {
+            kind: "review",
+            reason: "Awaiting reviewer results.",
+          },
+        },
+      },
+    });
+  });
+
+  it("persists review lifecycle state when launching a code-review subagent", () => {
+    const runtimeMemory = createRuntimeMemoryDb();
+    const manager = createManager([], {
+      stationId: "primary",
+      memoryDb: runtimeMemory.db,
+    });
+    const internals = manager as unknown as SessionManagerInternals & {
+      createSubagentRunner: (
+        domain: SubagentDomain,
+        workingDirectory?: string,
+      ) => {
+        launch: () => Record<string, unknown>;
+      };
+    };
+    const reviewDomain: SubagentDomain = {
+      id: "code-review",
+      label: "Code Review",
+      serverIds: [],
+      allowWrites: false,
+      delegationToolName: "delegate_to_code_review",
+      systemPrompt: "",
+    };
+    internals.createSubagentRunner = vi.fn(() => ({
+      launch: () => ({
+        runId: "review-run-1",
+        roomId: "agent:review-run-1",
+        allowWrites: false,
+        startedAt: 100,
+        resultPromise: new Promise<never>(() => {}),
+        write: vi.fn(),
+        stop: vi.fn().mockResolvedValue(undefined),
+      }),
+    }));
+
+    manager.launchManagedSubagent(reviewDomain, { task: "Review the current diff", mode: "background" });
+
+    expect(runtimeMemory.runtimeSessions.get("station:primary")).toMatchObject({
+      contract: {
+        workflowState: {
+          phase: "review",
+          status: "active",
+          review: {
+            status: "running",
+            attempt: 1,
+            runId: "review-run-1",
+          },
+        },
+      },
+    });
+  });
+
+  it("updates review lifecycle state from code-review subagent status events", () => {
+    const runtimeMemory = createRuntimeMemoryDb();
+    const manager = createManager([], {
+      stationId: "primary",
+      memoryDb: runtimeMemory.db,
+    });
+    const bus = (manager as unknown as { bus: SpiraEventBus }).bus;
+    const internals = manager as unknown as SessionManagerInternals & {
+      setWorkflowReviewState: (input: {
+        status: "running";
+        runId: string;
+        attempt: number;
+        summary: string;
+      }) => void;
+      syncRuntimeState: () => void;
+    };
+
+    internals.setWorkflowReviewState({
+      status: "running",
+      runId: "review-run-1",
+      attempt: 1,
+      summary: "Review running.",
+    });
+    internals.syncRuntimeState();
+
+    bus.emit("subagent:status", {
+      runId: "review-run-1",
+      roomId: "agent:review-run-1",
+      domain: "code-review",
+      label: "code-review",
+      status: "failed",
+      occurredAt: 200,
+      summary: "Reviewer crashed.",
+    });
+
+    expect(runtimeMemory.runtimeSessions.get("station:primary")).toMatchObject({
+      contract: {
+        workflowState: {
+          phase: "review",
+          status: "blocked",
+          blockedBy: {
+            kind: "review",
+          },
+          review: {
+            status: "failed",
+            runId: "review-run-1",
+            failureReason: "Reviewer crashed.",
+          },
+        },
+      },
+    });
+  });
+
+  it("marks persisted running reviews as missing after restart when the tracked run is gone", () => {
+    const runtimeMemory = createRuntimeMemoryDb();
+    runtimeMemory.db.upsertRuntimeSession({
+      runtimeSessionId: "station:primary",
+      stationId: "primary",
+      kind: "station",
+      contract: createRuntimeSessionContract({
+        runtimeSessionId: "station:primary",
+        kind: "station",
+        scope: { stationId: "primary" },
+        workingDirectory: "C:\\GitHub\\Spira",
+        hostManifestHash: "host-hash",
+        providerProjectionHash: "projection-hash",
+        providerId: "openai-escalation",
+        providerCapabilities: getDefaultProviderCapabilities("openai-escalation"),
+        providerSessionId: "station-session",
+        model: "gpt-5.4",
+        workflowState: {
+          phase: "review",
+          status: "active",
+          summary: "Running review: Review the diff",
+          updatedAt: 100,
+          phaseHistory: [],
+          handoffs: [],
+          blockedBy: null,
+          review: {
+            status: "running",
+            attempt: 1,
+            runId: "review-run-1",
+            origin: "managed-subagent",
+            summary: "Running review: Review the diff",
+            failureReason: null,
+            lastUpdatedAt: 100,
+          },
+        },
+      }),
+    });
+
+    const manager = createManager([], {
+      stationId: "primary",
+      memoryDb: runtimeMemory.db,
+    });
+    const internals = manager as unknown as SessionManagerInternals & { syncRuntimeState: () => void };
+
+    internals.syncRuntimeState();
+
+    expect(runtimeMemory.runtimeSessions.get("station:primary")).toMatchObject({
+      contract: {
+        workflowState: {
+          phase: "review",
+          status: "blocked",
+          blockedBy: {
+            kind: "review",
+          },
+          review: {
+            status: "missing",
+            runId: "review-run-1",
+          },
+        },
+      },
+    });
+  });
+
+  it("clears approval blocking after a pending permission resolves post-escalation", async () => {
+    const runtimeMemory = createRuntimeMemoryDb();
+    const manager = createManager([], {
+      envInput: { SPIRA_MODEL_PROVIDER: "openai-escalation" },
+      stationId: "primary",
+      memoryDb: runtimeMemory.db,
+    });
+    const internals = manager as unknown as SessionManagerInternals;
+    const bus = (manager as unknown as { bus: SpiraEventBus }).bus;
+    const permissionRequest = vi.fn();
+    bus.on("assistant:permission-request", permissionRequest);
+    internals.currentState = "thinking";
+    internals.session = {
+      sessionId: "escalation-session",
+      disconnect: vi.fn().mockResolvedValue(undefined),
+      escalate: vi.fn().mockResolvedValue({
+        status: "escalated",
+        providerId: "openai-escalation",
+        fromModel: "gpt-5.4-mini",
+        toModel: "gpt-5.4",
+      }),
+    };
+
+    const permissionResponse = internals.handlePermissionRequest({
+      kind: "custom-tool",
+      toolName: "apply_patch",
+      toolCallId: "call-1",
+      args: { patch: "*** Begin Patch\n*** End Patch\n" },
+    });
+    const requestId = permissionRequest.mock.calls[0]?.[0]?.requestId;
+    const tool = internals.getSessionConfig().tools.find((entry) => entry.name === "spira_escalate_session");
+
+    expect(typeof requestId).toBe("string");
+    expect(tool).toBeDefined();
+    if (!tool || typeof requestId !== "string") {
+      throw new Error("Expected escalation tool and pending permission request.");
+    }
+
+    await tool.handler({});
+
+    expect(runtimeMemory.runtimeSessions.get("station:primary")).toMatchObject({
+      contract: {
+        workflowState: {
+          phase: "implement",
+          status: "blocked",
+          blockedBy: {
+            kind: "approval",
+            pendingRequestIds: [requestId],
+          },
+        },
+      },
+    });
+
+    expect(manager.resolvePermissionRequest(requestId, true)).toBe(true);
+    await expect(permissionResponse).resolves.toEqual({ kind: "approve-once" });
+
+    expect(runtimeMemory.runtimeSessions.get("station:primary")).toMatchObject({
+      contract: {
+        workflowState: {
+          phase: "implement",
+          status: "active",
+          blockedBy: null,
+          phaseHistory: [
+            expect.objectContaining({
+              phase: "implement",
+              status: "active",
+              blockedBy: null,
+            }),
+          ],
+        },
+      },
+    });
+  });
+
   it("omits duplicated host tools when using the copilot provider", () => {
     const manager = createManager([], {
       envInput: { SPIRA_MODEL_PROVIDER: "copilot" },
@@ -670,6 +1473,4595 @@ describe("StationSessionManager", () => {
 
     expect(session.setModel).toHaveBeenCalledWith("gpt-5.5");
     expect(session.setModel.mock.invocationCallOrder[0]).toBeLessThan(session.send.mock.invocationCallOrder[0] ?? 0);
+  });
+
+  it("activates a work session for explicit coding requests", async () => {
+    const memory = createRuntimeMemoryDb();
+    const manager = createManager([], {
+      memoryDb: memory.db,
+      stationId: "station-alpha",
+    });
+    const session = {
+      sessionId: "work-session",
+      send: vi.fn().mockResolvedValue(undefined),
+      disconnect: vi.fn().mockResolvedValue(undefined),
+    };
+
+    vi.spyOn(
+      manager as unknown as { getOrCreateSession: () => Promise<typeof session> },
+      "getOrCreateSession",
+    ).mockResolvedValue(session);
+
+    await expect(manager.sendMessage("Implement the bridge UI badge in the renderer file")).resolves.toBeUndefined();
+
+    expect(manager.getWorkSessionSummary()).toMatchObject({
+      mode: "work-session",
+      active: true,
+      phase: "discover",
+    });
+    expect(
+      [...memory.sessionState.values()].map((value) => (typeof value === "string" ? JSON.parse(value) : value)),
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          taskText: "Implement the bridge UI badge in the renderer file",
+          currentPhase: "discover",
+        }),
+      ]),
+    );
+  });
+
+  it("preserves the original work-session scaffold across continuation prompts", async () => {
+    const memory = createRuntimeMemoryDb();
+    const manager = createManager([], {
+      memoryDb: memory.db,
+      stationId: "station-gamma",
+    });
+    const internals = manager as unknown as SessionManagerInternals;
+    const session = {
+      sessionId: "work-session",
+      send: vi.fn().mockResolvedValue(undefined),
+      disconnect: vi.fn().mockResolvedValue(undefined),
+    };
+
+    vi.spyOn(
+      manager as unknown as { getOrCreateSession: () => Promise<typeof session> },
+      "getOrCreateSession",
+    ).mockResolvedValue(session);
+
+    await expect(manager.sendMessage("Implement the bridge UI badge in the renderer file")).resolves.toBeUndefined();
+    internals.handleSessionEvent({ type: "session.idle", data: {} });
+    internals.currentState = "idle";
+    await expect(manager.sendMessage("continue")).resolves.toBeUndefined();
+
+    expect(
+      [...memory.sessionState.values()].map((value) => (typeof value === "string" ? JSON.parse(value) : value)),
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          taskText: "Implement the bridge UI badge in the renderer file",
+          classification: expect.objectContaining({
+            explicitWorkIntent: true,
+            intent: "edit",
+          }),
+          searchTerms: expect.arrayContaining(["implement", "bridge", "renderer", "file"]),
+        }),
+      ]),
+    );
+  });
+
+  it("restarts the work-session scaffold for a new explicit task", async () => {
+    const memory = createRuntimeMemoryDb();
+    const manager = createManager([], {
+      memoryDb: memory.db,
+      stationId: "station-lambda",
+    });
+    const internals = manager as unknown as SessionManagerInternals;
+    const session = {
+      sessionId: "work-session",
+      send: vi.fn().mockResolvedValue(undefined),
+      disconnect: vi.fn().mockResolvedValue(undefined),
+    };
+
+    vi.spyOn(
+      manager as unknown as { getOrCreateSession: () => Promise<typeof session> },
+      "getOrCreateSession",
+    ).mockResolvedValue(session);
+
+    await expect(manager.sendMessage("Implement the bridge UI badge in the renderer file")).resolves.toBeUndefined();
+    internals.handleSessionEvent({ type: "session.idle", data: {} });
+    internals.currentState = "idle";
+    internals.workflowState = {
+      ...internals.workflowState,
+      phase: "review",
+      status: "blocked",
+      blockedBy: {
+        kind: "review",
+        reason: "Previous review failed.",
+        pendingRequestIds: [],
+        blockedAt: 123,
+      },
+      review: {
+        ...internals.workflowState.review,
+        status: "failed",
+        runId: "review-1",
+        summary: "Previous review failed.",
+        failureReason: "Missing coverage.",
+        lastUpdatedAt: 123,
+      },
+    };
+
+    await expect(
+      manager.sendMessage("Review the current diff in packages/backend/src/copilot/station-registry.ts"),
+    ).resolves.toBeUndefined();
+
+    expect(
+      [...memory.sessionState.values()].map((value) => (typeof value === "string" ? JSON.parse(value) : value)),
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          taskText: "Review the current diff in packages/backend/src/copilot/station-registry.ts",
+          currentPhase: "discover",
+          classification: expect.objectContaining({
+            intent: "review",
+            explicitWorkIntent: true,
+          }),
+          planSummary: null,
+        }),
+      ]),
+    );
+    expect(memory.runtimeSessions.get("station:station-lambda")).toMatchObject({
+      contract: {
+        workflowState: {
+          phase: "discover",
+          status: "active",
+          blockedBy: null,
+          review: expect.objectContaining({
+            status: "idle",
+            runId: null,
+          }),
+        },
+      },
+    });
+  });
+
+  it("advances the work-session spine through discover, summarise, and plan", async () => {
+    const memory = createRuntimeMemoryDb();
+    const manager = createManager([], {
+      memoryDb: memory.db,
+      stationId: "station-zeta",
+    });
+    const internals = manager as unknown as SessionManagerInternals;
+    const session = {
+      sessionId: "work-session",
+      send: vi.fn().mockResolvedValue(undefined),
+      disconnect: vi.fn().mockResolvedValue(undefined),
+    };
+
+    vi.spyOn(
+      manager as unknown as { getOrCreateSession: () => Promise<typeof session> },
+      "getOrCreateSession",
+    ).mockResolvedValue(session);
+
+    await expect(manager.sendMessage("Implement the bridge UI badge in the renderer file")).resolves.toBeUndefined();
+    internals.session = session;
+    internals.activeSessionId = "work-session";
+
+    internals.handleSessionEvent({
+      type: "tool.execution_start",
+      data: {
+        toolCallId: "tool-1",
+        toolName: "view",
+        arguments: { path: "packages/backend/src/copilot/session-manager.ts" },
+      },
+    });
+    expect(manager.getWorkSessionSummary()).toMatchObject({
+      mode: "work-session",
+      phase: "discover",
+    });
+    internals.handleSessionEvent({
+      type: "tool.execution_complete",
+      data: {
+        toolCallId: "tool-1",
+        success: true,
+        result: { ok: true },
+      },
+    });
+    expect(manager.getWorkSessionSummary()).toMatchObject({
+      mode: "work-session",
+      phase: "summarise",
+    });
+    expect(memory.runtimeSessions.get("station:station-zeta")).toMatchObject({
+      contract: {
+        workflowState: {
+          phase: "summarise",
+          status: "active",
+          phaseHistory: expect.arrayContaining([expect.objectContaining({ phase: "summarise", status: "active" })]),
+        },
+      },
+    });
+    internals.handleSessionEvent({
+      type: "assistant.message",
+      data: {
+        messageId: "assistant-1",
+        content: "Plan the bridge badge work and update the session manager flow.",
+      },
+    });
+
+    expect(manager.getWorkSessionSummary()).toMatchObject({
+      mode: "work-session",
+      phase: "plan",
+    });
+    expect(memory.runtimeSessions.get("station:station-zeta")).toMatchObject({
+      contract: {
+        workflowState: {
+          phase: "plan",
+          status: "active",
+          phaseHistory: expect.arrayContaining([
+            expect.objectContaining({ phase: "classify", status: "complete" }),
+            expect.objectContaining({ phase: "discover", status: "complete" }),
+            expect.objectContaining({ phase: "summarise", status: "complete" }),
+            expect.objectContaining({ phase: "plan", status: "active" }),
+          ]),
+        },
+      },
+    });
+    expect(
+      [...memory.sessionState.values()].map((value) => (typeof value === "string" ? JSON.parse(value) : value)),
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          currentPhase: "plan",
+          planSummary: "Plan the bridge badge work and update the session manager flow.",
+        }),
+      ]),
+    );
+  });
+
+  it("transitions from plan into implement and records patch attempts", async () => {
+    const memory = createRuntimeMemoryDb();
+    const manager = createManager([], {
+      memoryDb: memory.db,
+      stationId: "station-exec-alpha",
+    });
+    const internals = manager as unknown as SessionManagerInternals;
+    const session = {
+      sessionId: "work-session",
+      send: vi.fn().mockResolvedValue(undefined),
+      disconnect: vi.fn().mockResolvedValue(undefined),
+    };
+
+    vi.spyOn(
+      manager as unknown as { getOrCreateSession: () => Promise<typeof session> },
+      "getOrCreateSession",
+    ).mockResolvedValue(session);
+
+    await expect(manager.sendMessage("Implement the bridge UI badge in the renderer file")).resolves.toBeUndefined();
+    internals.session = session;
+    internals.activeSessionId = "work-session";
+
+    internals.handleSessionEvent({
+      type: "tool.execution_complete",
+      data: {
+        toolCallId: "tool-discover",
+        success: true,
+        result: { ok: true },
+      },
+    });
+    internals.handleSessionEvent({
+      type: "assistant.message",
+      data: {
+        messageId: "assistant-1",
+        content: "Plan the bridge badge work and update the session manager flow.",
+      },
+    });
+
+    internals.handleSessionEvent({
+      type: "tool.execution_start",
+      data: {
+        toolCallId: "tool-patch",
+        toolName: "apply_patch",
+        arguments: {
+          patch:
+            "*** Begin Patch\n*** Update File: packages/renderer/src/components/base/BridgeRoomDetail.tsx\n@@\n- old\n+ new\n*** End Patch\n",
+        },
+      },
+    });
+
+    expect(manager.getWorkSessionSummary()).toMatchObject({
+      mode: "work-session",
+      phase: "implement",
+    });
+
+    internals.handleSessionEvent({
+      type: "tool.execution_complete",
+      data: {
+        toolCallId: "tool-patch",
+        success: true,
+        result: { ok: true },
+      },
+    });
+
+    expect(memory.runtimeSessions.get("station:station-exec-alpha")).toMatchObject({
+      contract: {
+        workflowState: {
+          phase: "implement",
+          status: "active",
+        },
+      },
+    });
+    expect(
+      [...memory.sessionState.values()].map((value) => (typeof value === "string" ? JSON.parse(value) : value)),
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          currentPhase: "implement",
+          changedFiles: ["packages/renderer/src/components/base/BridgeRoomDetail.tsx"],
+          patchAttempts: [
+            expect.objectContaining({
+              toolName: "apply_patch",
+              changedFiles: ["packages/renderer/src/components/base/BridgeRoomDetail.tsx"],
+            }),
+          ],
+        }),
+      ]),
+    );
+  });
+
+  it("does not persist changed files when an implementation tool fails", async () => {
+    const memory = createRuntimeMemoryDb();
+    const manager = createManager([], {
+      memoryDb: memory.db,
+      stationId: "station-exec-alpha-fail",
+    });
+    const internals = manager as unknown as SessionManagerInternals;
+    const session = {
+      sessionId: "work-session",
+      send: vi.fn().mockResolvedValue(undefined),
+      disconnect: vi.fn().mockResolvedValue(undefined),
+    };
+
+    vi.spyOn(
+      manager as unknown as { getOrCreateSession: () => Promise<typeof session> },
+      "getOrCreateSession",
+    ).mockResolvedValue(session);
+
+    await expect(manager.sendMessage("Implement the bridge UI badge in the renderer file")).resolves.toBeUndefined();
+    internals.session = session;
+    internals.activeSessionId = "work-session";
+    internals.handleSessionEvent({
+      type: "tool.execution_complete",
+      data: {
+        toolCallId: "tool-discover",
+        success: true,
+        result: { ok: true },
+      },
+    });
+    internals.handleSessionEvent({
+      type: "assistant.message",
+      data: {
+        messageId: "assistant-1",
+        content: "Plan the bridge badge work and update the session manager flow.",
+      },
+    });
+    internals.handleSessionEvent({
+      type: "tool.execution_start",
+      data: {
+        toolCallId: "tool-patch",
+        toolName: "apply_patch",
+        arguments: {
+          patch:
+            "*** Begin Patch\n*** Update File: packages/renderer/src/components/base/BridgeRoomDetail.tsx\n@@\n- old\n+ new\n*** End Patch\n",
+        },
+      },
+    });
+    internals.handleSessionEvent({
+      type: "tool.execution_complete",
+      data: {
+        toolCallId: "tool-patch",
+        success: false,
+        error: {
+          message: "Patch failed.",
+        },
+      },
+    });
+
+    expect(
+      [...memory.sessionState.values()].map((value) => (typeof value === "string" ? JSON.parse(value) : value)),
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          currentPhase: "implement",
+          changedFiles: [],
+          patchAttempts: [],
+          selectedFiles: ["packages/renderer/src/components/base/BridgeRoomDetail.tsx"],
+        }),
+      ]),
+    );
+  });
+
+  it("transitions from implement into validate and marks ready-for-review after successful validation", async () => {
+    const memory = createRuntimeMemoryDb();
+    const manager = createManager([], {
+      memoryDb: memory.db,
+      stationId: "station-exec-beta",
+    });
+    const internals = manager as unknown as SessionManagerInternals;
+    const session = {
+      sessionId: "work-session",
+      send: vi.fn().mockResolvedValue(undefined),
+      disconnect: vi.fn().mockResolvedValue(undefined),
+    };
+
+    vi.spyOn(
+      manager as unknown as { getOrCreateSession: () => Promise<typeof session> },
+      "getOrCreateSession",
+    ).mockResolvedValue(session);
+
+    await expect(manager.sendMessage("Implement the bridge UI badge in the renderer file")).resolves.toBeUndefined();
+    internals.session = session;
+    internals.activeSessionId = "work-session";
+
+    internals.handleSessionEvent({
+      type: "tool.execution_complete",
+      data: {
+        toolCallId: "tool-discover",
+        success: true,
+        result: { ok: true },
+      },
+    });
+    internals.handleSessionEvent({
+      type: "assistant.message",
+      data: {
+        messageId: "assistant-1",
+        content: "Plan the bridge badge work and update the session manager flow.",
+      },
+    });
+    internals.handleSessionEvent({
+      type: "tool.execution_start",
+      data: {
+        toolCallId: "tool-patch",
+        toolName: "apply_patch",
+        arguments: {
+          patch:
+            "*** Begin Patch\n*** Update File: packages/renderer/src/components/base/BridgeRoomDetail.tsx\n@@\n- old\n+ new\n*** End Patch\n",
+        },
+      },
+    });
+    internals.handleSessionEvent({
+      type: "tool.execution_complete",
+      data: {
+        toolCallId: "tool-patch",
+        success: true,
+        result: { ok: true },
+      },
+    });
+
+    internals.handleSessionEvent({
+      type: "tool.execution_start",
+      data: {
+        toolCallId: "tool-validate",
+        toolName: "powershell",
+        arguments: {
+          command: "pnpm exec vitest run packages\\backend\\src\\copilot\\session-manager.test.ts",
+          description: "Run targeted session manager tests",
+        },
+      },
+    });
+
+    expect(memory.runtimeSessions.get("station:station-exec-beta")).toMatchObject({
+      contract: {
+        workflowState: {
+          phase: "validate",
+          status: "active",
+        },
+      },
+    });
+
+    internals.handleSessionEvent({
+      type: "tool.execution_complete",
+      data: {
+        toolCallId: "tool-validate",
+        success: true,
+        result: { summary: "All tests passed." },
+      },
+    });
+
+    expect(memory.runtimeSessions.get("station:station-exec-beta")).toMatchObject({
+      contract: {
+        workflowState: {
+          phase: "validate",
+          status: "complete",
+          summary: "Validation passed; ready for review.",
+        },
+      },
+    });
+    expect(
+      [...memory.sessionState.values()].map((value) => (typeof value === "string" ? JSON.parse(value) : value)),
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          currentPhase: "validate",
+          readyForReview: true,
+          validationResults: [
+            expect.objectContaining({
+              toolName: "powershell",
+              success: true,
+              command: "pnpm exec vitest run packages\\backend\\src\\copilot\\session-manager.test.ts",
+            }),
+          ],
+        }),
+      ]),
+    );
+  });
+
+  it("waits for read_powershell follow-up before finalizing long-running validation", async () => {
+    const memory = createRuntimeMemoryDb();
+    const manager = createManager([], {
+      memoryDb: memory.db,
+      stationId: "station-exec-beta-streaming",
+    });
+    const internals = manager as unknown as SessionManagerInternals;
+    const session = {
+      sessionId: "work-session",
+      send: vi.fn().mockResolvedValue(undefined),
+      disconnect: vi.fn().mockResolvedValue(undefined),
+    };
+
+    vi.spyOn(
+      manager as unknown as { getOrCreateSession: () => Promise<typeof session> },
+      "getOrCreateSession",
+    ).mockResolvedValue(session);
+
+    await expect(manager.sendMessage("Implement the bridge UI badge in the renderer file")).resolves.toBeUndefined();
+    internals.session = session;
+    internals.activeSessionId = "work-session";
+    internals.handleSessionEvent({
+      type: "tool.execution_complete",
+      data: {
+        toolCallId: "tool-discover",
+        success: true,
+        result: { ok: true },
+      },
+    });
+    internals.handleSessionEvent({
+      type: "assistant.message",
+      data: {
+        messageId: "assistant-1",
+        content: "Plan the bridge badge work and update the session manager flow.",
+      },
+    });
+    internals.handleSessionEvent({
+      type: "tool.execution_start",
+      data: {
+        toolCallId: "tool-patch",
+        toolName: "apply_patch",
+        arguments: {
+          patch:
+            "*** Begin Patch\n*** Update File: packages/renderer/src/components/base/BridgeRoomDetail.tsx\n@@\n- old\n+ new\n*** End Patch\n",
+        },
+      },
+    });
+    internals.handleSessionEvent({
+      type: "tool.execution_complete",
+      data: {
+        toolCallId: "tool-patch",
+        success: true,
+        result: { ok: true },
+      },
+    });
+    internals.handleSessionEvent({
+      type: "tool.execution_start",
+      data: {
+        toolCallId: "tool-validate",
+        toolName: "powershell",
+        arguments: {
+          command: "pnpm exec vitest run packages\\backend\\src\\copilot\\session-manager.test.ts",
+          description: "Run targeted session manager tests",
+        },
+      },
+    });
+    internals.handleSessionEvent({
+      type: "tool.execution_complete",
+      data: {
+        toolCallId: "tool-validate",
+        success: true,
+        result: {
+          resultType: "success",
+          textResultForLlm: JSON.stringify({
+            shellId: "shell-1",
+            status: "running",
+            exitCode: null,
+            output: "partial output",
+          }),
+        },
+      },
+    });
+
+    expect(
+      [...memory.sessionState.values()].map((value) => (typeof value === "string" ? JSON.parse(value) : value)),
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          currentPhase: "validate",
+          readyForReview: false,
+          pendingValidationShellId: "shell-1",
+          validationResults: [],
+        }),
+      ]),
+    );
+
+    internals.handleSessionEvent({
+      type: "tool.execution_start",
+      data: {
+        toolCallId: "tool-validate-read",
+        toolName: "read_powershell",
+        arguments: {
+          shellId: "shell-1",
+          delay: 5,
+        },
+      },
+    });
+    internals.handleSessionEvent({
+      type: "tool.execution_complete",
+      data: {
+        toolCallId: "tool-validate-read",
+        success: true,
+        result: {
+          resultType: "success",
+          textResultForLlm: JSON.stringify({
+            shellId: "shell-1",
+            status: "running",
+            exitCode: null,
+            output: "still running",
+          }),
+        },
+      },
+    });
+
+    expect(
+      [...memory.sessionState.values()].map((value) => (typeof value === "string" ? JSON.parse(value) : value)),
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          currentPhase: "validate",
+          readyForReview: false,
+          pendingValidationShellId: "shell-1",
+          validationResults: [],
+        }),
+      ]),
+    );
+
+    internals.handleSessionEvent({
+      type: "tool.execution_start",
+      data: {
+        toolCallId: "tool-validate-read-2",
+        toolName: "read_powershell",
+        arguments: {
+          shellId: "shell-1",
+          delay: 5,
+        },
+      },
+    });
+    internals.handleSessionEvent({
+      type: "tool.execution_complete",
+      data: {
+        toolCallId: "tool-validate-read-2",
+        success: true,
+        result: {
+          resultType: "success",
+          textResultForLlm: JSON.stringify({
+            shellId: "shell-1",
+            status: "completed",
+            exitCode: 0,
+            output: "All tests passed.",
+          }),
+        },
+      },
+    });
+
+    expect(memory.runtimeSessions.get("station:station-exec-beta-streaming")).toMatchObject({
+      contract: {
+        workflowState: {
+          phase: "validate",
+          status: "complete",
+          blockedBy: null,
+        },
+      },
+    });
+    expect(
+      [...memory.sessionState.values()].map((value) => (typeof value === "string" ? JSON.parse(value) : value)),
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          currentPhase: "validate",
+          readyForReview: true,
+          pendingValidationShellId: null,
+          validationResults: [
+            expect.objectContaining({
+              toolName: "read_powershell",
+              command: "pnpm exec vitest run packages\\backend\\src\\copilot\\session-manager.test.ts",
+              success: true,
+            }),
+          ],
+        }),
+      ]),
+    );
+  });
+
+  it("does not misclassify generic powershell file reads as validation", async () => {
+    const memory = createRuntimeMemoryDb();
+    const manager = createManager([], {
+      memoryDb: memory.db,
+      stationId: "station-exec-beta-generic-powershell",
+    });
+    const internals = manager as unknown as SessionManagerInternals;
+    const session = {
+      sessionId: "work-session",
+      send: vi.fn().mockResolvedValue(undefined),
+      disconnect: vi.fn().mockResolvedValue(undefined),
+    };
+
+    vi.spyOn(
+      manager as unknown as { getOrCreateSession: () => Promise<typeof session> },
+      "getOrCreateSession",
+    ).mockResolvedValue(session);
+
+    await expect(manager.sendMessage("Implement the bridge UI badge in the renderer file")).resolves.toBeUndefined();
+    internals.session = session;
+    internals.activeSessionId = "work-session";
+    internals.handleSessionEvent({
+      type: "tool.execution_complete",
+      data: {
+        toolCallId: "tool-discover",
+        success: true,
+        result: { ok: true },
+      },
+    });
+    internals.handleSessionEvent({
+      type: "assistant.message",
+      data: {
+        messageId: "assistant-1",
+        content: "Plan the bridge badge work and update the session manager flow.",
+      },
+    });
+    internals.handleSessionEvent({
+      type: "tool.execution_start",
+      data: {
+        toolCallId: "tool-patch",
+        toolName: "apply_patch",
+        arguments: {
+          patch:
+            "*** Begin Patch\n*** Update File: packages/renderer/src/components/base/BridgeRoomDetail.tsx\n@@\n- old\n+ new\n*** End Patch\n",
+        },
+      },
+    });
+    internals.handleSessionEvent({
+      type: "tool.execution_complete",
+      data: {
+        toolCallId: "tool-patch",
+        success: true,
+        result: { ok: true },
+      },
+    });
+    internals.handleSessionEvent({
+      type: "tool.execution_start",
+      data: {
+        toolCallId: "tool-generic-powershell",
+        toolName: "powershell",
+        arguments: {
+          command: "Get-Content packages\\backend\\src\\copilot\\session-manager.test.ts",
+          description: "Read the session manager test file",
+        },
+      },
+    });
+
+    expect(memory.runtimeSessions.get("station:station-exec-beta-generic-powershell")).toMatchObject({
+      contract: {
+        workflowState: {
+          phase: "implement",
+          status: "active",
+        },
+      },
+    });
+  });
+
+  it("returns from validate to implement after a failed validation run", async () => {
+    const memory = createRuntimeMemoryDb();
+    const manager = createManager([], {
+      memoryDb: memory.db,
+      stationId: "station-exec-gamma",
+    });
+    const internals = manager as unknown as SessionManagerInternals;
+    const session = {
+      sessionId: "work-session",
+      send: vi.fn().mockResolvedValue(undefined),
+      disconnect: vi.fn().mockResolvedValue(undefined),
+    };
+
+    vi.spyOn(
+      manager as unknown as { getOrCreateSession: () => Promise<typeof session> },
+      "getOrCreateSession",
+    ).mockResolvedValue(session);
+
+    await expect(manager.sendMessage("Implement the bridge UI badge in the renderer file")).resolves.toBeUndefined();
+    internals.session = session;
+    internals.activeSessionId = "work-session";
+
+    internals.handleSessionEvent({
+      type: "tool.execution_complete",
+      data: {
+        toolCallId: "tool-discover",
+        success: true,
+        result: { ok: true },
+      },
+    });
+    internals.handleSessionEvent({
+      type: "assistant.message",
+      data: {
+        messageId: "assistant-1",
+        content: "Plan the bridge badge work and update the session manager flow.",
+      },
+    });
+    internals.handleSessionEvent({
+      type: "tool.execution_start",
+      data: {
+        toolCallId: "tool-patch",
+        toolName: "apply_patch",
+        arguments: {
+          patch:
+            "*** Begin Patch\n*** Update File: packages/renderer/src/components/base/BridgeRoomDetail.tsx\n@@\n- old\n+ new\n*** End Patch\n",
+        },
+      },
+    });
+    internals.handleSessionEvent({
+      type: "tool.execution_complete",
+      data: {
+        toolCallId: "tool-patch",
+        success: true,
+        result: { ok: true },
+      },
+    });
+    internals.handleSessionEvent({
+      type: "tool.execution_start",
+      data: {
+        toolCallId: "tool-validate",
+        toolName: "powershell",
+        arguments: {
+          command: "pnpm exec tsc -b packages\\shared packages\\backend --pretty false",
+          description: "Run shared and backend type build",
+        },
+      },
+    });
+    internals.handleSessionEvent({
+      type: "tool.execution_complete",
+      data: {
+        toolCallId: "tool-validate",
+        success: false,
+        error: {
+          message: "TS2322: Type 'string' is not assignable to type 'number'.",
+        },
+      },
+    });
+
+    expect(memory.runtimeSessions.get("station:station-exec-gamma")).toMatchObject({
+      contract: {
+        workflowState: {
+          phase: "implement",
+          status: "active",
+        },
+      },
+    });
+    expect(
+      [...memory.sessionState.values()].map((value) => (typeof value === "string" ? JSON.parse(value) : value)),
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          currentPhase: "implement",
+          fixIterationCount: 1,
+          repeatFailureCount: 1,
+          lastValidationFingerprint: expect.stringMatching(/^TS2322:/),
+          readyForReview: false,
+          validationResults: [
+            expect.objectContaining({
+              success: false,
+              fingerprint: expect.stringMatching(/^TS2322:/),
+            }),
+          ],
+        }),
+      ]),
+    );
+  });
+
+  it("resets the fix-iteration budget after a successful validation", async () => {
+    const memory = createRuntimeMemoryDb();
+    const manager = createManager([], {
+      memoryDb: memory.db,
+      stationId: "station-exec-gamma-success-reset",
+    });
+    const internals = manager as unknown as SessionManagerInternals;
+    const session = {
+      sessionId: "work-session",
+      send: vi.fn().mockResolvedValue(undefined),
+      disconnect: vi.fn().mockResolvedValue(undefined),
+    };
+
+    vi.spyOn(
+      manager as unknown as { getOrCreateSession: () => Promise<typeof session> },
+      "getOrCreateSession",
+    ).mockResolvedValue(session);
+
+    await expect(manager.sendMessage("Implement the bridge UI badge in the renderer file")).resolves.toBeUndefined();
+    internals.session = session;
+    internals.activeSessionId = "work-session";
+    internals.handleSessionEvent({
+      type: "tool.execution_complete",
+      data: {
+        toolCallId: "tool-discover",
+        success: true,
+        result: { ok: true },
+      },
+    });
+    internals.handleSessionEvent({
+      type: "assistant.message",
+      data: {
+        messageId: "assistant-1",
+        content: "Plan the bridge badge work and update the session manager flow.",
+      },
+    });
+    internals.handleSessionEvent({
+      type: "tool.execution_start",
+      data: {
+        toolCallId: "tool-patch-1",
+        toolName: "apply_patch",
+        arguments: {
+          patch:
+            "*** Begin Patch\n*** Update File: packages/renderer/src/components/base/BridgeRoomDetail.tsx\n@@\n- old\n+ new\n*** End Patch\n",
+        },
+      },
+    });
+    internals.handleSessionEvent({
+      type: "tool.execution_complete",
+      data: {
+        toolCallId: "tool-patch-1",
+        success: true,
+        result: { ok: true },
+      },
+    });
+    internals.handleSessionEvent({
+      type: "tool.execution_start",
+      data: {
+        toolCallId: "tool-validate-1",
+        toolName: "powershell",
+        arguments: {
+          command: "pnpm exec tsc -b packages\\shared packages\\backend --pretty false",
+          description: "Run shared and backend type build",
+        },
+      },
+    });
+    internals.handleSessionEvent({
+      type: "tool.execution_complete",
+      data: {
+        toolCallId: "tool-validate-1",
+        success: false,
+        error: {
+          message: "TS2322: Type 'string' is not assignable to type 'number'.",
+        },
+      },
+    });
+    internals.handleSessionEvent({
+      type: "tool.execution_start",
+      data: {
+        toolCallId: "tool-patch-2",
+        toolName: "apply_patch",
+        arguments: {
+          patch:
+            "*** Begin Patch\n*** Update File: packages/renderer/src/components/base/BridgeRoomDetail.tsx\n@@\n- old\n+ fixed\n*** End Patch\n",
+        },
+      },
+    });
+    internals.handleSessionEvent({
+      type: "tool.execution_complete",
+      data: {
+        toolCallId: "tool-patch-2",
+        success: true,
+        result: { ok: true },
+      },
+    });
+    internals.handleSessionEvent({
+      type: "tool.execution_start",
+      data: {
+        toolCallId: "tool-validate-2",
+        toolName: "powershell",
+        arguments: {
+          command: "pnpm exec vitest run packages\\backend\\src\\copilot\\session-manager.test.ts",
+          description: "Run targeted session manager tests",
+        },
+      },
+    });
+    internals.handleSessionEvent({
+      type: "tool.execution_complete",
+      data: {
+        toolCallId: "tool-validate-2",
+        success: true,
+        result: { summary: "All tests passed." },
+      },
+    });
+
+    expect(
+      [...memory.sessionState.values()].map((value) => (typeof value === "string" ? JSON.parse(value) : value)),
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          currentPhase: "validate",
+          readyForReview: true,
+          fixIterationCount: 0,
+        }),
+      ]),
+    );
+  });
+
+  it("treats async powershell failures with different shell ids as the same repeated validation failure", async () => {
+    const memory = createRuntimeMemoryDb();
+    const manager = createManager([], {
+      memoryDb: memory.db,
+      stationId: "station-exec-gamma-async",
+    });
+    const internals = manager as unknown as SessionManagerInternals;
+    const session = {
+      sessionId: "work-session",
+      send: vi.fn().mockResolvedValue(undefined),
+      disconnect: vi.fn().mockResolvedValue(undefined),
+    };
+
+    vi.spyOn(
+      manager as unknown as { getOrCreateSession: () => Promise<typeof session> },
+      "getOrCreateSession",
+    ).mockResolvedValue(session);
+
+    await expect(manager.sendMessage("Implement the bridge UI badge in the renderer file")).resolves.toBeUndefined();
+    internals.session = session;
+    internals.activeSessionId = "work-session";
+    internals.handleSessionEvent({
+      type: "tool.execution_complete",
+      data: {
+        toolCallId: "tool-discover",
+        success: true,
+        result: { ok: true },
+      },
+    });
+    internals.handleSessionEvent({
+      type: "assistant.message",
+      data: {
+        messageId: "assistant-1",
+        content: "Plan the bridge badge work and update the session manager flow.",
+      },
+    });
+
+    for (const [index, shellId] of [
+      [1, "shell-a"],
+      [2, "shell-b"],
+    ] as const) {
+      internals.handleSessionEvent({
+        type: "tool.execution_start",
+        data: {
+          toolCallId: `tool-patch-${index}`,
+          toolName: "apply_patch",
+          arguments: {
+            patch:
+              "*** Begin Patch\n*** Update File: packages/renderer/src/components/base/BridgeRoomDetail.tsx\n@@\n- old\n+ new\n*** End Patch\n",
+          },
+        },
+      });
+      internals.handleSessionEvent({
+        type: "tool.execution_complete",
+        data: {
+          toolCallId: `tool-patch-${index}`,
+          success: true,
+          result: { ok: true },
+        },
+      });
+      internals.handleSessionEvent({
+        type: "tool.execution_start",
+        data: {
+          toolCallId: `tool-validate-${index}`,
+          toolName: "powershell",
+          arguments: {
+            command: "pnpm exec tsc -b packages\\shared packages\\backend --pretty false",
+            description: "Run shared and backend type build",
+          },
+        },
+      });
+      internals.handleSessionEvent({
+        type: "tool.execution_complete",
+        data: {
+          toolCallId: `tool-validate-${index}`,
+          success: true,
+          result: {
+            resultType: "success",
+            textResultForLlm: JSON.stringify({
+              shellId,
+              status: "running",
+              exitCode: null,
+              output: "partial output",
+            }),
+          },
+        },
+      });
+      internals.handleSessionEvent({
+        type: "tool.execution_start",
+        data: {
+          toolCallId: `tool-validate-read-${index}`,
+          toolName: "read_powershell",
+          arguments: {
+            shellId,
+            delay: 5,
+          },
+        },
+      });
+      internals.handleSessionEvent({
+        type: "tool.execution_complete",
+        data: {
+          toolCallId: `tool-validate-read-${index}`,
+          success: true,
+          result: {
+            resultType: "success",
+            textResultForLlm: JSON.stringify({
+              shellId,
+              status: "failed",
+              exitCode: 1,
+              output: "TS2322: Type 'string' is not assignable to type 'number'.",
+            }),
+          },
+        },
+      });
+    }
+
+    expect(memory.runtimeSessions.get("station:station-exec-gamma-async")).toMatchObject({
+      contract: {
+        workflowState: {
+          phase: "validate",
+          status: "stalled",
+        },
+      },
+    });
+  });
+
+  it("treats cancelled powershell validation sessions as failures instead of passes", async () => {
+    const memory = createRuntimeMemoryDb();
+    const manager = createManager([], {
+      memoryDb: memory.db,
+      stationId: "station-exec-gamma-cancelled",
+    });
+    const internals = manager as unknown as SessionManagerInternals;
+    const session = {
+      sessionId: "work-session",
+      send: vi.fn().mockResolvedValue(undefined),
+      disconnect: vi.fn().mockResolvedValue(undefined),
+    };
+
+    vi.spyOn(
+      manager as unknown as { getOrCreateSession: () => Promise<typeof session> },
+      "getOrCreateSession",
+    ).mockResolvedValue(session);
+
+    await expect(manager.sendMessage("Implement the bridge UI badge in the renderer file")).resolves.toBeUndefined();
+    internals.session = session;
+    internals.activeSessionId = "work-session";
+    internals.handleSessionEvent({
+      type: "tool.execution_complete",
+      data: {
+        toolCallId: "tool-discover",
+        success: true,
+        result: { ok: true },
+      },
+    });
+    internals.handleSessionEvent({
+      type: "assistant.message",
+      data: {
+        messageId: "assistant-1",
+        content: "Plan the bridge badge work and update the session manager flow.",
+      },
+    });
+    internals.handleSessionEvent({
+      type: "tool.execution_start",
+      data: {
+        toolCallId: "tool-patch",
+        toolName: "apply_patch",
+        arguments: {
+          patch:
+            "*** Begin Patch\n*** Update File: packages/renderer/src/components/base/BridgeRoomDetail.tsx\n@@\n- old\n+ new\n*** End Patch\n",
+        },
+      },
+    });
+    internals.handleSessionEvent({
+      type: "tool.execution_complete",
+      data: {
+        toolCallId: "tool-patch",
+        success: true,
+        result: { ok: true },
+      },
+    });
+    internals.handleSessionEvent({
+      type: "tool.execution_start",
+      data: {
+        toolCallId: "tool-validate",
+        toolName: "powershell",
+        arguments: {
+          command: "pnpm exec vitest run packages\\backend\\src\\copilot\\session-manager.test.ts",
+          description: "Run targeted session manager tests",
+        },
+      },
+    });
+    internals.handleSessionEvent({
+      type: "tool.execution_complete",
+      data: {
+        toolCallId: "tool-validate",
+        success: true,
+        result: {
+          resultType: "success",
+          textResultForLlm: JSON.stringify({
+            shellId: "shell-cancelled",
+            status: "cancelled",
+            exitCode: 1,
+            output: "Validation cancelled.",
+          }),
+        },
+      },
+    });
+
+    expect(memory.runtimeSessions.get("station:station-exec-gamma-cancelled")).toMatchObject({
+      contract: {
+        workflowState: {
+          phase: "implement",
+          status: "active",
+          blockedBy: null,
+        },
+      },
+    });
+    expect(
+      [...memory.sessionState.values()].map((value) => (typeof value === "string" ? JSON.parse(value) : value)),
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          currentPhase: "implement",
+          readyForReview: false,
+          validationResults: [
+            expect.objectContaining({
+              success: false,
+            }),
+          ],
+        }),
+      ]),
+    );
+  });
+
+  it("stalls the work session after the same validation failure repeats twice", async () => {
+    const memory = createRuntimeMemoryDb();
+    const manager = createManager([], {
+      memoryDb: memory.db,
+      stationId: "station-exec-delta",
+    });
+    const internals = manager as unknown as SessionManagerInternals;
+    const session = {
+      sessionId: "work-session",
+      send: vi.fn().mockResolvedValue(undefined),
+      disconnect: vi.fn().mockResolvedValue(undefined),
+    };
+
+    vi.spyOn(
+      manager as unknown as { getOrCreateSession: () => Promise<typeof session> },
+      "getOrCreateSession",
+    ).mockResolvedValue(session);
+
+    await expect(manager.sendMessage("Implement the bridge UI badge in the renderer file")).resolves.toBeUndefined();
+    internals.session = session;
+    internals.activeSessionId = "work-session";
+
+    internals.handleSessionEvent({
+      type: "tool.execution_complete",
+      data: {
+        toolCallId: "tool-discover",
+        success: true,
+        result: { ok: true },
+      },
+    });
+    internals.handleSessionEvent({
+      type: "assistant.message",
+      data: {
+        messageId: "assistant-1",
+        content: "Plan the bridge badge work and update the session manager flow.",
+      },
+    });
+
+    for (const patchId of ["tool-patch-1", "tool-patch-2"]) {
+      internals.handleSessionEvent({
+        type: "tool.execution_start",
+        data: {
+          toolCallId: patchId,
+          toolName: "apply_patch",
+          arguments: {
+            patch:
+              "*** Begin Patch\n*** Update File: packages/renderer/src/components/base/BridgeRoomDetail.tsx\n@@\n- old\n+ new\n*** End Patch\n",
+          },
+        },
+      });
+      internals.handleSessionEvent({
+        type: "tool.execution_complete",
+        data: {
+          toolCallId: patchId,
+          success: true,
+          result: { ok: true },
+        },
+      });
+      internals.handleSessionEvent({
+        type: "tool.execution_start",
+        data: {
+          toolCallId: `${patchId}-validate`,
+          toolName: "powershell",
+          arguments: {
+            command: "pnpm exec tsc -b packages\\shared packages\\backend --pretty false",
+            description: "Run shared and backend type build",
+          },
+        },
+      });
+      internals.handleSessionEvent({
+        type: "tool.execution_complete",
+        data: {
+          toolCallId: `${patchId}-validate`,
+          success: false,
+          error: {
+            message: "TS2322: Type 'string' is not assignable to type 'number'.",
+          },
+        },
+      });
+    }
+
+    expect(memory.runtimeSessions.get("station:station-exec-delta")).toMatchObject({
+      contract: {
+        workflowState: {
+          phase: "validate",
+          status: "stalled",
+          blockedBy: expect.objectContaining({
+            kind: "error",
+          }),
+        },
+      },
+    });
+    expect(
+      [...memory.sessionState.values()].map((value) => (typeof value === "string" ? JSON.parse(value) : value)),
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          currentPhase: "validate",
+          repeatFailureCount: 2,
+          stalledReason: "Validation repeated the same failure twice; escalation or manual intervention is required.",
+        }),
+      ]),
+    );
+  });
+
+  it("clears stalled workflow blocking after a corrective patch and successful validation", async () => {
+    const memory = createRuntimeMemoryDb();
+    const manager = createManager([], {
+      memoryDb: memory.db,
+      stationId: "station-exec-delta-recover",
+    });
+    const internals = manager as unknown as SessionManagerInternals;
+    const session = {
+      sessionId: "work-session",
+      send: vi.fn().mockResolvedValue(undefined),
+      disconnect: vi.fn().mockResolvedValue(undefined),
+    };
+
+    vi.spyOn(
+      manager as unknown as { getOrCreateSession: () => Promise<typeof session> },
+      "getOrCreateSession",
+    ).mockResolvedValue(session);
+
+    await expect(manager.sendMessage("Implement the bridge UI badge in the renderer file")).resolves.toBeUndefined();
+    internals.session = session;
+    internals.activeSessionId = "work-session";
+    internals.handleSessionEvent({
+      type: "tool.execution_complete",
+      data: {
+        toolCallId: "tool-discover",
+        success: true,
+        result: { ok: true },
+      },
+    });
+    internals.handleSessionEvent({
+      type: "assistant.message",
+      data: {
+        messageId: "assistant-1",
+        content: "Plan the bridge badge work and update the session manager flow.",
+      },
+    });
+
+    for (const patchId of ["tool-patch-1", "tool-patch-2"]) {
+      internals.handleSessionEvent({
+        type: "tool.execution_start",
+        data: {
+          toolCallId: patchId,
+          toolName: "apply_patch",
+          arguments: {
+            patch:
+              "*** Begin Patch\n*** Update File: packages/renderer/src/components/base/BridgeRoomDetail.tsx\n@@\n- old\n+ new\n*** End Patch\n",
+          },
+        },
+      });
+      internals.handleSessionEvent({
+        type: "tool.execution_complete",
+        data: {
+          toolCallId: patchId,
+          success: true,
+          result: { ok: true },
+        },
+      });
+      internals.handleSessionEvent({
+        type: "tool.execution_start",
+        data: {
+          toolCallId: `${patchId}-validate`,
+          toolName: "powershell",
+          arguments: {
+            command: "pnpm exec tsc -b packages\\shared packages\\backend --pretty false",
+            description: "Run shared and backend type build",
+          },
+        },
+      });
+      internals.handleSessionEvent({
+        type: "tool.execution_complete",
+        data: {
+          toolCallId: `${patchId}-validate`,
+          success: false,
+          error: {
+            message: "TS2322: Type 'string' is not assignable to type 'number'.",
+          },
+        },
+      });
+    }
+
+    expect(memory.runtimeSessions.get("station:station-exec-delta-recover")).toMatchObject({
+      contract: {
+        workflowState: {
+          phase: "validate",
+          status: "stalled",
+        },
+      },
+    });
+
+    internals.handleSessionEvent({
+      type: "tool.execution_start",
+      data: {
+        toolCallId: "tool-patch-3",
+        toolName: "apply_patch",
+        arguments: {
+          patch:
+            "*** Begin Patch\n*** Update File: packages/renderer/src/components/base/BridgeRoomDetail.tsx\n@@\n- old\n+ newer\n*** End Patch\n",
+        },
+      },
+    });
+    internals.handleSessionEvent({
+      type: "tool.execution_complete",
+      data: {
+        toolCallId: "tool-patch-3",
+        success: true,
+        result: { ok: true },
+      },
+    });
+    internals.handleSessionEvent({
+      type: "tool.execution_start",
+      data: {
+        toolCallId: "tool-patch-3-validate",
+        toolName: "powershell",
+        arguments: {
+          command: "pnpm exec vitest run packages\\backend\\src\\copilot\\session-manager.test.ts",
+          description: "Run targeted session manager tests",
+        },
+      },
+    });
+    internals.handleSessionEvent({
+      type: "tool.execution_complete",
+      data: {
+        toolCallId: "tool-patch-3-validate",
+        success: true,
+        result: { summary: "All tests passed." },
+      },
+    });
+
+    expect(memory.runtimeSessions.get("station:station-exec-delta-recover")).toMatchObject({
+      contract: {
+        workflowState: {
+          phase: "validate",
+          status: "complete",
+          blockedBy: null,
+          summary: "Validation passed; ready for review.",
+        },
+      },
+    });
+  });
+
+  it("does not clear a stalled validation state just by rerunning validation without a corrective patch", async () => {
+    const memory = createRuntimeMemoryDb();
+    const manager = createManager([], {
+      memoryDb: memory.db,
+      stationId: "station-exec-delta-guard",
+    });
+    const internals = manager as unknown as SessionManagerInternals;
+    const session = {
+      sessionId: "work-session",
+      send: vi.fn().mockResolvedValue(undefined),
+      disconnect: vi.fn().mockResolvedValue(undefined),
+    };
+
+    vi.spyOn(
+      manager as unknown as { getOrCreateSession: () => Promise<typeof session> },
+      "getOrCreateSession",
+    ).mockResolvedValue(session);
+
+    await expect(manager.sendMessage("Implement the bridge UI badge in the renderer file")).resolves.toBeUndefined();
+    internals.session = session;
+    internals.activeSessionId = "work-session";
+    internals.handleSessionEvent({
+      type: "tool.execution_complete",
+      data: {
+        toolCallId: "tool-discover",
+        success: true,
+        result: { ok: true },
+      },
+    });
+    internals.handleSessionEvent({
+      type: "assistant.message",
+      data: {
+        messageId: "assistant-1",
+        content: "Plan the bridge badge work and update the session manager flow.",
+      },
+    });
+
+    for (const patchId of ["tool-patch-1", "tool-patch-2"]) {
+      internals.handleSessionEvent({
+        type: "tool.execution_start",
+        data: {
+          toolCallId: patchId,
+          toolName: "apply_patch",
+          arguments: {
+            patch:
+              "*** Begin Patch\n*** Update File: packages/renderer/src/components/base/BridgeRoomDetail.tsx\n@@\n- old\n+ new\n*** End Patch\n",
+          },
+        },
+      });
+      internals.handleSessionEvent({
+        type: "tool.execution_complete",
+        data: {
+          toolCallId: patchId,
+          success: true,
+          result: { ok: true },
+        },
+      });
+      internals.handleSessionEvent({
+        type: "tool.execution_start",
+        data: {
+          toolCallId: `${patchId}-validate`,
+          toolName: "powershell",
+          arguments: {
+            command: "pnpm exec tsc -b packages\\shared packages\\backend --pretty false",
+            description: "Run shared and backend type build",
+          },
+        },
+      });
+      internals.handleSessionEvent({
+        type: "tool.execution_complete",
+        data: {
+          toolCallId: `${patchId}-validate`,
+          success: false,
+          error: {
+            message: "TS2322: Type 'string' is not assignable to type 'number'.",
+          },
+        },
+      });
+    }
+
+    internals.handleSessionEvent({
+      type: "tool.execution_start",
+      data: {
+        toolCallId: "tool-validate-3",
+        toolName: "powershell",
+        arguments: {
+          command: "pnpm exec vitest run packages\\backend\\src\\copilot\\session-manager.test.ts",
+          description: "Run targeted session manager tests",
+        },
+      },
+    });
+    internals.handleSessionEvent({
+      type: "tool.execution_complete",
+      data: {
+        toolCallId: "tool-validate-3",
+        success: false,
+        error: {
+          message: "Different validation failure.",
+        },
+      },
+    });
+
+    expect(memory.runtimeSessions.get("station:station-exec-delta-guard")).toMatchObject({
+      contract: {
+        workflowState: {
+          phase: "validate",
+          status: "stalled",
+          blockedBy: expect.objectContaining({
+            kind: "error",
+          }),
+        },
+      },
+    });
+  });
+
+  it("does not allow validation to restart from implement after a failed stalled-recovery write", async () => {
+    const memory = createRuntimeMemoryDb();
+    const manager = createManager([], {
+      memoryDb: memory.db,
+      stationId: "station-exec-delta-failed-recovery",
+    });
+    const internals = manager as unknown as SessionManagerInternals;
+    const session = {
+      sessionId: "work-session",
+      send: vi.fn().mockResolvedValue(undefined),
+      disconnect: vi.fn().mockResolvedValue(undefined),
+    };
+
+    vi.spyOn(
+      manager as unknown as { getOrCreateSession: () => Promise<typeof session> },
+      "getOrCreateSession",
+    ).mockResolvedValue(session);
+
+    await expect(manager.sendMessage("Implement the bridge UI badge in the renderer file")).resolves.toBeUndefined();
+    internals.session = session;
+    internals.activeSessionId = "work-session";
+    internals.handleSessionEvent({
+      type: "tool.execution_complete",
+      data: {
+        toolCallId: "tool-discover",
+        success: true,
+        result: { ok: true },
+      },
+    });
+    internals.handleSessionEvent({
+      type: "assistant.message",
+      data: {
+        messageId: "assistant-1",
+        content: "Plan the bridge badge work and update the session manager flow.",
+      },
+    });
+
+    for (const patchId of ["tool-patch-1", "tool-patch-2"]) {
+      internals.handleSessionEvent({
+        type: "tool.execution_start",
+        data: {
+          toolCallId: patchId,
+          toolName: "apply_patch",
+          arguments: {
+            patch:
+              "*** Begin Patch\n*** Update File: packages/renderer/src/components/base/BridgeRoomDetail.tsx\n@@\n- old\n+ new\n*** End Patch\n",
+          },
+        },
+      });
+      internals.handleSessionEvent({
+        type: "tool.execution_complete",
+        data: {
+          toolCallId: patchId,
+          success: true,
+          result: { ok: true },
+        },
+      });
+      internals.handleSessionEvent({
+        type: "tool.execution_start",
+        data: {
+          toolCallId: `${patchId}-validate`,
+          toolName: "powershell",
+          arguments: {
+            command: "pnpm exec tsc -b packages\\shared packages\\backend --pretty false",
+            description: "Run shared and backend type build",
+          },
+        },
+      });
+      internals.handleSessionEvent({
+        type: "tool.execution_complete",
+        data: {
+          toolCallId: `${patchId}-validate`,
+          success: false,
+          error: {
+            message: "TS2322: Type 'string' is not assignable to type 'number'.",
+          },
+        },
+      });
+    }
+
+    internals.handleSessionEvent({
+      type: "tool.execution_start",
+      data: {
+        toolCallId: "tool-patch-3",
+        toolName: "apply_patch",
+        arguments: {
+          patch:
+            "*** Begin Patch\n*** Update File: packages/renderer/src/components/base/BridgeRoomDetail.tsx\n@@\n- old\n+ newer\n*** End Patch\n",
+        },
+      },
+    });
+    internals.handleSessionEvent({
+      type: "tool.execution_complete",
+      data: {
+        toolCallId: "tool-patch-3",
+        success: false,
+        error: {
+          message: "Patch failed.",
+        },
+      },
+    });
+    internals.handleSessionEvent({
+      type: "tool.execution_start",
+      data: {
+        toolCallId: "tool-patch-3-validate",
+        toolName: "powershell",
+        arguments: {
+          command: "pnpm exec vitest run packages\\backend\\src\\copilot\\session-manager.test.ts",
+          description: "Run targeted session manager tests",
+        },
+      },
+    });
+
+    expect(memory.runtimeSessions.get("station:station-exec-delta-failed-recovery")).toMatchObject({
+      contract: {
+        workflowState: {
+          phase: "implement",
+          status: "stalled",
+          blockedBy: expect.objectContaining({
+            kind: "error",
+          }),
+        },
+      },
+    });
+  });
+
+  it("resets the repeat-failure budget after a stalled validation resumes with a corrective patch", async () => {
+    const memory = createRuntimeMemoryDb();
+    const manager = createManager([], {
+      memoryDb: memory.db,
+      stationId: "station-exec-delta-budget",
+    });
+    const internals = manager as unknown as SessionManagerInternals;
+    const session = {
+      sessionId: "work-session",
+      send: vi.fn().mockResolvedValue(undefined),
+      disconnect: vi.fn().mockResolvedValue(undefined),
+    };
+
+    vi.spyOn(
+      manager as unknown as { getOrCreateSession: () => Promise<typeof session> },
+      "getOrCreateSession",
+    ).mockResolvedValue(session);
+
+    await expect(manager.sendMessage("Implement the bridge UI badge in the renderer file")).resolves.toBeUndefined();
+    internals.session = session;
+    internals.activeSessionId = "work-session";
+    internals.handleSessionEvent({
+      type: "tool.execution_complete",
+      data: {
+        toolCallId: "tool-discover",
+        success: true,
+        result: { ok: true },
+      },
+    });
+    internals.handleSessionEvent({
+      type: "assistant.message",
+      data: {
+        messageId: "assistant-1",
+        content: "Plan the bridge badge work and update the session manager flow.",
+      },
+    });
+
+    for (const patchId of ["tool-patch-1", "tool-patch-2"]) {
+      internals.handleSessionEvent({
+        type: "tool.execution_start",
+        data: {
+          toolCallId: patchId,
+          toolName: "apply_patch",
+          arguments: {
+            patch:
+              "*** Begin Patch\n*** Update File: packages/renderer/src/components/base/BridgeRoomDetail.tsx\n@@\n- old\n+ new\n*** End Patch\n",
+          },
+        },
+      });
+      internals.handleSessionEvent({
+        type: "tool.execution_complete",
+        data: {
+          toolCallId: patchId,
+          success: true,
+          result: { ok: true },
+        },
+      });
+      internals.handleSessionEvent({
+        type: "tool.execution_start",
+        data: {
+          toolCallId: `${patchId}-validate`,
+          toolName: "powershell",
+          arguments: {
+            command: "pnpm exec tsc -b packages\\shared packages\\backend --pretty false",
+            description: "Run shared and backend type build",
+          },
+        },
+      });
+      internals.handleSessionEvent({
+        type: "tool.execution_complete",
+        data: {
+          toolCallId: `${patchId}-validate`,
+          success: false,
+          error: {
+            message: "TS2322: Type 'string' is not assignable to type 'number'.",
+          },
+        },
+      });
+    }
+
+    internals.handleSessionEvent({
+      type: "tool.execution_start",
+      data: {
+        toolCallId: "tool-patch-3",
+        toolName: "apply_patch",
+        arguments: {
+          patch:
+            "*** Begin Patch\n*** Update File: packages/renderer/src/components/base/BridgeRoomDetail.tsx\n@@\n- old\n+ newer\n*** End Patch\n",
+        },
+      },
+    });
+    internals.handleSessionEvent({
+      type: "tool.execution_complete",
+      data: {
+        toolCallId: "tool-patch-3",
+        success: true,
+        result: { ok: true },
+      },
+    });
+    internals.handleSessionEvent({
+      type: "tool.execution_start",
+      data: {
+        toolCallId: "tool-patch-3-validate",
+        toolName: "powershell",
+        arguments: {
+          command: "pnpm exec tsc -b packages\\shared packages\\backend --pretty false",
+          description: "Run shared and backend type build",
+        },
+      },
+    });
+    internals.handleSessionEvent({
+      type: "tool.execution_complete",
+      data: {
+        toolCallId: "tool-patch-3-validate",
+        success: false,
+        error: {
+          message: "TS2322: Type 'string' is not assignable to type 'number'.",
+        },
+      },
+    });
+
+    expect(memory.runtimeSessions.get("station:station-exec-delta-budget")).toMatchObject({
+      contract: {
+        workflowState: {
+          phase: "implement",
+          status: "active",
+          blockedBy: null,
+        },
+      },
+    });
+    expect(
+      [...memory.sessionState.values()].map((value) => (typeof value === "string" ? JSON.parse(value) : value)),
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          currentPhase: "implement",
+          repeatFailureCount: 1,
+          lastValidationFingerprint: expect.stringMatching(/^TS2322:/),
+          stalledReason: null,
+        }),
+      ]),
+    );
+  });
+
+  it("resets the attempt-limit budget after recovering from a bounded fix-loop stall", async () => {
+    const memory = createRuntimeMemoryDb();
+    const manager = createManager([], {
+      memoryDb: memory.db,
+      stationId: "station-exec-delta-attempt-budget",
+    });
+    const internals = manager as unknown as SessionManagerInternals;
+    const session = {
+      sessionId: "work-session",
+      send: vi.fn().mockResolvedValue(undefined),
+      disconnect: vi.fn().mockResolvedValue(undefined),
+    };
+
+    vi.spyOn(
+      manager as unknown as { getOrCreateSession: () => Promise<typeof session> },
+      "getOrCreateSession",
+    ).mockResolvedValue(session);
+
+    await expect(manager.sendMessage("Implement the bridge UI badge in the renderer file")).resolves.toBeUndefined();
+    internals.session = session;
+    internals.activeSessionId = "work-session";
+    internals.handleSessionEvent({
+      type: "tool.execution_complete",
+      data: {
+        toolCallId: "tool-discover",
+        success: true,
+        result: { ok: true },
+      },
+    });
+    internals.handleSessionEvent({
+      type: "assistant.message",
+      data: {
+        messageId: "assistant-1",
+        content: "Plan the bridge badge work and update the session manager flow.",
+      },
+    });
+
+    for (const [index, errorMessage] of [
+      [1, "Failure one."],
+      [2, "Failure two."],
+      [3, "Failure three."],
+      [4, "Failure four."],
+      [5, "Failure five."],
+    ] as const) {
+      internals.handleSessionEvent({
+        type: "tool.execution_start",
+        data: {
+          toolCallId: `tool-patch-${index}`,
+          toolName: "apply_patch",
+          arguments: {
+            patch:
+              "*** Begin Patch\n*** Update File: packages/renderer/src/components/base/BridgeRoomDetail.tsx\n@@\n- old\n+ new\n*** End Patch\n",
+          },
+        },
+      });
+      internals.handleSessionEvent({
+        type: "tool.execution_complete",
+        data: {
+          toolCallId: `tool-patch-${index}`,
+          success: true,
+          result: { ok: true },
+        },
+      });
+      internals.handleSessionEvent({
+        type: "tool.execution_start",
+        data: {
+          toolCallId: `tool-validate-${index}`,
+          toolName: "powershell",
+          arguments: {
+            command: "pnpm exec tsc -b packages\\shared packages\\backend --pretty false",
+            description: "Run shared and backend type build",
+          },
+        },
+      });
+      internals.handleSessionEvent({
+        type: "tool.execution_complete",
+        data: {
+          toolCallId: `tool-validate-${index}`,
+          success: false,
+          error: {
+            message: errorMessage,
+          },
+        },
+      });
+    }
+
+    expect(memory.runtimeSessions.get("station:station-exec-delta-attempt-budget")).toMatchObject({
+      contract: {
+        workflowState: {
+          phase: "validate",
+          status: "stalled",
+        },
+      },
+    });
+
+    internals.handleSessionEvent({
+      type: "tool.execution_start",
+      data: {
+        toolCallId: "tool-patch-6",
+        toolName: "apply_patch",
+        arguments: {
+          patch:
+            "*** Begin Patch\n*** Update File: packages/renderer/src/components/base/BridgeRoomDetail.tsx\n@@\n- old\n+ recovered\n*** End Patch\n",
+        },
+      },
+    });
+    internals.handleSessionEvent({
+      type: "tool.execution_complete",
+      data: {
+        toolCallId: "tool-patch-6",
+        success: true,
+        result: { ok: true },
+      },
+    });
+    internals.handleSessionEvent({
+      type: "tool.execution_start",
+      data: {
+        toolCallId: "tool-validate-6",
+        toolName: "powershell",
+        arguments: {
+          command: "pnpm exec tsc -b packages\\shared packages\\backend --pretty false",
+          description: "Run shared and backend type build",
+        },
+      },
+    });
+    internals.handleSessionEvent({
+      type: "tool.execution_complete",
+      data: {
+        toolCallId: "tool-validate-6",
+        success: false,
+        error: {
+          message: "Failure after recovery.",
+        },
+      },
+    });
+
+    expect(memory.runtimeSessions.get("station:station-exec-delta-attempt-budget")).toMatchObject({
+      contract: {
+        workflowState: {
+          phase: "implement",
+          status: "active",
+          blockedBy: null,
+        },
+      },
+    });
+    expect(
+      [...memory.sessionState.values()].map((value) => (typeof value === "string" ? JSON.parse(value) : value)),
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          currentPhase: "implement",
+          fixIterationCount: 1,
+          stalledReason: null,
+        }),
+      ]),
+    );
+  });
+
+  it("preserves continue-current-phase escalation semantics during validate", async () => {
+    const runtimeMemory = createRuntimeMemoryDb();
+    const manager = createManager([], {
+      envInput: { SPIRA_MODEL_PROVIDER: "openai-escalation" },
+      stationId: "primary",
+      memoryDb: runtimeMemory.db,
+    });
+    const internals = manager as unknown as SessionManagerInternals;
+    const session = {
+      sessionId: "work-session",
+      send: vi.fn().mockResolvedValue(undefined),
+      disconnect: vi.fn().mockResolvedValue(undefined),
+      escalate: vi.fn().mockResolvedValue({
+        status: "escalated",
+        providerId: "openai-escalation",
+        fromModel: "gpt-5.4-mini",
+        toModel: "gpt-5.4",
+      }),
+    };
+
+    vi.spyOn(
+      manager as unknown as { getOrCreateSession: () => Promise<typeof session> },
+      "getOrCreateSession",
+    ).mockResolvedValue(session);
+
+    await expect(manager.sendMessage("Implement the bridge UI badge in the renderer file")).resolves.toBeUndefined();
+    internals.session = session;
+    internals.activeSessionId = "work-session";
+    internals.handleSessionEvent({
+      type: "tool.execution_complete",
+      data: {
+        toolCallId: "tool-discover",
+        success: true,
+        result: { ok: true },
+      },
+    });
+    internals.handleSessionEvent({
+      type: "assistant.message",
+      data: {
+        messageId: "assistant-1",
+        content: "Plan the bridge badge work and update the session manager flow.",
+      },
+    });
+    internals.handleSessionEvent({
+      type: "tool.execution_start",
+      data: {
+        toolCallId: "tool-patch",
+        toolName: "apply_patch",
+        arguments: {
+          patch:
+            "*** Begin Patch\n*** Update File: packages/renderer/src/components/base/BridgeRoomDetail.tsx\n@@\n- old\n+ new\n*** End Patch\n",
+        },
+      },
+    });
+    internals.handleSessionEvent({
+      type: "tool.execution_complete",
+      data: {
+        toolCallId: "tool-patch",
+        success: true,
+        result: { ok: true },
+      },
+    });
+    internals.handleSessionEvent({
+      type: "tool.execution_start",
+      data: {
+        toolCallId: "tool-validate",
+        toolName: "powershell",
+        arguments: {
+          command: "pnpm exec vitest run packages\\backend\\src\\copilot\\session-manager.test.ts",
+          description: "Run targeted session manager tests",
+        },
+      },
+    });
+
+    const tool = internals.getSessionConfig().tools.find((entry) => entry.name === "spira_escalate_session");
+    expect(tool).toBeDefined();
+    if (!tool) {
+      throw new Error("Expected spira_escalate_session to be available.");
+    }
+
+    await tool.handler({});
+
+    expect(runtimeMemory.runtimeSessions.get("station:primary")).toMatchObject({
+      contract: {
+        workflowState: {
+          phase: "validate",
+          status: "active",
+          handoffs: [
+            expect.objectContaining({
+              kind: "model-escalation",
+              phase: "validate",
+              continuationMode: "continue-current-phase",
+              toModel: "gpt-5.4",
+            }),
+          ],
+        },
+      },
+    });
+  });
+
+  it("preserves approval blocks while syncing work-session workflow phases", async () => {
+    const memory = createRuntimeMemoryDb();
+    memory.db.upsertRuntimePermissionRequest({
+      requestId: "perm-1",
+      stationId: "station-kappa",
+      payload: { kind: "custom-tool", toolName: "spira_escalate_session" },
+      createdAt: 123,
+    });
+    const manager = createManager([], {
+      memoryDb: memory.db,
+      stationId: "station-kappa",
+    });
+    const internals = manager as unknown as SessionManagerInternals;
+    const session = {
+      sessionId: "work-session",
+      send: vi.fn().mockResolvedValue(undefined),
+      disconnect: vi.fn().mockResolvedValue(undefined),
+    };
+
+    vi.spyOn(
+      manager as unknown as { getOrCreateSession: () => Promise<typeof session> },
+      "getOrCreateSession",
+    ).mockResolvedValue(session);
+
+    await expect(manager.sendMessage("Implement the bridge UI badge in the renderer file")).resolves.toBeUndefined();
+    internals.session = session;
+    internals.activeSessionId = "work-session";
+    internals.workflowState = {
+      ...internals.workflowState,
+      phase: "discover",
+      status: "blocked",
+      blockedBy: {
+        kind: "approval",
+        reason: "Awaiting approval.",
+        pendingRequestIds: ["perm-1"],
+        blockedAt: 123,
+      },
+    };
+
+    internals.handleSessionEvent({
+      type: "tool.execution_complete",
+      data: {
+        toolCallId: "tool-1",
+        success: true,
+        result: { ok: true },
+      },
+    });
+
+    expect(memory.runtimeSessions.get("station:station-kappa")).toMatchObject({
+      contract: {
+        workflowState: {
+          phase: "summarise",
+          status: "blocked",
+          blockedBy: {
+            kind: "approval",
+            pendingRequestIds: ["perm-1"],
+          },
+        },
+      },
+    });
+    expect(memory.runtimeSessions.get("station:station-kappa")).toMatchObject({
+      contract: {
+        workflowState: {
+          phaseHistory: expect.arrayContaining([expect.objectContaining({ phase: "summarise", status: "blocked" })]),
+        },
+      },
+    });
+  });
+
+  it("resumes work-session workflow syncing after review completes", async () => {
+    const memory = createRuntimeMemoryDb();
+    const manager = createManager([], {
+      memoryDb: memory.db,
+      stationId: "station-mu",
+    });
+    const internals = manager as unknown as SessionManagerInternals;
+    const session = {
+      sessionId: "work-session",
+      send: vi.fn().mockResolvedValue(undefined),
+      disconnect: vi.fn().mockResolvedValue(undefined),
+    };
+
+    vi.spyOn(
+      manager as unknown as { getOrCreateSession: () => Promise<typeof session> },
+      "getOrCreateSession",
+    ).mockResolvedValue(session);
+
+    await expect(manager.sendMessage("Implement the bridge UI badge in the renderer file")).resolves.toBeUndefined();
+    internals.session = session;
+    internals.activeSessionId = "work-session";
+    internals.workflowState = {
+      ...internals.workflowState,
+      phase: "review",
+      status: "complete",
+      review: {
+        ...internals.workflowState.review,
+        status: "completed",
+        summary: "Review completed.",
+        lastUpdatedAt: 123,
+      },
+    };
+
+    internals.handleSessionEvent({
+      type: "tool.execution_complete",
+      data: {
+        toolCallId: "tool-1",
+        success: true,
+        result: { ok: true },
+      },
+    });
+
+    expect(memory.runtimeSessions.get("station:station-mu")).toMatchObject({
+      contract: {
+        workflowState: {
+          phase: "summarise",
+          status: "active",
+          phaseHistory: expect.arrayContaining([expect.objectContaining({ phase: "summarise", status: "active" })]),
+          review: expect.objectContaining({
+            status: "completed",
+          }),
+        },
+      },
+    });
+  });
+
+  it("seals a ready-for-review work session when review completes", () => {
+    const memory = createRuntimeMemoryDb();
+    memory.sessionState.set(
+      "station:station-mu-complete:work-session",
+      JSON.stringify({
+        sessionId: "work-session",
+        stationId: "station-mu-complete",
+        taskText: "Implement the bridge UI badge in the renderer file",
+        currentPhase: "validate",
+        classification: {
+          intent: "edit",
+          explicitWorkIntent: true,
+          requiresRepoContext: true,
+          confidence: "heuristic",
+        },
+        phaseHistory: [
+          {
+            phase: "classify",
+            status: "complete",
+            summary: "Coding task classified.",
+            startedAt: 1,
+            updatedAt: 1,
+            completedAt: 1,
+          },
+          {
+            phase: "discover",
+            status: "complete",
+            summary: "Repository context discovered.",
+            startedAt: 1,
+            updatedAt: 2,
+            completedAt: 2,
+          },
+          {
+            phase: "summarise",
+            status: "complete",
+            summary: "Repository findings summarised.",
+            startedAt: 2,
+            updatedAt: 3,
+            completedAt: 3,
+          },
+          {
+            phase: "plan",
+            status: "complete",
+            summary: "Plan ready.",
+            startedAt: 3,
+            updatedAt: 4,
+            completedAt: 4,
+          },
+          {
+            phase: "implement",
+            status: "complete",
+            summary: "Patch applied.",
+            startedAt: 4,
+            updatedAt: 5,
+            completedAt: 5,
+          },
+          {
+            phase: "validate",
+            status: "complete",
+            summary: "Validation passed; ready for review.",
+            startedAt: 5,
+            updatedAt: 6,
+            completedAt: 6,
+          },
+        ],
+        searchTerms: ["bridge", "renderer"],
+        candidateFiles: ["packages/renderer/src/components/base/BridgeRoomDetail.tsx"],
+        selectedFiles: ["packages/renderer/src/components/base/BridgeRoomDetail.tsx"],
+        summary: "Validation passed; ready for review.",
+        planSummary: "Plan ready.",
+        changedFiles: ["packages/renderer/src/components/base/BridgeRoomDetail.tsx"],
+        patchAttempts: [],
+        validationResults: [],
+        fixIterationCount: 0,
+        repeatFailureCount: 0,
+        lastValidationFingerprint: null,
+        readyForReview: true,
+        reviewSummary: null,
+        completedAt: null,
+        stalledReason: null,
+        stalledAt: null,
+        createdAt: 1,
+        updatedAt: 6,
+      }),
+    );
+
+    const manager = createManager([], {
+      memoryDb: memory.db,
+      stationId: "station-mu-complete",
+    });
+    const internals = manager as unknown as SessionManagerInternals & {
+      handleReviewSubagentStatus(
+        runId: string,
+        domain: string,
+        status: string,
+        occurredAt: number,
+        summary: string | null,
+      ): void;
+    };
+
+    internals.workflowState = {
+      ...internals.workflowState,
+      phase: "review",
+      status: "active",
+      summary: "Running review: Review the current diff",
+      review: {
+        ...internals.workflowState.review,
+        status: "running",
+        origin: "managed-subagent",
+        runId: "review-run-1",
+        attempt: 1,
+        summary: "Running review: Review the current diff",
+        failureReason: null,
+        lastUpdatedAt: 11,
+      },
+    };
+
+    internals.handleReviewSubagentStatus("review-run-1", "code-review", "completed", 12, "Review completed cleanly.");
+
+    expect(memory.runtimeSessions.get("station:station-mu-complete")).toMatchObject({
+      contract: {
+        workflowState: {
+          phase: "complete",
+          status: "complete",
+          summary: "Review completed cleanly.",
+          review: {
+            status: "completed",
+            summary: "Review completed cleanly.",
+          },
+          phaseHistory: expect.arrayContaining([expect.objectContaining({ phase: "complete", status: "complete" })]),
+        },
+      },
+    });
+    expect(JSON.parse(String(memory.sessionState.get("station:station-mu-complete:work-session")))).toMatchObject({
+      currentPhase: "validate",
+      readyForReview: true,
+      reviewSummary: "Review completed cleanly.",
+      completedAt: 12,
+      summary: "Review completed cleanly.",
+    });
+
+    internals.session = {
+      sessionId: "work-session",
+      disconnect: vi.fn().mockResolvedValue(undefined),
+    };
+    internals.activeSessionId = "work-session";
+    const runtimeBeforeLateEvent = structuredClone(memory.runtimeSessions.get("station:station-mu-complete"));
+    const ledgerCountBeforeLateEvent = memory.runtimeLedgerEvents.length;
+    internals.handleSessionEvent({
+      type: "tool.execution_start",
+      data: {
+        toolCallId: "tool-late",
+        toolName: "apply_patch",
+        arguments: {
+          patch:
+            "*** Begin Patch\n*** Update File: packages/renderer/src/components/base/BridgeRoomDetail.tsx\n@@\n- old\n+ new\n*** End Patch\n",
+        },
+      },
+    });
+
+    expect(memory.runtimeSessions.get("station:station-mu-complete")).toEqual(runtimeBeforeLateEvent);
+    expect(memory.runtimeLedgerEvents).toHaveLength(ledgerCountBeforeLateEvent);
+    expect(
+      (
+        memory.runtimeSessions.get("station:station-mu-complete")?.contract as {
+          workflowState?: { phaseHistory?: unknown[] };
+        }
+      ).workflowState?.phaseHistory?.filter((entry) =>
+        Boolean(
+          entry && typeof entry === "object" && "phase" in entry && (entry as { phase?: string }).phase === "complete",
+        ),
+      ),
+    ).toHaveLength(1);
+    expect(JSON.parse(String(memory.sessionState.get("station:station-mu-complete:work-session")))).toMatchObject({
+      updatedAt: 12,
+    });
+
+    internals.handleReviewSubagentStatus("review-run-1", "code-review", "failed", 13, "Late failure.");
+
+    expect(memory.runtimeSessions.get("station:station-mu-complete")).toMatchObject({
+      contract: {
+        workflowState: {
+          phase: "complete",
+          status: "complete",
+          summary: "Review completed cleanly.",
+          review: {
+            status: "completed",
+            summary: "Review completed cleanly.",
+          },
+        },
+      },
+    });
+  });
+
+  it("ignores tool events while review is running for a ready-for-review work session", () => {
+    const memory = createRuntimeMemoryDb();
+    memory.sessionState.set(
+      "station:station-mu-review-running:work-session",
+      JSON.stringify({
+        sessionId: "work-session",
+        stationId: "station-mu-review-running",
+        taskText: "Implement the bridge UI badge in the renderer file",
+        currentPhase: "validate",
+        classification: {
+          intent: "edit",
+          explicitWorkIntent: true,
+          requiresRepoContext: true,
+          confidence: "heuristic",
+        },
+        phaseHistory: [
+          {
+            phase: "classify",
+            status: "complete",
+            summary: "Coding task classified.",
+            startedAt: 1,
+            updatedAt: 1,
+            completedAt: 1,
+          },
+          {
+            phase: "discover",
+            status: "complete",
+            summary: "Repository context discovered.",
+            startedAt: 1,
+            updatedAt: 2,
+            completedAt: 2,
+          },
+          {
+            phase: "summarise",
+            status: "complete",
+            summary: "Repository findings summarised.",
+            startedAt: 2,
+            updatedAt: 3,
+            completedAt: 3,
+          },
+          {
+            phase: "plan",
+            status: "complete",
+            summary: "Plan ready.",
+            startedAt: 3,
+            updatedAt: 4,
+            completedAt: 4,
+          },
+          {
+            phase: "implement",
+            status: "complete",
+            summary: "Patch applied.",
+            startedAt: 4,
+            updatedAt: 5,
+            completedAt: 5,
+          },
+          {
+            phase: "validate",
+            status: "complete",
+            summary: "Validation passed; ready for review.",
+            startedAt: 5,
+            updatedAt: 6,
+            completedAt: 6,
+          },
+        ],
+        searchTerms: ["bridge", "renderer"],
+        candidateFiles: ["packages/renderer/src/components/base/BridgeRoomDetail.tsx"],
+        selectedFiles: ["packages/renderer/src/components/base/BridgeRoomDetail.tsx"],
+        summary: "Validation passed; ready for review.",
+        planSummary: "Plan ready.",
+        changedFiles: ["packages/renderer/src/components/base/BridgeRoomDetail.tsx"],
+        patchAttempts: [],
+        validationResults: [],
+        fixIterationCount: 0,
+        repeatFailureCount: 0,
+        lastValidationFingerprint: null,
+        readyForReview: true,
+        reviewSummary: null,
+        completedAt: null,
+        stalledReason: null,
+        stalledAt: null,
+        createdAt: 1,
+        updatedAt: 6,
+      }),
+    );
+
+    const manager = createManager([], {
+      memoryDb: memory.db,
+      stationId: "station-mu-review-running",
+    });
+    const internals = manager as unknown as SessionManagerInternals;
+    internals.session = {
+      sessionId: "work-session",
+      disconnect: vi.fn().mockResolvedValue(undefined),
+    };
+    internals.activeSessionId = "work-session";
+    internals.workflowState = {
+      ...internals.workflowState,
+      phase: "review",
+      status: "active",
+      review: {
+        ...internals.workflowState.review,
+        status: "running",
+        origin: "managed-subagent",
+        runId: "review-run-1",
+        attempt: 1,
+        summary: "Running review: Review the current diff",
+        failureReason: null,
+        lastUpdatedAt: 11,
+      },
+    };
+    const runtimeBeforeLateTool = structuredClone(memory.runtimeSessions.get("station:station-mu-review-running"));
+
+    internals.handleSessionEvent({
+      type: "tool.execution_start",
+      data: {
+        toolCallId: "tool-late-review",
+        toolName: "apply_patch",
+        arguments: {
+          patch:
+            "*** Begin Patch\n*** Update File: packages/renderer/src/components/base/BridgeRoomDetail.tsx\n@@\n- old\n+ new\n*** End Patch\n",
+        },
+      },
+    });
+
+    expect(memory.runtimeSessions.get("station:station-mu-review-running")).toEqual(runtimeBeforeLateTool);
+    expect(JSON.parse(String(memory.sessionState.get("station:station-mu-review-running:work-session")))).toMatchObject(
+      {
+        currentPhase: "validate",
+        readyForReview: true,
+        completedAt: null,
+      },
+    );
+  });
+
+  it("keeps simple questions conversational", async () => {
+    const memory = createRuntimeMemoryDb();
+    const manager = createManager([], {
+      memoryDb: memory.db,
+      stationId: "station-beta",
+    });
+    const session = {
+      sessionId: "chat-session",
+      send: vi.fn().mockResolvedValue(undefined),
+      disconnect: vi.fn().mockResolvedValue(undefined),
+    };
+
+    vi.spyOn(
+      manager as unknown as { getOrCreateSession: () => Promise<typeof session> },
+      "getOrCreateSession",
+    ).mockResolvedValue(session);
+
+    await expect(manager.sendMessage("Can you explain the bridge UI?")).resolves.toBeUndefined();
+
+    expect(manager.getWorkSessionSummary()).toBeNull();
+    expect(
+      [...memory.sessionState.values()].map((value) => (typeof value === "string" ? JSON.parse(value) : value)),
+    ).not.toEqual(expect.arrayContaining([expect.objectContaining({ currentPhase: "classify" })]));
+  });
+
+  it("clears persisted work-session state when the station session is reset", async () => {
+    const memory = createRuntimeMemoryDb();
+    const manager = createManager([], {
+      memoryDb: memory.db,
+      stationId: "station-delta",
+    });
+    const session = {
+      sessionId: "work-session",
+      send: vi.fn().mockResolvedValue(undefined),
+      disconnect: vi.fn().mockResolvedValue(undefined),
+    };
+
+    vi.spyOn(
+      manager as unknown as { getOrCreateSession: () => Promise<typeof session> },
+      "getOrCreateSession",
+    ).mockResolvedValue(session);
+
+    await expect(manager.sendMessage("Implement the bridge UI badge in the renderer file")).resolves.toBeUndefined();
+    await expect(manager.clearSession()).resolves.toBeUndefined();
+
+    expect(manager.getWorkSessionSummary()).toBeNull();
+    expect([...memory.sessionState.values()]).not.toEqual(
+      expect.arrayContaining([expect.stringContaining('"currentPhase":"classify"')]),
+    );
+    expect(memory.runtimeSessions.get("station:station-delta")).toMatchObject({
+      contract: {
+        workflowState: {
+          phase: "intake",
+          status: "idle",
+          summary: null,
+        },
+      },
+    });
+  });
+
+  it("clears later review workflow state when resetting an active work session", async () => {
+    const memory = createRuntimeMemoryDb();
+    const manager = createManager([], {
+      memoryDb: memory.db,
+      stationId: "station-rho",
+    });
+    const session = {
+      sessionId: "work-session",
+      send: vi.fn().mockResolvedValue(undefined),
+      disconnect: vi.fn().mockResolvedValue(undefined),
+    };
+    const internals = manager as unknown as SessionManagerInternals;
+
+    vi.spyOn(
+      manager as unknown as { getOrCreateSession: () => Promise<typeof session> },
+      "getOrCreateSession",
+    ).mockResolvedValue(session);
+
+    await expect(manager.sendMessage("Implement the bridge UI badge in the renderer file")).resolves.toBeUndefined();
+    internals.workflowState = {
+      ...internals.workflowState,
+      phase: "review",
+      status: "blocked",
+      summary: "Review failed.",
+      blockedBy: {
+        kind: "review",
+        reason: "Review failed.",
+        pendingRequestIds: [],
+        blockedAt: 123,
+      },
+      review: {
+        ...internals.workflowState.review,
+        status: "failed",
+        runId: "review-1",
+        summary: "Review failed.",
+        failureReason: "Review failed.",
+        lastUpdatedAt: 123,
+      },
+    };
+
+    await expect(manager.clearSession()).resolves.toBeUndefined();
+
+    expect(memory.runtimeSessions.get("station:station-rho")).toMatchObject({
+      contract: {
+        workflowState: {
+          phase: "intake",
+          status: "idle",
+          blockedBy: null,
+          review: {
+            status: "idle",
+            runId: null,
+            summary: null,
+            failureReason: null,
+          },
+        },
+      },
+    });
+  });
+
+  it("starts a new work session without carrying prior review history", async () => {
+    const memory = createRuntimeMemoryDb();
+    const manager = createManager([], {
+      memoryDb: memory.db,
+      stationId: "station-sigma",
+    });
+    const session = {
+      sessionId: "work-session",
+      send: vi.fn().mockResolvedValue(undefined),
+      disconnect: vi.fn().mockResolvedValue(undefined),
+    };
+    const internals = manager as unknown as SessionManagerInternals;
+
+    vi.spyOn(
+      manager as unknown as { getOrCreateSession: () => Promise<typeof session> },
+      "getOrCreateSession",
+    ).mockResolvedValue(session);
+
+    await expect(manager.sendMessage("Implement the bridge UI badge in the renderer file")).resolves.toBeUndefined();
+    internals.workflowState = {
+      ...internals.workflowState,
+      phase: "review",
+      status: "blocked",
+      summary: "Review failed.",
+      blockedBy: {
+        kind: "review",
+        reason: "Review failed.",
+        pendingRequestIds: [],
+        blockedAt: 123,
+      },
+      phaseHistory: [
+        ...internals.workflowState.phaseHistory,
+        {
+          phase: "review",
+          status: "blocked",
+          summary: "Review failed.",
+          providerId: "copilot",
+          model: "review",
+          startedAt: 123,
+          updatedAt: 123,
+          completedAt: null,
+          blockedBy: {
+            kind: "review",
+            reason: "Review failed.",
+            pendingRequestIds: [],
+            blockedAt: 123,
+          },
+        },
+      ],
+      review: {
+        ...internals.workflowState.review,
+        status: "failed",
+        runId: "review-1",
+        summary: "Review failed.",
+        failureReason: "Review failed.",
+        lastUpdatedAt: 123,
+      },
+    };
+    internals.handleSessionEvent({ type: "session.idle", data: {} });
+    internals.currentState = "idle";
+
+    await expect(
+      manager.sendMessage("Implement the station registry cleanup in the backend file"),
+    ).resolves.toBeUndefined();
+
+    const runtimeSession = memory.runtimeSessions.get("station:station-sigma");
+    const persistedWorkflowState = runtimeSession?.contract as { workflowState: RuntimeWorkflowState } | undefined;
+    expect(runtimeSession).toMatchObject({
+      contract: {
+        workflowState: {
+          phase: "discover",
+          status: "active",
+          blockedBy: null,
+          review: {
+            status: "idle",
+            runId: null,
+            summary: null,
+            failureReason: null,
+          },
+        },
+      },
+    });
+    expect(
+      persistedWorkflowState?.workflowState.phaseHistory.some(
+        (entry) => entry.phase === "review" || entry.phase === "complete",
+      ),
+    ).toBe(false);
+  });
+
+  it("falls back to conversational mode and clears work-session state for non-work follow-ups", async () => {
+    const memory = createRuntimeMemoryDb();
+    const manager = createManager([], {
+      memoryDb: memory.db,
+      stationId: "station-epsilon",
+    });
+    const internals = manager as unknown as SessionManagerInternals;
+    const session = {
+      sessionId: "work-session",
+      send: vi.fn().mockResolvedValue(undefined),
+      disconnect: vi.fn().mockResolvedValue(undefined),
+    };
+
+    vi.spyOn(
+      manager as unknown as { getOrCreateSession: () => Promise<typeof session> },
+      "getOrCreateSession",
+    ).mockResolvedValue(session);
+
+    await expect(manager.sendMessage("Implement the bridge UI badge in the renderer file")).resolves.toBeUndefined();
+    internals.handleSessionEvent({ type: "session.idle", data: {} });
+    internals.currentState = "idle";
+
+    await expect(manager.sendMessage("Can you explain what changed?")).resolves.toBeUndefined();
+
+    expect(manager.getWorkSessionSummary()).toBeNull();
+    expect([...memory.sessionState.values()]).not.toEqual(
+      expect.arrayContaining([expect.stringContaining('"currentPhase":"classify"')]),
+    );
+    expect(memory.runtimeSessions.get("station:station-epsilon")).toMatchObject({
+      contract: {
+        workflowState: {
+          phase: "intake",
+          status: "idle",
+        },
+      },
+    });
+  });
+
+  it("preserves persisted work-session state across manager shutdown", async () => {
+    const memory = createRuntimeMemoryDb();
+    const manager = createManager([], {
+      memoryDb: memory.db,
+      stationId: "station-iota",
+    });
+    const session = {
+      sessionId: "work-session",
+      send: vi.fn().mockResolvedValue(undefined),
+      disconnect: vi.fn().mockResolvedValue(undefined),
+    };
+    const internals = manager as unknown as SessionManagerInternals;
+
+    vi.spyOn(
+      manager as unknown as { getOrCreateSession: () => Promise<typeof session> },
+      "getOrCreateSession",
+    ).mockResolvedValue(session);
+
+    await expect(manager.sendMessage("Implement the bridge UI badge in the renderer file")).resolves.toBeUndefined();
+    internals.session = session;
+    internals.activeSessionId = "work-session";
+
+    await expect(manager.shutdown()).resolves.toBeUndefined();
+
+    expect([...memory.sessionState.values()]).toEqual(
+      expect.arrayContaining([expect.stringContaining('"stationId":"station-iota"')]),
+    );
+  });
+
+  it("restores persisted work-session phase state on restart", () => {
+    const memory = createRuntimeMemoryDb();
+    memory.sessionState.set(
+      "station:station-theta:work-session",
+      JSON.stringify({
+        sessionId: "work-session",
+        stationId: "station-theta",
+        taskText: "Implement the bridge UI badge in the renderer file",
+        currentPhase: "plan",
+        classification: {
+          intent: "edit",
+          explicitWorkIntent: true,
+          requiresRepoContext: true,
+          confidence: "heuristic",
+        },
+        phaseHistory: [
+          {
+            phase: "classify",
+            status: "complete",
+            summary: "WorkSession activated from explicit coding intent.",
+            startedAt: 1,
+            updatedAt: 1,
+            completedAt: 1,
+          },
+          {
+            phase: "discover",
+            status: "complete",
+            summary: "Repository context discovered.",
+            startedAt: 1,
+            updatedAt: 2,
+            completedAt: 2,
+          },
+          {
+            phase: "summarise",
+            status: "complete",
+            summary: "Repository findings summarised.",
+            startedAt: 1,
+            updatedAt: 3,
+            completedAt: 3,
+          },
+          {
+            phase: "plan",
+            status: "active",
+            summary: "Plan ready.",
+            startedAt: 1,
+            updatedAt: 4,
+          },
+        ],
+        searchTerms: ["bridge", "renderer"],
+        candidateFiles: [],
+        summary: "Plan ready.",
+        planSummary: "Plan ready.",
+        createdAt: 1,
+        updatedAt: 4,
+      }),
+    );
+
+    const manager = createManager([], {
+      memoryDb: memory.db,
+      stationId: "station-theta",
+    });
+
+    expect(manager.getWorkSessionSummary()).toMatchObject({
+      mode: "work-session",
+      phase: "plan",
+      summary: "Plan ready.",
+    });
+    expect(memory.runtimeSessions.get("station:station-theta")).toMatchObject({
+      contract: {
+        workflowState: {
+          phase: "plan",
+          status: "active",
+        },
+      },
+    });
+  });
+
+  it("restores validate-complete work-session state on restart", () => {
+    const memory = createRuntimeMemoryDb();
+    memory.sessionState.set(
+      "station:station-xi:work-session",
+      JSON.stringify({
+        sessionId: "work-session",
+        stationId: "station-xi",
+        taskText: "Implement the bridge UI badge in the renderer file",
+        currentPhase: "validate",
+        classification: {
+          intent: "edit",
+          explicitWorkIntent: true,
+          requiresRepoContext: true,
+          confidence: "heuristic",
+        },
+        phaseHistory: [
+          {
+            phase: "classify",
+            status: "complete",
+            summary: "WorkSession activated from explicit coding intent.",
+            startedAt: 1,
+            updatedAt: 1,
+            completedAt: 1,
+          },
+          {
+            phase: "discover",
+            status: "complete",
+            summary: "Repository context discovered.",
+            startedAt: 1,
+            updatedAt: 2,
+            completedAt: 2,
+          },
+          {
+            phase: "summarise",
+            status: "complete",
+            summary: "Repository findings summarised.",
+            startedAt: 1,
+            updatedAt: 3,
+            completedAt: 3,
+          },
+          {
+            phase: "plan",
+            status: "complete",
+            summary: "Plan ready.",
+            startedAt: 1,
+            updatedAt: 4,
+            completedAt: 4,
+          },
+          {
+            phase: "implement",
+            status: "complete",
+            summary: "Patch applied.",
+            startedAt: 4,
+            updatedAt: 5,
+            completedAt: 5,
+          },
+          {
+            phase: "validate",
+            status: "complete",
+            summary: "Validation passed; ready for review.",
+            startedAt: 5,
+            updatedAt: 6,
+            completedAt: 6,
+          },
+        ],
+        searchTerms: ["bridge", "renderer"],
+        candidateFiles: ["packages/renderer/src/components/base/BridgeRoomDetail.tsx"],
+        selectedFiles: ["packages/renderer/src/components/base/BridgeRoomDetail.tsx"],
+        summary: "Validation passed; ready for review.",
+        planSummary: "Plan ready.",
+        changedFiles: ["packages/renderer/src/components/base/BridgeRoomDetail.tsx"],
+        patchAttempts: [],
+        validationResults: [],
+        fixIterationCount: 0,
+        repeatFailureCount: 0,
+        lastValidationFingerprint: null,
+        readyForReview: true,
+        stalledReason: null,
+        stalledAt: null,
+        createdAt: 1,
+        updatedAt: 6,
+      }),
+    );
+
+    const manager = createManager([], {
+      memoryDb: memory.db,
+      stationId: "station-xi",
+    });
+
+    expect(manager.getWorkSessionSummary()).toMatchObject({
+      mode: "work-session",
+      phase: "validate",
+      summary: "Validation passed; ready for review.",
+    });
+    expect(memory.runtimeSessions.get("station:station-xi")).toMatchObject({
+      contract: {
+        workflowState: {
+          phase: "validate",
+          status: "complete",
+          summary: "Validation passed; ready for review.",
+        },
+      },
+    });
+  });
+
+  it("restores a sealed work session as complete after restart", () => {
+    const memory = createRuntimeMemoryDb();
+    memory.sessionState.set(
+      "station:station-xi-complete:work-session",
+      JSON.stringify({
+        sessionId: "work-session",
+        stationId: "station-xi-complete",
+        taskText: "Implement the bridge UI badge in the renderer file",
+        currentPhase: "validate",
+        classification: {
+          intent: "edit",
+          explicitWorkIntent: true,
+          requiresRepoContext: true,
+          confidence: "heuristic",
+        },
+        phaseHistory: [
+          {
+            phase: "classify",
+            status: "complete",
+            summary: "Coding task classified.",
+            startedAt: 1,
+            updatedAt: 1,
+            completedAt: 1,
+          },
+          {
+            phase: "discover",
+            status: "complete",
+            summary: "Repository context discovered.",
+            startedAt: 1,
+            updatedAt: 2,
+            completedAt: 2,
+          },
+          {
+            phase: "summarise",
+            status: "complete",
+            summary: "Repository findings summarised.",
+            startedAt: 2,
+            updatedAt: 3,
+            completedAt: 3,
+          },
+          {
+            phase: "plan",
+            status: "complete",
+            summary: "Plan ready.",
+            startedAt: 3,
+            updatedAt: 4,
+            completedAt: 4,
+          },
+          {
+            phase: "implement",
+            status: "complete",
+            summary: "Patch applied.",
+            startedAt: 4,
+            updatedAt: 5,
+            completedAt: 5,
+          },
+          {
+            phase: "validate",
+            status: "complete",
+            summary: "Validation passed; ready for review.",
+            startedAt: 5,
+            updatedAt: 6,
+            completedAt: 6,
+          },
+        ],
+        searchTerms: ["bridge", "renderer"],
+        candidateFiles: ["packages/renderer/src/components/base/BridgeRoomDetail.tsx"],
+        selectedFiles: ["packages/renderer/src/components/base/BridgeRoomDetail.tsx"],
+        summary: "Review completed cleanly.",
+        planSummary: "Plan ready.",
+        changedFiles: ["packages/renderer/src/components/base/BridgeRoomDetail.tsx"],
+        patchAttempts: [],
+        validationResults: [],
+        fixIterationCount: 0,
+        repeatFailureCount: 0,
+        lastValidationFingerprint: null,
+        readyForReview: true,
+        reviewSummary: "Review completed cleanly.",
+        completedAt: 12,
+        stalledReason: null,
+        stalledAt: null,
+        createdAt: 1,
+        updatedAt: 12,
+      }),
+    );
+    const runtimeSession = createRuntimeSessionContract({
+      runtimeSessionId: "station:station-xi-complete",
+      kind: "station",
+      scope: { stationId: "station-xi-complete" },
+      workingDirectory: "C:\\GitHub\\Spira",
+      hostManifestHash: "manifest",
+      providerProjectionHash: "projection",
+      providerId: "copilot",
+      providerCapabilities: getDefaultProviderCapabilities("copilot"),
+      providerSessionId: "work-session",
+      model: "gpt-5.4",
+      boundAt: 100,
+    });
+    memory.db.upsertRuntimeSession({
+      runtimeSessionId: "station:station-xi-complete",
+      stationId: "station-xi-complete",
+      kind: "station",
+      contract: {
+        ...runtimeSession,
+        workflowState: {
+          ...runtimeSession.workflowState,
+          phase: "review",
+          status: "active",
+          summary: "Running review: Review the current diff",
+          updatedAt: 11,
+          phaseHistory: [
+            {
+              phase: "review",
+              status: "active",
+              summary: "Running review: Review the current diff",
+              providerId: "copilot",
+              model: "gpt-5.4",
+              startedAt: 11,
+              updatedAt: 11,
+              completedAt: null,
+              blockedBy: null,
+            },
+          ],
+          blockedBy: null,
+          review: {
+            status: "running",
+            attempt: 1,
+            runId: "review-run-1",
+            origin: "managed-subagent",
+            summary: "Running review: Review the current diff",
+            failureReason: null,
+            lastUpdatedAt: 11,
+          },
+        },
+      },
+    });
+
+    const manager = createManager([], {
+      memoryDb: memory.db,
+      stationId: "station-xi-complete",
+    });
+
+    expect(manager.getWorkSessionSummary()).toMatchObject({
+      mode: "work-session",
+      phase: "validate",
+      summary: "Review completed cleanly.",
+    });
+    expect(memory.runtimeSessions.get("station:station-xi-complete")).toMatchObject({
+      contract: {
+        workflowState: {
+          phase: "complete",
+          status: "complete",
+          summary: "Review completed cleanly.",
+          review: {
+            status: "completed",
+            summary: "Review completed cleanly.",
+          },
+          phaseHistory: expect.arrayContaining([expect.objectContaining({ phase: "complete", status: "complete" })]),
+        },
+      },
+    });
+  });
+
+  it("does not duplicate the complete phase when restarting an already sealed session", () => {
+    const memory = createRuntimeMemoryDb();
+    memory.sessionState.set(
+      "station:station-xi-complete-repeat:work-session",
+      JSON.stringify({
+        sessionId: "work-session",
+        stationId: "station-xi-complete-repeat",
+        taskText: "Implement the bridge UI badge in the renderer file",
+        currentPhase: "validate",
+        classification: {
+          intent: "edit",
+          explicitWorkIntent: true,
+          requiresRepoContext: true,
+          confidence: "heuristic",
+        },
+        phaseHistory: [
+          {
+            phase: "classify",
+            status: "complete",
+            summary: "Coding task classified.",
+            startedAt: 1,
+            updatedAt: 1,
+            completedAt: 1,
+          },
+          {
+            phase: "discover",
+            status: "complete",
+            summary: "Repository context discovered.",
+            startedAt: 1,
+            updatedAt: 2,
+            completedAt: 2,
+          },
+          {
+            phase: "summarise",
+            status: "complete",
+            summary: "Repository findings summarised.",
+            startedAt: 2,
+            updatedAt: 3,
+            completedAt: 3,
+          },
+          {
+            phase: "plan",
+            status: "complete",
+            summary: "Plan ready.",
+            startedAt: 3,
+            updatedAt: 4,
+            completedAt: 4,
+          },
+          {
+            phase: "implement",
+            status: "complete",
+            summary: "Patch applied.",
+            startedAt: 4,
+            updatedAt: 5,
+            completedAt: 5,
+          },
+          {
+            phase: "validate",
+            status: "complete",
+            summary: "Validation passed; ready for review.",
+            startedAt: 5,
+            updatedAt: 6,
+            completedAt: 6,
+          },
+        ],
+        searchTerms: ["bridge", "renderer"],
+        candidateFiles: ["packages/renderer/src/components/base/BridgeRoomDetail.tsx"],
+        selectedFiles: ["packages/renderer/src/components/base/BridgeRoomDetail.tsx"],
+        summary: "Review completed cleanly.",
+        planSummary: "Plan ready.",
+        changedFiles: ["packages/renderer/src/components/base/BridgeRoomDetail.tsx"],
+        patchAttempts: [],
+        validationResults: [],
+        fixIterationCount: 0,
+        repeatFailureCount: 0,
+        lastValidationFingerprint: null,
+        readyForReview: true,
+        reviewSummary: "Review completed cleanly.",
+        completedAt: 12,
+        stalledReason: null,
+        stalledAt: null,
+        createdAt: 1,
+        updatedAt: 12,
+      }),
+    );
+    const runtimeSession = createRuntimeSessionContract({
+      runtimeSessionId: "station:station-xi-complete-repeat",
+      kind: "station",
+      scope: { stationId: "station-xi-complete-repeat" },
+      workingDirectory: "C:\\GitHub\\Spira",
+      hostManifestHash: "manifest",
+      providerProjectionHash: "projection",
+      providerId: "copilot",
+      providerCapabilities: getDefaultProviderCapabilities("copilot"),
+      providerSessionId: "work-session",
+      model: "gpt-5.4",
+      boundAt: 100,
+    });
+    memory.db.upsertRuntimeSession({
+      runtimeSessionId: "station:station-xi-complete-repeat",
+      stationId: "station-xi-complete-repeat",
+      kind: "station",
+      contract: {
+        ...runtimeSession,
+        workflowState: {
+          ...runtimeSession.workflowState,
+          phase: "complete",
+          status: "complete",
+          summary: "Review completed cleanly.",
+          updatedAt: 12,
+          phaseHistory: [
+            {
+              phase: "review",
+              status: "complete",
+              summary: "Review completed cleanly.",
+              providerId: "copilot",
+              model: "gpt-5.4",
+              startedAt: 11,
+              updatedAt: 12,
+              completedAt: 12,
+              blockedBy: null,
+            },
+            {
+              phase: "complete",
+              status: "complete",
+              summary: "Review completed cleanly.",
+              providerId: "copilot",
+              model: "gpt-5.4",
+              startedAt: 12,
+              updatedAt: 12,
+              completedAt: 12,
+              blockedBy: null,
+            },
+          ],
+          blockedBy: null,
+          review: {
+            status: "completed",
+            attempt: 1,
+            runId: "review-run-1",
+            origin: "managed-subagent",
+            summary: "Review completed cleanly.",
+            failureReason: null,
+            lastUpdatedAt: 12,
+          },
+        },
+      },
+    });
+
+    const manager = createManager([], {
+      memoryDb: memory.db,
+      stationId: "station-xi-complete-repeat",
+    });
+
+    expect(manager.getWorkSessionSummary()).toMatchObject({
+      mode: "work-session",
+      phase: "validate",
+      summary: "Review completed cleanly.",
+    });
+    const phaseHistory = (
+      memory.runtimeSessions.get("station:station-xi-complete-repeat")?.contract as {
+        workflowState?: { phaseHistory?: Array<{ phase?: string }> };
+      }
+    ).workflowState?.phaseHistory;
+    expect(phaseHistory?.filter((entry) => entry.phase === "complete")).toHaveLength(1);
+  });
+
+  it("seals a legacy validate-complete work session during restart when review already finished", () => {
+    const memory = createRuntimeMemoryDb();
+    memory.sessionState.set(
+      "station:station-xi-crash-window:work-session",
+      JSON.stringify({
+        sessionId: "work-session",
+        stationId: "station-xi-crash-window",
+        taskText: "Implement the bridge UI badge in the renderer file",
+        currentPhase: "validate",
+        classification: {
+          intent: "edit",
+          explicitWorkIntent: true,
+          requiresRepoContext: true,
+          confidence: "heuristic",
+        },
+        phaseHistory: [
+          {
+            phase: "classify",
+            status: "complete",
+            summary: "Coding task classified.",
+            startedAt: 1,
+            updatedAt: 1,
+            completedAt: 1,
+          },
+          {
+            phase: "discover",
+            status: "complete",
+            summary: "Repository context discovered.",
+            startedAt: 1,
+            updatedAt: 2,
+            completedAt: 2,
+          },
+          {
+            phase: "summarise",
+            status: "complete",
+            summary: "Repository findings summarised.",
+            startedAt: 2,
+            updatedAt: 3,
+            completedAt: 3,
+          },
+          {
+            phase: "plan",
+            status: "complete",
+            summary: "Plan ready.",
+            startedAt: 3,
+            updatedAt: 4,
+            completedAt: 4,
+          },
+          {
+            phase: "implement",
+            status: "complete",
+            summary: "Patch applied.",
+            startedAt: 4,
+            updatedAt: 5,
+            completedAt: 5,
+          },
+          {
+            phase: "validate",
+            status: "complete",
+            summary: "Validation passed; ready for review.",
+            startedAt: 5,
+            updatedAt: 6,
+            completedAt: 6,
+          },
+        ],
+        searchTerms: ["bridge", "renderer"],
+        candidateFiles: ["packages/renderer/src/components/base/BridgeRoomDetail.tsx"],
+        selectedFiles: ["packages/renderer/src/components/base/BridgeRoomDetail.tsx"],
+        summary: "Validation passed; ready for review.",
+        planSummary: "Plan ready.",
+        changedFiles: ["packages/renderer/src/components/base/BridgeRoomDetail.tsx"],
+        patchAttempts: [],
+        validationResults: [],
+        fixIterationCount: 0,
+        repeatFailureCount: 0,
+        lastValidationFingerprint: null,
+        reviewSummary: null,
+        completedAt: null,
+        stalledReason: null,
+        stalledAt: null,
+        createdAt: 1,
+        updatedAt: 6,
+      }),
+    );
+    const runtimeSession = createRuntimeSessionContract({
+      runtimeSessionId: "station:station-xi-crash-window",
+      kind: "station",
+      scope: { stationId: "station-xi-crash-window" },
+      workingDirectory: "C:\\GitHub\\Spira",
+      hostManifestHash: "manifest",
+      providerProjectionHash: "projection",
+      providerId: "copilot",
+      providerCapabilities: getDefaultProviderCapabilities("copilot"),
+      providerSessionId: "work-session",
+      model: "gpt-5.4",
+      boundAt: 100,
+    });
+    memory.db.upsertRuntimeSession({
+      runtimeSessionId: "station:station-xi-crash-window",
+      stationId: "station-xi-crash-window",
+      kind: "station",
+      contract: {
+        ...runtimeSession,
+        workflowState: {
+          ...runtimeSession.workflowState,
+          phase: "review",
+          status: "active",
+          summary: "Running review: Review the current diff",
+          updatedAt: 11,
+          phaseHistory: [
+            {
+              phase: "review",
+              status: "active",
+              summary: "Running review: Review the current diff",
+              providerId: "copilot",
+              model: "gpt-5.4",
+              startedAt: 11,
+              updatedAt: 11,
+              completedAt: null,
+              blockedBy: null,
+            },
+          ],
+          blockedBy: null,
+          review: {
+            status: "running",
+            attempt: 1,
+            runId: "review-run-1",
+            origin: "managed-subagent",
+            summary: "Running review: Review the current diff",
+            failureReason: null,
+            lastUpdatedAt: 11,
+          },
+        },
+      },
+    });
+    memory.db.upsertRuntimeSubagentRun({
+      runId: "review-run-1",
+      stationId: "station-xi-crash-window",
+      snapshot: {
+        agent_id: "review-run-1",
+        runId: "review-run-1",
+        roomId: "agent:review-run-1",
+        domain: "code-review",
+        task: "Review the current diff",
+        status: "completed",
+        allowWrites: false,
+        activeToolCalls: [],
+        toolCalls: [],
+        startedAt: 11,
+        updatedAt: 12,
+        summary: "Review completed after restart.",
+      },
+      createdAt: 11,
+    });
+
+    const manager = createManager([], {
+      memoryDb: memory.db,
+      stationId: "station-xi-crash-window",
+    });
+
+    expect(manager.getWorkSessionSummary()).toMatchObject({
+      mode: "work-session",
+      phase: "validate",
+      summary: "Review completed after restart.",
+    });
+    expect(memory.runtimeSessions.get("station:station-xi-crash-window")).toMatchObject({
+      contract: {
+        workflowState: {
+          phase: "complete",
+          status: "complete",
+          summary: "Review completed after restart.",
+          review: {
+            status: "completed",
+            summary: "Review completed after restart.",
+          },
+        },
+      },
+    });
+    expect(JSON.parse(String(memory.sessionState.get("station:station-xi-crash-window:work-session")))).toMatchObject({
+      currentPhase: "validate",
+      reviewSummary: "Review completed after restart.",
+      completedAt: 12,
+    });
+  });
+
+  it("clears closure markers when reopened work re-enters implementation", () => {
+    const manager = createManager([]);
+    const reopened = (
+      manager as unknown as {
+        startWorkSessionImplementation(
+          snapshot: WorkSessionSnapshot,
+          toolName: string,
+          args: Record<string, unknown>,
+          occurredAt: number,
+        ): WorkSessionSnapshot;
+      }
+    ).startWorkSessionImplementation(
+      {
+        sessionId: "work-session",
+        stationId: "station-xi-reopen",
+        taskText: "Implement the bridge UI badge in the renderer file",
+        currentPhase: "validate",
+        classification: {
+          intent: "edit",
+          explicitWorkIntent: true,
+          requiresRepoContext: true,
+          confidence: "heuristic",
+        },
+        phaseHistory: [
+          {
+            phase: "classify",
+            status: "complete",
+            summary: "Coding task classified.",
+            startedAt: 1,
+            updatedAt: 1,
+            completedAt: 1,
+          },
+          {
+            phase: "discover",
+            status: "complete",
+            summary: "Repository context discovered.",
+            startedAt: 1,
+            updatedAt: 2,
+            completedAt: 2,
+          },
+          {
+            phase: "summarise",
+            status: "complete",
+            summary: "Repository findings summarised.",
+            startedAt: 2,
+            updatedAt: 3,
+            completedAt: 3,
+          },
+          {
+            phase: "plan",
+            status: "complete",
+            summary: "Plan ready.",
+            startedAt: 3,
+            updatedAt: 4,
+            completedAt: 4,
+          },
+          {
+            phase: "implement",
+            status: "complete",
+            summary: "Patch applied.",
+            startedAt: 4,
+            updatedAt: 5,
+            completedAt: 5,
+          },
+          {
+            phase: "validate",
+            status: "complete",
+            summary: "Validation passed; ready for review.",
+            startedAt: 5,
+            updatedAt: 6,
+            completedAt: 6,
+          },
+        ],
+        searchTerms: ["bridge", "renderer"],
+        candidateFiles: ["packages/renderer/src/components/base/BridgeRoomDetail.tsx"],
+        selectedFiles: ["packages/renderer/src/components/base/BridgeRoomDetail.tsx"],
+        summary: "Validation passed; ready for review.",
+        planSummary: "Plan ready.",
+        changedFiles: ["packages/renderer/src/components/base/BridgeRoomDetail.tsx"],
+        patchAttempts: [],
+        validationResults: [],
+        fixIterationCount: 0,
+        repeatFailureCount: 0,
+        lastValidationFingerprint: null,
+        readyForReview: true,
+        reviewSummary: "Review completed.",
+        completedAt: 10,
+        stalledReason: null,
+        stalledAt: null,
+        createdAt: 1,
+        updatedAt: 10,
+      },
+      "apply_patch",
+      {
+        patch:
+          "*** Begin Patch\n*** Update File: packages/renderer/src/components/base/BridgeRoomDetail.tsx\n@@\n- old\n+ new\n*** End Patch\n",
+      },
+      11,
+    );
+
+    expect(reopened).toMatchObject({
+      currentPhase: "implement",
+      readyForReview: false,
+      reviewSummary: null,
+      completedAt: null,
+    });
+  });
+
+  it("clears stale review workflow state when explicitly reopening a sealed work session", () => {
+    const memory = createRuntimeMemoryDb();
+    memory.sessionState.set(
+      "station:station-rho:work-session",
+      JSON.stringify({
+        sessionId: "work-session",
+        stationId: "station-rho",
+        taskText: "Implement the bridge UI badge in the renderer file",
+        currentPhase: "validate",
+        classification: {
+          intent: "edit",
+          explicitWorkIntent: true,
+          requiresRepoContext: true,
+          confidence: "heuristic",
+        },
+        phaseHistory: [
+          {
+            phase: "classify",
+            status: "complete",
+            summary: "Coding task classified.",
+            startedAt: 1,
+            updatedAt: 1,
+            completedAt: 1,
+          },
+          {
+            phase: "discover",
+            status: "complete",
+            summary: "Repository context discovered.",
+            startedAt: 1,
+            updatedAt: 2,
+            completedAt: 2,
+          },
+          {
+            phase: "summarise",
+            status: "complete",
+            summary: "Repository findings summarised.",
+            startedAt: 2,
+            updatedAt: 3,
+            completedAt: 3,
+          },
+          {
+            phase: "plan",
+            status: "complete",
+            summary: "Plan ready.",
+            startedAt: 3,
+            updatedAt: 4,
+            completedAt: 4,
+          },
+          {
+            phase: "implement",
+            status: "complete",
+            summary: "Patch applied.",
+            startedAt: 4,
+            updatedAt: 5,
+            completedAt: 5,
+          },
+          {
+            phase: "validate",
+            status: "complete",
+            summary: "Validation passed; ready for review.",
+            startedAt: 5,
+            updatedAt: 6,
+            completedAt: 6,
+          },
+        ],
+        searchTerms: ["bridge", "renderer"],
+        candidateFiles: ["packages/renderer/src/components/base/BridgeRoomDetail.tsx"],
+        selectedFiles: ["packages/renderer/src/components/base/BridgeRoomDetail.tsx"],
+        summary: "Review completed cleanly.",
+        planSummary: "Plan ready.",
+        changedFiles: ["packages/renderer/src/components/base/BridgeRoomDetail.tsx"],
+        patchAttempts: [],
+        validationResults: [],
+        fixIterationCount: 0,
+        repeatFailureCount: 0,
+        lastValidationFingerprint: null,
+        readyForReview: true,
+        reviewSummary: "Review completed cleanly.",
+        completedAt: 12,
+        stalledReason: null,
+        stalledAt: null,
+        createdAt: 1,
+        updatedAt: 12,
+      }),
+    );
+    const runtimeSession = createRuntimeSessionContract({
+      runtimeSessionId: "station:station-rho",
+      kind: "station",
+      scope: { stationId: "station-rho" },
+      workingDirectory: "C:\\GitHub\\Spira",
+      hostManifestHash: "manifest",
+      providerProjectionHash: "projection",
+      providerId: "copilot",
+      providerCapabilities: getDefaultProviderCapabilities("copilot"),
+      providerSessionId: "work-session",
+      model: "gpt-5.4",
+      boundAt: 100,
+    });
+    memory.db.upsertRuntimeSession({
+      runtimeSessionId: "station:station-rho",
+      stationId: "station-rho",
+      kind: "station",
+      contract: {
+        ...runtimeSession,
+        workflowState: {
+          ...runtimeSession.workflowState,
+          phase: "complete",
+          status: "complete",
+          summary: "Review completed cleanly.",
+          updatedAt: 12,
+          phaseHistory: [
+            {
+              phase: "review",
+              status: "complete",
+              summary: "Review completed cleanly.",
+              providerId: "copilot",
+              model: "gpt-5.4",
+              startedAt: 11,
+              updatedAt: 12,
+              completedAt: 12,
+              blockedBy: null,
+            },
+            {
+              phase: "complete",
+              status: "complete",
+              summary: "Review completed cleanly.",
+              providerId: "copilot",
+              model: "gpt-5.4",
+              startedAt: 12,
+              updatedAt: 12,
+              completedAt: 12,
+              blockedBy: null,
+            },
+          ],
+          blockedBy: null,
+          review: {
+            status: "completed",
+            attempt: 1,
+            runId: "review-run-1",
+            origin: "managed-subagent",
+            summary: "Review completed cleanly.",
+            failureReason: null,
+            lastUpdatedAt: 12,
+          },
+        },
+      },
+    });
+
+    const manager = createManager([], {
+      memoryDb: memory.db,
+      stationId: "station-rho",
+    });
+    const internals = manager as unknown as SessionManagerInternals & {
+      activateWorkSession(
+        taskText: string,
+        classification: WorkSessionClassification,
+        options?: { startsNewSession?: boolean },
+      ): void;
+      syncRuntimeState(): void;
+    };
+    internals.activateWorkSession("Refine the bridge badge spacing.", {
+      intent: "edit",
+      explicitWorkIntent: true,
+      requiresRepoContext: true,
+      confidence: "heuristic",
+    });
+    internals.syncRuntimeState();
+
+    expect(internals.workflowState).toMatchObject({
+      phase: "validate",
+      review: {
+        status: "idle",
+        runId: null,
+        summary: null,
+      },
+    });
+    expect(internals.workflowState.phaseHistory).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ phase: "review" })]),
+    );
+    expect(internals.workflowState.phaseHistory).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ phase: "complete" })]),
+    );
+
+    expect(memory.runtimeSessions.get("station:station-rho")).toMatchObject({
+      contract: {
+        workflowState: {
+          phase: "validate",
+          review: {
+            status: "idle",
+            runId: null,
+            summary: null,
+          },
+        },
+      },
+    });
+    expect(JSON.parse(String(memory.sessionState.get("station:station-rho:work-session")))).toMatchObject({
+      completedAt: null,
+      reviewSummary: null,
+      readyForReview: false,
+    });
+  });
+
+  it("restores reopened work-session state over a stale persisted complete phase after restart", () => {
+    const memory = createRuntimeMemoryDb();
+    memory.sessionState.set(
+      "station:station-rho-restart:work-session",
+      JSON.stringify({
+        sessionId: "work-session",
+        stationId: "station-rho-restart",
+        taskText: "Refine the bridge badge spacing.",
+        currentPhase: "validate",
+        classification: {
+          intent: "edit",
+          explicitWorkIntent: true,
+          requiresRepoContext: true,
+          confidence: "heuristic",
+        },
+        phaseHistory: [
+          {
+            phase: "classify",
+            status: "complete",
+            summary: "Coding task classified.",
+            startedAt: 1,
+            updatedAt: 1,
+            completedAt: 1,
+          },
+          {
+            phase: "discover",
+            status: "complete",
+            summary: "Repository context discovered.",
+            startedAt: 1,
+            updatedAt: 2,
+            completedAt: 2,
+          },
+          {
+            phase: "summarise",
+            status: "complete",
+            summary: "Repository findings summarised.",
+            startedAt: 2,
+            updatedAt: 3,
+            completedAt: 3,
+          },
+          {
+            phase: "plan",
+            status: "complete",
+            summary: "Plan ready.",
+            startedAt: 3,
+            updatedAt: 4,
+            completedAt: 4,
+          },
+          {
+            phase: "implement",
+            status: "complete",
+            summary: "Patch applied.",
+            startedAt: 4,
+            updatedAt: 5,
+            completedAt: 5,
+          },
+          {
+            phase: "validate",
+            status: "active",
+            summary: "Validation passed; ready for review.",
+            startedAt: 5,
+            updatedAt: 13,
+            completedAt: 6,
+          },
+        ],
+        searchTerms: ["bridge", "renderer"],
+        candidateFiles: ["packages/renderer/src/components/base/BridgeRoomDetail.tsx"],
+        selectedFiles: ["packages/renderer/src/components/base/BridgeRoomDetail.tsx"],
+        summary: "Validation passed; ready for review.",
+        planSummary: "Plan ready.",
+        changedFiles: ["packages/renderer/src/components/base/BridgeRoomDetail.tsx"],
+        patchAttempts: [],
+        validationResults: [],
+        fixIterationCount: 0,
+        repeatFailureCount: 0,
+        lastValidationFingerprint: null,
+        readyForReview: false,
+        reviewSummary: null,
+        completedAt: null,
+        stalledReason: null,
+        stalledAt: null,
+        createdAt: 1,
+        updatedAt: 13,
+      }),
+    );
+    const runtimeSession = createRuntimeSessionContract({
+      runtimeSessionId: "station:station-rho-restart",
+      kind: "station",
+      scope: { stationId: "station-rho-restart" },
+      workingDirectory: "C:\\GitHub\\Spira",
+      hostManifestHash: "manifest",
+      providerProjectionHash: "projection",
+      providerId: "copilot",
+      providerCapabilities: getDefaultProviderCapabilities("copilot"),
+      providerSessionId: "work-session",
+      model: "gpt-5.4",
+      boundAt: 100,
+    });
+    memory.db.upsertRuntimeSession({
+      runtimeSessionId: "station:station-rho-restart",
+      stationId: "station-rho-restart",
+      kind: "station",
+      contract: {
+        ...runtimeSession,
+        workflowState: {
+          ...runtimeSession.workflowState,
+          phase: "complete",
+          status: "complete",
+          summary: "Review completed cleanly.",
+          updatedAt: 12,
+          phaseHistory: [
+            {
+              phase: "review",
+              status: "complete",
+              summary: "Review completed cleanly.",
+              providerId: "copilot",
+              model: "gpt-5.4",
+              startedAt: 11,
+              updatedAt: 12,
+              completedAt: 12,
+              blockedBy: null,
+            },
+            {
+              phase: "complete",
+              status: "complete",
+              summary: "Review completed cleanly.",
+              providerId: "copilot",
+              model: "gpt-5.4",
+              startedAt: 12,
+              updatedAt: 12,
+              completedAt: 12,
+              blockedBy: null,
+            },
+          ],
+          blockedBy: null,
+          review: {
+            status: "idle",
+            attempt: 1,
+            runId: null,
+            origin: "managed-subagent",
+            summary: null,
+            failureReason: null,
+            lastUpdatedAt: 12,
+          },
+        },
+      },
+    });
+
+    const manager = createManager([], {
+      memoryDb: memory.db,
+      stationId: "station-rho-restart",
+    });
+
+    expect(manager.getWorkSessionSummary()).toMatchObject({
+      mode: "work-session",
+      phase: "validate",
+      summary: "Validation passed; ready for review.",
+    });
+    expect(memory.runtimeSessions.get("station:station-rho-restart")).toMatchObject({
+      contract: {
+        workflowState: {
+          phase: "validate",
+          review: {
+            status: "idle",
+            runId: null,
+          },
+        },
+      },
+    });
+  });
+
+  it("restores stalled work-session execution state as a stalled workflow", () => {
+    const memory = createRuntimeMemoryDb();
+    memory.sessionState.set(
+      "station:station-omicron:work-session",
+      JSON.stringify({
+        sessionId: "work-session",
+        stationId: "station-omicron",
+        taskText: "Implement the bridge UI badge in the renderer file",
+        currentPhase: "validate",
+        classification: {
+          intent: "edit",
+          explicitWorkIntent: true,
+          requiresRepoContext: true,
+          confidence: "heuristic",
+        },
+        phaseHistory: [
+          {
+            phase: "classify",
+            status: "complete",
+            summary: "WorkSession activated from explicit coding intent.",
+            startedAt: 1,
+            updatedAt: 1,
+            completedAt: 1,
+          },
+          {
+            phase: "discover",
+            status: "complete",
+            summary: "Repository context discovered.",
+            startedAt: 1,
+            updatedAt: 2,
+            completedAt: 2,
+          },
+          {
+            phase: "summarise",
+            status: "complete",
+            summary: "Repository findings summarised.",
+            startedAt: 1,
+            updatedAt: 3,
+            completedAt: 3,
+          },
+          {
+            phase: "plan",
+            status: "complete",
+            summary: "Plan ready.",
+            startedAt: 1,
+            updatedAt: 4,
+            completedAt: 4,
+          },
+          {
+            phase: "implement",
+            status: "complete",
+            summary: "Patch applied.",
+            startedAt: 4,
+            updatedAt: 5,
+            completedAt: 5,
+          },
+          {
+            phase: "validate",
+            status: "active",
+            summary: "Validation failed repeatedly.",
+            startedAt: 5,
+            updatedAt: 6,
+            completedAt: null,
+          },
+        ],
+        searchTerms: ["bridge", "renderer"],
+        candidateFiles: [],
+        selectedFiles: [],
+        summary: "Validation failed repeatedly.",
+        planSummary: "Plan ready.",
+        changedFiles: ["packages/renderer/src/components/base/BridgeRoomDetail.tsx"],
+        patchAttempts: [],
+        validationResults: [],
+        fixIterationCount: 3,
+        repeatFailureCount: 2,
+        lastValidationFingerprint: "TS2322",
+        readyForReview: false,
+        stalledReason: "Validation exhausted the bounded fix loop.",
+        stalledAt: 6,
+        createdAt: 1,
+        updatedAt: 6,
+      }),
+    );
+
+    createManager([], {
+      memoryDb: memory.db,
+      stationId: "station-omicron",
+    });
+
+    expect(memory.runtimeSessions.get("station:station-omicron")).toMatchObject({
+      contract: {
+        workflowState: {
+          phase: "validate",
+          status: "stalled",
+          summary: "Validation failed repeatedly.",
+          blockedBy: {
+            kind: "error",
+            reason: "Validation exhausted the bounded fix loop.",
+            pendingRequestIds: [],
+            blockedAt: 6,
+          },
+        },
+      },
+    });
+  });
+
+  it("preserves validate-complete status when clearing a stale approval block during restore", () => {
+    const runtimeSession = createRuntimeSessionContract({
+      runtimeSessionId: "station:station-pi",
+      kind: "station",
+      scope: { stationId: "station-pi" },
+      workingDirectory: "C:\\GitHub\\Spira",
+      hostManifestHash: "host-hash",
+      providerProjectionHash: "projection-hash",
+      providerId: "copilot",
+      providerCapabilities: getDefaultProviderCapabilities("copilot"),
+      workflowState: {
+        phase: "validate",
+        status: "blocked",
+        summary: "Validation passed; ready for review.",
+        updatedAt: 10,
+        phaseHistory: [
+          {
+            phase: "validate",
+            status: "blocked",
+            summary: "Validation passed; ready for review.",
+            providerId: "copilot",
+            model: "work-session",
+            startedAt: 5,
+            updatedAt: 10,
+            completedAt: 10,
+            blockedBy: {
+              kind: "approval",
+              reason: "Awaiting approval.",
+              pendingRequestIds: ["perm-stale"],
+              blockedAt: 10,
+            },
+          },
+        ],
+        handoffs: [],
+        blockedBy: {
+          kind: "approval",
+          reason: "Awaiting approval.",
+          pendingRequestIds: ["perm-stale"],
+          blockedAt: 10,
+        },
+        review: {
+          status: "idle",
+          attempt: 0,
+          runId: null,
+          summary: null,
+          failureReason: null,
+          lastUpdatedAt: null,
+        },
+      },
+    });
+    const memory = createRuntimeMemoryDb({
+      stationId: "station-pi",
+      state: "idle",
+      promptInFlight: false,
+      activeSessionId: null,
+      hostManifestHash: "host-hash",
+      providerProjectionHash: "projection-hash",
+      activeToolCalls: [],
+      abortRequestedAt: null,
+      recoveryMessage: null,
+      createdAt: 1,
+      updatedAt: 1,
+    });
+    memory.runtimeSessions.set("station:station-pi", {
+      runtimeSessionId: "station:station-pi",
+      stationId: "station-pi",
+      kind: "station",
+      contract: runtimeSession,
+    });
+    memory.sessionState.set(
+      "station:station-pi:work-session",
+      JSON.stringify({
+        sessionId: "work-session",
+        stationId: "station-pi",
+        taskText: "Implement the bridge UI badge in the renderer file",
+        currentPhase: "validate",
+        classification: {
+          intent: "edit",
+          explicitWorkIntent: true,
+          requiresRepoContext: true,
+          confidence: "heuristic",
+        },
+        phaseHistory: [
+          {
+            phase: "classify",
+            status: "complete",
+            summary: "WorkSession activated from explicit coding intent.",
+            startedAt: 1,
+            updatedAt: 1,
+            completedAt: 1,
+          },
+          {
+            phase: "discover",
+            status: "complete",
+            summary: "Repository context discovered.",
+            startedAt: 1,
+            updatedAt: 2,
+            completedAt: 2,
+          },
+          {
+            phase: "summarise",
+            status: "complete",
+            summary: "Repository findings summarised.",
+            startedAt: 1,
+            updatedAt: 3,
+            completedAt: 3,
+          },
+          {
+            phase: "plan",
+            status: "complete",
+            summary: "Plan ready.",
+            startedAt: 1,
+            updatedAt: 4,
+            completedAt: 4,
+          },
+          {
+            phase: "implement",
+            status: "complete",
+            summary: "Patch applied.",
+            startedAt: 4,
+            updatedAt: 5,
+            completedAt: 5,
+          },
+          {
+            phase: "validate",
+            status: "complete",
+            summary: "Validation passed; ready for review.",
+            startedAt: 5,
+            updatedAt: 10,
+            completedAt: 10,
+          },
+        ],
+        searchTerms: ["bridge", "renderer"],
+        candidateFiles: [],
+        selectedFiles: [],
+        summary: "Validation passed; ready for review.",
+        planSummary: "Plan ready.",
+        changedFiles: ["packages/renderer/src/components/base/BridgeRoomDetail.tsx"],
+        patchAttempts: [],
+        validationResults: [],
+        fixIterationCount: 0,
+        repeatFailureCount: 0,
+        lastValidationFingerprint: null,
+        readyForReview: true,
+        stalledReason: null,
+        stalledAt: null,
+        createdAt: 1,
+        updatedAt: 10,
+      }),
+    );
+
+    createManager([], {
+      memoryDb: memory.db,
+      stationId: "station-pi",
+    });
+
+    expect(memory.runtimeSessions.get("station:station-pi")).toMatchObject({
+      contract: {
+        workflowState: {
+          phase: "validate",
+          status: "complete",
+          blockedBy: null,
+          summary: "Validation passed; ready for review.",
+        },
+      },
+    });
+  });
+
+  it("clears stale approval blocking from an active restored work-session phase", () => {
+    const runtimeSession = createRuntimeSessionContract({
+      runtimeSessionId: "station:station-tau",
+      kind: "station",
+      scope: { stationId: "station-tau" },
+      workingDirectory: "C:\\GitHub\\Spira",
+      hostManifestHash: "host-hash",
+      providerProjectionHash: "projection-hash",
+      providerId: "copilot",
+      providerCapabilities: getDefaultProviderCapabilities("copilot"),
+      workflowState: {
+        phase: "implement",
+        status: "blocked",
+        summary: "Applying the patch.",
+        updatedAt: 10,
+        phaseHistory: [
+          {
+            phase: "implement",
+            status: "blocked",
+            summary: "Applying the patch.",
+            providerId: "copilot",
+            model: "work-session",
+            startedAt: 5,
+            updatedAt: 10,
+            completedAt: null,
+            blockedBy: {
+              kind: "approval",
+              reason: "Awaiting approval.",
+              pendingRequestIds: ["perm-stale"],
+              blockedAt: 10,
+            },
+          },
+        ],
+        handoffs: [],
+        blockedBy: {
+          kind: "approval",
+          reason: "Awaiting approval.",
+          pendingRequestIds: ["perm-stale"],
+          blockedAt: 10,
+        },
+        review: {
+          status: "idle",
+          attempt: 0,
+          runId: null,
+          summary: null,
+          failureReason: null,
+          lastUpdatedAt: null,
+        },
+      },
+    });
+    const memory = createRuntimeMemoryDb({
+      stationId: "station-tau",
+      state: "idle",
+      promptInFlight: false,
+      activeSessionId: null,
+      hostManifestHash: "host-hash",
+      providerProjectionHash: "projection-hash",
+      activeToolCalls: [],
+      abortRequestedAt: null,
+      recoveryMessage: null,
+      createdAt: 1,
+      updatedAt: 1,
+    });
+    memory.runtimeSessions.set("station:station-tau", {
+      runtimeSessionId: "station:station-tau",
+      stationId: "station-tau",
+      kind: "station",
+      contract: runtimeSession,
+    });
+    memory.sessionState.set(
+      "station:station-tau:work-session",
+      JSON.stringify({
+        sessionId: "work-session",
+        stationId: "station-tau",
+        taskText: "Implement the bridge UI badge in the renderer file",
+        currentPhase: "implement",
+        classification: {
+          intent: "edit",
+          explicitWorkIntent: true,
+          requiresRepoContext: true,
+          confidence: "heuristic",
+        },
+        phaseHistory: [
+          {
+            phase: "classify",
+            status: "complete",
+            summary: "WorkSession activated from explicit coding intent.",
+            startedAt: 1,
+            updatedAt: 1,
+            completedAt: 1,
+          },
+          {
+            phase: "discover",
+            status: "complete",
+            summary: "Repository context discovered.",
+            startedAt: 1,
+            updatedAt: 2,
+            completedAt: 2,
+          },
+          {
+            phase: "summarise",
+            status: "complete",
+            summary: "Repository findings summarised.",
+            startedAt: 1,
+            updatedAt: 3,
+            completedAt: 3,
+          },
+          {
+            phase: "plan",
+            status: "complete",
+            summary: "Plan ready.",
+            startedAt: 1,
+            updatedAt: 4,
+            completedAt: 4,
+          },
+          {
+            phase: "implement",
+            status: "active",
+            summary: "Applying the patch.",
+            startedAt: 5,
+            updatedAt: 10,
+            completedAt: null,
+          },
+          {
+            phase: "validate",
+            status: "pending",
+            summary: null,
+            startedAt: 10,
+            updatedAt: 10,
+          },
+        ],
+        searchTerms: ["bridge", "renderer"],
+        candidateFiles: [],
+        selectedFiles: [],
+        summary: "Applying the patch.",
+        planSummary: "Plan ready.",
+        changedFiles: [],
+        patchAttempts: [],
+        validationResults: [],
+        fixIterationCount: 0,
+        repeatFailureCount: 0,
+        lastValidationFingerprint: null,
+        readyForReview: false,
+        stalledReason: null,
+        stalledAt: null,
+        createdAt: 1,
+        updatedAt: 10,
+      }),
+    );
+
+    createManager([], {
+      memoryDb: memory.db,
+      stationId: "station-tau",
+    });
+
+    expect(memory.runtimeSessions.get("station:station-tau")).toMatchObject({
+      contract: {
+        workflowState: {
+          phase: "implement",
+          status: "active",
+          blockedBy: null,
+          summary: "Applying the patch.",
+          phaseHistory: expect.arrayContaining([
+            expect.objectContaining({
+              phase: "implement",
+              status: "active",
+              blockedBy: null,
+            }),
+          ]),
+        },
+      },
+    });
+  });
+
+  it("does not rewind a later runtime phase when restoring a persisted work session", () => {
+    const runtimeSession = createRuntimeSessionContract({
+      runtimeSessionId: "station:station-nu",
+      kind: "station",
+      scope: { stationId: "station-nu" },
+      workingDirectory: "C:\\GitHub\\Spira",
+      hostManifestHash: "host-hash",
+      providerProjectionHash: "projection-hash",
+      providerId: "copilot",
+      providerCapabilities: getDefaultProviderCapabilities("copilot"),
+      workflowState: {
+        phase: "implement",
+        status: "active",
+        summary: "Implementing the change.",
+        updatedAt: 10,
+        phaseHistory: [],
+        handoffs: [],
+        blockedBy: null,
+        review: {
+          status: "idle",
+          attempt: 0,
+          runId: null,
+          summary: null,
+          failureReason: null,
+          lastUpdatedAt: null,
+        },
+      },
+    });
+    const memory = createRuntimeMemoryDb({
+      stationId: "station-nu",
+      state: "idle",
+      promptInFlight: false,
+      activeSessionId: null,
+      hostManifestHash: "host-hash",
+      providerProjectionHash: "projection-hash",
+      activeToolCalls: [],
+      abortRequestedAt: null,
+      recoveryMessage: null,
+      createdAt: 1,
+      updatedAt: 1,
+    });
+    memory.runtimeSessions.set("station:station-nu", {
+      runtimeSessionId: "station:station-nu",
+      stationId: "station-nu",
+      kind: "station",
+      contract: runtimeSession,
+    });
+    memory.sessionState.set(
+      "station:station-nu:work-session",
+      JSON.stringify({
+        sessionId: "work-session",
+        stationId: "station-nu",
+        taskText: "Implement the bridge UI badge in the renderer file",
+        currentPhase: "plan",
+        classification: {
+          intent: "edit",
+          explicitWorkIntent: true,
+          requiresRepoContext: true,
+          confidence: "heuristic",
+        },
+        phaseHistory: [],
+        searchTerms: ["bridge"],
+        candidateFiles: [],
+        summary: "Plan ready.",
+        planSummary: "Plan ready.",
+        createdAt: 1,
+        updatedAt: 4,
+      }),
+    );
+
+    createManager([], {
+      memoryDb: memory.db,
+      stationId: "station-nu",
+    });
+
+    expect(memory.runtimeSessions.get("station:station-nu")).toMatchObject({
+      contract: {
+        workflowState: {
+          phase: "implement",
+          status: "active",
+          summary: "Implementing the change.",
+        },
+      },
+    });
   });
 
   it("emits provider usage when a turn becomes idle", () => {
@@ -2057,6 +7449,7 @@ describe("StationSessionManager", () => {
         summary: "Recovered the last Azure-hosted station turn.",
         artifactRefs: runtimeSession.artifactRefs,
         turnState: runtimeSession.turnState,
+        workflowState: runtimeSession.workflowState,
         permissionState: runtimeSession.permissionState,
         cancellationState: runtimeSession.cancellationState,
         usageSummary: runtimeSession.usageSummary,

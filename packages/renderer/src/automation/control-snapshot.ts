@@ -2,11 +2,11 @@ import {
   PROTOCOL_VERSION,
   SPIRA_UI_CONTROL_BRIDGE_VERSION,
   SPIRA_UI_ROOT_VIEWS,
-  getMissionRunIdFromView,
-  type SpiraUiContext,
   type SpiraUiChatTranscript,
+  type SpiraUiContext,
   type SpiraUiMessageSummary,
   type SpiraUiSnapshot,
+  getMissionRunIdFromView,
 } from "@spira/shared";
 import { buildAssistantDockSummary } from "../shinra-status.js";
 import { getAwaitingAssistantQuestion, getChatSession, useChatStore } from "../stores/chat-store.js";
@@ -53,6 +53,7 @@ export const buildSpiraUiChatTranscript = (limit = 100): SpiraUiChatTranscript =
 
 export const buildSpiraUiSnapshot = (): SpiraUiSnapshot => {
   const activeStationId = useStationStore.getState().activeStationId;
+  const activeStation = getStation(useStationStore.getState(), activeStationId);
   const chat = getChatSession(useChatStore.getState(), activeStationId);
   const awaitingQuestion = getAwaitingAssistantQuestion(chat.messages);
   const lastUserMessage = [...chat.messages].reverse().find((message) => message.role === "user");
@@ -63,13 +64,13 @@ export const buildSpiraUiSnapshot = (): SpiraUiSnapshot => {
   const navigation = useNavigationStore.getState();
   const activeView = navigation.activeView;
   const activeMissionRunId = getMissionRunIdFromView(activeView);
-  const assistantState = getStation(useStationStore.getState(), activeStationId).state;
+  const assistantState = activeStation.state;
 
   return {
     bridgeVersion: SPIRA_UI_CONTROL_BRIDGE_VERSION,
     protocolVersion: PROTOCOL_VERSION,
     activeView,
-    activeMissionRoom: activeMissionRunId ? navigation.missionRooms[activeMissionRunId] ?? "details" : undefined,
+    activeMissionRoom: activeMissionRunId ? (navigation.missionRooms[activeMissionRunId] ?? "details") : undefined,
     rootViews: [...SPIRA_UI_ROOT_VIEWS],
     window: {
       title: document.title || "Spira",
@@ -78,6 +79,7 @@ export const buildSpiraUiSnapshot = (): SpiraUiSnapshot => {
     },
     assistantState,
     connectionStatus: useConnectionStore.getState().status,
+    workSession: activeStation.workSession ?? null,
     settings: {
       voiceEnabled: settings.voiceEnabled,
       wakeWordEnabled: settings.wakeWordEnabled,
@@ -139,6 +141,7 @@ export const buildSpiraUiContext = (): SpiraUiContext => {
     activeMissionRoom: snapshot.activeMissionRoom,
     assistantState: snapshot.assistantState,
     connectionStatus: snapshot.connectionStatus,
+    workSession: snapshot.workSession,
     chat: {
       isStreaming: snapshot.chat.isStreaming,
       isAborting: snapshot.chat.isAborting,

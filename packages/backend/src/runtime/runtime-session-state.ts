@@ -1,5 +1,9 @@
 import { type RuntimeSessionContract, createRuntimeSessionContract } from "./runtime-contract.js";
-import { recordRuntimeSessionCreated, recordRuntimeTurnStateChanged } from "./runtime-lifecycle.js";
+import {
+  recordRuntimeSessionCreated,
+  recordRuntimeTurnStateChanged,
+  recordRuntimeWorkflowUpdated,
+} from "./runtime-lifecycle.js";
 import type { RuntimeStore } from "./runtime-store.js";
 
 const resolveBindingTiming = (
@@ -29,6 +33,11 @@ const didTurnStateChange = (
   previousTurnState.activeToolCallIds.length !== nextTurnState.activeToolCallIds.length ||
   previousTurnState.activeToolCallIds.some((callId, index) => callId !== nextTurnState.activeToolCallIds[index]);
 
+const didWorkflowStateChange = (
+  previousWorkflowState: RuntimeSessionContract["workflowState"] | null | undefined,
+  nextWorkflowState: RuntimeSessionContract["workflowState"],
+): boolean => JSON.stringify(previousWorkflowState ?? null) !== JSON.stringify(nextWorkflowState);
+
 export const persistSharedRuntimeSessionState = (
   runtimeStore: RuntimeStore | null | undefined,
   input: {
@@ -49,6 +58,7 @@ export const persistSharedRuntimeSessionState = (
     artifactRefs?: RuntimeSessionContract["artifactRefs"];
     checkpointRef?: RuntimeSessionContract["checkpointRef"];
     turnState: RuntimeSessionContract["turnState"];
+    workflowState?: RuntimeSessionContract["workflowState"];
     permissionState: RuntimeSessionContract["permissionState"];
     cancellationState: Omit<RuntimeSessionContract["cancellationState"], "mode">;
     usageSummary: RuntimeSessionContract["usageSummary"];
@@ -80,6 +90,7 @@ export const persistSharedRuntimeSessionState = (
     artifactRefs: input.artifactRefs ?? existing?.artifactRefs,
     checkpointRef: input.checkpointRef ?? existing?.checkpointRef ?? null,
     turnState: input.turnState,
+    workflowState: input.workflowState ?? existing?.workflowState,
     permissionState: input.permissionState,
     cancellationState: input.cancellationState,
     usageSummary: input.usageSummary,
@@ -108,6 +119,12 @@ export const persistSharedRuntimeSessionState = (
   if (persisted && didTurnStateChange(existing?.turnState, persisted.turnState)) {
     recordRuntimeTurnStateChanged(runtimeStore, input.runtimeSessionId, {
       turnState: persisted.turnState,
+      occurredAt: input.now,
+    });
+  }
+  if (persisted && didWorkflowStateChange(existing?.workflowState, persisted.workflowState)) {
+    recordRuntimeWorkflowUpdated(runtimeStore, input.runtimeSessionId, {
+      workflowState: persisted.workflowState,
       occurredAt: input.now,
     });
   }

@@ -26,6 +26,31 @@ export const RUNTIME_TURN_STATES = [
 ] as const;
 export type RuntimeTurnState = (typeof RUNTIME_TURN_STATES)[number];
 
+export const RUNTIME_WORKFLOW_PHASES = [
+  "intake",
+  "classify",
+  "discover",
+  "summarise",
+  "plan",
+  "implement",
+  "validate",
+  "review",
+  "complete",
+] as const;
+export type RuntimeWorkflowPhase = (typeof RUNTIME_WORKFLOW_PHASES)[number];
+
+export const RUNTIME_WORKFLOW_STATUSES = ["idle", "active", "blocked", "stalled", "complete"] as const;
+export type RuntimeWorkflowStatus = (typeof RUNTIME_WORKFLOW_STATUSES)[number];
+
+export const RUNTIME_WORKFLOW_BLOCK_KINDS = ["approval", "review", "user-input", "external", "error"] as const;
+export type RuntimeWorkflowBlockKind = (typeof RUNTIME_WORKFLOW_BLOCK_KINDS)[number];
+
+export const RUNTIME_WORKFLOW_HANDOFF_KINDS = ["model-escalation", "review-retry", "phase-resume"] as const;
+export type RuntimeWorkflowHandoffKind = (typeof RUNTIME_WORKFLOW_HANDOFF_KINDS)[number];
+
+export const RUNTIME_WORKFLOW_CONTINUATION_MODES = ["continue-current-phase", "pause-for-user", "blocked"] as const;
+export type RuntimeWorkflowContinuationMode = (typeof RUNTIME_WORKFLOW_CONTINUATION_MODES)[number];
+
 export const RUNTIME_ARTIFACT_KINDS = ["plan", "scratchpad", "context"] as const;
 export type RuntimeArtifactKind = (typeof RUNTIME_ARTIFACT_KINDS)[number];
 
@@ -101,6 +126,7 @@ export type RuntimeCheckpointPayload = RuntimeCheckpointRef & {
   summary: string;
   artifactRefs: RuntimeArtifactRef[];
   turnState: RuntimeTurnContract;
+  workflowState: RuntimeWorkflowState;
   permissionState: RuntimePermissionState;
   cancellationState: RuntimeCancellationState;
   usageSummary: RuntimeUsageSummary;
@@ -126,6 +152,68 @@ export type RuntimeUsageSummary = {
   totalTokens: number | null;
   lastObservedAt: number | null;
   source: "provider" | "estimated" | "unknown";
+};
+
+export type RuntimeWorkflowBlock = {
+  kind: RuntimeWorkflowBlockKind;
+  reason: string;
+  pendingRequestIds: string[];
+  blockedAt: number;
+};
+
+export type RuntimeWorkflowPhaseEntry = {
+  phase: RuntimeWorkflowPhase;
+  status: RuntimeWorkflowStatus;
+  summary?: string | null;
+  providerId?: ProviderId;
+  model?: string | null;
+  startedAt: number;
+  updatedAt: number;
+  completedAt?: number | null;
+  blockedBy?: RuntimeWorkflowBlock | null;
+};
+
+export type RuntimeWorkflowHandoff = {
+  handoffId: string;
+  kind: RuntimeWorkflowHandoffKind;
+  phase: RuntimeWorkflowPhase;
+  reason: string;
+  continuationMode: RuntimeWorkflowContinuationMode;
+  occurredAt: number;
+  fromProviderId?: ProviderId | null;
+  toProviderId?: ProviderId | null;
+  fromModel?: string | null;
+  toModel?: string | null;
+};
+
+export type RuntimeWorkflowReviewStatus =
+  | "idle"
+  | "running"
+  | "completed"
+  | "failed"
+  | "missing"
+  | "relaunching"
+  | "stalled";
+
+export type RuntimeWorkflowReviewState = {
+  status: RuntimeWorkflowReviewStatus;
+  attempt: number;
+  runId?: string | null;
+  origin?: "managed-subagent" | null;
+  summary?: string | null;
+  failureReason?: string | null;
+  lastUpdatedAt: number | null;
+};
+
+export type RuntimeWorkflowState = {
+  phase: RuntimeWorkflowPhase;
+  status: RuntimeWorkflowStatus;
+  summary: string | null;
+  updatedAt: number | null;
+  phaseHistory: RuntimeWorkflowPhaseEntry[];
+  handoffs: RuntimeWorkflowHandoff[];
+  blockedBy: RuntimeWorkflowBlock | null;
+  review: RuntimeWorkflowReviewState;
 };
 
 export type RuntimeRecoveryPolicy = {
@@ -283,6 +371,13 @@ export type RuntimeLedgerEvent =
       eventId: string;
       sessionId: string;
       occurredAt: number;
+      type: "workflow.updated";
+      payload: RuntimeWorkflowState;
+    }
+  | {
+      eventId: string;
+      sessionId: string;
+      occurredAt: number;
       type: "permission.state_changed";
       payload: RuntimePermissionState;
     }
@@ -331,6 +426,81 @@ export type RuntimeTurnContract = {
   lastAssistantMessageId?: string | null;
 };
 
+const cloneRuntimeWorkflowBlock = (
+  block: Partial<RuntimeWorkflowBlock> | null | undefined,
+): RuntimeWorkflowBlock | null => {
+  if (!block) {
+    return null;
+  }
+
+  return {
+    kind: RUNTIME_WORKFLOW_BLOCK_KINDS.includes(block.kind ?? "external") ? (block.kind ?? "external") : "external",
+    reason: block.reason ?? "",
+    pendingRequestIds: Array.isArray(block.pendingRequestIds) ? [...block.pendingRequestIds] : [],
+    blockedAt: block.blockedAt ?? 0,
+  };
+};
+
+export const createDefaultRuntimeWorkflowState = (): RuntimeWorkflowState => ({
+  phase: "intake",
+  status: "idle",
+  summary: null,
+  updatedAt: null,
+  phaseHistory: [],
+  handoffs: [],
+  blockedBy: null,
+  review: {
+    status: "idle",
+    attempt: 0,
+    runId: null,
+    summary: null,
+    failureReason: null,
+    lastUpdatedAt: null,
+  },
+});
+
+export const normalizeRuntimeWorkflowState = (
+  workflowState: Partial<RuntimeWorkflowState> | null | undefined,
+): RuntimeWorkflowState => {
+  const defaults = createDefaultRuntimeWorkflowState();
+  return {
+    ...defaults,
+    ...(workflowState ?? {}),
+    phaseHistory: (workflowState?.phaseHistory ?? []).map((entry) => ({
+      ...entry,
+      ...(entry.model !== undefined ? { model: entry.model } : {}),
+      ...(entry.summary !== undefined ? { summary: entry.summary } : {}),
+      ...(entry.completedAt !== undefined ? { completedAt: entry.completedAt } : {}),
+      ...(entry.providerId !== undefined ? { providerId: entry.providerId } : {}),
+      blockedBy: cloneRuntimeWorkflowBlock(entry.blockedBy),
+    })),
+    handoffs: (workflowState?.handoffs ?? []).map((handoff) => ({ ...handoff })),
+    blockedBy: cloneRuntimeWorkflowBlock(workflowState?.blockedBy),
+    review: {
+      ...defaults.review,
+      ...(workflowState?.review ?? {}),
+    },
+  };
+};
+
+const cloneRuntimeWorkflowState = (workflowState: RuntimeWorkflowState): RuntimeWorkflowState => {
+  const normalized = normalizeRuntimeWorkflowState(workflowState);
+  return {
+    ...normalized,
+    phaseHistory: normalized.phaseHistory.map((entry) => ({
+      ...entry,
+      ...(entry.model !== undefined ? { model: entry.model } : {}),
+      ...(entry.summary !== undefined ? { summary: entry.summary } : {}),
+      ...(entry.completedAt !== undefined ? { completedAt: entry.completedAt } : {}),
+      ...(entry.providerId !== undefined ? { providerId: entry.providerId } : {}),
+      blockedBy: cloneRuntimeWorkflowBlock(entry.blockedBy),
+    })),
+    handoffs: normalized.handoffs.map((handoff) => ({ ...handoff })),
+    blockedBy: cloneRuntimeWorkflowBlock(normalized.blockedBy),
+    review: { ...normalized.review },
+  };
+};
+
 export type RuntimeSessionContract = {
   runtimeSessionId: string;
   kind: RuntimeSessionKind;
@@ -341,6 +511,7 @@ export type RuntimeSessionContract = {
   artifactRefs: RuntimeArtifactRef[];
   checkpointRef: RuntimeCheckpointRef | null;
   turnState: RuntimeTurnContract;
+  workflowState: RuntimeWorkflowState;
   permissionState: RuntimePermissionState;
   cancellationState: RuntimeCancellationState;
   usageSummary: RuntimeUsageSummary;
@@ -423,6 +594,7 @@ export const createRuntimeSessionContract = (input: {
   artifactRefs?: readonly RuntimeArtifactRef[];
   checkpointRef?: RuntimeCheckpointRef | null;
   turnState?: RuntimeTurnContract;
+  workflowState?: RuntimeWorkflowState;
   permissionState?: RuntimePermissionState;
   cancellationState?: Omit<RuntimeCancellationState, "mode">;
   usageSummary?: RuntimeUsageSummary;
@@ -452,6 +624,9 @@ export const createRuntimeSessionContract = (input: {
       lastUserMessageId: null,
       lastAssistantMessageId: null,
     },
+    workflowState: input.workflowState
+      ? cloneRuntimeWorkflowState(input.workflowState)
+      : createDefaultRuntimeWorkflowState(),
     permissionState: input.permissionState ?? {
       status: "idle",
       pendingRequestIds: [],
@@ -519,6 +694,7 @@ export const createRuntimeCheckpointPayload = (input: {
   summary: string;
   artifactRefs: readonly RuntimeArtifactRef[];
   turnState: RuntimeTurnContract;
+  workflowState: RuntimeWorkflowState;
   permissionState: RuntimePermissionState;
   cancellationState: RuntimeCancellationState;
   usageSummary: RuntimeUsageSummary;
@@ -531,6 +707,7 @@ export const createRuntimeCheckpointPayload = (input: {
   summary: input.summary,
   artifactRefs: input.artifactRefs.map((artifact) => ({ ...artifact })),
   turnState: { ...input.turnState, activeToolCallIds: [...input.turnState.activeToolCallIds] },
+  workflowState: cloneRuntimeWorkflowState(input.workflowState),
   permissionState: {
     ...input.permissionState,
     pendingRequestIds: [...input.permissionState.pendingRequestIds],
@@ -588,6 +765,14 @@ export const createRuntimeLedgerEvent = (event: RuntimeLedgerEvent): RuntimeLedg
         occurredAt: event.occurredAt,
         type: event.type,
         payload: { ...event.payload },
+      };
+    case "workflow.updated":
+      return {
+        eventId: event.eventId,
+        sessionId: event.sessionId,
+        occurredAt: event.occurredAt,
+        type: event.type,
+        payload: cloneRuntimeWorkflowState(event.payload),
       };
     case "user.message":
       return {

@@ -12,6 +12,58 @@ The system should assume it is already operating inside the correct repository, 
 
 The main objective is to avoid sending huge amounts of code to expensive models, while still getting high-quality coding output when required.
 
+## Current implementation status (audited 2026-05-05)
+
+This document started as a target architecture. The repository now contains a meaningful first slice of it around the **provider layer, runtime plumbing, and the early WorkSession orchestration spine**. The app-owned coding workflow described below is still only partially implemented end-to-end.
+
+### Implemented now
+
+- [x] Provider-local escalation variants exist: `openai-escalation` and `azure-openai-escalation`.
+- [x] Shared config, runtime config normalization, provider labels, and persistence accept the escalation provider IDs.
+- [x] Experimental OpenAI and Azure sessions can escalate one-way and stay latched to the escalation target for the rest of the session.
+- [x] Manual station-session escalation exists via `spira_escalate_session` for escalation-capable providers.
+- [x] Runtime persistence already records provider binding, requested model, observed model/usage-derived model, checkpoints, recovery data, and permission state.
+- [x] Subagent runs already persist requested and observed model metadata, tool-call history, and pending permission request state.
+- [x] Runtime session contracts and checkpoint payloads now carry a durable workflow-state spine: phase/status, phase history, blocked-state metadata, handoff records, and review state.
+- [x] Runtime lifecycle now emits `workflow.updated`, and legacy persisted runtime sessions/checkpoints backfill a default workflow state on read.
+- [x] Manual escalation now writes durable `model-escalation` handoffs into workflow state, preserves or derives the active phase, and survives legacy partial workflow payloads.
+- [x] Escalation-driven workflow blocking now distinguishes approval overlays from non-approval blockers, clears approval blocks when permission requests resolve, and preserves durably pending approval blocks across restart-time sync.
+- [x] Code-review subagent launches now persist explicit review lifecycle state in workflow state, including `running`, `completed`, `failed`, `missing`, `relaunching`, and `stalled`.
+- [x] Managed review state now carries durable origin metadata so restart reconciliation can repair or persist missing/stalled review state without relying on summary text.
+- [x] Station sessions now have an app-owned **WorkSession entry gate** with a default-conversational safety catch: mission stations stay mission-scoped, explicit coding/planning/repo-review prompts can activate WorkSession mode, and non-work follow-ups can fall back to conversational mode.
+- [x] A lightweight persisted WorkSession scaffold now exists for coding-task activation, including shared summary types, station-summary transport, minimal snapshot persistence, and reset/shutdown cleanup.
+- [x] WorkSession now owns a deterministic pre-implementation spine for `classify -> discover -> summarise -> plan`, persists that phase history across restart, syncs it into runtime workflow state, and avoids clobbering later review/implementation workflow on recovery.
+- [x] WorkSession state and runtime workflow sync now extend through `implement` and `validate`, including durable execution artifact fields, stalled execution mapping, restart restore for execution phases, and teardown/restart cleanup that removes stale downstream `review` / `complete` state.
+- [x] Restart-time approval reconciliation no longer downgrades restored validate-complete state or re-apply stale approval blocks from open execution phase history.
+- [x] Bridge-safe observability now surfaces the active station WorkSession mode/phase/summary in the renderer and Spira UI control snapshot without leaking mission-style workflow chrome into ordinary chat surfaces.
+
+### Not implemented yet
+
+- [x] WorkSession now owns a deterministic application-managed execution loop for `plan -> implement -> validate`, including persisted patch/validation artifacts, bounded retries, repeat-failure detection, long-running PowerShell validation tracking, and ready-for-review vs stalled outcomes.
+- [x] Review/finish orchestration after execution now includes the `review -> complete` closure path for WorkSession-owned coding tasks, with thin WorkSession closure semantics, managed-review completion sealing, restart reconciliation for crash windows, late-event suppression after seal, explicit reopen clearing stale review state, and deduplicated terminal `complete` history on restore.
+- [ ] Dedicated coding agents such as `TaskClassifierAgent`, `SearchTermAgent`, `FileRankerAgent`, `PlanningAgent`, and `BuildFailureAgent`.
+- [ ] Phase-aware budget enforcement and routing policy across the full workflow.
+- [ ] Context packaging rules enforced by the app rather than left to the active model.
+- [ ] Full explicit **escalate-and-continue** execution semantics so a stronger lane resumes the active implementation/validation phase instead of pausing to restate the plan.
+- [ ] Approval-flow resilience across UI refreshes or renderer churn.
+- [ ] Full user-visible per-phase observability for active work, blocking conditions, and handoff history beyond the current Bridge-safe WorkSession summary.
+
+### Interpretation
+
+The current codebase proves that **provider escalation and runtime continuity are viable**. It does **not** yet prove the broader orchestrator described in the rest of this file. The next iterations should build on the existing persistence and runtime ledger rather than inventing a second state system.
+
+The current codebase now also proves the **entry semantics, early state machine, execution-state foundation, execution loop, review closure, and first observability surface** for app-owned orchestration: the application, not the active model, decides when a station remains conversational and when it enters a coding-oriented WorkSession, it owns the deterministic `classify -> discover -> summarise -> plan -> implement -> validate -> review -> complete` flow across WorkSession and runtime workflow state, it persists execution-oriented state and closure outcomes across restart, and it exposes the active WorkSession summary through Bridge-safe UI and semantic control state. The next missing pieces are to make that workflow **more policy-driven and operationally resilient**: approval-flow resilience, phase-aware routing, stronger budget/context packaging rules, and broader observability for blockers and handoffs.
+
+### Likely next slice: Approval-flow resilience
+
+The next implementation slice should stay operationally focused and harden permission-gated execution across refreshes, interrupted prompts, and stale UI state.
+
+1. Persist pending approval requests and blocked reasons so refresh or renderer churn cannot strand a task in silent limbo.
+2. Reattach or explicitly invalidate approvals after restart instead of relying on transient UI prompts surviving.
+3. Keep approval blocking coherent with the now end-to-end WorkSession closure path so implement/validate/review/complete state cannot drift around permission events.
+
+Detailed review lifecycle remains a runtime-workflow concern (`running`, `completed`, `failed`, `missing`, `relaunching`, `stalled`). The next gap is no longer review closure itself; it is making approval gating just as durable and explicit as the coding-task spine.
+
 ---
 
 ## Core Principle
@@ -154,6 +206,8 @@ Mini creates implementation plan
   ↓
 Application decides implementation model
   ↓
+Application records the phase transition and any escalation handoff
+  ↓
 Mini or GPT-5.4 creates patch
   ↓
 Application applies patch
@@ -166,6 +220,14 @@ Nano/mini/GPT-5.4 reviews final diff
   ↓
 Application returns final summary
 ```
+
+Two operational requirements need to be first-class here:
+
+1. **Escalate and continue, not escalate and pause.**  
+   If the system promotes a session from mini to GPT-5.4 or GPT-5.4 to GPT-5.5, the escalated lane should resume the current phase immediately unless the user explicitly asked for analysis only.
+
+2. **Every phase transition must be observable.**  
+   The application should persist and expose phase changes such as `discovering`, `planning`, `escalating`, `implementing`, `blocked-awaiting-approval`, `validating`, `reviewing`, `stalled`, and `complete`.
 
 ---
 
@@ -193,11 +255,25 @@ Example conceptual structure:
   "candidateFiles": [],
   "fileSummaries": [],
   "selectedFiles": [],
+  "currentPhase": "",
+  "phaseHistory": [],
   "plan": {},
   "patches": [],
   "buildResults": [],
   "testResults": [],
   "reviews": [],
+  "handoffs": [],
+  "escalationDecisions": [],
+  "approvalState": {
+    "pendingRequestIds": [],
+    "lastResolvedAt": 0,
+    "blockedReason": null
+  },
+  "reviewState": {
+    "status": "idle",
+    "attempt": 0,
+    "lastFailureReason": null
+  },
   "cost": {
     "inputTokens": 0,
     "outputTokens": 0,
@@ -218,6 +294,66 @@ This gives:
 - Better telemetry
 - Easier model comparison
 - Reduced repeated context generation
+
+The important refinement after the MVP experiments is that this session state must capture **handoff semantics, approval blockers, and review durability**, not just token usage and file lists.
+
+## Cross-cutting operational requirements
+
+These are not optional polish items. The MVP work showed they belong in the base architecture.
+
+### 1. Explicit escalate-and-continue semantics
+
+Escalation should produce a durable handoff record:
+
+```json
+{
+  "fromModel": "gpt-5.4-mini",
+  "toModel": "gpt-5.4",
+  "phase": "implement",
+  "reason": "complexity-threshold",
+  "continuationMode": "continue-current-phase",
+  "occurredAt": 0
+}
+```
+
+Rules:
+
+- escalation should preserve the current phase unless the application explicitly changes it
+- the promoted lane should continue execution without an explanatory pause
+- if the handoff cannot continue, the session should move to `stalled` or `blocked` with a concrete reason
+
+### 2. Observability and audit trail
+
+The runtime already has useful provider/session persistence. The full orchestrator should extend that into a phase ledger that records:
+
+- phase entered
+- active provider and model
+- escalation decisions and reasons
+- approval-request lifecycle
+- review launch, timeout, retry, and completion state
+- user-visible summary text for the current step
+
+### 3. Approval resilience
+
+Permission gating should survive UI churn. The architecture should assume approval prompts can be disrupted and should therefore support:
+
+- durable pending permission requests outside transient renderer state
+- replay or reattachment after refresh
+- explicit detection that approval was invalidated
+- a visible blocked state instead of silent waiting
+
+### 4. Review durability
+
+Final review cannot be treated as a vague background hope. The review stage should expose one of:
+
+- `running`
+- `completed`
+- `failed`
+- `missing`
+- `relaunching`
+- `stalled`
+
+If a review agent disappears, the application should treat that as a hard state transition and report it immediately.
 
 ---
 
@@ -805,6 +941,13 @@ Use GPT-5.5 review only for:
 - Cases where GPT-5.4 and reviewer disagree
 - User explicitly requests strongest review
 
+Operational rules:
+
+- final review must persist a concrete review status, not just "waiting"
+- if a background review disappears or cannot be read back, mark it as `missing` and either relaunch explicitly or fail the phase
+- prefer blocking or otherwise durable execution for the last review step until background review reliability is proven
+- retries must record that the previous review attempt was lost, failed, or timed out
+
 ---
 
 ## Escalation Rules
@@ -1164,16 +1307,22 @@ For the first implementation, build this simple flow:
 8. Nano summarises files.
 9. Mini creates implementation plan.
 10. App decides mini vs GPT-5.4 implementation.
-11. Implementer outputs patch.
-12. App validates and applies patch.
-13. App runs build/test.
-14. If failed, send focused failure context to mini or GPT-5.4.
-15. Nano reviews final diff.
-16. Escalate review if needed.
-17. App returns final result summary.
+11. If the app escalates, it records the handoff and continues the current phase immediately.
+12. Implementer outputs patch.
+13. App validates and applies patch.
+14. App runs build/test.
+15. If failed, send focused failure context to mini or GPT-5.4.
+16. Nano reviews final diff.
+17. Escalate review if needed, with durable review-state tracking.
+18. App returns final result summary.
 ```
 
 This is enough to prove the architecture before adding more advanced capabilities.
+
+For Spira specifically, there is now a clear prerequisite split:
+
+- **already proven:** provider-local escalation, provider binding persistence, requested/observed model tracking, checkpoints, recovery primitives
+- **still to prove:** app-owned phase machine, bounded coding agents, continuation semantics, approval resilience, durable review orchestration
 
 ---
 
@@ -1365,6 +1514,8 @@ Prefer this:
 Application owns the workflow.
 Models perform bounded jobs.
 Escalation is rule-based.
+Escalation continues the active phase unless blocked.
+Approval and review states are explicit.
 Every output is structured.
 Every phase is auditable.
 ```

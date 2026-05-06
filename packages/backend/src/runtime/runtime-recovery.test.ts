@@ -31,6 +31,7 @@ describe("runtime-recovery", () => {
       summary: "Initial inspection complete.",
       artifactRefs: runtimeSession.artifactRefs,
       turnState: runtimeSession.turnState,
+      workflowState: runtimeSession.workflowState,
       permissionState: runtimeSession.permissionState,
       cancellationState: runtimeSession.cancellationState,
       usageSummary: runtimeSession.usageSummary,
@@ -89,8 +90,8 @@ describe("runtime-recovery", () => {
     const fallback = buildRuntimeRecoveryPreambleFallback(context);
 
     expect(systemSection.content).toContain("[Host runtime recovery bundle]");
-    expect(systemSection.content).toContain("\"checkpointSummary\": \"Checkpoint summary\"");
-    expect(systemSection.content).toContain("\"replayMode\": \"post-checkpoint\"");
+    expect(systemSection.content).toContain('"checkpointSummary": "Checkpoint summary"');
+    expect(systemSection.content).toContain('"replayMode": "post-checkpoint"');
     expect(systemSection.content).toContain("authoritative continuity state");
     expect(fallback).toContain("[Recovered host continuity]");
     expect(fallback).toContain("Checkpoint summary");

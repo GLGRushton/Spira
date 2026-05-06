@@ -51,6 +51,7 @@ export type StationRuntimePersistenceContext = {
   abortRequestedAt: number | null;
   requestedModel: string | null | undefined;
   runtimeUsageSummary: RuntimeUsageSummary;
+  workflowState: RuntimeSessionContract["workflowState"];
   sessionOrigin: "created" | "resumed" | null;
   lastRuntimeUserMessageId: string | null;
   lastRuntimeAssistantMessageId: string | null;
@@ -128,6 +129,7 @@ export const persistStationRuntimeSessionContract = ({
         isError: context.currentState === "error",
         isCancelled: Boolean(context.abortRequestedAt),
       }),
+    workflowState: overrides.workflowState ?? context.workflowState,
     permissionState:
       overrides.permissionState ??
       buildRuntimePermissionState({

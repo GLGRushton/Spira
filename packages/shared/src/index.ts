@@ -132,6 +132,18 @@ export type {
   UserSettings,
 } from "./protocol.js";
 export type {
+  WorkSessionClassification,
+  WorkSessionIntent,
+  WorkSessionMode,
+  WorkSessionPatchAttempt,
+  WorkSessionPhase,
+  WorkSessionPhaseEntry,
+  WorkSessionPhaseStatus,
+  WorkSessionSnapshot,
+  WorkSessionSummary,
+  WorkSessionValidationResult,
+} from "./work-session-types.js";
+export type {
   BuiltinSubagentDomainId,
   NormalizedStateChange,
   SubagentCreateConfig,

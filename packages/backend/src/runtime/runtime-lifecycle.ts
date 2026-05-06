@@ -2,10 +2,10 @@ import { randomUUID } from "node:crypto";
 import type { PermissionRequestPayload } from "@spira/shared";
 import type { ProviderPermissionResult } from "../provider/types.js";
 import {
-  createRuntimeLedgerEvent,
   type RuntimeCheckpointPayload,
   type RuntimeLedgerEvent,
   type RuntimeSessionContract,
+  createRuntimeLedgerEvent,
 } from "./runtime-contract.js";
 import type { RuntimeStore } from "./runtime-store.js";
 
@@ -87,6 +87,21 @@ export const recordRuntimeTurnStateChanged = (
     occurredAt: input.occurredAt,
     type: "turn.state_changed",
     payload: input.turnState,
+  });
+
+export const recordRuntimeWorkflowUpdated = (
+  runtimeStore: RuntimeStore | null | undefined,
+  runtimeSessionId: string | null,
+  input: {
+    workflowState: RuntimeSessionContract["workflowState"];
+    occurredAt: number;
+  },
+): RuntimeLedgerEvent | null =>
+  appendRuntimeLifecycleEvent(runtimeStore, runtimeSessionId, {
+    eventId: randomUUID(),
+    occurredAt: input.occurredAt,
+    type: "workflow.updated",
+    payload: input.workflowState,
   });
 
 export const recordRuntimeAssistantMessageDelta = (

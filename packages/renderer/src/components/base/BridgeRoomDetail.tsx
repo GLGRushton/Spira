@@ -1,4 +1,4 @@
-import type { AssistantState, StationId } from "@spira/shared";
+import type { AssistantState, StationId, WorkSessionPhase, WorkSessionSummary } from "@spira/shared";
 import { useShinraStatusContext } from "../../hooks/useShinraStatusContext.js";
 import { useStationStore } from "../../stores/station-store.js";
 import { ChatPanel } from "../chat/ChatPanel.js";
@@ -12,11 +12,18 @@ interface BridgeRoomDetailProps {
   stationId?: StationId;
 }
 
+const formatWorkSessionPhase = (phase?: WorkSessionPhase | null): string =>
+  phase ? phase.charAt(0).toUpperCase() + phase.slice(1) : "Active";
+
+const getVisibleWorkSession = (workSession?: WorkSessionSummary | null): WorkSessionSummary | null =>
+  workSession?.mode === "work-session" && workSession.active ? workSession : null;
+
 export function BridgeRoomDetail({ assistantState, stationId }: BridgeRoomDetailProps) {
   const activeStationId = useStationStore((store) => store.activeStationId);
   const resolvedStationId = stationId ?? activeStationId;
   const activeStation = useStationStore((store) => store.stations[resolvedStationId]);
   const { context } = useShinraStatusContext(resolvedStationId);
+  const visibleWorkSession = getVisibleWorkSession(activeStation?.workSession);
 
   return (
     <div className={styles.panel}>
@@ -60,6 +67,17 @@ export function BridgeRoomDetail({ assistantState, stationId }: BridgeRoomDetail
             <div className={styles.statusCluster}>
               <p className={styles.statusLine}>{context.workSummary ?? "Standing by"}</p>
               <ToolSummaryChips assistantState={assistantState} />
+              {visibleWorkSession ? (
+                <div className={styles.workSessionCard}>
+                  <div className={styles.workSessionHeader}>
+                    <span className={styles.workSessionEyebrow}>Work session</span>
+                    <span className={styles.workSessionBadge}>{formatWorkSessionPhase(visibleWorkSession.phase)}</span>
+                  </div>
+                  <p className={styles.workSessionSummary}>
+                    {visibleWorkSession.summary?.trim() || "Repository orchestration is active for this station."}
+                  </p>
+                </div>
+              ) : null}
             </div>
           </section>
 
