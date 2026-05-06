@@ -1,4 +1,3 @@
-import BetterSqlite3 from "better-sqlite3";
 import {
   MODEL_PROVIDERS,
   TICKET_RUN_ATTEMPT_STATUSES,
@@ -29,11 +28,13 @@ import type {
   TicketRunMissionValidationKind,
   TicketRunMissionValidationStatus,
   TicketRunProofArtifactKind,
-  TicketRunProofStatus,
   TicketRunProofRunStatus,
+  TicketRunProofStatus,
   TicketRunStatus,
   TicketRunSubmoduleParentRef,
 } from "@spira/shared";
+import type BetterSqlite3 from "better-sqlite3";
+import { MIGRATIONS } from "./migrations.js";
 import {
   MEMORY_ENTRY_CATEGORIES,
   REPO_INTELLIGENCE_ENTRY_SOURCES,
@@ -51,7 +52,6 @@ import type {
   RuntimePermissionRequestStatus,
   ValidationProfileKind,
 } from "./types.js";
-import { MIGRATIONS } from "./migrations.js";
 
 export const getPersistedProviderSessionStateKey = (stationId: string): string =>
   stationId === "primary" ? "copilot-session-id" : `station:${stationId}:copilot-session-id`;
@@ -89,7 +89,8 @@ export const normalizeTitle = (value: string | null | undefined): string | null 
   return trimmed.length > 0 ? trimmed : null;
 };
 
-export const normalizeText = (value: string | null | undefined): string => (typeof value === "string" ? value.trim() : "");
+export const normalizeText = (value: string | null | undefined): string =>
+  typeof value === "string" ? value.trim() : "";
 
 export const MODEL_PROVIDER_ID_SET = new Set<ModelProviderId>(MODEL_PROVIDERS);
 
@@ -120,18 +121,20 @@ export const normalizeTicketRunSubmoduleParentRefs = (
 export const normalizeStringArray = (value: readonly string[] | null | undefined): string[] =>
   (value ?? []).map((entry) => entry.trim()).filter((entry) => entry.length > 0);
 
-export const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null;
+export const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null;
 
-export const assertRuntimePermissionRequestStatus: (value: string) => asserts value is RuntimePermissionRequestStatus = (
+export const assertRuntimePermissionRequestStatus: (value: string) => asserts value is RuntimePermissionRequestStatus =
+  (value) => {
+    if ((RUNTIME_PERMISSION_REQUEST_STATUSES as readonly string[]).includes(value)) {
+      return;
+    }
+    throw new Error(`Unknown runtime permission request status: ${value}`);
+  };
+
+export const assertRuntimeHostResourceStatus: (value: string) => asserts value is RuntimeHostResourceStatus = (
   value,
 ) => {
-  if ((RUNTIME_PERMISSION_REQUEST_STATUSES as readonly string[]).includes(value)) {
-    return;
-  }
-  throw new Error(`Unknown runtime permission request status: ${value}`);
-};
-
-export const assertRuntimeHostResourceStatus: (value: string) => asserts value is RuntimeHostResourceStatus = (value) => {
   if ((RUNTIME_HOST_RESOURCE_STATUSES as readonly string[]).includes(value)) {
     return;
   }
@@ -214,13 +217,17 @@ export function assertTicketRunMissionPhase(phase: string): asserts phase is Tic
   }
 }
 
-export function assertTicketRunMissionClassificationKind(kind: string): asserts kind is TicketRunMissionClassificationKind {
+export function assertTicketRunMissionClassificationKind(
+  kind: string,
+): asserts kind is TicketRunMissionClassificationKind {
   if (!TICKET_RUN_MISSION_CLASSIFICATIONS.includes(kind as TicketRunMissionClassificationKind)) {
     throw new Error(`Unsupported ticket run mission classification kind: ${kind}`);
   }
 }
 
-export function assertTicketRunMissionProofArtifactMode(mode: string): asserts mode is TicketRunMissionProofArtifactMode {
+export function assertTicketRunMissionProofArtifactMode(
+  mode: string,
+): asserts mode is TicketRunMissionProofArtifactMode {
   if (!TICKET_RUN_MISSION_PROOF_ARTIFACT_MODES.includes(mode as TicketRunMissionProofArtifactMode)) {
     throw new Error(`Unsupported ticket run mission proof artifact mode: ${mode}`);
   }
@@ -246,7 +253,9 @@ export function assertTicketRunMissionValidationKind(kind: string): asserts kind
   }
 }
 
-export function assertTicketRunMissionValidationStatus(status: string): asserts status is TicketRunMissionValidationStatus {
+export function assertTicketRunMissionValidationStatus(
+  status: string,
+): asserts status is TicketRunMissionValidationStatus {
   if (!TICKET_RUN_MISSION_VALIDATION_STATUSES.includes(status as TicketRunMissionValidationStatus)) {
     throw new Error(`Unsupported ticket run mission validation status: ${status}`);
   }

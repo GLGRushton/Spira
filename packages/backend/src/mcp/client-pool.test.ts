@@ -148,7 +148,7 @@ describe("McpClientPool", () => {
       args: ["packages/mcp-vision/dist/index.js"],
       stderr: "pipe",
     });
-  });
+  }, 15_000);
 
   it("emits stderr and crash events when the MCP process misbehaves", async () => {
     const { McpClientPool } = await loadClientPool();

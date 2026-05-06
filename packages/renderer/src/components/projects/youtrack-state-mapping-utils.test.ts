@@ -40,10 +40,7 @@ describe("assessYouTrackStateMappingDraft", () => {
       invalidTodoStates: [],
       invalidInProgressStates: ["Review"],
       overlappingStates: [],
-      errors: [
-        "Select at least one To-do YouTrack state.",
-        "In-progress states not found in YouTrack: Review.",
-      ],
+      errors: ["Select at least one To-do YouTrack state.", "In-progress states not found in YouTrack: Review."],
     });
   });
 

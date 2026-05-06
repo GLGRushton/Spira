@@ -2,8 +2,8 @@ import type {
   MissionServiceProcessSummary,
   MissionServiceProfileSummary,
   MissionServiceSnapshot,
-  TicketRunMissionEventSummary,
   TicketRunGitState,
+  TicketRunMissionEventSummary,
   TicketRunProofProfileSummary,
   TicketRunRepoIntelligenceEntrySummary,
   TicketRunReviewRepoState,
@@ -216,14 +216,6 @@ export function useMissionRunController(run: TicketRunSummary): MissionRunContro
   );
   const serviceProfilesByRepo = useMemo(() => groupProfilesByRepo(services?.profiles ?? []), [services?.profiles]);
   const serviceProcesses = services?.processes ?? [];
-  const latestAttemptUpdatedAt = useMemo(
-    () => Math.max(0, ...run.attempts.map((attempt) => attempt.updatedAt)),
-    [run.attempts],
-  );
-  const latestValidationUpdatedAt = useMemo(
-    () => Math.max(0, ...run.validations.map((validation) => validation.updatedAt)),
-    [run.validations],
-  );
   const activeServiceProfileIds = useMemo(
     () =>
       new Set(
@@ -467,25 +459,13 @@ export function useMissionRunController(run: TicketRunSummary): MissionRunContro
   }, [run.runId, setRunSnapshot]);
 
   useEffect(() => {
+    void run.runId;
     setMissionTimeline([]);
   }, [run.runId]);
 
   useEffect(() => {
     void refreshMissionTimeline();
-  }, [
-    refreshMissionTimeline,
-    run.runId,
-    run.status,
-    run.missionPhase,
-    run.missionPhaseUpdatedAt,
-    run.updatedAt,
-    latestAttemptUpdatedAt,
-    latestValidationUpdatedAt,
-    run.proof.status,
-    run.proof.lastProofAt,
-    run.proofRuns.length,
-    run.missionSummary?.updatedAt,
-  ]);
+  }, [refreshMissionTimeline]);
 
   const refreshRepoIntelligence = useCallback(async () => {
     const requestId = repoIntelligenceRequestIdRef.current + 1;
@@ -516,12 +496,13 @@ export function useMissionRunController(run: TicketRunSummary): MissionRunContro
   }, [run.runId, setRunSnapshot]);
 
   useEffect(() => {
+    void run.runId;
     setRepoIntelligenceEntries([]);
   }, [run.runId]);
 
   useEffect(() => {
     void refreshRepoIntelligence();
-  }, [refreshRepoIntelligence, run.runId, run.status, run.updatedAt]);
+  }, [refreshRepoIntelligence]);
 
   const resetDetailGitState = useCallback(() => {
     detailRequestGenerationRef.current += 1;
@@ -1144,7 +1125,7 @@ export function useMissionRunController(run: TicketRunSummary): MissionRunContro
         setRunningProofProfileId(null);
       }
     },
-    [refreshMissionProofs, run.runId, run.ticketId, setRunSnapshot],
+    [refreshMissionProofs, run.runId, setRunSnapshot],
   );
 
   const completeRun = useCallback(async () => {
@@ -1198,7 +1179,9 @@ export function useMissionRunController(run: TicketRunSummary): MissionRunContro
           current.map((entry) => (entry.id === result.entry.id ? result.entry : entry)),
         );
         void refreshMissionTimeline();
-        setRunNotice(`Repo intelligence candidate approved for ${result.entry.repoRelativePath ?? "the mission scope"}.`);
+        setRunNotice(
+          `Repo intelligence candidate approved for ${result.entry.repoRelativePath ?? "the mission scope"}.`,
+        );
       } catch (error) {
         console.error("Failed to approve repo intelligence candidate", error);
         setRunError(error instanceof Error ? error.message : "Failed to approve the repo intelligence candidate.");

@@ -1,7 +1,7 @@
 import type { McpServerStatus } from "@spira/shared";
 import { useState } from "react";
-import { getMcpServerStateLabel, getMcpServerStateTone } from "./mcp-server-status.js";
 import styles from "./McpClusterDetail.module.css";
+import { getMcpServerStateLabel, getMcpServerStateTone } from "./mcp-server-status.js";
 
 interface McpClusterDetailProps {
   servers: McpServerStatus[];

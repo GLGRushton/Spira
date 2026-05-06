@@ -1,6 +1,6 @@
 import type { McpServerStatus } from "@spira/shared";
-import { getMcpServerStateLabel, getMcpServerStateTone } from "./mcp-server-status.js";
 import styles from "./McpRoomDetail.module.css";
+import { getMcpServerStateLabel, getMcpServerStateTone } from "./mcp-server-status.js";
 
 interface McpRoomDetailProps {
   server: McpServerStatus;

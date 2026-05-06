@@ -14,10 +14,7 @@ const getSnapshotBindingTimestamp = (
 ): number | null => snapshot.completedAt ?? snapshot.updatedAt ?? snapshot.startedAt ?? null;
 
 export function inferProviderIdAtTimestamp(
-  runtimeSession:
-    | Pick<RuntimeSessionContract, "providerBinding" | "providerSwitches">
-    | null
-    | undefined,
+  runtimeSession: Pick<RuntimeSessionContract, "providerBinding" | "providerSwitches"> | null | undefined,
   occurredAt: number | null,
 ): ProviderId | null {
   const currentProviderId = runtimeSession?.providerBinding.providerId ?? null;
@@ -31,7 +28,10 @@ export function inferProviderIdAtTimestamp(
   let providerId = currentProviderId;
   const switchHistory = runtimeSession?.providerSwitches ?? [];
   for (let index = switchHistory.length - 1; index >= 0; index -= 1) {
-    const record = switchHistory[index]!;
+    const record = switchHistory[index];
+    if (!record) {
+      continue;
+    }
     if (occurredAt < record.switchedAt) {
       providerId = record.fromProviderId;
       continue;
@@ -44,7 +44,13 @@ export function inferProviderIdAtTimestamp(
 export function resolveSubagentProviderBinding(
   snapshot: Pick<
     SubagentRunSnapshot,
-    "providerId" | "providerSessionId" | "hostManifestHash" | "providerProjectionHash" | "completedAt" | "updatedAt" | "startedAt"
+    | "providerId"
+    | "providerSessionId"
+    | "hostManifestHash"
+    | "providerProjectionHash"
+    | "completedAt"
+    | "updatedAt"
+    | "startedAt"
   >,
   runtimeSession: Pick<RuntimeSessionContract, "providerBinding" | "providerSwitches"> | null | undefined,
   stationRuntimeSession?: Pick<RuntimeSessionContract, "providerBinding" | "providerSwitches"> | null | undefined,
@@ -86,7 +92,7 @@ export function resolveSubagentProviderBinding(
       : null;
   const legacyProviderId =
     snapshot.providerSessionId && !snapshot.providerId
-      ? localLegacyProviderId ?? inferProviderIdAtTimestamp(stationRuntimeSession, snapshotBindingTimestamp)
+      ? (localLegacyProviderId ?? inferProviderIdAtTimestamp(stationRuntimeSession, snapshotBindingTimestamp))
       : null;
   if (legacyProviderId && snapshot.providerSessionId) {
     return {

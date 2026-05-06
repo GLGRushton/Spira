@@ -13,7 +13,6 @@ import {
   type YouTrackStateMapping,
   type YouTrackStatusSummary,
   type YouTrackTicketSummary,
-  normalizeYouTrackStateMapping,
 } from "@spira/shared";
 import { type KeyboardEvent as ReactKeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMissionRunsStore } from "../../stores/mission-runs-store.js";
@@ -23,211 +22,37 @@ import { useStationStore } from "../../stores/station-store.js";
 import { ProjectTypeahead } from "./ProjectTypeahead.js";
 import { ProjectsMappingsList } from "./ProjectsMappingsList.js";
 import styles from "./ProjectsPanel.module.css";
+import {
+  EMPTY_SNAPSHOT,
+  MISSIONS_TAB_ORDER,
+  type MissionSelection,
+  type MissionsTabId,
+  NEW_MAPPING_SENTINEL,
+  YOUTRACK_TICKET_LIST_LIMIT,
+  buildManagedSubmoduleKey,
+  cloneYouTrackStateMapping,
+  describeAttemptStatus,
+  describeMissionServiceLauncher,
+  describeMissionServiceState,
+  describeMissionTab,
+  describeRunStatus,
+  describeStatusLabel,
+  describeStatusTone,
+  formatDiffDelta,
+  formatMissionServiceUrls,
+  formatStateList,
+  formatTicketUpdatedAt,
+  getDiffLineTone,
+  getDiffStatusTone,
+  getMissionServiceStateTone,
+  getTicketStartBlocker,
+  isMissionServiceProcessActive,
+} from "./ProjectsPanel.utils.js";
 import { ProjectsRepoChecklist } from "./ProjectsRepoChecklist.js";
 import { YouTrackStateListEditor } from "./YouTrackStateListEditor.js";
 import { type MissionLaneTabId, buildRunByTicketId, resolveRunTab, splitMissionCollections } from "./mission-utils.js";
 import { normalizeProjectKey } from "./project-utils.js";
 import { assessYouTrackStateMappingDraft, haveYouTrackStateMappingsChanged } from "./youtrack-state-mapping-utils.js";
-
-const EMPTY_SNAPSHOT: ProjectRepoMappingsSnapshot = {
-  workspaceRoot: null,
-  repos: [],
-  mappings: [],
-};
-
-const NEW_MAPPING_SENTINEL = "__new__";
-const YOUTRACK_TICKET_LIST_LIMIT = 50;
-type MissionsTabId = "quarterdeck" | MissionLaneTabId;
-type MissionSelection = { kind: "ticket"; ticketId: string } | { kind: "run"; runId: string };
-const MISSIONS_TAB_ORDER: MissionsTabId[] = ["quarterdeck", "launch-bay", "flight-deck", "dry-dock"];
-const buildManagedSubmoduleKey = (runId: string, canonicalUrl: string): string => `${runId}:${canonicalUrl}`;
-const ACTIVE_MISSION_SERVICE_STATES = new Set<MissionServiceProcessSummary["state"]>([
-  "starting",
-  "running",
-  "stopping",
-]);
-
-const describeStatusTone = (status: YouTrackStatusSummary | null): string => {
-  if (!status || status.state === "missing-config" || status.state === "disabled") {
-    return styles.statusWarning;
-  }
-
-  if (status.state === "connected") {
-    return styles.statusConnected;
-  }
-
-  return styles.statusError;
-};
-
-const describeStatusLabel = (status: YouTrackStatusSummary | null): string => {
-  if (!status) {
-    return "Checking";
-  }
-
-  switch (status.state) {
-    case "connected":
-      return "Connected";
-    case "disabled":
-      return "Disabled";
-    case "missing-config":
-      return "Needs setup";
-    case "error":
-      return "Error";
-  }
-};
-
-const formatTicketUpdatedAt = (updatedAt: number | null): string =>
-  updatedAt ? `Updated ${new Date(updatedAt).toLocaleString()}` : "Update time unavailable";
-
-const formatStateList = (states: string[] | undefined): string =>
-  states && states.length > 0 ? states.join(", ") : "None";
-
-const cloneYouTrackStateMapping = (
-  mapping: YouTrackStateMapping | null | undefined = DEFAULT_YOUTRACK_STATE_MAPPING,
-): YouTrackStateMapping => normalizeYouTrackStateMapping(mapping);
-
-const formatDiffDelta = (additions: number | null, deletions: number | null): string => {
-  if (additions === null && deletions === null) {
-    return "Binary or metadata change";
-  }
-  return `+${additions ?? 0} / -${deletions ?? 0}`;
-};
-
-const getDiffStatusTone = (status: string): string => {
-  switch (status) {
-    case "A":
-      return styles.diffStatusAdded;
-    case "D":
-      return styles.diffStatusDeleted;
-    default:
-      return styles.diffStatusModified;
-  }
-};
-
-const getDiffLineTone = (line: string): string => {
-  if (line.startsWith("@@")) {
-    return styles.diffLineModified;
-  }
-  if (line.startsWith("+") && !line.startsWith("+++")) {
-    return styles.diffLineAdded;
-  }
-  if (line.startsWith("-") && !line.startsWith("---")) {
-    return styles.diffLineDeleted;
-  }
-  if (line.startsWith("diff --git") || line.startsWith("index ") || line.startsWith("---") || line.startsWith("+++")) {
-    return styles.diffLineMeta;
-  }
-  return "";
-};
-
-const isMissionServiceProcessActive = (process: MissionServiceProcessSummary): boolean =>
-  ACTIVE_MISSION_SERVICE_STATES.has(process.state);
-
-const describeMissionServiceLauncher = (
-  profile: MissionServiceProfileSummary | MissionServiceProcessSummary,
-): string => {
-  switch (profile.launcher) {
-    case "translated-iisexpress":
-      return "IIS Express profile (translated)";
-    default:
-      return "Project profile";
-  }
-};
-
-const describeMissionServiceState = (state: MissionServiceProcessSummary["state"]): string => {
-  switch (state) {
-    case "starting":
-      return "Starting";
-    case "running":
-      return "Running";
-    case "stopping":
-      return "Stopping";
-    case "stopped":
-      return "Stopped";
-    case "error":
-      return "Error";
-  }
-};
-
-const getMissionServiceStateTone = (state: MissionServiceProcessSummary["state"]): string => {
-  switch (state) {
-    case "starting":
-      return styles.serviceStateStarting;
-    case "running":
-      return styles.serviceStateRunning;
-    case "stopping":
-      return styles.serviceStateStopping;
-    case "error":
-      return styles.serviceStateError;
-    default:
-      return styles.serviceStateStopped;
-  }
-};
-
-const formatMissionServiceUrls = (urls: string[]): string => (urls.length > 0 ? urls.join(" • ") : "No URL declared");
-
-const describeRunStatus = (run: TicketRunSummary): string => {
-  switch (run.status) {
-    case "starting":
-      return "Starting";
-    case "ready":
-      return "Ready";
-    case "blocked":
-      return "Blocked";
-    case "working":
-      return "Working";
-    case "awaiting-review":
-      return "Awaiting review";
-    case "error":
-      return "Error";
-    case "done":
-      return "Done";
-  }
-};
-
-const describeAttemptStatus = (status: TicketRunSummary["attempts"][number]["status"]): string => {
-  switch (status) {
-    case "running":
-      return "Running";
-    case "completed":
-      return "Completed";
-    case "failed":
-      return "Needs review";
-    case "cancelled":
-      return "Cancelled";
-  }
-};
-
-const describeMissionTab = (tabId: MissionLaneTabId): string => {
-  switch (tabId) {
-    case "launch-bay":
-      return "Launch bay";
-    case "flight-deck":
-      return "Flight deck";
-    case "dry-dock":
-      return "Dry dock";
-  }
-};
-
-const getTicketStartBlocker = (
-  isMapped: boolean,
-  repoCount: number,
-  existingRun: TicketRunSummary | null,
-): string | null => {
-  if (existingRun) {
-    return null;
-  }
-
-  if (!isMapped) {
-    return "Map a repo first";
-  }
-
-  if (repoCount === 0) {
-    return "Map a repo first";
-  }
-
-  return null;
-};
 
 export function ProjectsPanel() {
   const youTrackEnabled = useSettingsStore((store) => store.youTrackEnabled);

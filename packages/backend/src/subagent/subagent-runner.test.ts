@@ -5,7 +5,12 @@ import { SpiraMemoryDatabase, getSpiraMemoryDbPath } from "@spira/memory-db";
 import { type SubagentDomain, parseEnv } from "@spira/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getDefaultProviderCapabilities } from "../provider/capability-fallback.js";
-import type { ProviderClient, ProviderSession, ProviderSessionConfig, ProviderSessionEvent } from "../provider/types.js";
+import type {
+  ProviderClient,
+  ProviderSession,
+  ProviderSessionConfig,
+  ProviderSessionEvent,
+} from "../provider/types.js";
 import { createRuntimeSessionContract } from "../runtime/runtime-contract.js";
 import { RuntimeStore } from "../runtime/runtime-store.js";
 import { SpiraEventBus } from "../util/event-bus.js";
@@ -82,9 +87,9 @@ const createClient = (
   },
 ) => {
   const providerId = typeof providerIdOrRunSession === "function" ? "copilot" : providerIdOrRunSession;
-  const runSession = (typeof providerIdOrRunSession === "function"
-    ? providerIdOrRunSession
-    : maybeRunSession) as (config: ProviderSessionConfig) => {
+  const runSession = (typeof providerIdOrRunSession === "function" ? providerIdOrRunSession : maybeRunSession) as (
+    config: ProviderSessionConfig,
+  ) => {
     sessionId: string;
     send: (payload: { prompt: string }) => Promise<void>;
     disconnect: () => Promise<void>;
@@ -145,7 +150,12 @@ type SubagentRunnerInternals = {
       lastUserMessageId?: string | null;
       lastAssistantMessageId?: string | null;
       latestAssistantMessageText?: string | null;
-      usageSummary?: { model: string | null; totalTokens: number | null; lastObservedAt: number | null; source: string };
+      usageSummary?: {
+        model: string | null;
+        totalTokens: number | null;
+        lastObservedAt: number | null;
+        source: string;
+      };
       cancellationRequestedAt?: number | null;
       cancellationCompletedAt?: number | null;
       runtimeRecoveryContext?: null;
@@ -237,7 +247,7 @@ describe("SubagentRunner", () => {
   it("persists subagent runtime sessions and ledger events against a real runtime store", async () => {
     const bus = new SpiraEventBus();
     const runtimeStore = createTestRuntimeStore();
-    const database = (runtimeStore as unknown as { memoryDb: SpiraMemoryDatabase }).memoryDb;
+    const _database = (runtimeStore as unknown as { memoryDb: SpiraMemoryDatabase }).memoryDb;
     const { client } = createClient((config) => ({
       sessionId: "subagent-session-runtime",
       send: async () => {
@@ -629,71 +639,74 @@ describe("SubagentRunner", () => {
         toolCalling: "native" as const,
       },
     },
-  ])("keeps background runs alive for follow-up writes until stopped for $providerId", async ({ providerId, capabilities }) => {
-    const bus = new SpiraEventBus();
-    const started = vi.fn();
-    bus.on("subagent:started", started);
-    const disconnect = vi.fn().mockResolvedValue(undefined);
-    let sendCount = 0;
+  ])(
+    "keeps background runs alive for follow-up writes until stopped for $providerId",
+    async ({ providerId, capabilities }) => {
+      const bus = new SpiraEventBus();
+      const started = vi.fn();
+      bus.on("subagent:started", started);
+      const disconnect = vi.fn().mockResolvedValue(undefined);
+      let sendCount = 0;
 
-    const { client, clientMock } = createClient(providerId, (config) => ({
-      sessionId: "subagent-session-live",
-      send: async ({ prompt }) => {
-        sendCount += 1;
-        if (sendCount === 1) {
-          expect(prompt).toBe("Inspect Spira");
+      const { client, clientMock } = createClient(providerId, (config) => ({
+        sessionId: "subagent-session-live",
+        send: async ({ prompt }) => {
+          sendCount += 1;
+          if (sendCount === 1) {
+            expect(prompt).toBe("Inspect Spira");
+            config.onEvent?.(
+              createSessionEvent("assistant.message", {
+                messageId: "msg-1",
+                content: '{"summary":"Initial inspection complete.","payload":{"step":1}}',
+              }),
+            );
+            config.onEvent?.(createSessionEvent("session.idle", {}));
+            return;
+          }
+
+          expect(prompt).toBe("Continue with a follow-up");
           config.onEvent?.(
             createSessionEvent("assistant.message", {
-              messageId: "msg-1",
-              content: '{"summary":"Initial inspection complete.","payload":{"step":1}}',
+              messageId: "msg-2",
+              content: '{"summary":"Follow-up complete.","payload":{"step":2}}',
             }),
           );
           config.onEvent?.(createSessionEvent("session.idle", {}));
-          return;
-        }
+        },
+        disconnect,
+      }));
+      clientMock.capabilities = capabilities;
 
-        expect(prompt).toBe("Continue with a follow-up");
-        config.onEvent?.(
-          createSessionEvent("assistant.message", {
-            messageId: "msg-2",
-            content: '{"summary":"Follow-up complete.","payload":{"step":2}}',
-          }),
-        );
-        config.onEvent?.(createSessionEvent("session.idle", {}));
-      },
-      disconnect,
-    }));
-    clientMock.capabilities = capabilities;
+      const runner = new SubagentRunner({
+        bus,
+        env: parseEnv({}),
+        toolAggregator: createToolAggregator(),
+        domain: baseDomain,
+        getClient: async () => client,
+        runIdFactory: () => "run-live",
+        sessionIdFactory: () => "00000000-0000-0000-0000-000000000005",
+      });
 
-    const runner = new SubagentRunner({
-      bus,
-      env: parseEnv({}),
-      toolAggregator: createToolAggregator(),
-      domain: baseDomain,
-      getClient: async () => client,
-      runIdFactory: () => "run-live",
-      sessionIdFactory: () => "00000000-0000-0000-0000-000000000005",
-    });
+      const launch = runner.launch({ task: "Inspect Spira", mode: "background" });
+      const initialEnvelope = await launch.resultPromise;
 
-    const launch = runner.launch({ task: "Inspect Spira", mode: "background" });
-    const initialEnvelope = await launch.resultPromise;
+      expect(initialEnvelope.summary).toBe("Initial inspection complete.");
+      expect(clientMock.createSession).toHaveBeenCalledTimes(1);
+      expect(started).toHaveBeenCalledTimes(1);
+      expect(disconnect).not.toHaveBeenCalled();
 
-    expect(initialEnvelope.summary).toBe("Initial inspection complete.");
-    expect(clientMock.createSession).toHaveBeenCalledTimes(1);
-    expect(started).toHaveBeenCalledTimes(1);
-    expect(disconnect).not.toHaveBeenCalled();
+      const followupEnvelope = await launch.write("Continue with a follow-up");
 
-    const followupEnvelope = await launch.write("Continue with a follow-up");
+      expect(followupEnvelope.summary).toBe("Follow-up complete.");
+      expect(clientMock.createSession).toHaveBeenCalledTimes(1);
+      expect(started).toHaveBeenCalledTimes(1);
+      expect(disconnect).not.toHaveBeenCalled();
 
-    expect(followupEnvelope.summary).toBe("Follow-up complete.");
-    expect(clientMock.createSession).toHaveBeenCalledTimes(1);
-    expect(started).toHaveBeenCalledTimes(1);
-    expect(disconnect).not.toHaveBeenCalled();
+      await launch.stop();
 
-    await launch.stop();
-
-    expect(disconnect).toHaveBeenCalledTimes(1);
-  });
+      expect(disconnect).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("persists provider switch history for background runs", async () => {
     const runtimeStore = createTestRuntimeStore();
@@ -1393,7 +1406,10 @@ describe("SubagentRunner", () => {
     expect(recovered).not.toBeNull();
     const liveRun = (
       runner as unknown as {
-        liveRuns: Map<string, { providerOverride: "copilot" | "azure-openai" | null; providerSessionId: string | null }>;
+        liveRuns: Map<
+          string,
+          { providerOverride: "copilot" | "azure-openai" | null; providerSessionId: string | null }
+        >;
       }
     ).liveRuns.get("run-host-managed-provider-recovery");
     expect(liveRun).toMatchObject({
@@ -1461,15 +1477,18 @@ describe("SubagentRunner", () => {
     await seedRunner.run({ task: "Inspect Spira", allowWrites: true });
     const persistedRuntimeSession = runtimeStore.getRuntimeSession("subagent:run-stale-manifest");
     expect(persistedRuntimeSession).not.toBeNull();
+    if (!persistedRuntimeSession) {
+      throw new Error("Expected persisted runtime session for stale manifest test.");
+    }
     runtimeStore.persistRuntimeSession({
       runtimeSessionId: "subagent:run-stale-manifest",
       stationId: "primary",
       runId: "run-stale-manifest",
       kind: "subagent",
       contract: {
-        ...persistedRuntimeSession!,
+        ...persistedRuntimeSession,
         providerBinding: {
-          ...persistedRuntimeSession!.providerBinding,
+          ...persistedRuntimeSession.providerBinding,
           providerSessionId: null,
         },
       },
@@ -1746,7 +1765,9 @@ describe("SubagentRunner", () => {
         if (permissionPromise) {
           await permissionPromise;
         }
-        config.onEvent?.(createSessionEvent("assistant.message", { messageId: "assistant-1", content: "{\"summary\":\"done\"}" }));
+        config.onEvent?.(
+          createSessionEvent("assistant.message", { messageId: "assistant-1", content: '{"summary":"done"}' }),
+        );
         config.onEvent?.(createSessionEvent("session.idle", { usage: { totalTokens: 3, source: "provider" } }));
       },
       disconnect: async () => undefined,
@@ -1890,8 +1911,15 @@ describe("SubagentRunner", () => {
 
     const launch = runner.launch({ task: "Inspect Spira", mode: "background" });
     await launch.stop();
-    expect(releaseSession).not.toBeNull();
-    releaseSession!();
+    const requireReleaseSession = (value: (() => void) | null): (() => void) => {
+      if (value === null) {
+        throw new Error("Expected launch stop to expose a releaseSession callback.");
+      }
+      return value;
+    };
+    const release = requireReleaseSession(releaseSession);
+    expect(release).not.toBeNull();
+    release();
 
     await expect(launch.resultPromise).resolves.toMatchObject({ status: "failed", summary: "Subagent run cancelled." });
     expect(send).not.toHaveBeenCalled();

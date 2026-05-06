@@ -159,7 +159,7 @@ export const buildSpiraUiContext = (): SpiraUiContext => {
       requests: snapshot.permissions.map((request) => ({
         requestId: request.requestId,
         toolName: request.toolName,
-        action: request.action,
+        action: request.kind,
         stationId: request.stationId,
       })),
     },

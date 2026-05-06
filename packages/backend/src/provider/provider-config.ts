@@ -3,10 +3,7 @@ import type { ProviderId } from "./types.js";
 
 export const getConfiguredProviderId = (env: Env): ProviderId => env.SPIRA_MODEL_PROVIDER;
 
-export const ESCALATION_PROVIDER_IDS = [
-  "azure-openai-escalation",
-  "openai-escalation",
-] as const satisfies ProviderId[];
+export const ESCALATION_PROVIDER_IDS = ["azure-openai-escalation", "openai-escalation"] as const satisfies ProviderId[];
 
 export const isEscalationProvider = (
   providerId: ProviderId | null | undefined,

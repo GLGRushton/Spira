@@ -81,9 +81,7 @@ export async function discoverMissionProofProfiles(run: TicketRunSummary): Promi
   return profiles.flatMap((profile) => (profile ? [profile] : []));
 }
 
-export const toMissionProofProfileSummary = (
-  profile: ResolvedMissionProofProfile,
-): TicketRunProofProfileSummary => ({
+export const toMissionProofProfileSummary = (profile: ResolvedMissionProofProfile): TicketRunProofProfileSummary => ({
   profileId: profile.profileId,
   label: profile.label,
   description: profile.description,

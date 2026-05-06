@@ -227,12 +227,11 @@ export async function runMissionProof(input: RunMissionProofInput): Promise<RunM
     ];
   });
 
-  const summary =
-    timedOut
-      ? `${input.profile.label} timed out before it finished.`
-      : exitCode === 0
-        ? `${input.profile.label} passed and produced ${artifacts.length} artifact${artifacts.length === 1 ? "" : "s"}.`
-        : `${input.profile.label} failed with exit code ${exitCode ?? "unknown"}.`;
+  const summary = timedOut
+    ? `${input.profile.label} timed out before it finished.`
+    : exitCode === 0
+      ? `${input.profile.label} passed and produced ${artifacts.length} artifact${artifacts.length === 1 ? "" : "s"}.`
+      : `${input.profile.label} failed with exit code ${exitCode ?? "unknown"}.`;
 
   await writeFile(
     path.join(proofRunDirectory, "summary.json"),
@@ -264,7 +263,12 @@ export async function runMissionProof(input: RunMissionProofInput): Promise<RunM
     command,
     artifacts: [
       ...artifacts,
-      buildArtifact(`${input.proofRunId}:summary`, "report", "Proof summary", path.join(proofRunDirectory, "summary.json")),
+      buildArtifact(
+        `${input.proofRunId}:summary`,
+        "report",
+        "Proof summary",
+        path.join(proofRunDirectory, "summary.json"),
+      ),
     ],
   };
 }

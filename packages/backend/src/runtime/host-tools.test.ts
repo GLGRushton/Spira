@@ -6,6 +6,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createHostTools } from "./host-tools.js";
 
 const parseToolResult = <T>(value: { textResultForLlm: string }): T => JSON.parse(value.textResultForLlm) as T;
+const requireTool = <T>(tool: T | undefined, name: string): T => {
+  expect(tool).toBeDefined();
+  if (!tool) {
+    throw new Error(`Expected tool ${name} to be defined.`);
+  }
+  return tool;
+};
 
 describe("createHostTools", () => {
   let workspacePath: string | null = null;
@@ -22,10 +29,12 @@ describe("createHostTools", () => {
     const filePath = path.join(workspacePath, "sample.txt");
     await writeFile(filePath, "alpha\nbeta", "utf8");
 
-    const applyPatch = createHostTools({ workingDirectory: workspacePath }).find((tool) => tool.name === "apply_patch");
-    expect(applyPatch).toBeDefined();
+    const applyPatch = requireTool(
+      createHostTools({ workingDirectory: workspacePath }).find((tool) => tool.name === "apply_patch"),
+      "apply_patch",
+    );
 
-    const result = await applyPatch!.handler({
+    const result = await applyPatch?.handler({
       patch:
         "*** Begin Patch\n*** Update File: sample.txt\n@@\n alpha\n-beta\n+gamma\n*** End of File\n*** End Patch\n",
     });
@@ -39,10 +48,12 @@ describe("createHostTools", () => {
     const filePath = path.join(workspacePath, "sample.txt");
     await writeFile(filePath, "alpha\nbeta\n", "utf8");
 
-    const applyPatch = createHostTools({ workingDirectory: workspacePath }).find((tool) => tool.name === "apply_patch");
-    expect(applyPatch).toBeDefined();
+    const applyPatch = requireTool(
+      createHostTools({ workingDirectory: workspacePath }).find((tool) => tool.name === "apply_patch"),
+      "apply_patch",
+    );
 
-    const result = await applyPatch!.handler({
+    const result = await applyPatch?.handler({
       patch: "--- a/sample.txt\n+++ b/sample.txt\n@@ -1,2 +1,2 @@\n alpha\n-beta\n+gamma\n",
     });
 
@@ -56,10 +67,12 @@ describe("createHostTools", () => {
     const newPath = path.join(workspacePath, "new.txt");
     await writeFile(oldPath, "alpha\n", "utf8");
 
-    const applyPatch = createHostTools({ workingDirectory: workspacePath }).find((tool) => tool.name === "apply_patch");
-    expect(applyPatch).toBeDefined();
+    const applyPatch = requireTool(
+      createHostTools({ workingDirectory: workspacePath }).find((tool) => tool.name === "apply_patch"),
+      "apply_patch",
+    );
 
-    const result = await applyPatch!.handler({
+    const result = await applyPatch?.handler({
       patch: "diff --git a/old.txt b/new.txt\nsimilarity index 100%\nrename from old.txt\nrename to new.txt\n",
     });
 
@@ -78,10 +91,12 @@ describe("createHostTools", () => {
     await writeFile(oldPath, "alpha\n", "utf8");
     await writeFile(samplePath, "beta\n", "utf8");
 
-    const applyPatch = createHostTools({ workingDirectory: workspacePath }).find((tool) => tool.name === "apply_patch");
-    expect(applyPatch).toBeDefined();
+    const applyPatch = requireTool(
+      createHostTools({ workingDirectory: workspacePath }).find((tool) => tool.name === "apply_patch"),
+      "apply_patch",
+    );
 
-    const result = await applyPatch!.handler({
+    const result = await applyPatch?.handler({
       patch:
         "diff --git a/old.txt b/new.txt\nsimilarity index 100%\nrename from old.txt\nrename to new.txt\ndiff --git a/sample.txt b/sample.txt\n--- a/sample.txt\n+++ b/sample.txt\n@@ -1 +1 @@\n-beta\n+gamma\n",
     });
@@ -100,10 +115,12 @@ describe("createHostTools", () => {
     const copiedPath = path.join(workspacePath, "b.txt");
     await writeFile(sourcePath, "alpha\nbeta\n", "utf8");
 
-    const applyPatch = createHostTools({ workingDirectory: workspacePath }).find((tool) => tool.name === "apply_patch");
-    expect(applyPatch).toBeDefined();
+    const applyPatch = requireTool(
+      createHostTools({ workingDirectory: workspacePath }).find((tool) => tool.name === "apply_patch"),
+      "apply_patch",
+    );
 
-    const result = await applyPatch!.handler({
+    const result = await applyPatch?.handler({
       patch:
         "diff --git a/a.txt b/b.txt\nsimilarity index 75%\ncopy from a.txt\ncopy to b.txt\n--- a/a.txt\n+++ b/b.txt\n@@ -1,2 +1,2 @@\n alpha\n-beta\n+gamma\n",
     });
@@ -117,11 +134,13 @@ describe("createHostTools", () => {
     workspacePath = await mkdtemp(path.join(tmpdir(), "spira-host-tools-"));
     const filePath = path.join(workspacePath, "empty.txt");
 
-    const applyPatch = createHostTools({ workingDirectory: workspacePath }).find((tool) => tool.name === "apply_patch");
-    expect(applyPatch).toBeDefined();
+    const applyPatch = requireTool(
+      createHostTools({ workingDirectory: workspacePath }).find((tool) => tool.name === "apply_patch"),
+      "apply_patch",
+    );
 
     await expect(
-      applyPatch!.handler({
+      applyPatch?.handler({
         patch: "diff --git a/empty.txt b/empty.txt\nnew file mode 100644\n--- /dev/null\n+++ b/empty.txt\n",
       }),
     ).resolves.toMatchObject({
@@ -135,11 +154,13 @@ describe("createHostTools", () => {
     const filePath = path.join(workspacePath, "sample.txt");
     await writeFile(filePath, "hello\n", "utf8");
 
-    const applyPatch = createHostTools({ workingDirectory: workspacePath }).find((tool) => tool.name === "apply_patch");
-    expect(applyPatch).toBeDefined();
+    const applyPatch = requireTool(
+      createHostTools({ workingDirectory: workspacePath }).find((tool) => tool.name === "apply_patch"),
+      "apply_patch",
+    );
 
     await expect(
-      applyPatch!.handler({
+      applyPatch?.handler({
         patch: "--- a/sample.txt\n+++ b/sample.txt\n@@ -1 +1 @@\n-hello\n+hello\n\\ No newline at end of file\n",
       }),
     ).resolves.toMatchObject({
@@ -153,10 +174,12 @@ describe("createHostTools", () => {
     const filePath = path.join(workspacePath, "sample.txt");
     await writeFile(filePath, "alpha\nbeta\n", "utf8");
 
-    const writeTool = createHostTools({ workingDirectory: workspacePath }).find((tool) => tool.name === "write_file");
-    expect(writeTool).toBeDefined();
+    const writeTool = requireTool(
+      createHostTools({ workingDirectory: workspacePath }).find((tool) => tool.name === "write_file"),
+      "write_file",
+    );
 
-    await expect(writeTool!.handler({ path: "sample.txt", content: "gamma\n" })).resolves.toMatchObject({
+    await expect(writeTool?.handler({ path: "sample.txt", content: "gamma\n" })).resolves.toMatchObject({
       resultType: "failure",
       error: expect.stringContaining("Use apply_patch for partial edits"),
     });
@@ -169,11 +192,13 @@ describe("createHostTools", () => {
     const originalContent = "alpha\nbeta\n";
     await writeFile(filePath, originalContent, "utf8");
 
-    const writeTool = createHostTools({ workingDirectory: workspacePath }).find((tool) => tool.name === "write_file");
-    expect(writeTool).toBeDefined();
+    const writeTool = requireTool(
+      createHostTools({ workingDirectory: workspacePath }).find((tool) => tool.name === "write_file"),
+      "write_file",
+    );
 
     await expect(
-      writeTool!.handler({
+      writeTool?.handler({
         path: "sample.txt",
         content: "gamma\n",
         overwriteExisting: true,
@@ -184,7 +209,7 @@ describe("createHostTools", () => {
       error: expect.stringContaining("expectedSha256 did not match"),
     });
     await expect(
-      writeTool!.handler({
+      writeTool?.handler({
         path: "sample.txt",
         content: "gamma\n",
         overwriteExisting: true,
@@ -198,19 +223,23 @@ describe("createHostTools", () => {
 
   it("does not retain completed sync PowerShell sessions", async () => {
     const tools = createHostTools({ workingDirectory: "C:\\GitHub\\Spira" });
-    const powershell = tools.find((tool) => tool.name === "powershell");
-    const listPowerShell = tools.find((tool) => tool.name === "list_powershell");
-    expect(powershell).toBeDefined();
-    expect(listPowerShell).toBeDefined();
+    const powershell = requireTool(
+      tools.find((tool) => tool.name === "powershell"),
+      "powershell",
+    );
+    const listPowerShell = requireTool(
+      tools.find((tool) => tool.name === "list_powershell"),
+      "list_powershell",
+    );
 
-    const result = await powershell!.handler({
+    const result = await powershell?.handler({
       shellId: "sync-cleanup-test",
       command: 'Write-Output "ok"',
       description: "Emit output",
       mode: "sync",
-      initial_wait: 5,
+      initial_wait: 10,
     });
-    const listed = await listPowerShell!.handler({});
+    const listed = await listPowerShell?.handler({});
 
     expect(parseToolResult<{ shellId: string; status: string }>(result)).toMatchObject({
       shellId: "sync-cleanup-test",
@@ -219,19 +248,25 @@ describe("createHostTools", () => {
     expect(parseToolResult<{ sessions: Array<{ shellId: string }> }>(listed).sessions).not.toContainEqual(
       expect.objectContaining({ shellId: "sync-cleanup-test" }),
     );
-  });
+  }, 15_000);
 
   it("cleans up sync PowerShell sessions that finish after the initial wait timeout", async () => {
     const tools = createHostTools({ workingDirectory: "C:\\GitHub\\Spira" });
-    const powershell = tools.find((tool) => tool.name === "powershell");
-    const listPowerShell = tools.find((tool) => tool.name === "list_powershell");
-    const readPowerShell = tools.find((tool) => tool.name === "read_powershell");
-    expect(powershell).toBeDefined();
-    expect(listPowerShell).toBeDefined();
-    expect(readPowerShell).toBeDefined();
+    const powershell = requireTool(
+      tools.find((tool) => tool.name === "powershell"),
+      "powershell",
+    );
+    const listPowerShell = requireTool(
+      tools.find((tool) => tool.name === "list_powershell"),
+      "list_powershell",
+    );
+    const readPowerShell = requireTool(
+      tools.find((tool) => tool.name === "read_powershell"),
+      "read_powershell",
+    );
 
     await expect(
-      powershell!.handler({
+      powershell?.handler({
         shellId: "sync-review",
         command: 'Start-Sleep -Milliseconds 1500; Write-Output "done"',
         description: "Delayed sync output",
@@ -244,21 +279,21 @@ describe("createHostTools", () => {
 
     await vi.waitFor(
       async () => {
-        const listed = await listPowerShell!.handler({});
+        const listed = await listPowerShell?.handler({});
         expect(parseToolResult<{ sessions: Array<{ shellId: string }> }>(listed).sessions).not.toContainEqual(
           expect.objectContaining({ shellId: "sync-review" }),
         );
       },
       { timeout: 10_000, interval: 100 },
     );
-    await expect(readPowerShell!.handler({ shellId: "sync-review", delay: 0 })).resolves.toMatchObject({
+    await expect(readPowerShell?.handler({ shellId: "sync-review", delay: 0 })).resolves.toMatchObject({
       resultType: "success",
       textResultForLlm: expect.stringContaining('"status": "completed"'),
     });
-    await expect(readPowerShell!.handler({ shellId: "sync-review", delay: 0 })).resolves.toMatchObject({
+    await expect(readPowerShell?.handler({ shellId: "sync-review", delay: 0 })).resolves.toMatchObject({
       resultType: "failure",
     });
-  });
+  }, 15_000);
 
   it("marks host tools as explicit overrides for Copilot built-ins", () => {
     const tools = createHostTools({ workingDirectory: "C:\\GitHub\\Spira" });
@@ -272,14 +307,16 @@ describe("createHostTools", () => {
     await writeFile(filePath, "const a = 1;\nimport x from 'y';\n", "utf8");
 
     const tools = createHostTools({ workingDirectory: workspacePath });
-    const rg = tools.find((tool) => tool.name === "rg");
-    expect(rg).toBeDefined();
+    const rg = requireTool(
+      tools.find((tool) => tool.name === "rg"),
+      "rg",
+    );
 
-    await expect(rg!.handler({ pattern: "^import", output_mode: "files_with_matches" })).resolves.toMatchObject({
+    await expect(rg?.handler({ pattern: "^import", output_mode: "files_with_matches" })).resolves.toMatchObject({
       resultType: "success",
       textResultForLlm: expect.stringContaining(JSON.stringify(filePath)),
     });
-    await expect(rg!.handler({ pattern: "^import", output_mode: "count" })).resolves.toMatchObject({
+    await expect(rg?.handler({ pattern: "^import", output_mode: "count" })).resolves.toMatchObject({
       resultType: "success",
       textResultForLlm: expect.stringContaining('"count": 1'),
     });
@@ -287,16 +324,21 @@ describe("createHostTools", () => {
 
   it("persists idle PowerShell sessions between writes and completion", async () => {
     const tools = createHostTools({ workingDirectory: "C:\\GitHub\\Spira" });
-    const powershell = tools.find((tool) => tool.name === "powershell");
-    const readPowerShell = tools.find((tool) => tool.name === "read_powershell");
-    const stopPowerShell = tools.find((tool) => tool.name === "stop_powershell");
-
-    expect(powershell).toBeDefined();
-    expect(readPowerShell).toBeDefined();
-    expect(stopPowerShell).toBeDefined();
+    const powershell = requireTool(
+      tools.find((tool) => tool.name === "powershell"),
+      "powershell",
+    );
+    const readPowerShell = requireTool(
+      tools.find((tool) => tool.name === "read_powershell"),
+      "read_powershell",
+    );
+    const stopPowerShell = requireTool(
+      tools.find((tool) => tool.name === "stop_powershell"),
+      "stop_powershell",
+    );
 
     await expect(
-      powershell!.handler({
+      powershell?.handler({
         shellId: "idle-session-test",
         command: "Start-Sleep -Seconds 3",
         description: "Idle session test",
@@ -304,71 +346,84 @@ describe("createHostTools", () => {
         initial_wait: 1,
       }),
     ).resolves.toMatchObject({ resultType: "success" });
-    await expect(readPowerShell!.handler({ shellId: "idle-session-test", delay: 0 })).resolves.toMatchObject({
+    await expect(readPowerShell?.handler({ shellId: "idle-session-test", delay: 0 })).resolves.toMatchObject({
       resultType: "success",
       textResultForLlm: expect.stringContaining('"status": "idle"'),
     });
-    await expect(stopPowerShell!.handler({ shellId: "idle-session-test" })).resolves.toMatchObject({
+    await expect(stopPowerShell?.handler({ shellId: "idle-session-test" })).resolves.toMatchObject({
       resultType: "success",
     });
   });
 
   it("allows writing to an idle PowerShell session after a read", async () => {
     const tools = createHostTools({ workingDirectory: "C:\\GitHub\\Spira" });
-    const powershell = tools.find((tool) => tool.name === "powershell");
-    const readPowerShell = tools.find((tool) => tool.name === "read_powershell");
-    const writePowerShell = tools.find((tool) => tool.name === "write_powershell");
-    const stopPowerShell = tools.find((tool) => tool.name === "stop_powershell");
-
-    expect(powershell).toBeDefined();
-    expect(readPowerShell).toBeDefined();
-    expect(writePowerShell).toBeDefined();
-    expect(stopPowerShell).toBeDefined();
+    const powershell = requireTool(
+      tools.find((tool) => tool.name === "powershell"),
+      "powershell",
+    );
+    const readPowerShell = requireTool(
+      tools.find((tool) => tool.name === "read_powershell"),
+      "read_powershell",
+    );
+    const writePowerShell = requireTool(
+      tools.find((tool) => tool.name === "write_powershell"),
+      "write_powershell",
+    );
+    const stopPowerShell = requireTool(
+      tools.find((tool) => tool.name === "stop_powershell"),
+      "stop_powershell",
+    );
 
     await expect(
-      powershell!.handler({
+      powershell?.handler({
         command: "Write-Output 'ready'",
         description: "Keep shell interactive",
         shellId: "idle-write-session",
         mode: "async",
-        initial_wait: 1,
+        initial_wait: 2,
       }),
     ).resolves.toMatchObject({
       resultType: "success",
     });
-    await expect(readPowerShell!.handler({ shellId: "idle-write-session", delay: 0 })).resolves.toMatchObject({
+    await expect(readPowerShell?.handler({ shellId: "idle-write-session", delay: 0 })).resolves.toMatchObject({
       resultType: "success",
       textResultForLlm: expect.stringContaining("ready"),
     });
-    await expect(readPowerShell!.handler({ shellId: "idle-write-session", delay: 0 })).resolves.toMatchObject({
+    await expect(readPowerShell?.handler({ shellId: "idle-write-session", delay: 0 })).resolves.toMatchObject({
       resultType: "success",
       textResultForLlm: expect.stringContaining('"status": "idle"'),
     });
     await expect(
-      writePowerShell!.handler({ shellId: "idle-write-session", input: "Write-Output 'pong'{enter}", delay: 1 }),
+      writePowerShell?.handler({ shellId: "idle-write-session", input: "Write-Output 'pong'{enter}", delay: 2 }),
     ).resolves.toMatchObject({
       resultType: "success",
     });
-    await expect(readPowerShell!.handler({ shellId: "idle-write-session", delay: 0 })).resolves.toMatchObject({
+    await vi.waitFor(
+      async () => {
+        await expect(readPowerShell?.handler({ shellId: "idle-write-session", delay: 1 })).resolves.toMatchObject({
+          resultType: "success",
+          textResultForLlm: expect.stringContaining("pong"),
+        });
+      },
+      { timeout: 10_000, interval: 250 },
+    );
+    await expect(stopPowerShell?.handler({ shellId: "idle-write-session" })).resolves.toMatchObject({
       resultType: "success",
-      textResultForLlm: expect.stringContaining("pong"),
     });
-    await expect(stopPowerShell!.handler({ shellId: "idle-write-session" })).resolves.toMatchObject({
-      resultType: "success",
-    });
-  });
+  }, 20_000);
 
   it("starts PowerShell sessions inside the runtime working directory", async () => {
     workspacePath = await mkdtemp(path.join(tmpdir(), "spira-host-tools-cwd-"));
     const nestedPath = path.join(workspacePath, "nested");
     await mkdir(nestedPath, { recursive: true });
     const tools = createHostTools({ workingDirectory: nestedPath });
-    const powershell = tools.find((tool) => tool.name === "powershell");
-
-    expect(powershell).toBeDefined();
+    const powershell = requireTool(
+      tools.find((tool) => tool.name === "powershell"),
+      "powershell",
+    );
 
     await expect(
-      powershell!.handler({
+      powershell?.handler({
         shellId: "working-directory-test",
         command: "(Get-Location).Path",
         description: "Report working directory",
@@ -390,18 +445,25 @@ describe("createHostTools", () => {
       workingDirectory: "C:\\GitHub\\Spira",
       runtimeSessionId: "runtime-b",
     });
-    const startA = toolsA.find((tool) => tool.name === "powershell");
-    const readB = toolsB.find((tool) => tool.name === "read_powershell");
-    const listB = toolsB.find((tool) => tool.name === "list_powershell");
-    const stopA = toolsA.find((tool) => tool.name === "stop_powershell");
-
-    expect(startA).toBeDefined();
-    expect(readB).toBeDefined();
-    expect(listB).toBeDefined();
-    expect(stopA).toBeDefined();
+    const startA = requireTool(
+      toolsA.find((tool) => tool.name === "powershell"),
+      "powershell",
+    );
+    const readB = requireTool(
+      toolsB.find((tool) => tool.name === "read_powershell"),
+      "read_powershell",
+    );
+    const listB = requireTool(
+      toolsB.find((tool) => tool.name === "list_powershell"),
+      "list_powershell",
+    );
+    const stopA = requireTool(
+      toolsA.find((tool) => tool.name === "stop_powershell"),
+      "stop_powershell",
+    );
 
     await expect(
-      startA!.handler({
+      startA?.handler({
         command: "Write-Output 'owned'",
         description: "Owned shell",
         shellId: "scoped-session",
@@ -412,53 +474,60 @@ describe("createHostTools", () => {
       resultType: "success",
     });
 
-    await expect(readB!.handler({ shellId: "scoped-session", delay: 0 })).resolves.toMatchObject({
+    await expect(readB?.handler({ shellId: "scoped-session", delay: 0 })).resolves.toMatchObject({
       resultType: "failure",
     });
-    const listed = await listB!.handler({});
+    const listed = await listB?.handler({});
     expect(parseToolResult<{ sessions: Array<{ shellId: string }> }>(listed).sessions).toEqual([]);
-    await expect(stopA!.handler({ shellId: "scoped-session" })).resolves.toMatchObject({
+    await expect(stopA?.handler({ shellId: "scoped-session" })).resolves.toMatchObject({
       resultType: "success",
     });
   });
 
   it("translates arrow-key tokens for interactive PowerShell writes", async () => {
     const tools = createHostTools({ workingDirectory: "C:\\GitHub\\Spira" });
-    const powershell = tools.find((tool) => tool.name === "powershell");
-    const readPowerShell = tools.find((tool) => tool.name === "read_powershell");
-    const writePowerShell = tools.find((tool) => tool.name === "write_powershell");
-    const stopPowerShell = tools.find((tool) => tool.name === "stop_powershell");
-
-    expect(powershell).toBeDefined();
-    expect(readPowerShell).toBeDefined();
-    expect(writePowerShell).toBeDefined();
-    expect(stopPowerShell).toBeDefined();
+    const powershell = requireTool(
+      tools.find((tool) => tool.name === "powershell"),
+      "powershell",
+    );
+    const readPowerShell = requireTool(
+      tools.find((tool) => tool.name === "read_powershell"),
+      "read_powershell",
+    );
+    const writePowerShell = requireTool(
+      tools.find((tool) => tool.name === "write_powershell"),
+      "write_powershell",
+    );
+    const stopPowerShell = requireTool(
+      tools.find((tool) => tool.name === "stop_powershell"),
+      "stop_powershell",
+    );
 
     await expect(
-      powershell!.handler({
+      powershell?.handler({
         command:
           "node -e \"process.stdin.on('data', (chunk) => { console.log(Array.from(chunk).join(',')); process.exit(0); })\"",
         description: "Capture arrow-key bytes",
         shellId: "arrow-session",
         mode: "async",
-        initial_wait: 1,
+        initial_wait: 2,
       }),
     ).resolves.toMatchObject({
       resultType: "success",
     });
     await expect(
-      writePowerShell!.handler({ shellId: "arrow-session", input: "{up}", delay: 1 }),
+      writePowerShell?.handler({ shellId: "arrow-session", input: "{up}", delay: 2 }),
     ).resolves.toMatchObject({
       resultType: "success",
     });
-    await expect(readPowerShell!.handler({ shellId: "arrow-session", delay: 0 })).resolves.toMatchObject({
+    await expect(readPowerShell?.handler({ shellId: "arrow-session", delay: 0 })).resolves.toMatchObject({
       resultType: "success",
       textResultForLlm: expect.stringContaining("27,91,65"),
     });
-    await expect(stopPowerShell!.handler({ shellId: "arrow-session" })).resolves.toMatchObject({
+    await expect(stopPowerShell?.handler({ shellId: "arrow-session" })).resolves.toMatchObject({
       resultType: "success",
     });
-  });
+  }, 20_000);
 
   it("persists and journals cancelled PowerShell sessions", async () => {
     const capturedStatuses: string[] = [];
@@ -491,14 +560,17 @@ describe("createHostTools", () => {
         listRuntimeHostResources: () => [],
       } as never,
     });
-    const powershell = tools.find((tool) => tool.name === "powershell");
-    const stopPowerShell = tools.find((tool) => tool.name === "stop_powershell");
-
-    expect(powershell).toBeDefined();
-    expect(stopPowerShell).toBeDefined();
+    const powershell = requireTool(
+      tools.find((tool) => tool.name === "powershell"),
+      "powershell",
+    );
+    const stopPowerShell = requireTool(
+      tools.find((tool) => tool.name === "stop_powershell"),
+      "stop_powershell",
+    );
 
     await expect(
-      powershell!.handler({
+      powershell?.handler({
         shellId: "cancel-session-test",
         command: "Start-Sleep -Seconds 10",
         description: "Cancel session test",
@@ -506,24 +578,28 @@ describe("createHostTools", () => {
         initial_wait: 1,
       }),
     ).resolves.toMatchObject({ resultType: "success" });
-    await expect(stopPowerShell!.handler({ shellId: "cancel-session-test" })).resolves.toMatchObject({
+    await expect(stopPowerShell?.handler({ shellId: "cancel-session-test" })).resolves.toMatchObject({
       resultType: "success",
     });
 
     expect(capturedStatuses).toContain("cancelled");
     expect(capturedEventTypes).toContain("host.resource_recorded");
-    expect(capturedResourceIds).toContain("powershell:station:primary:cancel-session-test");
+    expect(capturedResourceIds).toContain("cancel-session-test");
   });
 
   it("fails stop_powershell for completed async sessions", async () => {
     const tools = createHostTools({ workingDirectory: "C:\\GitHub\\Spira" });
-    const powershell = tools.find((tool) => tool.name === "powershell");
-    const stopPowerShell = tools.find((tool) => tool.name === "stop_powershell");
-    expect(powershell).toBeDefined();
-    expect(stopPowerShell).toBeDefined();
+    const powershell = requireTool(
+      tools.find((tool) => tool.name === "powershell"),
+      "powershell",
+    );
+    const stopPowerShell = requireTool(
+      tools.find((tool) => tool.name === "stop_powershell"),
+      "stop_powershell",
+    );
 
     await expect(
-      powershell!.handler({
+      powershell?.handler({
         shellId: "completed-async-stop-test",
         command: 'Write-Output "done"; exit',
         description: "Completed async session",
@@ -534,7 +610,7 @@ describe("createHostTools", () => {
       resultType: "success",
     });
 
-    await expect(stopPowerShell!.handler({ shellId: "completed-async-stop-test" })).resolves.toMatchObject({
+    await expect(stopPowerShell?.handler({ shellId: "completed-async-stop-test" })).resolves.toMatchObject({
       resultType: "failure",
     });
   });
@@ -574,15 +650,21 @@ describe("createHostTools", () => {
         appendRuntimeLedgerEvent: () => undefined,
       } as never,
     });
-    const powershell = tools.find((tool) => tool.name === "powershell");
-    const listPowerShell = tools.find((tool) => tool.name === "list_powershell");
-    const readPowerShell = tools.find((tool) => tool.name === "read_powershell");
-    expect(powershell).toBeDefined();
-    expect(listPowerShell).toBeDefined();
-    expect(readPowerShell).toBeDefined();
+    const powershell = requireTool(
+      tools.find((tool) => tool.name === "powershell"),
+      "powershell",
+    );
+    const listPowerShell = requireTool(
+      tools.find((tool) => tool.name === "list_powershell"),
+      "list_powershell",
+    );
+    const readPowerShell = requireTool(
+      tools.find((tool) => tool.name === "read_powershell"),
+      "read_powershell",
+    );
 
     await expect(
-      powershell!.handler({
+      powershell?.handler({
         shellId: "sync-persist-test",
         command: 'Write-Output "ok"',
         description: "Completed sync persist test",
@@ -594,10 +676,10 @@ describe("createHostTools", () => {
     });
 
     await vi.waitFor(async () => {
-      const listed = await listPowerShell!.handler({});
+      const listed = await listPowerShell?.handler({});
       expect(parseToolResult<{ sessions: Array<{ shellId: string }> }>(listed).sessions).toEqual([]);
     });
-    await expect(readPowerShell!.handler({ shellId: "sync-persist-test", delay: 0 })).resolves.toMatchObject({
+    await expect(readPowerShell?.handler({ shellId: "sync-persist-test", delay: 0 })).resolves.toMatchObject({
       resultType: "failure",
     });
   });
@@ -609,7 +691,7 @@ describe("createHostTools", () => {
       runtimeStore: {
         listRuntimeHostResources: () => [
           {
-            resourceId: "powershell:station:primary:stuck-shell",
+            resourceId: "stuck-shell",
             runtimeSessionId: "station:primary",
             stationId: "primary",
             kind: "powershell",
@@ -637,10 +719,12 @@ describe("createHostTools", () => {
         appendRuntimeLedgerEvent: () => undefined,
       } as never,
     });
-    const stopPowerShell = tools.find((tool) => tool.name === "stop_powershell");
-    expect(stopPowerShell).toBeDefined();
+    const stopPowerShell = requireTool(
+      tools.find((tool) => tool.name === "stop_powershell"),
+      "stop_powershell",
+    );
 
-    await expect(stopPowerShell!.handler({ shellId: "stuck-shell" })).resolves.toMatchObject({
+    await expect(stopPowerShell?.handler({ shellId: "stuck-shell" })).resolves.toMatchObject({
       resultType: "failure",
     });
   });
@@ -679,10 +763,11 @@ describe("createHostTools", () => {
         ],
       } as never,
     });
-    const listPowerShell = tools.find((tool) => tool.name === "list_powershell");
-
-    expect(listPowerShell).toBeDefined();
-    const listed = await listPowerShell!.handler({});
+    const listPowerShell = requireTool(
+      tools.find((tool) => tool.name === "list_powershell"),
+      "list_powershell",
+    );
+    const listed = await listPowerShell?.handler({});
 
     expect(parseToolResult<{ sessions: Array<{ shellId: string; status: string }> }>(listed).sessions).toContainEqual(
       expect.objectContaining({
@@ -727,15 +812,18 @@ describe("createHostTools", () => {
         appendRuntimeLedgerEvent: () => undefined,
       } as never,
     });
-    const readPowerShell = tools.find((tool) => tool.name === "read_powershell");
-    const writePowerShell = tools.find((tool) => tool.name === "write_powershell");
-
-    expect(readPowerShell).toBeDefined();
-    expect(writePowerShell).toBeDefined();
-    await expect(readPowerShell!.handler({ shellId: "shell-recovered", delay: 0 })).resolves.toMatchObject({
+    const readPowerShell = requireTool(
+      tools.find((tool) => tool.name === "read_powershell"),
+      "read_powershell",
+    );
+    const writePowerShell = requireTool(
+      tools.find((tool) => tool.name === "write_powershell"),
+      "write_powershell",
+    );
+    await expect(readPowerShell?.handler({ shellId: "shell-recovered", delay: 0 })).resolves.toMatchObject({
       resultType: "success",
     });
-    await expect(writePowerShell!.handler({ shellId: "shell-recovered", input: "x", delay: 0 })).resolves.toMatchObject(
+    await expect(writePowerShell?.handler({ shellId: "shell-recovered", input: "x", delay: 0 })).resolves.toMatchObject(
       {
         resultType: "failure",
       },

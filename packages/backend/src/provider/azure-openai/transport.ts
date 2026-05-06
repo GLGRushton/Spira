@@ -186,7 +186,9 @@ export const requestAzureOpenAiCompletion = async (
   tools: readonly ProviderToolDefinition[],
   options: RequestAzureOpenAiCompletionOptions = {},
 ): Promise<AzureOpenAiChatResponse> => {
-  const url = new URL(`${config.endpoint}/openai/deployments/${encodeURIComponent(state.currentDeployment)}/chat/completions`);
+  const url = new URL(
+    `${config.endpoint}/openai/deployments/${encodeURIComponent(state.currentDeployment)}/chat/completions`,
+  );
   url.searchParams.set("api-version", config.apiVersion);
 
   const response = await (config.fetchFn ?? fetch)(url, {

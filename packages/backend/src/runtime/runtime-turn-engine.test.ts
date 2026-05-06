@@ -1,14 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
-import { StreamAssembler } from "./stream-handler.js";
+import { getDefaultProviderCapabilities } from "../provider/capability-fallback.js";
+import { createRuntimeSessionContract } from "./runtime-contract.js";
 import {
+  type SharedTurnEventState,
   createRuntimeCheckpointFromContract,
   handleSharedTurnEvent,
   settleTurnCompletionIfReady,
   updateRuntimeUsageSummary,
-  type SharedTurnEventState,
 } from "./runtime-turn-engine.js";
-import { createRuntimeSessionContract } from "./runtime-contract.js";
-import { getDefaultProviderCapabilities } from "../provider/capability-fallback.js";
+import { StreamAssembler } from "./stream-handler.js";
 
 describe("runtime-turn-engine", () => {
   it("handles shared assistant, tool, and idle events through one turn path", () => {

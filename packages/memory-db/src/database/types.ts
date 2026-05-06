@@ -8,7 +8,6 @@ import type {
   SubagentRunSnapshot,
   SubagentSource,
   TicketRunAttemptStatus,
-  TicketRunAttemptSummary,
   TicketRunCleanupState,
   TicketRunMissionClassification,
   TicketRunMissionClassificationKind,
@@ -17,24 +16,14 @@ import type {
   TicketRunMissionProofArtifactMode,
   TicketRunMissionProofLevel,
   TicketRunMissionProofPreflightStatus,
-  TicketRunMissionProofStrategy,
-  TicketRunMissionSummary,
   TicketRunMissionValidationKind,
   TicketRunMissionValidationStatus,
   TicketRunPreviousPassContext,
-  TicketRunProofArtifact,
   TicketRunProofArtifactKind,
   TicketRunProofRunStatus,
-  TicketRunProofRunSummary,
   TicketRunProofStatus,
-  TicketRunProofSummary,
-  TicketRunSnapshot,
   TicketRunStatus,
   TicketRunSubmoduleParentRef,
-  TicketRunSubmoduleSummary,
-  TicketRunSummary,
-  TicketRunWorktreeSummary,
-  YouTrackStateMapping,
 } from "@spira/shared";
 
 export const SQLITE_BUSY_TIMEOUT_MS = 5_000;
@@ -658,4 +647,3 @@ export interface UpsertTicketRunProofRunInput {
   command?: string | null;
   artifacts?: readonly UpsertTicketRunProofArtifactInput[];
 }
-

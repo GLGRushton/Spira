@@ -13,7 +13,8 @@ export const registerConfigurationTools = (server: McpServer): void => {
   server.registerTool(
     "spira_ui_get_settings",
     {
-      description: "Read Spira's current effective settings and visible runtime configuration from the UI state snapshot.",
+      description:
+        "Read Spira's current effective settings and visible runtime configuration from the UI state snapshot.",
       inputSchema: EmptySchema,
       annotations: { readOnlyHint: true, idempotentHint: true },
     },

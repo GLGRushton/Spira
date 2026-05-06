@@ -1,17 +1,12 @@
-import type {
-  ProofDecisionRecord,
-  RepoIntelligenceRecord,
-  SpiraMemoryDatabase,
-  ValidationProfileRecord,
-} from "@spira/memory-db";
+import type { ProofDecisionRecord, RepoIntelligenceRecord, SpiraMemoryDatabase } from "@spira/memory-db";
 import type {
   TicketRunMissionClassification,
   TicketRunMissionPhase,
   TicketRunMissionPlan,
-  TicketRunPreviousPassContext,
   TicketRunMissionProofStrategy,
   TicketRunMissionSummary,
   TicketRunMissionValidationRecord,
+  TicketRunPreviousPassContext,
   TicketRunProofRunSummary,
   TicketRunProofSnapshotResult,
   TicketRunProofStatus,
@@ -19,15 +14,15 @@ import type {
 } from "@spira/shared";
 import type { SpiraEventBus } from "../util/event-bus.js";
 import {
-  assertMissionWorkflowActionAllowed,
-  getMissionWorkflowState,
-  type MissionWorkflowState,
-} from "./mission-workflow-guard.js";
-import {
-  computeAdvisoryProofDecision,
   type MissionRepoGuidanceSnapshot,
+  computeAdvisoryProofDecision,
   toPersistedProofDecisionInput,
 } from "./mission-intelligence.js";
+import {
+  type MissionWorkflowState,
+  assertMissionWorkflowActionAllowed,
+  getMissionWorkflowState,
+} from "./mission-workflow-guard.js";
 
 const buildRepoScopePaths = (run: TicketRunSummary): string[] =>
   Array.from(
@@ -368,7 +363,8 @@ export class MissionLifecycleService {
     if (!this.memoryDb) {
       return;
     }
-    const currentAttempt = [...run.attempts].reverse().find((attempt) => attempt.status === "running") ?? run.attempts.at(-1) ?? null;
+    const currentAttempt =
+      [...run.attempts].reverse().find((attempt) => attempt.status === "running") ?? run.attempts.at(-1) ?? null;
     this.memoryDb.appendMissionEvent({
       runId: run.runId,
       attemptId: currentAttempt?.attemptId ?? null,

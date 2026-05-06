@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { assertMissionWorkflowStateActionAllowed, type MissionWorkflowState } from "./mission-workflow-guard.js";
+import { type MissionWorkflowState, assertMissionWorkflowStateActionAllowed } from "./mission-workflow-guard.js";
 
 const createState = (): MissionWorkflowState => ({
   kickoffComplete: true,

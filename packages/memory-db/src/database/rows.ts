@@ -374,4 +374,3 @@ export interface SubagentConfigRow {
   createdAt: number;
   updatedAt: number;
 }
-

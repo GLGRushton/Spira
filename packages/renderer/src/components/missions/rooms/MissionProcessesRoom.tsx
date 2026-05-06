@@ -79,7 +79,9 @@ export function MissionProcessesRoom({ run, controller }: MissionProcessesRoomPr
                             <div className={projectStyles.workHeader}>
                               <div className={projectStyles.workHeaderCopy}>
                                 <strong>{profile.profileName}</strong>
-                                <span className={projectStyles.repoTabMeta}>{describeMissionServiceLauncher(profile)}</span>
+                                <span className={projectStyles.repoTabMeta}>
+                                  {describeMissionServiceLauncher(profile)}
+                                </span>
                               </div>
                               <div className={projectStyles.inlineActions}>
                                 {profileUrl ? (
@@ -93,7 +95,9 @@ export function MissionProcessesRoom({ run, controller }: MissionProcessesRoomPr
                                 ) : null}
                                 <button
                                   type="button"
-                                  className={profile.isLaunchable ? projectStyles.actionButton : projectStyles.secondaryButton}
+                                  className={
+                                    profile.isLaunchable ? projectStyles.actionButton : projectStyles.secondaryButton
+                                  }
                                   onClick={() => void controller.startMissionService(profile)}
                                   disabled={
                                     !profile.isLaunchable ||
@@ -179,10 +183,15 @@ export function MissionProcessesRoom({ run, controller }: MissionProcessesRoomPr
                         <button
                           type="button"
                           className={
-                            isMissionServiceProcessActive(process) ? projectStyles.secondaryButton : projectStyles.actionButton
+                            isMissionServiceProcessActive(process)
+                              ? projectStyles.secondaryButton
+                              : projectStyles.actionButton
                           }
                           onClick={() => void controller.stopMissionService(process)}
-                          disabled={!isMissionServiceProcessActive(process) || controller.stoppingServiceId === process.serviceId}
+                          disabled={
+                            !isMissionServiceProcessActive(process) ||
+                            controller.stoppingServiceId === process.serviceId
+                          }
                         >
                           {controller.stoppingServiceId === process.serviceId
                             ? "Stopping..."
@@ -196,7 +205,10 @@ export function MissionProcessesRoom({ run, controller }: MissionProcessesRoomPr
                     {stdoutLogLines.length > 0 ? (
                       <div className={projectStyles.serviceLogTail}>
                         {stdoutLogLines.map((line, index) => (
-                          <div key={`${process.serviceId}:${line.timestamp}:${index}`} className={projectStyles.serviceLogLine}>
+                          <div
+                            key={`${process.serviceId}:${line.timestamp}:${index}`}
+                            className={projectStyles.serviceLogLine}
+                          >
                             {line.line}
                           </div>
                         ))}

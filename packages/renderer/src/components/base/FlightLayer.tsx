@@ -38,6 +38,7 @@ export function FlightLayer({ flights, trackRef, roomNodesRef }: FlightLayerProp
   const [expiryTick, setExpiryTick] = useState(0);
 
   const activeFlights = useMemo(() => {
+    void expiryTick;
     const now = Date.now();
     return flights.filter((flight) => {
       if (!flight.completedAt) {
@@ -49,6 +50,7 @@ export function FlightLayer({ flights, trackRef, roomNodesRef }: FlightLayerProp
   }, [flights, expiryTick]);
 
   useEffect(() => {
+    void expiryTick;
     const nextExpiryDelay = flights.reduce<number | null>((nearest, flight) => {
       if (!flight.completedAt) {
         return nearest;

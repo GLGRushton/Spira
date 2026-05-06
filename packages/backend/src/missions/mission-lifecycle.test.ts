@@ -2,15 +2,11 @@ import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { SpiraMemoryDatabase, getSpiraMemoryDbPath } from "@spira/memory-db";
-import { describe, expect, it, vi } from "vitest";
 import type { TicketRunSummary } from "@spira/shared";
-import {
-  BUILTIN_PROOF_RULES,
-  BUILTIN_REPO_INTELLIGENCE,
-  BUILTIN_VALIDATION_PROFILES,
-} from "./mission-intelligence.js";
-import { getMissionWorkflowState } from "./mission-workflow-guard.js";
+import { describe, expect, it, vi } from "vitest";
+import { BUILTIN_PROOF_RULES, BUILTIN_REPO_INTELLIGENCE, BUILTIN_VALIDATION_PROFILES } from "./mission-intelligence.js";
 import { MissionLifecycleService } from "./mission-lifecycle.js";
+import { getMissionWorkflowState } from "./mission-workflow-guard.js";
 
 const createDatabase = (): { database: SpiraMemoryDatabase; tempDir: string } => {
   const tempDir = mkdtempSync(path.join(os.tmpdir(), "spira-mission-lifecycle-"));
@@ -232,7 +228,8 @@ describe("MissionLifecycleService", () => {
         uiChange: true,
         proofRequired: true,
         recommendedLevel: "manual-review-only",
-        rationale: "Backend mission surfaces in the monorepo require manual review proof when scoped from the root worktree.",
+        rationale:
+          "Backend mission surfaces in the monorepo require manual review proof when scoped from the root worktree.",
       });
 
       const service = new MissionLifecycleService(database, undefined, async (runId: string) => ({
@@ -392,7 +389,8 @@ describe("MissionLifecycleService", () => {
       expect(context.advisoryProofDecision).toMatchObject({
         recommendedLevel: "manual-review-only",
         preflightStatus: "degraded",
-        rationale: "Backend mission surfaces in the monorepo require manual review proof when scoped from the root worktree.",
+        rationale:
+          "Backend mission surfaces in the monorepo require manual review proof when scoped from the root worktree.",
       });
       expect(database.getProofDecision("run-1")).toMatchObject({
         recommendedLevel: "manual-review-only",

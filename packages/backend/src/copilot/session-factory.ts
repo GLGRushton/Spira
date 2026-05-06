@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type { Env } from "@spira/shared";
 import type { Logger } from "pino";
+import { type CopilotAuthStrategy, createCopilotProviderClient } from "../provider/copilot/client-factory.js";
 import type { ProviderClient, ProviderSession, ProviderSessionConfig } from "../provider/types.js";
-import { createCopilotProviderClient, type CopilotAuthStrategy } from "../provider/copilot/client-factory.js";
 import { CopilotError } from "../util/errors.js";
 import { setUnrefTimeout } from "../util/timers.js";
 
@@ -13,10 +13,7 @@ export const createCopilotClient = async (
   logger: Pick<Logger, "info" | "warn">,
 ): Promise<{ client: ProviderClient; strategy: CopilotAuthStrategy }> => createCopilotProviderClient(env, logger);
 
-export const stopCopilotClient = async (
-  client: ProviderClient,
-  logger: Pick<Logger, "warn">,
-): Promise<void> => {
+export const stopCopilotClient = async (client: ProviderClient, logger: Pick<Logger, "warn">): Promise<void> => {
   try {
     const stopErrors = await client.stop();
     if (stopErrors.length > 0) {

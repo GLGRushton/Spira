@@ -83,9 +83,11 @@ export const buildRuntimeRecoveryContext = (input: {
   runtimeState?: Pick<RuntimeStationStateRecord, "recoveryMessage"> | null;
   replayLimit?: number;
 }): RuntimeRecoveryContext | null => {
-  const replaySource = input.checkpoint
-    ? input.ledgerEvents.filter((event) => event.occurredAt > input.checkpoint!.createdAt)
-    : input.ledgerEvents.slice(-(input.replayLimit ?? 6));
+  const checkpointCreatedAt = input.checkpoint?.createdAt ?? null;
+  const replaySource =
+    checkpointCreatedAt !== null
+      ? input.ledgerEvents.filter((event) => event.occurredAt > checkpointCreatedAt)
+      : input.ledgerEvents.slice(-(input.replayLimit ?? 6));
   const replay = replaySource
     .map((event) => toReplayEvent(event))
     .filter((event): event is RuntimeRecoveryReplayEvent => event !== null);
@@ -108,9 +110,7 @@ export const buildRuntimeRecoveryContext = (input: {
   };
 };
 
-export const buildRuntimeRecoverySystemSection = (
-  context: RuntimeRecoveryContext,
-): ProviderSystemMessageSection => ({
+export const buildRuntimeRecoverySystemSection = (context: RuntimeRecoveryContext): ProviderSystemMessageSection => ({
   action: "append",
   content: [
     "[Host runtime recovery bundle]",

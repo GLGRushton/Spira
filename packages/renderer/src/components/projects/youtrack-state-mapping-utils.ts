@@ -1,8 +1,4 @@
-import {
-  normalizeYouTrackStateMapping,
-  type YouTrackStateMapping,
-  validateYouTrackStateMapping,
-} from "@spira/shared";
+import { type YouTrackStateMapping, normalizeYouTrackStateMapping, validateYouTrackStateMapping } from "@spira/shared";
 
 export interface YouTrackStateMappingDraftAssessment {
   mapping: YouTrackStateMapping;
@@ -20,10 +16,7 @@ const hasOrderedStateListChanged = (left: readonly string[], right: readonly str
   return left.some((state, index) => state !== right[index]);
 };
 
-export const haveYouTrackStateMappingsChanged = (
-  left: YouTrackStateMapping,
-  right: YouTrackStateMapping,
-): boolean => {
+export const haveYouTrackStateMappingsChanged = (left: YouTrackStateMapping, right: YouTrackStateMapping): boolean => {
   const normalizedLeft = normalizeYouTrackStateMapping(left);
   const normalizedRight = normalizeYouTrackStateMapping(right);
   return (

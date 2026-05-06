@@ -1,4 +1,9 @@
-import { getTicketRunMissionWorkflowState, type McpTool, type TicketRunMissionWorkflowState, type TicketRunSummary } from "@spira/shared";
+import {
+  type McpTool,
+  type TicketRunMissionWorkflowState,
+  type TicketRunSummary,
+  getTicketRunMissionWorkflowState,
+} from "@spira/shared";
 
 export type MissionWorkflowAction =
   | "load-context"

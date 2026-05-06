@@ -155,8 +155,11 @@ describe("runtime capability registry", () => {
     const powershell = manifest.tools.find((tool) => tool.name === "powershell");
 
     expect(powershell).toBeDefined();
+    if (!powershell) {
+      throw new Error("Expected powershell tool in runtime capability manifest.");
+    }
     await expect(
-      powershell!.handler({
+      powershell.handler({
         shellId: "capability-runtime-test",
         command: 'Write-Output "ok"',
         description: "Emit output",

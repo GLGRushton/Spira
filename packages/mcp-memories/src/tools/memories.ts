@@ -1,5 +1,5 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { errorResult, successResult } from "@spira/mcp-util/results";
+import { errorResult, successResult } from "@spira/mcp-util";
 import { getMemoryDatabase } from "../util/database.js";
 import {
   ForgetMemorySchema,

@@ -285,7 +285,7 @@ export const buildLearnedRepoIntelligenceCandidates = (run: TicketRunSummary): U
     ...new Set(
       [
         ...missionSummary.changedRepoRelativePaths,
-        ...run.plan.touchedRepoRelativePaths,
+        ...(run.plan?.touchedRepoRelativePaths ?? []),
         ...classification.impactedRepoRelativePaths,
       ]
         .map((value) => value.trim())

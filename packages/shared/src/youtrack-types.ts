@@ -35,7 +35,9 @@ const normalizeYouTrackStateList = (states: readonly string[] | null | undefined
   return normalizedStates;
 };
 
-export const normalizeYouTrackStateMapping = (mapping: Partial<YouTrackStateMapping> | null | undefined): YouTrackStateMapping => ({
+export const normalizeYouTrackStateMapping = (
+  mapping: Partial<YouTrackStateMapping> | null | undefined,
+): YouTrackStateMapping => ({
   todo: normalizeYouTrackStateList(mapping?.todo),
   inProgress: normalizeYouTrackStateList(mapping?.inProgress),
 });
@@ -89,7 +91,9 @@ export const validateYouTrackStateMapping = (
     return canonical;
   });
 
-  const todoKeys = new Set(todo.map((state) => normalizeYouTrackStateName(state)).filter((state): state is string => Boolean(state)));
+  const todoKeys = new Set(
+    todo.map((state) => normalizeYouTrackStateName(state)).filter((state): state is string => Boolean(state)),
+  );
   const overlappingStates: string[] = [];
   const seenOverlaps = new Set<string>();
 

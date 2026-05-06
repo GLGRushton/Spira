@@ -1,14 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { LoadableWindow } from "./window.js";
 import { createDevelopmentBootstrapUrl, loadDevelopmentRenderer, loadUrlWithTimeout } from "./window.js";
 
 type FakeWindow = {
-  readonly loadURL: ReturnType<typeof vi.fn>;
+  readonly loadURL: LoadableWindow["loadURL"];
   readonly show: ReturnType<typeof vi.fn>;
   readonly isVisible: ReturnType<typeof vi.fn>;
   readonly isDestroyed: ReturnType<typeof vi.fn>;
-  readonly webContents: {
-    readonly stop: ReturnType<typeof vi.fn>;
-  };
+  readonly webContents: LoadableWindow["webContents"];
 };
 
 const createFakeWindow = (

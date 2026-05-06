@@ -66,7 +66,7 @@ export const TICKET_RUN_MISSION_WORKFLOW_WAIT_REASONS = [
   "proof-missing",
   "summary-missing",
   "complete",
- ] as const;
+] as const;
 export type TicketRunMissionWorkflowWaitReason = (typeof TICKET_RUN_MISSION_WORKFLOW_WAIT_REASONS)[number];
 
 export const TICKET_RUN_PROOF_ARTIFACT_KINDS = [

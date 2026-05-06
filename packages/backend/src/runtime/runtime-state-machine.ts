@@ -1,8 +1,4 @@
-import type {
-  RuntimeCancellationState,
-  RuntimePermissionState,
-  RuntimeTurnContract,
-} from "./runtime-contract.js";
+import type { RuntimeCancellationState, RuntimePermissionState, RuntimeTurnContract } from "./runtime-contract.js";
 import { deriveRuntimeTurnState } from "./runtime-turn-engine.js";
 
 export const buildRuntimeTurnContract = (input: {
@@ -15,19 +11,18 @@ export const buildRuntimeTurnContract = (input: {
   isCancelled?: boolean;
   isCompleted?: boolean;
 }): RuntimeTurnContract => ({
-  state:
-    input.isError
-      ? "error"
-      : input.isCompleted
-        ? "completed"
-        : input.isCancelled
-          ? "cancelled"
-          : input.waitingForPermission
-            ? "waiting_for_permission"
-            : deriveRuntimeTurnState({
-                isThinking: input.isThinking,
-                activeToolCallCount: input.activeToolCallIds.length,
-              }),
+  state: input.isError
+    ? "error"
+    : input.isCompleted
+      ? "completed"
+      : input.isCancelled
+        ? "cancelled"
+        : input.waitingForPermission
+          ? "waiting_for_permission"
+          : deriveRuntimeTurnState({
+              isThinking: input.isThinking,
+              activeToolCallCount: input.activeToolCallIds.length,
+            }),
   activeToolCallIds: [...input.activeToolCallIds],
   lastUserMessageId: input.lastUserMessageId,
   lastAssistantMessageId: input.lastAssistantMessageId,
@@ -41,7 +36,7 @@ export const buildRuntimePermissionState = (input: {
   status:
     input.pendingRequestIds.length > 0
       ? "pending"
-      : input.defaultStatus ?? (input.lastResolvedAt !== null ? "resolved" : "idle"),
+      : (input.defaultStatus ?? (input.lastResolvedAt !== null ? "resolved" : "idle")),
   pendingRequestIds: [...input.pendingRequestIds],
   lastResolvedAt: input.lastResolvedAt,
 });
@@ -56,7 +51,9 @@ export const buildRuntimeCancellationState = (input: {
   completedAt: input.completedAt,
 });
 
-export const requestRuntimeCancellation = (requestedAt: number): {
+export const requestRuntimeCancellation = (
+  requestedAt: number,
+): {
   requestedAt: number;
   completedAt: null;
 } => ({
@@ -64,7 +61,9 @@ export const requestRuntimeCancellation = (requestedAt: number): {
   completedAt: null,
 });
 
-export const completeRuntimeCancellation = (completedAt: number): {
+export const completeRuntimeCancellation = (
+  completedAt: number,
+): {
   requestedAt: null;
   completedAt: number;
 } => ({

@@ -12,7 +12,11 @@ const preloadPath = isDevelopment
   ? path.resolve(currentDir, "../dev-preload.cjs")
   : path.join(currentDir, "preload.js");
 
-type LoadableWindow = Pick<BrowserWindow, "loadURL" | "show" | "isVisible" | "isDestroyed" | "webContents">;
+type LoadableWebContents = Pick<BrowserWindow["webContents"], "stop">;
+
+export type LoadableWindow = Pick<BrowserWindow, "loadURL" | "show" | "isVisible" | "isDestroyed"> & {
+  readonly webContents: LoadableWebContents;
+};
 
 const wait = (delayMs: number): Promise<void> =>
   new Promise((resolve) => {

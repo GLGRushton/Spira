@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
-import type { ToolBridgeOptions } from "./tool-bridge.js";
 import type { McpToolAggregator } from "../mcp/tool-aggregator.js";
 import type { ProviderCapabilities, ProviderId, ProviderToolDefinition } from "../provider/types.js";
 import { buildRuntimeCapabilityDefinitions } from "./capability-tools.js";
 import type { RuntimeCapabilitySource } from "./runtime-contract.js";
+import type { ToolBridgeOptions } from "./tool-bridge.js";
 
 export type RuntimeCapabilityRegistryEntry = {
   capabilityId: string;

@@ -121,10 +121,10 @@ export function ChatPanel({ stationId }: ChatPanelProps) {
       ) : null}
       <div ref={scrollRef} className={styles.messages}>
         {historyWasTrimmed ? (
-          <div className={`${styles.notice} ${styles.info} ${styles.historyNotice}`} role="status" aria-live="polite">
+          <output className={`${styles.notice} ${styles.info} ${styles.historyNotice}`} aria-live="polite">
             Older transcript entries were trimmed from this live view to keep the session responsive. Restored and
             stored conversations still come from the archive.
-          </div>
+          </output>
         ) : null}
         {messages.length === 0 ? (
           <section className={styles.emptyState}>

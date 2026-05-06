@@ -9,8 +9,8 @@ import type {
   SubagentToolCallRecord,
 } from "@spira/shared";
 import type { ProviderUsageRecord } from "../provider/types.js";
-import type { RuntimeStore } from "../runtime/runtime-store.js";
 import { resolveSubagentProviderBinding } from "../runtime/provider-binding.js";
+import type { RuntimeStore } from "../runtime/runtime-store.js";
 import type { SpiraEventBus } from "../util/event-bus.js";
 import { setUnrefTimeout } from "../util/timers.js";
 import type { RecoveredSubagentRunLaunch, SubagentRunLaunch } from "./subagent-runner.js";
@@ -236,7 +236,11 @@ export class SubagentRunRegistry {
       stationRuntimeSessionId && this.runtimeStore && typeof this.runtimeStore.getRuntimeSession === "function"
         ? this.runtimeStore.getRuntimeSession(stationRuntimeSessionId)
         : null;
-    const { providerId, providerSessionId } = resolveSubagentProviderBinding(snapshot, runtimeSession, stationRuntimeSession);
+    const { providerId, providerSessionId } = resolveSubagentProviderBinding(
+      snapshot,
+      runtimeSession,
+      stationRuntimeSession,
+    );
     if (!providerId || !providerSessionId || !this.runtimeStore) {
       return;
     }
@@ -415,7 +419,9 @@ export class SubagentRunRegistry {
           activeToolCalls: [],
           toolCalls: envelope.toolCalls,
           envelope,
-          ...(envelope.status === "completed" ? { expiresAt: updatedAt + this.idleTimeoutMs } : { expiresAt: undefined }),
+          ...(envelope.status === "completed"
+            ? { expiresAt: updatedAt + this.idleTimeoutMs }
+            : { expiresAt: undefined }),
         };
         this.persistSnapshot(current.snapshot);
         if (envelope.status === "completed") {
@@ -478,9 +484,12 @@ export class SubagentRunRegistry {
 
   private schedulePrune(trackedRun: TrackedSubagentRun, delayMs = this.retentionMs): void {
     this.clearPruneTimer(trackedRun);
-    trackedRun.pruneTimer = setUnrefTimeout(() => {
-      this.deleteRun(trackedRun.snapshot.runId);
-    }, Math.max(0, delayMs));
+    trackedRun.pruneTimer = setUnrefTimeout(
+      () => {
+        this.deleteRun(trackedRun.snapshot.runId);
+      },
+      Math.max(0, delayMs),
+    );
   }
 
   private async expire(runId: string): Promise<void> {

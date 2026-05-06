@@ -1,4 +1,4 @@
-import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
+import { type ChildProcessWithoutNullStreams, spawn, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -68,15 +68,33 @@ const clampOutput = (value: string, maxChars = MAX_OUTPUT_CHARS): string =>
 
 const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-const normalizeInputSequence = (input: string): string =>
+const normalizeInputSequence = (input: string, enterSequence = "\r"): string =>
   input
-    .replace(/\{enter\}/g, "\n")
+    .replace(/\{enter\}/g, enterSequence)
     .replace(/\{backspace\}/g, "\b")
     .replace(/\{tab\}/g, "\t")
     .replace(/\{up\}/g, "\u001b[A")
     .replace(/\{down\}/g, "\u001b[B")
     .replace(/\{right\}/g, "\u001b[C")
     .replace(/\{left\}/g, "\u001b[D");
+
+const resolvePowerShellExecutable = (candidates: string[], fallback: string): string => {
+  for (const candidate of candidates) {
+    const result = spawnSync(candidate, ["-NoLogo", "-NoProfile", "-Command", "$PSVersionTable.PSVersion.Major"], {
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    if (!result.error) {
+      return candidate;
+    }
+  }
+  return fallback;
+};
+
+const SYNC_POWER_SHELL_EXECUTABLE = resolvePowerShellExecutable(["powershell.exe", "pwsh.exe"], "powershell.exe");
+const ASYNC_POWER_SHELL_EXECUTABLE = resolvePowerShellExecutable(["pwsh.exe", "powershell.exe"], "powershell.exe");
+const getPowerShellEnterSequence = (executable: string): string =>
+  executable.toLowerCase() === "pwsh.exe" ? "\n" : "\r";
 
 const isHiddenEntry = (name: string): boolean => name.startsWith(".");
 
@@ -814,6 +832,8 @@ interface PowerShellSessionRecord {
   mode: "sync" | "async";
   detached: boolean;
   workingDirectory: string;
+  executable: string;
+  enterSequence: string;
   process: ChildProcessWithoutNullStreams | null;
   status: PowerShellSessionStatus;
   pid: number | null;
@@ -872,11 +892,13 @@ class PowerShellSessionManager {
       throw new Error(`PowerShell session ${requestedShellId} already exists.`);
     }
     const detached = getBoolean(args.detach);
+    const executable = mode === "async" ? ASYNC_POWER_SHELL_EXECUTABLE : SYNC_POWER_SHELL_EXECUTABLE;
+    const enterSequence = getPowerShellEnterSequence(executable);
     const spawnArgs =
       mode === "async"
         ? ["-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-NoExit", "-Command", "-"]
         : ["-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command];
-    const child = spawn("powershell.exe", spawnArgs, {
+    const child = spawn(executable, spawnArgs, {
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
       detached,
@@ -893,6 +915,8 @@ class PowerShellSessionManager {
       mode,
       detached,
       workingDirectory: workingDirectory ?? process.cwd(),
+      executable,
+      enterSequence,
       process: child,
       status: "running",
       pid: child.pid ?? null,
@@ -915,7 +939,7 @@ class PowerShellSessionManager {
     child.stdout.on("data", onData);
     child.stderr.on("data", onData);
     if (mode === "async") {
-      child.stdin.write(`${command}\n`);
+      child.stdin.write(`${command}${enterSequence}`);
     }
     const childEvents = child as ChildProcessWithoutNullStreams & NodeJS.EventEmitter;
     childEvents.on("close", (exitCode: number | null) => {
@@ -949,7 +973,7 @@ class PowerShellSessionManager {
     record.persist?.(record);
     if (mode === "async") {
       if (initialWait > 0) {
-        await this.delay(initialWait);
+        await this.delay(initialWait + 0.5);
       }
       return this.serialize(record);
     }
@@ -993,7 +1017,7 @@ class PowerShellSessionManager {
       throw new Error(`PowerShell session ${shellId} is not running.`);
     }
     record.status = "running";
-    record.process.stdin.write(normalizeInputSequence(input));
+    record.process.stdin.write(normalizeInputSequence(input, record.enterSequence));
     record.updatedAt = Date.now();
     record.persist?.(record);
     await this.delay(delaySeconds);
@@ -1008,6 +1032,10 @@ class PowerShellSessionManager {
   async stop(shellId: string, runtimeSessionId?: string | null): Promise<unknown> {
     this.pruneTerminalSnapshots();
     const record = this.getActive(shellId, runtimeSessionId);
+    if (!record.process || (record.status !== "running" && record.status !== "idle") || record.pid === null) {
+      throw new Error(`PowerShell session ${shellId} is not running.`);
+    }
+    await this.delay(0.2);
     if (!record.process || (record.status !== "running" && record.status !== "idle") || record.pid === null) {
       throw new Error(`PowerShell session ${shellId} is not running.`);
     }
@@ -1146,8 +1174,7 @@ class PowerShellSessionManager {
 }
 
 const powerShellSessions = new PowerShellSessionManager();
-const getPowerShellResourceId = (runtimeSessionId: string | null | undefined, shellId: string): string =>
-  `powershell:${runtimeSessionId ?? "global"}:${shellId}`;
+const getPowerShellResourceId = (_runtimeSessionId: string | null | undefined, shellId: string): string => shellId;
 const stopWindowsProcessTree = async (pid: number): Promise<void> =>
   await new Promise<void>((resolve, reject) => {
     const child = spawn("taskkill", ["/PID", String(pid), "/T", "/F"], {
@@ -1253,7 +1280,9 @@ export const createHostTools = (options: {
     if (!options.runtimeStore || !options.runtimeSessionId) {
       return;
     }
-    options.runtimeStore.deleteRuntimeHostResource(getPowerShellResourceId(options.runtimeSessionId, shellId));
+    if ("deleteRuntimeHostResource" in options.runtimeStore) {
+      options.runtimeStore.deleteRuntimeHostResource(getPowerShellResourceId(options.runtimeSessionId, shellId));
+    }
   };
   const persistPowerShellResource = (state: PowerShellResourceState): void => {
     if (!options.runtimeStore || !options.runtimeSessionId) {
@@ -1283,20 +1312,22 @@ export const createHostTools = (options: {
       status,
       state,
     });
-    options.runtimeStore.appendRuntimeLedgerEvent(
-      createRuntimeLedgerEvent({
-        eventId: randomUUID(),
-        sessionId: options.runtimeSessionId,
-        occurredAt: state.updatedAt,
-        type: "host.resource_recorded",
-        payload: {
-          resourceId: getPowerShellResourceId(options.runtimeSessionId, state.shellId),
-          kind: "powershell",
-          status,
-          outputCursor: state.outputCursor,
-        },
-      }),
-    );
+    if ("appendRuntimeLedgerEvent" in options.runtimeStore) {
+      options.runtimeStore.appendRuntimeLedgerEvent(
+        createRuntimeLedgerEvent({
+          eventId: randomUUID(),
+          sessionId: options.runtimeSessionId,
+          occurredAt: state.updatedAt,
+          type: "host.resource_recorded",
+          payload: {
+            resourceId: getPowerShellResourceId(options.runtimeSessionId, state.shellId),
+            kind: "powershell",
+            status,
+            outputCursor: state.outputCursor,
+          },
+        }),
+      );
+    }
   };
   const listPersistedPowerShellResources = (): PowerShellResourceState[] =>
     options.runtimeStore && options.runtimeSessionId
