@@ -288,6 +288,14 @@ export const beginOpenAiTurnMessages = (state: OpenAiSessionState, prompt: strin
   return turnGeneration;
 };
 
+export const continueOpenAiTurnMessages = (state: OpenAiSessionState): number => {
+  const turnGeneration = state.turnGeneration + 1;
+  state.turnGeneration = turnGeneration;
+  // Continuations stay inside the same logical user turn so abort/fatal rollback can still clear it all.
+  publishOpenAiHostContinuity(state);
+  return turnGeneration;
+};
+
 export const finishOpenAiTurnMessages = (state: OpenAiSessionState, turnGeneration: number): void => {
   if (state.turnGeneration === turnGeneration) {
     state.activeTurnMessageStartIndex = null;

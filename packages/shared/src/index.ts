@@ -258,7 +258,11 @@ export {
   TICKET_RUN_PROOF_STATUSES,
   TICKET_RUN_STATUSES,
 } from "./ticket-run-types.js";
-export { describeTicketRunMissionNextAction, getTicketRunMissionWorkflowState } from "./ticket-run-workflow.js";
+export {
+  describeTicketRunMissionNextAction,
+  getEffectiveValidations,
+  getTicketRunMissionWorkflowState,
+} from "./ticket-run-workflow.js";
 export {
   createMissionView,
   getMissionRunIdFromView,

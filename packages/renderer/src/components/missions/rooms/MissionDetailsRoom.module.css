@@ -299,6 +299,19 @@
   background: rgba(255, 255, 255, 0.03);
 }
 
+.subCardSuperseded {
+  opacity: 0.72;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.validationBadgeRow {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
 .warningPanel {
   border: 1px solid rgba(245, 206, 120, 0.22);
   color: #ffe3ad;

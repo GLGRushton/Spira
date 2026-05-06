@@ -2012,7 +2012,7 @@ describe("TicketRunService", () => {
     );
   });
 
-  it("blocks closing when any recorded validation has failed", async () => {
+  it("blocks closing when the latest recorded validation result is still failing", async () => {
     const database = createTestDatabase();
     database.upsertTicketRun({
       runId: "run-1",
@@ -2225,6 +2225,96 @@ describe("TicketRunService", () => {
       stationId: null,
       statusMessage: "Mission closed.",
     });
+  });
+
+  it("allows closing when a later passing validation supersedes an earlier failed result", async () => {
+    const database = createTestDatabase();
+    database.upsertTicketRun({
+      runId: "run-1",
+      stationId: "mission:run-1",
+      ticketId: "SPI-110",
+      ticketSummary: "Prepare manual commit flow",
+      ticketUrl: "https://example.youtrack.cloud/issue/SPI-110",
+      projectKey: "SPI",
+      status: "awaiting-review",
+      missionPhase: "summarize",
+      missionPhaseUpdatedAt: 400,
+      classification: {
+        kind: "backend",
+        scopeSummary: "Workflow cleanup",
+        acceptanceCriteria: [],
+        impactedRepoRelativePaths: ["service-api"],
+        risks: [],
+        uiChange: false,
+        proofRequired: false,
+        proofArtifactMode: "none",
+        rationale: null,
+        createdAt: 200,
+        updatedAt: 200,
+      },
+      plan: {
+        steps: ["Update the ticket workflow"],
+        touchedRepoRelativePaths: ["service-api"],
+        validationPlan: ["Run unit tests"],
+        proofIntent: null,
+        blockers: [],
+        assumptions: [],
+        createdAt: 250,
+        updatedAt: 250,
+      },
+      validations: [
+        {
+          validationId: "validation-1",
+          kind: "unit-test",
+          command: "pnpm test",
+          cwd: "C:\\Repos\\.spira-worktrees\\spi-110",
+          status: "failed",
+          summary: "Validation was started from the wrong root.",
+          artifacts: [],
+          startedAt: 275,
+          completedAt: 280,
+          createdAt: 275,
+          updatedAt: 280,
+        },
+        {
+          validationId: "validation-2",
+          kind: "unit-test",
+          command: "pnpm test",
+          cwd: "C:\\Repos\\.spira-worktrees\\spi-110\\ClientApp",
+          supersedesValidationIds: ["validation-1"],
+          status: "passed",
+          summary: "Validation passed from the correct package root.",
+          artifacts: [],
+          startedAt: 290,
+          completedAt: 295,
+          createdAt: 290,
+          updatedAt: 295,
+        },
+      ],
+      missionSummary: {
+        completedWork: "Closed out the workflow cleanup.",
+        changedRepoRelativePaths: ["service-api"],
+        validationSummary: "Validation rerun passed.",
+        proofSummary: null,
+        openQuestions: [],
+        followUps: [],
+        createdAt: 300,
+        updatedAt: 300,
+      },
+      worktrees: [],
+    });
+    const service = new TicketRunService({
+      memoryDb: database,
+      logger: createLogger(),
+      projectRegistry: { getSnapshot: async () => ({ workspaceRoot: null, repos: [], mappings: [] }) },
+      youTrackService: null,
+      now: () => 500,
+    });
+
+    const result = await service.completeRun("run-1");
+
+    expect(result.run.status).toBe("done");
+    expect(result.run.statusMessage).toBe("Mission closed.");
   });
 
   it("blocks closing while a proof run is still active", async () => {

@@ -15,6 +15,7 @@ import type {
   TicketRunProofProfileSummary,
   TicketRunSummary,
 } from "@spira/shared";
+import { getEffectiveValidations } from "@spira/shared";
 
 const COPY_CHANGE_KEYWORDS = ["copy", "wording", "label", "labels", "text", "tooltip", "terminology", "rename"];
 const UI_CHANGE_KEYWORDS = ["ui", "screen", "page", "dialog", "button", "menu", "nav", "visual", "layout"];
@@ -56,19 +57,18 @@ const includesAnyKeyword = (text: string, keywords: readonly string[]): boolean 
 export const buildMissionScopePaths = (
   run: TicketRunSummary,
   classificationOverride?: TicketRunMissionClassification | null,
-): string[] =>
-  [
-    ...new Set(
-      [
-        ".",
-        ...run.worktrees.map((worktree) => worktree.repoRelativePath),
-        ...(classificationOverride?.impactedRepoRelativePaths ?? run.classification?.impactedRepoRelativePaths ?? []),
-        ...(run.plan?.touchedRepoRelativePaths ?? []),
-        ...(run.missionSummary?.changedRepoRelativePaths ?? []),
-        ...(run.proofStrategy?.repoRelativePath ? [run.proofStrategy.repoRelativePath] : []),
-      ].filter((repoRelativePath): repoRelativePath is string => repoRelativePath.trim().length > 0),
-    ),
-  ];
+): string[] => [
+  ...new Set(
+    [
+      ".",
+      ...run.worktrees.map((worktree) => worktree.repoRelativePath),
+      ...(classificationOverride?.impactedRepoRelativePaths ?? run.classification?.impactedRepoRelativePaths ?? []),
+      ...(run.plan?.touchedRepoRelativePaths ?? []),
+      ...(run.missionSummary?.changedRepoRelativePaths ?? []),
+      ...(run.proofStrategy?.repoRelativePath ? [run.proofStrategy.repoRelativePath] : []),
+    ].filter((repoRelativePath): repoRelativePath is string => repoRelativePath.trim().length > 0),
+  ),
+];
 
 const scoreProofRule = (options: {
   rule: ProofRuleRecord;
@@ -117,7 +117,12 @@ const scoreProofRule = (options: {
   }
 
   if (rule.summaryKeywords.length > 0) {
-    if (!includesAnyKeyword(searchText, rule.summaryKeywords.map((keyword) => keyword.toLowerCase()))) {
+    if (
+      !includesAnyKeyword(
+        searchText,
+        rule.summaryKeywords.map((keyword) => keyword.toLowerCase()),
+      )
+    ) {
       return null;
     }
     score += 2;
@@ -137,9 +142,7 @@ const inferPreliminaryProofLevel = (run: TicketRunSummary): TicketRunMissionProo
   return null;
 };
 
-export const computeAdvisoryProofDecision = (
-  input: AdvisoryProofDecisionInput,
-): AdvisoryProofDecisionComputation => {
+export const computeAdvisoryProofDecision = (input: AdvisoryProofDecisionInput): AdvisoryProofDecisionComputation => {
   const { run, classification, availableProofs, proofRules } = input;
   const searchText = normalizeSearchText(run.ticketSummary);
 
@@ -148,7 +151,11 @@ export const computeAdvisoryProofDecision = (
     return {
       recommendedLevel: preliminaryLevel,
       preflightStatus:
-        preliminaryLevel === null ? null : availableProofs.length > 0 || preliminaryLevel === "light" ? "runnable" : "blocked",
+        preliminaryLevel === null
+          ? null
+          : availableProofs.length > 0 || preliminaryLevel === "light"
+            ? "runnable"
+            : "blocked",
       rationale:
         preliminaryLevel === null
           ? "Save classification to generate repo-aware proof guidance."
@@ -157,7 +164,12 @@ export const computeAdvisoryProofDecision = (
     };
   }
 
-  if (!classification.proofRequired || !classification.uiChange || classification.kind === "backend" || classification.kind === "infra") {
+  if (
+    !classification.proofRequired ||
+    !classification.uiChange ||
+    classification.kind === "backend" ||
+    classification.kind === "infra"
+  ) {
     return {
       recommendedLevel: "none",
       preflightStatus: "runnable",
@@ -224,7 +236,8 @@ export const toPersistedProofDecisionInput = (
   decision: AdvisoryProofDecisionComputation,
   classificationOverride?: TicketRunMissionClassification | null,
 ): Omit<ProofDecisionRecord, "createdAt" | "updatedAt"> => {
-  const currentAttempt = [...run.attempts].reverse().find((attempt) => attempt.status === "running") ?? run.attempts.at(-1) ?? null;
+  const currentAttempt =
+    [...run.attempts].reverse().find((attempt) => attempt.status === "running") ?? run.attempts.at(-1) ?? null;
   return {
     runId: run.runId,
     attemptId: currentAttempt?.attemptId ?? null,
@@ -237,19 +250,29 @@ export const toPersistedProofDecisionInput = (
 };
 
 const summarizeValidationCommands = (run: TicketRunSummary): string =>
-  [...new Set(run.validations.filter((validation) => validation.status === "passed").map((validation) => validation.command.trim()))]
+  [
+    ...new Set(
+      getEffectiveValidations(run.validations)
+        .filter((validation) => validation.status === "passed")
+        .map((validation) => validation.command.trim()),
+    ),
+  ]
     .filter((command) => command.length > 0)
     .slice(0, 2)
     .join(" ; ");
 
-const isCleanMissionForLearning = (run: TicketRunSummary): boolean =>
-  run.status === "done" &&
-  run.classification !== null &&
-  run.plan !== null &&
-  run.missionSummary !== null &&
-  run.validations.some((validation) => validation.status === "passed") &&
-  !run.validations.some((validation) => validation.status === "failed" || validation.status === "pending") &&
-  (!run.classification.proofRequired || run.proof.status === "passed");
+const isCleanMissionForLearning = (run: TicketRunSummary): boolean => {
+  const effectiveValidations = getEffectiveValidations(run.validations);
+  return (
+    run.status === "done" &&
+    run.classification !== null &&
+    run.plan !== null &&
+    run.missionSummary !== null &&
+    effectiveValidations.some((validation) => validation.status === "passed") &&
+    !effectiveValidations.some((validation) => validation.status === "failed" || validation.status === "pending") &&
+    (!run.classification.proofRequired || run.proof.status === "passed")
+  );
+};
 
 export const buildLearnedRepoIntelligenceCandidates = (run: TicketRunSummary): UpsertRepoIntelligenceInput[] => {
   if (!isCleanMissionForLearning(run) || !run.classification || !run.missionSummary) {
@@ -262,7 +285,7 @@ export const buildLearnedRepoIntelligenceCandidates = (run: TicketRunSummary): U
     ...new Set(
       [
         ...missionSummary.changedRepoRelativePaths,
-        ...run.plan!.touchedRepoRelativePaths,
+        ...run.plan.touchedRepoRelativePaths,
         ...classification.impactedRepoRelativePaths,
       ]
         .map((value) => value.trim())
@@ -287,17 +310,12 @@ export const buildLearnedRepoIntelligenceCandidates = (run: TicketRunSummary): U
       repoRelativePath,
       type: "example",
       title: `Observed mission pattern from ${run.ticketId}`,
-      content:
-        `Observed from "${run.ticketSummary}" in ${repoRelativePath}. ` +
-        `Completed work: ${missionSummary.completedWork.trim()}. ` +
-        (validationCommands.length > 0 ? `Passing validation: ${validationCommands}.` : "Passing validation was recorded.") +
-        proofSummary,
-      tags: [
-        "learned",
-        `run:${run.runId}`,
-        `ticket:${run.ticketId}`,
-        `classification:${classification.kind}`,
-      ],
+      content: `Observed from "${run.ticketSummary}" in ${repoRelativePath}. Completed work: ${missionSummary.completedWork.trim()}. ${
+        validationCommands.length > 0
+          ? `Passing validation: ${validationCommands}.`
+          : "Passing validation was recorded."
+      }${proofSummary}`,
+      tags: ["learned", `run:${run.runId}`, `ticket:${run.ticketId}`, `classification:${classification.kind}`],
       source: "learned",
       approved: false,
       createdAt: missionSummary.updatedAt,

@@ -628,6 +628,7 @@ export interface UpsertTicketRunValidationInput {
   kind: TicketRunMissionValidationKind;
   command: string;
   cwd: string;
+  supersedesValidationIds?: readonly string[];
   status: TicketRunMissionValidationStatus;
   summary?: string | null;
   artifacts?: readonly UpsertTicketRunProofArtifactInput[];
@@ -950,6 +951,7 @@ interface TicketRunValidationRow {
   kind: string;
   command: string;
   cwd: string;
+  supersedesValidationIdsJson: string | null;
   status: string;
   summary: string | null;
   artifactsJson: string | null;
@@ -1880,6 +1882,27 @@ const MIGRATIONS: MigrationDefinition[] = [
     version: 26,
     statements: ["ALTER TABLE messages ADD COLUMN model TEXT"],
   },
+  {
+    version: 27,
+    statements: [
+      `CREATE TABLE IF NOT EXISTS ticket_run_validations (
+        validation_id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK(kind IN ('build', 'unit-test', 'lint', 'typecheck')),
+        command TEXT NOT NULL,
+        cwd TEXT NOT NULL,
+        status TEXT NOT NULL CHECK(status IN ('pending', 'passed', 'failed', 'skipped')),
+        summary TEXT,
+        artifacts_json TEXT,
+        started_at INTEGER NOT NULL,
+        completed_at INTEGER,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        FOREIGN KEY(run_id) REFERENCES ticket_runs(run_id) ON DELETE CASCADE
+      )`,
+      "ALTER TABLE ticket_run_validations ADD COLUMN supersedes_validation_ids_json TEXT",
+    ],
+  },
 ];
 
 type SqliteDatabase = InstanceType<typeof BetterSqlite3>;
@@ -2682,6 +2705,7 @@ const mapTicketRunValidationRow = (row: TicketRunValidationRow): TicketRunMissio
     kind: row.kind,
     command: String(row.command),
     cwd: String(row.cwd),
+    supersedesValidationIds: parseStringArray(row.supersedesValidationIdsJson),
     status: row.status,
     summary: row.summary === null ? null : String(row.summary),
     artifacts,
@@ -5240,6 +5264,7 @@ export class SpiraMemoryDatabase {
            kind,
            command,
            cwd,
+           supersedes_validation_ids_json AS supersedesValidationIdsJson,
            status,
            summary,
            artifacts_json AS artifactsJson,
@@ -5448,6 +5473,7 @@ export class SpiraMemoryDatabase {
            kind,
            command,
            cwd,
+           supersedes_validation_ids_json AS supersedesValidationIdsJson,
            status,
            summary,
            artifacts_json AS artifactsJson,
@@ -5742,6 +5768,13 @@ export class SpiraMemoryDatabase {
         kind: validation.kind,
         command,
         cwd,
+        supersedesValidationIds: [
+          ...new Set(
+            (validation.supersedesValidationIds ?? [])
+              .map((entry) => entry.trim())
+              .filter((entry) => entry.length > 0 && entry !== validationId),
+          ),
+        ],
         status: validation.status,
         summary: normalizeTitle(validation.summary),
         artifacts,
@@ -6137,6 +6170,7 @@ export class SpiraMemoryDatabase {
            kind,
            command,
            cwd,
+           supersedes_validation_ids_json,
            status,
            summary,
            artifacts_json,
@@ -6150,6 +6184,7 @@ export class SpiraMemoryDatabase {
            @kind,
            @command,
            @cwd,
+           @supersedesValidationIdsJson,
            @status,
            @summary,
            @artifactsJson,
@@ -6167,6 +6202,7 @@ export class SpiraMemoryDatabase {
           kind: validation.kind,
           command: validation.command,
           cwd: validation.cwd,
+          supersedesValidationIdsJson: serializeJson(validation.supersedesValidationIds),
           status: validation.status,
           summary: validation.summary,
           artifactsJson: serializeJson(validation.artifacts),

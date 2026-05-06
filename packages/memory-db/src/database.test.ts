@@ -1032,6 +1032,56 @@ describe("SpiraMemoryDatabase", () => {
     });
   });
 
+  it("round-trips validation supersession metadata", () => {
+    const database = createTestDatabase();
+
+    database.upsertTicketRun({
+      runId: "run-validation",
+      ticketId: "SPI-151",
+      ticketSummary: "Repair validation history",
+      ticketUrl: "https://example.youtrack.cloud/issue/SPI-151",
+      projectKey: "SPI",
+      status: "awaiting-review",
+      createdAt: 1_000,
+      startedAt: 1_000,
+      worktrees: [],
+      validations: [
+        {
+          validationId: "validation-1",
+          kind: "unit-test",
+          command: "pnpm test",
+          cwd: "C:\\Repos\\.spira-worktrees\\spi-151",
+          status: "failed",
+          summary: "Initial run failed.",
+          artifacts: [],
+          startedAt: 1_100,
+          completedAt: 1_150,
+        },
+        {
+          validationId: "validation-2",
+          kind: "unit-test",
+          command: "pnpm test",
+          cwd: "C:\\Repos\\.spira-worktrees\\spi-151\\ClientApp",
+          supersedesValidationIds: ["validation-1"],
+          status: "passed",
+          summary: "Rerun passed.",
+          artifacts: [],
+          startedAt: 1_200,
+          completedAt: 1_250,
+        },
+      ],
+    });
+
+    expect(database.getTicketRun("run-validation")?.validations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          validationId: "validation-2",
+          supersedesValidationIds: ["validation-1"],
+        }),
+      ]),
+    );
+  });
+
   it("stores repo intelligence and validation profiles with scoped retrieval", () => {
     const database = createTestDatabase();
 

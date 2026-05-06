@@ -4,6 +4,7 @@ import {
   type TicketRunMissionPhase,
   type TicketRunProofArtifact,
   type TicketRunSummary,
+  getEffectiveValidations,
 } from "@spira/shared";
 import { useEffect, useMemo, useState } from "react";
 import { useNavigationStore } from "../../../stores/navigation-store.js";
@@ -67,7 +68,8 @@ const describeTimelineEvent = (event: TicketRunMissionEventSummary): { title: st
     case "workspace-prepared":
       return {
         title: "Workspace prepared",
-        detail: typeof event.metadata?.status === "string" ? `Run status: ${formatEnumLabel(event.metadata.status)}` : null,
+        detail:
+          typeof event.metadata?.status === "string" ? `Run status: ${formatEnumLabel(event.metadata.status)}` : null,
       };
     case "attempt-started":
       return {
@@ -101,10 +103,7 @@ const describeTimelineEvent = (event: TicketRunMissionEventSummary): { title: st
     case "proof-finished":
       return {
         title: "Proof finished",
-        detail:
-          typeof event.metadata?.status === "string"
-            ? formatEnumLabel(event.metadata.status)
-            : null,
+        detail: typeof event.metadata?.status === "string" ? formatEnumLabel(event.metadata.status) : null,
       };
     case "run-closed":
       return {
@@ -236,10 +235,14 @@ export function MissionDetailsRoom({ run, controller }: MissionDetailsRoomProps)
   const canRunProof = run.status === "awaiting-review";
   const runTone = getRunTone(run.status);
   const workflowComplete = missionNextAction.complete;
+  const expandedCompletedPhasesResetKey = `${run.runId}:${run.missionPhase}:${run.missionPhaseUpdatedAt}`;
 
   useEffect(() => {
+    if (expandedCompletedPhasesResetKey.length === 0) {
+      return;
+    }
     setExpandedCompletedPhases(new Set());
-  }, [run.runId, run.missionPhase, run.missionPhaseUpdatedAt]);
+  }, [expandedCompletedPhasesResetKey]);
 
   const phaseStates = useMemo(
     () =>
@@ -250,6 +253,10 @@ export function MissionDetailsRoom({ run, controller }: MissionDetailsRoomProps)
         timestamp: getPhaseTimestamp(run, phase, latestProofRun),
       })),
     [latestProofRun, run, workflowComplete],
+  );
+  const effectiveValidationIds = useMemo(
+    () => new Set(getEffectiveValidations(run.validations).map((validation) => validation.validationId)),
+    [run.validations],
   );
 
   const messages = [
@@ -520,19 +527,35 @@ export function MissionDetailsRoom({ run, controller }: MissionDetailsRoomProps)
           <div className={styles.phaseContent}>
             {[...run.validations]
               .sort((left, right) => right.startedAt - left.startedAt)
-              .map((validation) => (
-                <div key={validation.validationId} className={styles.subCard}>
-                  <div className={styles.subCardHeader}>
-                    <strong>{formatEnumLabel(validation.kind)}</strong>
-                    <span className={styles.metricBadge}>{formatEnumLabel(validation.status)}</span>
+              .map((validation) => {
+                const validationIsSuperseded = !effectiveValidationIds.has(validation.validationId);
+                return (
+                  <div
+                    key={validation.validationId}
+                    className={
+                      validationIsSuperseded ? `${styles.subCard} ${styles.subCardSuperseded}` : styles.subCard
+                    }
+                  >
+                    <div className={styles.subCardHeader}>
+                      <strong>{formatEnumLabel(validation.kind)}</strong>
+                      <div className={styles.validationBadgeRow}>
+                        <span className={styles.metricBadge}>{formatEnumLabel(validation.status)}</span>
+                        {validationIsSuperseded ? <span className={styles.metricBadgeMuted}>Superseded</span> : null}
+                      </div>
+                    </div>
+                    <div className={styles.subCardMeta}>
+                      {validation.command} {validation.cwd ? `· ${validation.cwd}` : ""}
+                    </div>
+                    {validation.summary ? <div className={styles.phaseCopy}>{validation.summary}</div> : null}
+                    {validationIsSuperseded ? (
+                      <div className={styles.subCardMeta}>
+                        Historical result retained for audit; a later rerun now counts.
+                      </div>
+                    ) : null}
+                    {renderArtifacts(validation.artifacts)}
                   </div>
-                  <div className={styles.subCardMeta}>
-                    {validation.command} {validation.cwd ? `· ${validation.cwd}` : ""}
-                  </div>
-                  {validation.summary ? <div className={styles.phaseCopy}>{validation.summary}</div> : null}
-                  {renderArtifacts(validation.artifacts)}
-                </div>
-              ))}
+                );
+              })}
           </div>
         ) : (
           <div className={styles.placeholder}>No validation records have been stored yet.</div>
@@ -868,7 +891,9 @@ export function MissionDetailsRoom({ run, controller }: MissionDetailsRoomProps)
           <div>
             <div className={shellStyles.eyebrow}>Repo intelligence enrichment</div>
             <h3 className={styles.sectionTitle}>Observed candidates</h3>
-            <p className={styles.sectionLead}>Curated learning starts here: inspect, then approve the entries worth reusing.</p>
+            <p className={styles.sectionLead}>
+              Curated learning starts here: inspect, then approve the entries worth reusing.
+            </p>
           </div>
           <button
             type="button"
@@ -887,7 +912,7 @@ export function MissionDetailsRoom({ run, controller }: MissionDetailsRoomProps)
                 <div className={styles.worktreeCopy}>
                   <strong>{entry.title}</strong>
                   <span>
-                    {(entry.repoRelativePath ?? "Mission scope") + " · " + (entry.approved ? "Approved" : "Observed")}
+                    {`${entry.repoRelativePath ?? "Mission scope"} · ${entry.approved ? "Approved" : "Observed"}`}
                   </span>
                   <span>{entry.content}</span>
                 </div>
@@ -910,7 +935,9 @@ export function MissionDetailsRoom({ run, controller }: MissionDetailsRoomProps)
             ))
           ) : (
             <div className={styles.commandHint}>
-              {controller.isRepoIntelligenceLoading ? "Loading observed candidates..." : "No repo intelligence candidates recorded for this mission yet."}
+              {controller.isRepoIntelligenceLoading
+                ? "Loading observed candidates..."
+                : "No repo intelligence candidates recorded for this mission yet."}
             </div>
           )}
         </div>

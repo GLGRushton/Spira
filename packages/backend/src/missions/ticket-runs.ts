@@ -55,7 +55,7 @@ import type {
   TicketRunSubmoduleSummary,
   TicketRunSummary,
 } from "@spira/shared";
-import { normalizeProjectKey } from "@spira/shared";
+import { getEffectiveValidations, normalizeProjectKey } from "@spira/shared";
 import fetch from "node-fetch";
 import type { Logger } from "pino";
 import type { ProjectRegistry } from "../projects/registry.js";
@@ -1517,6 +1517,7 @@ export class TicketRunService {
   }
 
   private assertRunCanCloseWithLifecycle(run: TicketRunSummary): void {
+    const effectiveValidations = getEffectiveValidations(run.validations);
     if (run.missionPhase !== "summarize") {
       throw new ConfigError(`Ticket ${run.ticketId} must reach the summarize phase before it can be closed.`);
     }
@@ -1529,13 +1530,16 @@ export class TicketRunService {
     if (!run.missionSummary) {
       throw new ConfigError(`Ticket ${run.ticketId} is missing a final mission summary.`);
     }
-    if (run.validations.length === 0 || !run.validations.some((validation) => validation.status === "passed")) {
+    if (
+      effectiveValidations.length === 0 ||
+      !effectiveValidations.some((validation) => validation.status === "passed")
+    ) {
       throw new ConfigError(`Ticket ${run.ticketId} requires recorded validation results before it can be closed.`);
     }
-    if (run.validations.some((validation) => validation.status === "pending")) {
+    if (effectiveValidations.some((validation) => validation.status === "pending")) {
       throw new ConfigError(`Ticket ${run.ticketId} has pending validation work that must finish before closing.`);
     }
-    if (run.validations.some((validation) => validation.status === "failed")) {
+    if (effectiveValidations.some((validation) => validation.status === "failed")) {
       throw new ConfigError(
         `Ticket ${run.ticketId} has failing validation results that must be resolved before closing.`,
       );

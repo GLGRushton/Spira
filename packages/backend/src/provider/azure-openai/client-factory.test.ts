@@ -33,6 +33,56 @@ const createStreamResponse = (events: string[], status = 200) =>
     text: async () => events.join(""),
   }) as unknown as Response;
 
+const createToolCallResponse = (model: string, callId: string) =>
+  createResponse({
+    id: `resp-${callId}`,
+    model,
+    choices: [
+      {
+        message: {
+          role: "assistant",
+          content: null,
+          tool_calls: [
+            {
+              id: callId,
+              type: "function",
+              function: {
+                name: "spira_ui_get_snapshot",
+                arguments: "{}",
+              },
+            },
+          ],
+        },
+        finish_reason: "tool_calls",
+      },
+    ],
+    usage: {
+      prompt_tokens: 8,
+      completion_tokens: 2,
+      total_tokens: 10,
+    },
+  });
+
+const createAssistantResponse = (model: string, content: string) =>
+  createResponse({
+    id: `resp-${model}-${content.length}`,
+    model,
+    choices: [
+      {
+        message: {
+          role: "assistant",
+          content,
+        },
+        finish_reason: "stop",
+      },
+    ],
+    usage: {
+      prompt_tokens: 6,
+      completion_tokens: 3,
+      total_tokens: 9,
+    },
+  });
+
 describe("AzureOpenAiProviderClient", () => {
   it("runs host-owned tool calls and emits normalized usage", async () => {
     const onEvent = vi.fn<(event: ProviderSessionEvent) => void>();
@@ -1294,5 +1344,124 @@ describe("AzureOpenAiProviderClient", () => {
     expect(String(fetchFn.mock.calls[0]?.[0])).toContain("/deployments/shinra-mini/");
     expect(String(fetchFn.mock.calls[1]?.[0])).toContain("/deployments/shinra-mini/");
     expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it("continues across the tool-call iteration limit without replaying the user prompt", async () => {
+    const handler = vi.fn(async () => ({
+      resultType: "success" as const,
+      textResultForLlm: '{"activeView":"bridge"}',
+    }));
+    const fetchFn = vi.fn();
+    for (let iteration = 0; iteration < 12; iteration += 1) {
+      fetchFn.mockResolvedValueOnce(createToolCallResponse("gpt-4.1-mini", `call-${iteration + 1}`));
+    }
+    fetchFn.mockResolvedValueOnce(createAssistantResponse("gpt-4.1", "Recovered after continuing."));
+    const client = new AzureOpenAiProviderClient({
+      providerId: "azure-openai-escalation",
+      endpoint: "https://example.openai.azure.com",
+      apiKey: "secret",
+      deployment: "shinra-mini",
+      escalationDeployment: "shinra-full",
+      apiVersion: "2024-10-21",
+      modelLabel: "gpt-4.1-mini",
+      escalationModelLabel: "gpt-4.1",
+      fetchFn: fetchFn as unknown as typeof fetch,
+    });
+
+    const session = await client.createSession({
+      sessionId: "session-continued-limit",
+      clientName: "Spira",
+      streaming: false,
+      systemMessage: {
+        mode: "customize",
+        content: "You are Shinra.",
+      },
+      workingDirectory: "C:\\GitHub\\Spira",
+      tools: [
+        {
+          name: "spira_ui_get_snapshot",
+          description: "Read Spira snapshot.",
+          parameters: { type: "object", properties: {}, additionalProperties: false },
+          handler,
+        },
+      ],
+    } satisfies ProviderSessionConfig & { sessionId: string });
+
+    await expect(session.send({ prompt: "Keep going until the mission is done" })).resolves.toBeUndefined();
+
+    expect(fetchFn).toHaveBeenCalledTimes(13);
+    expect(handler).toHaveBeenCalledTimes(12);
+    expect(String(fetchFn.mock.calls[0]?.[0])).toContain("/deployments/shinra-mini/");
+    expect(String(fetchFn.mock.calls[12]?.[0])).toContain("/deployments/shinra-full/");
+
+    const finalRequest = JSON.parse(String(fetchFn.mock.calls[12]?.[1]?.body));
+    expect(finalRequest.messages.filter((message: { role: string }) => message.role === "user")).toEqual([
+      expect.objectContaining({ role: "user", content: "Keep going until the mission is done" }),
+    ]);
+    expect(finalRequest.messages.filter((message: { role: string }) => message.role === "tool")).toHaveLength(12);
+  });
+
+  it("rolls back the entire unfinished turn when a continued Azure turn is aborted", async () => {
+    const handler = vi.fn(async () => ({
+      resultType: "success" as const,
+      textResultForLlm: '{"activeView":"bridge"}',
+    }));
+    const fetchFn = vi.fn();
+    for (let iteration = 0; iteration < 12; iteration += 1) {
+      fetchFn.mockResolvedValueOnce(createToolCallResponse("gpt-4.1", `call-${iteration + 1}`));
+    }
+    fetchFn.mockImplementationOnce(
+      async (_url: URL, init?: RequestInit) =>
+        await new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => {
+            const error = new Error("The operation was aborted");
+            error.name = "AbortError";
+            reject(error);
+          });
+        }),
+    );
+    fetchFn.mockResolvedValueOnce(createAssistantResponse("gpt-4.1", "Fresh retry only."));
+    const client = new AzureOpenAiProviderClient({
+      endpoint: "https://example.openai.azure.com",
+      apiKey: "secret",
+      deployment: "shinra",
+      apiVersion: "2024-10-21",
+      modelLabel: "gpt-4.1",
+      fetchFn: fetchFn as unknown as typeof fetch,
+    });
+
+    const session = await client.createSession({
+      sessionId: "session-aborted-continuation",
+      clientName: "Spira",
+      streaming: false,
+      systemMessage: {
+        mode: "customize",
+        content: "You are Shinra.",
+      },
+      workingDirectory: "C:\\GitHub\\Spira",
+      tools: [
+        {
+          name: "spira_ui_get_snapshot",
+          description: "Read Spira snapshot.",
+          parameters: { type: "object", properties: {}, additionalProperties: false },
+          handler,
+        },
+      ],
+    } satisfies ProviderSessionConfig & { sessionId: string });
+
+    const sendPromise = session.send({ prompt: "Keep going" });
+    await vi.waitFor(() => {
+      expect(fetchFn).toHaveBeenCalledTimes(13);
+    });
+    await session.abort?.();
+
+    await expect(sendPromise).rejects.toThrow("Session not found: disconnected");
+    await expect(session.send({ prompt: "Retry" })).resolves.toBeUndefined();
+
+    const retryRequest = JSON.parse(String(fetchFn.mock.calls[13]?.[1]?.body));
+    expect(retryRequest.messages).toEqual([
+      { role: "system", content: "You are Shinra." },
+      { role: "user", content: "Retry" },
+    ]);
   });
 });

@@ -123,6 +123,70 @@ describe("describeMissionNextAction", () => {
       complete: false,
     });
   });
+
+  it("treats a later passing rerun as superseding an earlier failed validation", () => {
+    const run = createRun();
+    run.classification = {
+      kind: "backend",
+      scopeSummary: "Update mission closure logic.",
+      acceptanceCriteria: [],
+      impactedRepoRelativePaths: ["packages/backend"],
+      risks: [],
+      uiChange: false,
+      proofRequired: false,
+      proofArtifactMode: "none",
+      rationale: null,
+      createdAt: 21,
+      updatedAt: 21,
+    };
+    run.plan = {
+      steps: ["Fix validation closure semantics."],
+      touchedRepoRelativePaths: ["packages/backend"],
+      validationPlan: ["pnpm test"],
+      proofIntent: null,
+      blockers: [],
+      assumptions: [],
+      createdAt: 22,
+      updatedAt: 22,
+    };
+    run.validations = [
+      {
+        runId: "run-1",
+        validationId: "validation-older",
+        kind: "unit-test",
+        status: "failed",
+        command: "pnpm test",
+        cwd: "C:\\GitHub\\Spira\\packages\\backend",
+        summary: "Initial run failed.",
+        artifacts: [],
+        startedAt: 23,
+        completedAt: 24,
+        createdAt: 23,
+        updatedAt: 24,
+      },
+      {
+        runId: "run-1",
+        validationId: "validation-newer",
+        kind: "unit-test",
+        status: "passed",
+        command: "pnpm test",
+        cwd: "C:\\GitHub\\Spira",
+        supersedesValidationIds: ["validation-older"],
+        summary: "Rerun passed.",
+        artifacts: [],
+        startedAt: 25,
+        completedAt: 26,
+        createdAt: 25,
+        updatedAt: 26,
+      },
+    ];
+
+    expect(describeMissionNextAction(run)).toEqual({
+      label: "Save summary",
+      detail: "The final mission summary is still missing.",
+      complete: false,
+    });
+  });
 });
 
 describe("describeRunStatus", () => {
@@ -185,6 +249,85 @@ describe("describeRunStatus", () => {
       status: "completed",
       updatedAt: 25,
       completedAt: 25,
+    };
+
+    expect(describeRunStatus(run)).toBe("Ready to close");
+  });
+
+  it("keeps awaiting-review runs close-ready when an older failure has been superseded", () => {
+    const run = createRun();
+    run.status = "awaiting-review";
+    run.classification = {
+      kind: "backend",
+      scopeSummary: "Finish the mission run",
+      acceptanceCriteria: [],
+      impactedRepoRelativePaths: ["packages/backend"],
+      risks: [],
+      uiChange: false,
+      proofRequired: false,
+      proofArtifactMode: "none",
+      rationale: null,
+      createdAt: 21,
+      updatedAt: 21,
+    };
+    run.plan = {
+      steps: ["Close the mission loop."],
+      touchedRepoRelativePaths: ["packages/backend"],
+      validationPlan: ["pnpm test"],
+      proofIntent: null,
+      blockers: [],
+      assumptions: [],
+      createdAt: 22,
+      updatedAt: 22,
+    };
+    run.validations = [
+      {
+        runId: "run-1",
+        validationId: "validation-1",
+        kind: "unit-test",
+        status: "failed",
+        command: "pnpm test",
+        cwd: "C:\\GitHub\\Spira\\packages\\backend",
+        summary: "Initial run failed.",
+        artifacts: [],
+        startedAt: 23,
+        completedAt: 24,
+        createdAt: 23,
+        updatedAt: 24,
+      },
+      {
+        runId: "run-1",
+        validationId: "validation-2",
+        kind: "unit-test",
+        status: "passed",
+        command: "pnpm test",
+        cwd: "C:\\GitHub\\Spira",
+        supersedesValidationIds: ["validation-1"],
+        summary: "Rerun passed.",
+        artifacts: [],
+        startedAt: 25,
+        completedAt: 26,
+        createdAt: 25,
+        updatedAt: 26,
+      },
+    ];
+    run.missionSummary = {
+      completedWork: "Mission wrapped up.",
+      changedRepoRelativePaths: ["packages/backend"],
+      validationSummary: "pnpm test passed",
+      proofSummary: null,
+      openQuestions: [],
+      followUps: [],
+      createdAt: 27,
+      updatedAt: 27,
+    };
+    run.missionPhase = "summarize";
+    run.missionPhaseUpdatedAt = 27;
+    run.attempts[1] = {
+      ...run.attempts[1],
+      status: "completed",
+      updatedAt: 27,
+      completedAt: 27,
     };
 
     expect(describeRunStatus(run)).toBe("Ready to close");

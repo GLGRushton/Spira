@@ -1,9 +1,6 @@
-import { describe, expect, it } from "vitest";
 import type { TicketRunSummary } from "@spira/shared";
-import {
-  buildLearnedRepoIntelligenceCandidates,
-  toPersistedProofDecisionInput,
-} from "./mission-intelligence.js";
+import { describe, expect, it } from "vitest";
+import { buildLearnedRepoIntelligenceCandidates, toPersistedProofDecisionInput } from "./mission-intelligence.js";
 
 const createRun = (): TicketRunSummary => ({
   runId: "run-1",
@@ -128,7 +125,10 @@ describe("mission-intelligence", () => {
 
     const candidates = buildLearnedRepoIntelligenceCandidates(run);
     const targetIds = candidates
-      .filter((candidate) => candidate.repoRelativePath === "apps/web-admin" || candidate.repoRelativePath === "apps/web/admin")
+      .filter(
+        (candidate) =>
+          candidate.repoRelativePath === "apps/web-admin" || candidate.repoRelativePath === "apps/web/admin",
+      )
       .map((candidate) => candidate.id);
 
     expect(targetIds).toHaveLength(2);
@@ -152,5 +152,44 @@ describe("mission-intelligence", () => {
     expect(persisted.repoRelativePaths).toEqual(
       expect.arrayContaining([".", "packages/backend", "packages/renderer", "apps/web-admin", "apps/web/admin"]),
     );
+  });
+
+  it("treats superseded validation failures as clean for learned intelligence", () => {
+    const run = createRun();
+    run.validations = [
+      {
+        validationId: "validation-older",
+        runId: "run-1",
+        kind: "unit-test",
+        command: "pnpm test",
+        cwd: "C:\\Repos\\.spira-worktrees\\spi-101",
+        status: "failed",
+        summary: "Initial run failed.",
+        artifacts: [],
+        startedAt: 1,
+        completedAt: 2,
+        createdAt: 1,
+        updatedAt: 2,
+      },
+      {
+        validationId: "validation-newer",
+        runId: "run-1",
+        kind: "unit-test",
+        command: "pnpm test",
+        cwd: "C:\\Repos\\.spira-worktrees\\spi-101\\ClientApp",
+        supersedesValidationIds: ["validation-older"],
+        status: "passed",
+        summary: "Rerun passed.",
+        artifacts: [],
+        startedAt: 3,
+        completedAt: 4,
+        createdAt: 3,
+        updatedAt: 4,
+      },
+    ];
+
+    const candidates = buildLearnedRepoIntelligenceCandidates(run);
+
+    expect(candidates).not.toHaveLength(0);
   });
 });

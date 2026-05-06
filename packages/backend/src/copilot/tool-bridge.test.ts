@@ -484,6 +484,7 @@ describe("getCopilotTools", () => {
       kind: "lint",
       command: "pnpm lint",
       cwd: ".",
+      supersedesValidationIds: ["validation-old"],
       status: "passed",
       summary: "Lint passed.",
     });
@@ -494,6 +495,7 @@ describe("getCopilotTools", () => {
         validationId: "validation-1",
         kind: "lint",
         command: "pnpm lint",
+        supersedesValidationIds: ["validation-old"],
       }),
     );
     expect(result.textResultForLlm).toContain('"ok":true');

@@ -11,6 +11,7 @@ import type { AzureOpenAiClientConfig, AzureOpenAiSessionState } from "./session
 import {
   accumulateUsageSnapshots,
   beginAzureTurnMessages,
+  continueAzureTurnMessages,
   finishAzureTurnMessages,
   getAssistantMessage,
   getPermissionRequest,
@@ -23,6 +24,9 @@ import {
   tryEscalateAzureSession,
 } from "./session-state.js";
 import { requestAzureOpenAiCompletion } from "./transport.js";
+
+const MAX_AZURE_TOOL_CALL_ITERATIONS = 12;
+const MAX_AZURE_TURN_CONTINUATIONS = 32;
 
 export const executeAzureOpenAiTool = async (
   tool: ProviderToolDefinition,
@@ -100,6 +104,9 @@ const withTurnExecutionContext = (
   return Object.assign(new Error(String(error)), { executedToolCalls, accumulatedUsage });
 };
 
+const needsTurnContinuation = (error: unknown): boolean =>
+  typeof error === "object" && error !== null && "needsContinuation" in error && error.needsContinuation === true;
+
 const getAzureEscalationReason = (error: unknown): string | null => {
   if (!(error instanceof Error)) {
     return null;
@@ -126,13 +133,14 @@ const runAzureOpenAiTurnOnce = async (
   prompt: string,
   logger: { info(entry: object, message: string): void },
   initialUsage: ProviderUsageSnapshot | null = null,
+  isContinuation = false,
 ): Promise<void> => {
   if (state.abortController) {
     state.abortController.abort();
   }
   const abortController = new AbortController();
   state.abortController = abortController;
-  const turnGeneration = beginAzureTurnMessages(state, prompt);
+  const turnGeneration = isContinuation ? continueAzureTurnMessages(state) : beginAzureTurnMessages(state, prompt);
   logger.info(
     {
       providerId: state.providerId,
@@ -154,7 +162,7 @@ const runAzureOpenAiTurnOnce = async (
   };
 
   try {
-    for (let iteration = 0; iteration < 12; iteration += 1) {
+    for (let iteration = 0; iteration < MAX_AZURE_TOOL_CALL_ITERATIONS; iteration += 1) {
       const startedAt = Date.now();
       let emittedStreamDelta = false;
       const messageId = randomUUID();
@@ -304,9 +312,10 @@ const runAzureOpenAiTurnOnce = async (
     }
   }
 
-  rollbackAzureTurnMessages(state, turnGeneration);
   throw withTurnExecutionContext(
-    new ProviderError("Azure OpenAI exceeded the maximum tool-call iterations for a single turn."),
+    Object.assign(new ProviderError("Azure OpenAI exceeded the maximum tool-call iterations for a single turn."), {
+      needsContinuation: true,
+    }),
     executedToolCalls,
     accumulatedUsage,
   );
@@ -320,28 +329,66 @@ export const runAzureOpenAiTurn = async (
   logger: { info(entry: object, message: string): void },
 ): Promise<void> => {
   let accumulatedUsage: ProviderUsageSnapshot | null = null;
-  try {
-    await runAzureOpenAiTurnOnce(clientConfig, state, config, prompt, logger, accumulatedUsage);
-  } catch (error) {
-    accumulatedUsage = getAccumulatedUsage(error);
-    const reason = hasExecutedToolCalls(error) ? null : getAzureEscalationReason(error);
-    const escalation = reason ? tryEscalateAzureSession(state) : null;
-    if (!reason || !escalation) {
-      throw error;
-    }
+  let continuationCount = 0;
+  let isContinuation = false;
+  while (true) {
+    try {
+      await runAzureOpenAiTurnOnce(clientConfig, state, config, prompt, logger, accumulatedUsage, isContinuation);
+      return;
+    } catch (error) {
+      accumulatedUsage = getAccumulatedUsage(error);
+      if (needsTurnContinuation(error)) {
+        const escalation = tryEscalateAzureSession(state);
+        if (escalation) {
+          logger.info(
+            {
+              providerId: state.providerId,
+              sessionId: state.sessionId,
+              reason: "tool-iteration-limit",
+              fromDeployment: escalation.fromDeployment,
+              toDeployment: escalation.toDeployment,
+              fromModel: escalation.fromModel,
+              toModel: escalation.toModel,
+            },
+            "Escalating provider session",
+          );
+        }
+        if (continuationCount >= MAX_AZURE_TURN_CONTINUATIONS) {
+          rollbackAzureTurnMessages(state);
+          throw error;
+        }
+        continuationCount += 1;
+        isContinuation = true;
+        logger.info(
+          {
+            providerId: state.providerId,
+            sessionId: state.sessionId,
+            continuationCount,
+            deployment: state.currentDeployment,
+            ...(state.hostContinuityModel ? { model: state.hostContinuityModel } : {}),
+          },
+          "Continuing provider turn after tool-call iteration limit",
+        );
+        continue;
+      }
+      const reason = hasExecutedToolCalls(error) ? null : getAzureEscalationReason(error);
+      const escalation = reason ? tryEscalateAzureSession(state) : null;
+      if (!reason || !escalation) {
+        throw error;
+      }
 
-    logger.info(
-      {
-        providerId: state.providerId,
-        sessionId: state.sessionId,
-        reason,
-        fromDeployment: escalation.fromDeployment,
-        toDeployment: escalation.toDeployment,
-        fromModel: escalation.fromModel,
-        toModel: escalation.toModel,
-      },
-      "Escalating provider session",
-    );
-    await runAzureOpenAiTurnOnce(clientConfig, state, config, prompt, logger, accumulatedUsage);
+      logger.info(
+        {
+          providerId: state.providerId,
+          sessionId: state.sessionId,
+          reason,
+          fromDeployment: escalation.fromDeployment,
+          toDeployment: escalation.toDeployment,
+          fromModel: escalation.fromModel,
+          toModel: escalation.toModel,
+        },
+        "Escalating provider session",
+      );
+    }
   }
 };

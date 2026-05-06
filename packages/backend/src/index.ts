@@ -193,7 +193,6 @@ const sameVoiceConfiguration = (left: VoiceConfiguration, right: VoiceConfigurat
   left.openWakeWordThreshold === right.openWakeWordThreshold;
 
 const buildMissionStationId = (runId: string): string => `mission:${runId}`;
-const MISSION_STATION_MODEL = "gpt-5.5";
 
 const MISSION_WORKTREE_DIRECTORY_NAME = ".spira-worktrees";
 
@@ -229,6 +228,7 @@ const buildMissionStationInstructions = (
     `Repositories in scope:\n${formatMissionStationWorktrees(worktrees)}`,
     `Mission lifecycle tools are mandatory for this station and are already bound to run_id "${runId}". Start by calling get_mission_context before making changes.`,
     "Save classification before planning, save the plan before implementing, record validations before claiming completion, and save the final summary before finishing.",
+    "If a validation rerun should replace an older failed result, either reuse the same validationId or pass supersedesValidationIds with the obsolete validation IDs. Only unsuperseded validations count for workflow and closure.",
     "If the ticket changes UI, set a targeted proof strategy and record the resulting proof. Do not treat a generic harness run as sufficient proof.",
     `Mission services are managed through Spira. Use spira_list_mission_services with run_id "${runId}" to inspect profiles, spira_start_mission_service to launch tracked services, and spira_stop_mission_service to stop them.`,
     "Treat this as an iterative coding mission: preserve context between prompts, keep the mission workspace reviewable, and report unfinished edges plainly.",
@@ -295,7 +295,6 @@ const restoreMissionStations = (registry: StationRegistry, database: SpiraMemory
       stationId: run.stationId,
       label: `Mission ${run.ticketId}`,
       missionRunId: run.runId,
-      requestedModel: MISSION_STATION_MODEL,
       additionalInstructions: buildMissionStationInstructions(run.runId, run.ticketId, run.worktrees),
       workingDirectory,
       allowUpgradeTools: false,
@@ -2219,7 +2218,6 @@ const bootstrap = async () => {
         stationId,
         label: `Mission ${run.ticketId}`,
         missionRunId: run.runId,
-        requestedModel: MISSION_STATION_MODEL,
         additionalInstructions: buildMissionStationInstructions(run.runId, run.ticketId, run.worktrees),
         workingDirectory,
         allowUpgradeTools: false,
@@ -2248,7 +2246,6 @@ const bootstrap = async () => {
         stationId,
         label: `Mission ${run.ticketId}`,
         missionRunId: run.runId,
-        requestedModel: MISSION_STATION_MODEL,
         additionalInstructions: buildMissionStationInstructions(run.runId, run.ticketId, run.worktrees),
         workingDirectory: resolveMissionStationWorkingDirectory(run.worktrees) ?? undefined,
         allowUpgradeTools: false,

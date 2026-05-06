@@ -205,6 +205,13 @@ const parseMissionValidation = (runId: string, value: unknown): TicketRunMission
     ),
     command,
     cwd,
+    supersedesValidationIds: Array.isArray(value.supersedesValidationIds)
+      ? [
+          ...new Set(
+            value.supersedesValidationIds.flatMap((entry) => (typeof entry === "string" ? [entry.trim()] : [])),
+          ),
+        ].filter((entry) => entry.length > 0 && entry !== validationId)
+      : [],
     status: assertEnumValue(
       typeof value.status === "string" ? value.status : "",
       TICKET_RUN_MISSION_VALIDATION_STATUSES,
@@ -948,7 +955,7 @@ export const buildRecordValidationTool = (
 ) =>
   defineTool("record_validation", {
     description:
-      "Append a validation record for the active mission, including build, test, lint, or typecheck results.",
+      "Append a validation record for the active mission, including build, test, lint, or typecheck results. Reuse the same validationId to replace a record in place, or pass supersedesValidationIds to retire obsolete failures while preserving history.",
     parameters: {
       type: "object",
       properties: {
@@ -956,6 +963,10 @@ export const buildRecordValidationTool = (
         kind: { type: "string", enum: [...TICKET_RUN_MISSION_VALIDATION_KINDS] },
         command: { type: "string" },
         cwd: { type: "string" },
+        supersedesValidationIds: {
+          type: "array",
+          items: { type: "string" },
+        },
         status: { type: "string", enum: [...TICKET_RUN_MISSION_VALIDATION_STATUSES] },
         summary: { type: "string" },
         artifacts: {

@@ -228,6 +228,7 @@ export interface TicketRunMissionValidationRecord {
   kind: TicketRunMissionValidationKind;
   command: string;
   cwd: string;
+  supersedesValidationIds?: string[];
   status: TicketRunMissionValidationStatus;
   summary: string | null;
   artifacts: TicketRunProofArtifact[];

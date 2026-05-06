@@ -11,6 +11,7 @@ import type { OpenAiClientConfig, OpenAiSessionState } from "./session-state.js"
 import {
   accumulateUsageSnapshots,
   beginOpenAiTurnMessages,
+  continueOpenAiTurnMessages,
   finishOpenAiTurnMessages,
   getAssistantMessage,
   getPermissionRequest,
@@ -23,6 +24,9 @@ import {
   tryEscalateOpenAiSession,
 } from "./session-state.js";
 import { requestOpenAiCompletion } from "./transport.js";
+
+const MAX_OPENAI_TOOL_CALL_ITERATIONS = 12;
+const MAX_OPENAI_TURN_CONTINUATIONS = 32;
 
 export const executeOpenAiTool = async (
   tool: ProviderToolDefinition,
@@ -100,6 +104,9 @@ const withTurnExecutionContext = (
   return Object.assign(new Error(String(error)), { executedToolCalls, accumulatedUsage });
 };
 
+const needsTurnContinuation = (error: unknown): boolean =>
+  typeof error === "object" && error !== null && "needsContinuation" in error && error.needsContinuation === true;
+
 const getOpenAiEscalationReason = (error: unknown): string | null => {
   if (!(error instanceof Error)) {
     return null;
@@ -126,13 +133,14 @@ const runOpenAiTurnOnce = async (
   prompt: string,
   logger: { info(entry: object, message: string): void },
   initialUsage: ProviderUsageSnapshot | null = null,
+  isContinuation = false,
 ): Promise<void> => {
   if (state.abortController) {
     state.abortController.abort();
   }
   const abortController = new AbortController();
   state.abortController = abortController;
-  const turnGeneration = beginOpenAiTurnMessages(state, prompt);
+  const turnGeneration = isContinuation ? continueOpenAiTurnMessages(state) : beginOpenAiTurnMessages(state, prompt);
   logger.info(
     {
       providerId: state.providerId,
@@ -153,7 +161,7 @@ const runOpenAiTurnOnce = async (
   };
 
   try {
-    for (let iteration = 0; iteration < 12; iteration += 1) {
+    for (let iteration = 0; iteration < MAX_OPENAI_TOOL_CALL_ITERATIONS; iteration += 1) {
       const startedAt = Date.now();
       let emittedStreamDelta = false;
       const messageId = randomUUID();
@@ -303,9 +311,10 @@ const runOpenAiTurnOnce = async (
     }
   }
 
-  rollbackOpenAiTurnMessages(state, turnGeneration);
   throw withTurnExecutionContext(
-    new ProviderError("OpenAI exceeded the maximum tool-call iterations for a single turn."),
+    Object.assign(new ProviderError("OpenAI exceeded the maximum tool-call iterations for a single turn."), {
+      needsContinuation: true,
+    }),
     executedToolCalls,
     accumulatedUsage,
   );
@@ -319,26 +328,61 @@ export const runOpenAiTurn = async (
   logger: { info(entry: object, message: string): void },
 ): Promise<void> => {
   let accumulatedUsage: ProviderUsageSnapshot | null = null;
-  try {
-    await runOpenAiTurnOnce(clientConfig, state, config, prompt, logger, accumulatedUsage);
-  } catch (error) {
-    accumulatedUsage = getAccumulatedUsage(error);
-    const reason = hasExecutedToolCalls(error) ? null : getOpenAiEscalationReason(error);
-    const escalation = reason ? tryEscalateOpenAiSession(state) : null;
-    if (!reason || !escalation) {
-      throw error;
-    }
+  let continuationCount = 0;
+  let isContinuation = false;
+  while (true) {
+    try {
+      await runOpenAiTurnOnce(clientConfig, state, config, prompt, logger, accumulatedUsage, isContinuation);
+      return;
+    } catch (error) {
+      accumulatedUsage = getAccumulatedUsage(error);
+      if (needsTurnContinuation(error)) {
+        const escalation = tryEscalateOpenAiSession(state);
+        if (escalation) {
+          logger.info(
+            {
+              providerId: state.providerId,
+              sessionId: state.sessionId,
+              reason: "tool-iteration-limit",
+              fromModel: escalation.fromModel,
+              toModel: escalation.toModel,
+            },
+            "Escalating provider session",
+          );
+        }
+        if (continuationCount >= MAX_OPENAI_TURN_CONTINUATIONS) {
+          rollbackOpenAiTurnMessages(state);
+          throw error;
+        }
+        continuationCount += 1;
+        isContinuation = true;
+        logger.info(
+          {
+            providerId: state.providerId,
+            sessionId: state.sessionId,
+            continuationCount,
+            ...(state.currentModel ? { model: state.currentModel } : {}),
+          },
+          "Continuing provider turn after tool-call iteration limit",
+        );
+        continue;
+      }
+      const reason = hasExecutedToolCalls(error) ? null : getOpenAiEscalationReason(error);
+      const escalation = reason ? tryEscalateOpenAiSession(state) : null;
+      if (!reason || !escalation) {
+        throw error;
+      }
 
-    logger.info(
-      {
-        providerId: state.providerId,
-        sessionId: state.sessionId,
-        reason,
-        fromModel: escalation.fromModel,
-        toModel: escalation.toModel,
-      },
-      "Escalating provider session",
-    );
-    await runOpenAiTurnOnce(clientConfig, state, config, prompt, logger, accumulatedUsage);
+      logger.info(
+        {
+          providerId: state.providerId,
+          sessionId: state.sessionId,
+          reason,
+          fromModel: escalation.fromModel,
+          toModel: escalation.toModel,
+        },
+        "Escalating provider session",
+      );
+    }
   }
 };

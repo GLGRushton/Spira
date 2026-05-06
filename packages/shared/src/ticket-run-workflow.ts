@@ -1,10 +1,31 @@
-import type { TicketRunMissionWorkflowState, TicketRunSummary } from "./ticket-run-types.js";
+import type {
+  TicketRunMissionValidationRecord,
+  TicketRunMissionWorkflowState,
+  TicketRunSummary,
+} from "./ticket-run-types.js";
 
 const getCurrentAttempt = (run: TicketRunSummary) =>
   [...run.attempts].reverse().find((attempt) => attempt.status === "running") ?? run.attempts.at(-1) ?? null;
 
 const isCurrentAttemptValue = (attemptStartedAt: number | null, updatedAt: number | null | undefined): boolean =>
   attemptStartedAt !== null && typeof updatedAt === "number" && updatedAt >= attemptStartedAt;
+
+export const getEffectiveValidations = (
+  validations: readonly TicketRunMissionValidationRecord[],
+): TicketRunMissionValidationRecord[] => {
+  const supersededValidationIds = new Set<string>();
+  for (const validation of validations) {
+    for (const supersededValidationId of validation.supersedesValidationIds ?? []) {
+      const normalizedValidationId = supersededValidationId.trim();
+      if (normalizedValidationId.length > 0 && normalizedValidationId !== validation.validationId) {
+        supersededValidationIds.add(normalizedValidationId);
+      }
+    }
+  }
+  return [...validations]
+    .sort((left, right) => right.startedAt - left.startedAt || right.createdAt - left.createdAt)
+    .filter((validation) => !supersededValidationIds.has(validation.validationId));
+};
 
 const getWaitReason = (
   nextAction: TicketRunMissionWorkflowState["nextAction"],
@@ -75,9 +96,10 @@ export const getTicketRunMissionWorkflowState = (run: TicketRunSummary): TicketR
     (attemptStartedAt !== null &&
       run.missionPhase === "classification" &&
       run.missionPhaseUpdatedAt > attemptStartedAt);
-  const hasPassingValidation = run.validations.some((validation) => validation.status === "passed");
-  const hasFailingValidation = run.validations.some((validation) => validation.status === "failed");
-  const hasPendingValidation = run.validations.some((validation) => validation.status === "pending");
+  const effectiveValidations = getEffectiveValidations(run.validations);
+  const hasPassingValidation = effectiveValidations.some((validation) => validation.status === "passed");
+  const hasFailingValidation = effectiveValidations.some((validation) => validation.status === "failed");
+  const hasPendingValidation = effectiveValidations.some((validation) => validation.status === "pending");
   const proofRequired = run.classification?.proofRequired === true;
   const proofStrategySaved = !proofRequired || isCurrentAttemptValue(attemptStartedAt, run.proofStrategy?.updatedAt);
   const proofPassed = !proofRequired || run.proof.status === "passed";
