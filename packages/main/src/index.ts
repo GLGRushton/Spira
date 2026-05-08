@@ -215,7 +215,7 @@ const RUNTIME_CONFIG_METADATA: Record<
     envKey: "SPIRA_MODEL_PROVIDER",
     label: "Model provider",
     description:
-      'Selects the active provider adapter for Shinra turns, such as "copilot", "azure-openai", "azure-openai-escalation", "openai", or "openai-escalation".',
+      'Selects the active provider adapter for Shinra turns, such as "copilot", "claude-agent", "azure-openai", "azure-openai-escalation", "openai", or "openai-escalation". The "claude-agent" provider uses your Claude subscription auth — no API key required.',
     secret: false,
   },
   githubToken: {
@@ -291,6 +291,13 @@ const RUNTIME_CONFIG_METADATA: Record<
     envKey: "OPENAI_ESCALATION_MODEL",
     label: "OpenAI escalation model",
     description: "The OpenAI model used by the experimental escalation provider after it promotes a session.",
+    secret: false,
+  },
+  claudeAgentModel: {
+    envKey: "CLAUDE_AGENT_MODEL",
+    label: "Claude Agent model",
+    description:
+      'Default Claude model when the "claude-agent" provider is active, e.g. "claude-opus-4-7" or "claude-sonnet-4-6". Leave blank to use the Claude Code default.',
     secret: false,
   },
   missionGitHubToken: {

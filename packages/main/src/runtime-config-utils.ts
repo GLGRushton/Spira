@@ -3,6 +3,12 @@ import { MODEL_PROVIDERS, type ModelProviderId, type RuntimeConfigKey } from "@s
 const MODEL_PROVIDER_ALIASES = new Map<string, ModelProviderId>([
   ["copilot", "copilot"],
   ["github-copilot", "copilot"],
+  ["claude", "claude-agent"],
+  ["claude-agent", "claude-agent"],
+  ["claude-code", "claude-agent"],
+  ["claude code", "claude-agent"],
+  ["claude agent", "claude-agent"],
+  ["anthropic", "claude-agent"],
   ["azure", "azure-openai"],
   ["azure-ai", "azure-openai"],
   ["azure-openai", "azure-openai"],
@@ -48,7 +54,7 @@ const normalizeModelProviderValue = (value: string | null | undefined): ModelPro
   }
 
   throw new Error(
-    'Invalid model provider. Use "copilot", "azure-openai", "azure-openai-escalation", "openai", or "openai-escalation".',
+    'Invalid model provider. Use "copilot", "claude-agent", "azure-openai", "azure-openai-escalation", "openai", or "openai-escalation".',
   );
 };
 

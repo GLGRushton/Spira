@@ -21,7 +21,6 @@ import {
 } from "@spira/shared";
 import { ZodError } from "zod";
 import { handleChatRuntimeMessage } from "./backend/chat-runtime-router.js";
-import { DEFAULT_STATION_ID, StationRegistry } from "./runtime/station-registry.js";
 import { McpClientPool } from "./mcp/client-pool.js";
 import { McpRegistry } from "./mcp/registry.js";
 import { McpToolAggregator } from "./mcp/tool-aggregator.js";
@@ -36,6 +35,7 @@ import { MissionServiceRegistry } from "./missions/service-registry.js";
 import { type GenerateCommitDraftInput, TicketRunService } from "./missions/ticket-runs.js";
 import { ProjectRegistry } from "./projects/registry.js";
 import { RuntimeStore } from "./runtime/runtime-store.js";
+import { DEFAULT_STATION_ID, StationRegistry } from "./runtime/station-registry.js";
 import { WsServer } from "./server.js";
 import { MANAGED_SQL_SERVER_BUILTIN_SERVER_IDS, buildSqlServerBuiltinMcpServers } from "./sqlserver/builtin.js";
 import { SubagentRegistry } from "./subagent/registry.js";

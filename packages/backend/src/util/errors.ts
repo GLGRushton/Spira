@@ -46,6 +46,12 @@ export class CopilotError extends SpiraError {
   }
 }
 
+export class ClaudeAgentError extends SpiraError {
+  constructor(message: string, cause?: unknown) {
+    super("CLAUDE_AGENT_ERROR", message, cause);
+  }
+}
+
 export class ProviderError extends SpiraError {
   constructor(message: string, cause?: unknown) {
     super("PROVIDER_ERROR", message, cause);

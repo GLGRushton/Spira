@@ -12,6 +12,7 @@ export const RUNTIME_CONFIG_KEYS = [
   "openAiBaseUrl",
   "openAiModel",
   "openAiEscalationModel",
+  "claudeAgentModel",
   "missionGitHubToken",
   "elevenLabsApiKey",
   "picovoiceAccessKey",

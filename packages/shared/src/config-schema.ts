@@ -79,6 +79,7 @@ export const EnvSchema = z.object({
   OPENAI_BASE_URL: BlankStringAsUndefinedSchema.pipe(z.string().url().optional()),
   OPENAI_MODEL: BlankStringAsUndefinedSchema.pipe(z.string().default("gpt-5.4")),
   OPENAI_ESCALATION_MODEL: BlankStringAsUndefinedSchema.pipe(z.string().optional()),
+  CLAUDE_AGENT_MODEL: BlankStringAsUndefinedSchema.pipe(z.string().optional()),
   MISSION_GITHUB_TOKEN: z.string().optional(),
   YOUTRACK_BASE_URL: z.string().optional(),
   YOUTRACK_TOKEN: z.string().optional(),

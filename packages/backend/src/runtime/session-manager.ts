@@ -47,11 +47,15 @@ import type {
   ProviderUsageRecord,
   ProviderUsageSnapshot,
 } from "../provider/types.js";
-import {
-  approvePermissionOnce,
-  permissionUserNotAvailable,
-  rejectPermission,
-} from "./permission-decisions.js";
+import { SubagentLockManager } from "../subagent/lock-manager.js";
+import type { SubagentRegistry } from "../subagent/registry.js";
+import { SubagentRunRegistry } from "../subagent/run-registry.js";
+import { SubagentRunner } from "../subagent/subagent-runner.js";
+import { AssistantError, formatErrorDetails } from "../util/errors.js";
+import type { SpiraEventBus } from "../util/event-bus.js";
+import { createLogger } from "../util/logger.js";
+import { setUnrefTimeout } from "../util/timers.js";
+import { approvePermissionOnce, permissionUserNotAvailable, rejectPermission } from "./permission-decisions.js";
 import {
   type RuntimeCheckpointPayload,
   type RuntimeLedgerEvent,
@@ -76,17 +80,6 @@ import { executeRuntimePermissionRequest } from "./runtime-permission-lifecycle.
 import { completeRuntimeCancellation, requestRuntimeCancellation } from "./runtime-state-machine.js";
 import { RuntimeStore } from "./runtime-store.js";
 import { handleSharedTurnEvent, updateRuntimeUsageSummary } from "./runtime-turn-engine.js";
-import { type StationSessionStorage, createStationSessionStorage } from "./station-session-storage.js";
-import { StreamAssembler } from "./stream-handler.js";
-import type { ToolBridgeOptions } from "./tool-bridge.js";
-import { SubagentLockManager } from "../subagent/lock-manager.js";
-import type { SubagentRegistry } from "../subagent/registry.js";
-import { SubagentRunRegistry } from "../subagent/run-registry.js";
-import { SubagentRunner } from "../subagent/subagent-runner.js";
-import { AssistantError, formatErrorDetails } from "../util/errors.js";
-import type { SpiraEventBus } from "../util/event-bus.js";
-import { createLogger } from "../util/logger.js";
-import { setUnrefTimeout } from "../util/timers.js";
 import {
   VOICE_RESPONSE_INSTRUCTIONS,
   buildOutgoingPrompt,
@@ -160,6 +153,9 @@ import {
   shouldRestoreWorkSessionWorkflowState,
   syncOpenWorkflowPhaseEntryBlocking,
 } from "./session-manager/workflow-helpers.js";
+import { type StationSessionStorage, createStationSessionStorage } from "./station-session-storage.js";
+import { StreamAssembler } from "./stream-handler.js";
+import type { ToolBridgeOptions } from "./tool-bridge.js";
 
 const logger = createLogger("station-session");
 

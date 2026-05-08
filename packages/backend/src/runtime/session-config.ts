@@ -12,9 +12,9 @@ import type {
   ProviderSessionEvent,
   ProviderSystemMessageSection,
 } from "../provider/types.js";
+import { appRootDir } from "../util/app-paths.js";
 import { getProviderToolManifest } from "./capability-registry.js";
 import type { ToolBridgeOptions } from "./tool-bridge.js";
-import { appRootDir } from "../util/app-paths.js";
 
 const SHINRA_PERSONA_INSTRUCTIONS = [
   "You are Shinra, the resident operations intelligence of Spira.",

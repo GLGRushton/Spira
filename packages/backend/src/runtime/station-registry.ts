@@ -17,8 +17,6 @@ import type {
   UpgradeProposal,
 } from "@spira/shared";
 import type { McpToolAggregator } from "../mcp/tool-aggregator.js";
-import { clearStationSessionArtifacts, createStationSessionStorage } from "./station-session-storage.js";
-import type { ToolBridgeOptions } from "./tool-bridge.js";
 import { SubagentLockManager } from "../subagent/lock-manager.js";
 import type { SubagentRegistry } from "../subagent/registry.js";
 import { SpiraError } from "../util/errors.js";
@@ -26,6 +24,8 @@ import { type EventMap, SpiraEventBus } from "../util/event-bus.js";
 import { setUnrefTimeout } from "../util/timers.js";
 import { buildContinuityPreamble, buildConversationMemoryContent } from "./continuity.js";
 import { type SessionPersistence, StationSessionManager } from "./session-manager.js";
+import { clearStationSessionArtifacts, createStationSessionStorage } from "./station-session-storage.js";
+import type { ToolBridgeOptions } from "./tool-bridge.js";
 
 export const DEFAULT_STATION_ID = "primary";
 const DEFAULT_STATION_RESPONSE_TIMEOUT_MS = 30 * 60 * 1000;

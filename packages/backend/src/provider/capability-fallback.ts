@@ -25,17 +25,29 @@ export const getDefaultProviderCapabilities = (providerId: ProviderId): Provider
           modelSelection: "session-scoped",
           toolCalling: "native",
         }
-      : {
-          persistentSessions: true,
-          abortableTurns: true,
-          sessionResumption: "provider-managed",
-          turnCancellation: "provider-abort",
-          responseStreaming: "native",
-          usageReporting: "full",
-          toolManifestMode: "projected",
-          modelSelection: "session-scoped",
-          toolCalling: "native",
-        };
+      : providerId === "claude-agent"
+        ? {
+            persistentSessions: true,
+            abortableTurns: true,
+            sessionResumption: "provider-managed",
+            turnCancellation: "provider-abort",
+            responseStreaming: "native",
+            usageReporting: "full",
+            toolManifestMode: "projected",
+            modelSelection: "session-scoped",
+            toolCalling: "native",
+          }
+        : {
+            persistentSessions: true,
+            abortableTurns: true,
+            sessionResumption: "provider-managed",
+            turnCancellation: "provider-abort",
+            responseStreaming: "native",
+            usageReporting: "full",
+            toolManifestMode: "projected",
+            modelSelection: "session-scoped",
+            toolCalling: "native",
+          };
 
 export type ProviderRuntimeFallbackPolicy = {
   continuity: "provider-session" | "host-continuity";

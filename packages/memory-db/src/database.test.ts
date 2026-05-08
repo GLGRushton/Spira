@@ -471,6 +471,24 @@ describe("SpiraMemoryDatabase", () => {
     ]);
   });
 
+  it("accepts claude-agent provider usage records", () => {
+    const database = createTestDatabase();
+
+    database.appendProviderUsageRecord({
+      provider: "claude-agent",
+      sessionId: "session-claude-agent",
+      observedAt: 3_000,
+      source: "provider",
+    });
+
+    expect(database.listProviderUsageRecords()).toMatchObject([
+      {
+        provider: "claude-agent",
+        sessionId: "session-claude-agent",
+      },
+    ]);
+  });
+
   it("migrates v24 provider usage records to allow escalation providers", () => {
     const tempDir = mkdtempSync(path.join(os.tmpdir(), "spira-memory-db-migration-"));
     tempDirs.push(tempDir);

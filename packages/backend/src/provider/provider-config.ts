@@ -20,6 +20,8 @@ export const getProviderLabel = (providerId: ProviderId): string => {
       return "OpenAI Escalation";
     case "openai":
       return "OpenAI";
+    case "claude-agent":
+      return "Claude (Subscription)";
     default:
       return "GitHub Copilot";
   }

@@ -1,5 +1,6 @@
 export const MODEL_PROVIDERS = [
   "copilot",
+  "claude-agent",
   "azure-openai",
   "azure-openai-escalation",
   "openai",

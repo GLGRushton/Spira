@@ -34,6 +34,7 @@ const logger = createLogger("runtime-store");
 const PENDING_PROVIDER_SESSION_CLEANUP_KEY = "runtime.provider-session-cleanup";
 const VALID_PROVIDER_IDS = new Set<ProviderId>([
   "copilot",
+  "claude-agent",
   "azure-openai",
   "azure-openai-escalation",
   "openai",

@@ -3,10 +3,30 @@
   flex-direction: column;
   gap: 20px;
   min-height: 0;
+  height: 100%;
   padding: 18px 16px;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
   border-right: 1px solid var(--border-default);
   background: linear-gradient(180deg, rgba(19, 26, 52, 0.98), rgba(9, 14, 31, 0.99)),
     radial-gradient(circle at bottom, rgba(227, 191, 119, 0.06), transparent 28%);
+}
+
+.sidebar::-webkit-scrollbar {
+  width: 8px;
+}
+
+.sidebar::-webkit-scrollbar-thumb {
+  background: rgba(141, 214, 234, 0.16);
+  border-radius: 999px;
+}
+
+.sidebar::-webkit-scrollbar-thumb:hover {
+  background: rgba(141, 214, 234, 0.28);
+}
+
+.sidebar::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 .logoBlock {

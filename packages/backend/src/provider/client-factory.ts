@@ -4,12 +4,17 @@ import type { Logger } from "pino";
 import { ProviderError } from "../util/errors.js";
 import { setUnrefTimeout } from "../util/timers.js";
 import { type AzureOpenAiAuthStrategy, createAzureOpenAiProviderClient } from "./azure-openai/client-factory.js";
+import { type ClaudeAgentAuthStrategy, createClaudeAgentProviderClient } from "./claude-agent/client-factory.js";
 import { type CopilotAuthStrategy, createCopilotProviderClient } from "./copilot/client-factory.js";
 import { type OpenAiAuthStrategy, createOpenAiProviderClient } from "./openai/client-factory.js";
 import { getConfiguredProviderId } from "./provider-config.js";
 import type { ProviderClient, ProviderId, ProviderSession, ProviderSessionConfig } from "./types.js";
 
-export type ProviderAuthStrategy = CopilotAuthStrategy | AzureOpenAiAuthStrategy | OpenAiAuthStrategy;
+export type ProviderAuthStrategy =
+  | CopilotAuthStrategy
+  | AzureOpenAiAuthStrategy
+  | OpenAiAuthStrategy
+  | ClaudeAgentAuthStrategy;
 
 export const createProviderClient = async (
   env: Env,
@@ -30,6 +35,8 @@ export const createProviderClientForProvider = async (
     case "openai":
     case "openai-escalation":
       return createOpenAiProviderClient(env, logger, providerId);
+    case "claude-agent":
+      return createClaudeAgentProviderClient(env, logger);
     default:
       return createCopilotProviderClient(env, logger);
   }

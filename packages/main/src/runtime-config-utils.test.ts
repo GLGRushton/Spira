@@ -23,7 +23,7 @@ describe("runtime-config-utils", () => {
 
   it("rejects invalid model providers", () => {
     expect(() => normalizeRuntimeConfigValue("modelProvider", "gpt-5.4")).toThrow(
-      'Invalid model provider. Use "copilot", "azure-openai", "azure-openai-escalation", "openai", or "openai-escalation".',
+      'Invalid model provider. Use "copilot", "claude-agent", "azure-openai", "azure-openai-escalation", "openai", or "openai-escalation".',
     );
   });
 
@@ -44,11 +44,19 @@ describe("runtime-config-utils", () => {
   it("returns allowed values for model provider", () => {
     expect(getAllowedRuntimeConfigValues("modelProvider")).toEqual([
       "copilot",
+      "claude-agent",
       "azure-openai",
       "azure-openai-escalation",
       "openai",
       "openai-escalation",
     ]);
     expect(getAllowedRuntimeConfigValues("githubToken")).toBeUndefined();
+  });
+
+  it("normalizes claude-agent aliases", () => {
+    expect(normalizeRuntimeConfigValue("modelProvider", "claude")).toBe("claude-agent");
+    expect(normalizeRuntimeConfigValue("modelProvider", "claude-code")).toBe("claude-agent");
+    expect(normalizeRuntimeConfigValue("modelProvider", "claude-agent")).toBe("claude-agent");
+    expect(normalizeRuntimeConfigValue("modelProvider", "anthropic")).toBe("claude-agent");
   });
 });

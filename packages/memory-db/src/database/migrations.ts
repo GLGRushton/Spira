@@ -840,4 +840,58 @@ export const MIGRATIONS: MigrationDefinition[] = [
       "ALTER TABLE ticket_run_validations ADD COLUMN supersedes_validation_ids_json TEXT",
     ],
   },
+  {
+    version: 28,
+    statements: [
+      "ALTER TABLE provider_usage_records RENAME TO provider_usage_records_v25",
+      `CREATE TABLE provider_usage_records (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        provider TEXT NOT NULL CHECK(provider IN (${SQLITE_MODEL_PROVIDER_CHECK_VALUES})),
+        station_id TEXT,
+        run_id TEXT,
+        session_id TEXT,
+        model TEXT,
+        input_tokens INTEGER,
+        output_tokens INTEGER,
+        total_tokens INTEGER,
+        estimated_cost_usd REAL,
+        latency_ms INTEGER,
+        observed_at INTEGER NOT NULL,
+        source TEXT NOT NULL CHECK(source IN ('provider', 'estimated', 'unknown'))
+      )`,
+      `INSERT INTO provider_usage_records (
+         id,
+         provider,
+         station_id,
+         run_id,
+         session_id,
+         model,
+         input_tokens,
+         output_tokens,
+         total_tokens,
+         estimated_cost_usd,
+         latency_ms,
+         observed_at,
+         source
+       )
+       SELECT
+         id,
+         provider,
+         station_id,
+         run_id,
+         session_id,
+         model,
+         input_tokens,
+         output_tokens,
+         total_tokens,
+         estimated_cost_usd,
+         latency_ms,
+         observed_at,
+         source
+       FROM provider_usage_records_v25`,
+      "DROP TABLE provider_usage_records_v25",
+      "CREATE INDEX idx_provider_usage_records_scope_v28 ON provider_usage_records(provider, station_id, run_id, observed_at DESC)",
+      "CREATE INDEX idx_provider_usage_records_session_v28 ON provider_usage_records(session_id, observed_at DESC)",
+    ],
+  },
 ];

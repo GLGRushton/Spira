@@ -28,6 +28,7 @@ const AI_PROVIDER_RUNTIME_CONFIG_KEYS: RuntimeConfigKey[] = [
   "openAiBaseUrl",
   "openAiModel",
   "openAiEscalationModel",
+  "claudeAgentModel",
 ];
 const AI_PROVIDER_RUNTIME_CONFIG_KEY_SET = new Set<RuntimeConfigKey>(AI_PROVIDER_RUNTIME_CONFIG_KEYS);
 const SQL_SERVER_RUNTIME_CONFIG_KEYS: RuntimeConfigKey[] = [
@@ -278,253 +279,295 @@ export function SettingsPanel() {
       );
     });
 
+  type SettingsTab =
+    | "voice"
+    | "permissions"
+    | "ai-provider"
+    | "armoury"
+    | "mission-git"
+    | "youtrack"
+    | "sql-server"
+    | "other";
+
+  const tabs: Array<{ id: SettingsTab; label: string; caption: string }> = [
+    { id: "ai-provider", label: "AI provider", caption: "Active model + credentials" },
+    { id: "voice", label: "Voice", caption: "Wake word, TTS, transcription" },
+    { id: "permissions", label: "Permissions", caption: "Tool approval behaviour" },
+    { id: "armoury", label: "Armoury", caption: "MCP servers" },
+    { id: "mission-git", label: "Mission git", caption: "Submodule PAT" },
+    { id: "youtrack", label: "YouTrack", caption: "Ticket intake" },
+    { id: "sql-server", label: "SQL server", caption: "Read-only MCP login" },
+    { id: "other", label: "Other keys", caption: "ElevenLabs, Picovoice, Nexus" },
+  ];
+
+  const [activeTab, setActiveTab] = useState<SettingsTab>("ai-provider");
+
+  const renderVoiceTab = () => (
+    <section className={styles.section}>
+      <div className={styles.sectionHeader}>
+        <div>
+          <h2>Voice</h2>
+          <p>Manage speech capture and synthesis.</p>
+        </div>
+      </div>
+      <div className={styles.row}>
+        <div>
+          <span className={styles.label}>Wake listening</span>
+          <span className={styles.caption}>Keep Shinra listening for the wake word.</span>
+        </div>
+        <button
+          type="button"
+          className={`${styles.toggle} ${wakeWordEnabled ? styles.toggleActive : ""}`}
+          onClick={handleWakeWordToggle}
+        >
+          {wakeWordEnabled ? "Listening" : "Off"}
+        </button>
+      </div>
+      <div className={styles.row}>
+        <div>
+          <span className={styles.label}>Spoken replies</span>
+          <span className={styles.caption}>Let Shinra speak confirmations and responses aloud.</span>
+        </div>
+        <button
+          type="button"
+          className={`${styles.toggle} ${speechEnabled ? styles.toggleActive : ""}`}
+          onClick={handleSpeechToggle}
+        >
+          {speechEnabled ? "Speaking" : "Silent"}
+        </button>
+      </div>
+      <div className={styles.row}>
+        <div>
+          <label className={styles.label} htmlFor="tts-provider-select">
+            TTS provider
+          </label>
+          <span className={styles.caption}>Switch between cloud and high-quality local playback.</span>
+        </div>
+        <select
+          id="tts-provider-select"
+          className={styles.select}
+          value={ttsProvider}
+          onChange={(event) => handleProviderChange(event.target.value as TtsProvider)}
+        >
+          <option value="elevenlabs">ElevenLabs</option>
+          <option value="kokoro">Kokoro</option>
+        </select>
+      </div>
+      <div className={styles.row}>
+        <div>
+          <label className={styles.label} htmlFor="whisper-model-select">
+            Whisper model
+          </label>
+          <span className={styles.caption}>Choose speed vs. transcription quality for voice capture.</span>
+        </div>
+        <select
+          id="whisper-model-select"
+          className={styles.select}
+          value={whisperModel}
+          onChange={(event) => handleWhisperModelChange(event.target.value as "tiny.en" | "base.en" | "small.en")}
+        >
+          <option value="tiny.en">tiny.en</option>
+          <option value="base.en">base.en</option>
+          <option value="small.en">small.en</option>
+        </select>
+      </div>
+      <div className={styles.row}>
+        <div>
+          <label className={styles.label} htmlFor="wake-word-provider-select">
+            Wake-word provider
+          </label>
+          <span className={styles.caption}>Switch between openWakeWord, Porcupine, or push-to-talk only mode.</span>
+        </div>
+        <select
+          id="wake-word-provider-select"
+          className={styles.select}
+          value={wakeWordProvider}
+          onChange={(event) => handleWakeWordProviderChange(event.target.value as WakeWordProviderSetting)}
+        >
+          {WAKE_WORD_PROVIDERS.map((provider) => (
+            <option key={provider} value={provider}>
+              {provider}
+            </option>
+          ))}
+        </select>
+      </div>
+      <div className={styles.row}>
+        <div>
+          <label className={styles.label} htmlFor="openwakeword-threshold">
+            openWakeWord threshold
+          </label>
+          <span className={styles.caption}>Tune wake-word sensitivity when openWakeWord is active.</span>
+        </div>
+        <div className={styles.thresholdControl}>
+          <input
+            id="openwakeword-threshold"
+            className={styles.rangeInput}
+            type="range"
+            min="0"
+            max="1"
+            step="0.05"
+            value={openWakeWordThreshold}
+            disabled={wakeWordProvider !== "openwakeword"}
+            onChange={(event) => handleThresholdChange(Number(event.target.value))}
+          />
+          <span className={styles.rangeValue}>{openWakeWordThreshold.toFixed(2)}</span>
+        </div>
+      </div>
+      <div className={styles.row}>
+        <div>
+          <label className={styles.label} htmlFor="elevenlabs-voice-id">
+            ElevenLabs voice ID
+          </label>
+          <span className={styles.caption}>Set the default voice to use when ElevenLabs is selected.</span>
+        </div>
+        <input
+          id="elevenlabs-voice-id"
+          className={styles.textInput}
+          type="text"
+          value={elevenLabsVoiceIdDraft}
+          onChange={(event) => handleElevenLabsVoiceIdChange(event.target.value)}
+          onBlur={commitElevenLabsVoiceId}
+          placeholder="Voice ID"
+        />
+      </div>
+    </section>
+  );
+
+  const renderPermissionsTab = () => (
+    <section className={styles.section}>
+      <div className={styles.sectionHeader}>
+        <div>
+          <h2>Permissions</h2>
+          <p>Control how Shinra handles approval prompts for tool calls.</p>
+        </div>
+      </div>
+      <div className={styles.row}>
+        <div>
+          <span className={styles.label}>Auto-approve tool permissions</span>
+          <span className={styles.caption}>
+            Bypass approval prompts and auto-approve every tool request. Only enable for trusted, monitored sessions.
+          </span>
+        </div>
+        <button
+          type="button"
+          className={`${styles.toggle} ${autoApprovePermissions ? styles.toggleActive : ""}`}
+          onClick={handleAutoApprovePermissionsToggle}
+        >
+          {autoApprovePermissions ? "Auto" : "Ask"}
+        </button>
+      </div>
+    </section>
+  );
+
+  const renderArmouryTab = () => (
+    <section className={styles.section}>
+      <div className={styles.sectionHeader}>
+        <div>
+          <h2>Armoury</h2>
+          <p>Toggle local MCP servers on or off here. Changes take effect immediately.</p>
+        </div>
+      </div>
+      <div className={styles.serverList}>
+        {servers.length === 0 ? (
+          <div className={styles.empty}>No servers reported by the backend yet.</div>
+        ) : (
+          servers.map((server) => (
+            <label key={server.id} className={styles.row}>
+              <div>
+                <span className={styles.label}>{server.name}</span>
+                <span className={styles.caption}>
+                  {server.toolCount} tools · {server.state}
+                </span>
+              </div>
+              <input
+                type="checkbox"
+                checked={server.enabled}
+                disabled={server.state === "starting"}
+                title={server.state === "starting" ? "Server update in progress" : undefined}
+                onChange={(event) => handleServerToggle(server.id, event.target.checked)}
+              />
+            </label>
+          ))
+        )}
+      </div>
+    </section>
+  );
+
+  const renderRuntimeConfigSection = (title: string, description: string, keys: RuntimeConfigKey[]) => (
+    <section className={styles.section}>
+      <div className={styles.sectionHeader}>
+        <div>
+          <h2>{title}</h2>
+          <p>{description}</p>
+        </div>
+      </div>
+      {runtimeConfigNotice ? <div className={styles.notice}>{runtimeConfigNotice}</div> : null}
+      {runtimeConfig ? (
+        <div className={styles.keyGrid}>{renderRuntimeConfigCards(keys)}</div>
+      ) : (
+        <div className={styles.empty}>Loading secure runtime configuration…</div>
+      )}
+    </section>
+  );
+
+  const renderActiveTab = () => {
+    switch (activeTab) {
+      case "voice":
+        return renderVoiceTab();
+      case "permissions":
+        return renderPermissionsTab();
+      case "armoury":
+        return renderArmouryTab();
+      case "ai-provider":
+        return renderRuntimeConfigSection(
+          "AI provider",
+          "Select the active provider and store the credentials or deployment settings it needs.",
+          AI_PROVIDER_RUNTIME_CONFIG_KEYS,
+        );
+      case "youtrack":
+        return renderRuntimeConfigSection(
+          "YouTrack credentials",
+          "This is the only YouTrack setup that stays in Settings.",
+          YOUTRACK_RUNTIME_CONFIG_KEYS,
+        );
+      case "sql-server":
+        return renderRuntimeConfigSection(
+          "SQL Server read-only MCP",
+          "Configure the dedicated SQL login, allowlist, and query caps for the built-in SQL Server tools.",
+          SQL_SERVER_RUNTIME_CONFIG_KEYS,
+        );
+      case "mission-git":
+        return renderRuntimeConfigSection(
+          "Mission git credentials",
+          "This PAT is dedicated to mission submodule cloning, commits, publish, push, and GitHub author lookup.",
+          MISSION_GIT_RUNTIME_CONFIG_KEYS,
+        );
+      case "other":
+        return renderRuntimeConfigSection(
+          "Other secure keys",
+          "Everything else here powers the rest of Spira's backend integrations (ElevenLabs, Picovoice, Nexus Mods, etc.).",
+          OTHER_RUNTIME_CONFIG_KEYS,
+        );
+    }
+  };
+
   return (
     <div className={styles.panel}>
-      <section className={styles.section}>
-        <div className={styles.sectionHeader}>
-          <div>
-            <h2>Voice</h2>
-            <p>Manage speech capture and synthesis.</p>
-          </div>
-        </div>
-        <div className={styles.row}>
-          <div>
-            <span className={styles.label}>Wake listening</span>
-            <span className={styles.caption}>Keep Shinra listening for the wake word.</span>
-          </div>
+      <nav className={styles.tabRail} aria-label="Settings categories">
+        {tabs.map((tab) => (
           <button
+            key={tab.id}
             type="button"
-            className={`${styles.toggle} ${wakeWordEnabled ? styles.toggleActive : ""}`}
-            onClick={handleWakeWordToggle}
+            className={`${styles.tabButton} ${activeTab === tab.id ? styles.tabButtonActive : ""}`}
+            onClick={() => setActiveTab(tab.id)}
+            aria-current={activeTab === tab.id ? "page" : undefined}
           >
-            {wakeWordEnabled ? "Listening" : "Off"}
+            <span className={styles.tabLabel}>{tab.label}</span>
+            <span className={styles.tabCaption}>{tab.caption}</span>
           </button>
-        </div>
-        <div className={styles.row}>
-          <div>
-            <span className={styles.label}>Spoken replies</span>
-            <span className={styles.caption}>Let Shinra speak confirmations and responses aloud.</span>
-          </div>
-          <button
-            type="button"
-            className={`${styles.toggle} ${speechEnabled ? styles.toggleActive : ""}`}
-            onClick={handleSpeechToggle}
-          >
-            {speechEnabled ? "Speaking" : "Silent"}
-          </button>
-        </div>
-        <div className={styles.row}>
-          <div>
-            <label className={styles.label} htmlFor="tts-provider-select">
-              TTS provider
-            </label>
-            <span className={styles.caption}>Switch between cloud and high-quality local playback.</span>
-          </div>
-          <select
-            id="tts-provider-select"
-            className={styles.select}
-            value={ttsProvider}
-            onChange={(event) => handleProviderChange(event.target.value as TtsProvider)}
-          >
-            <option value="elevenlabs">ElevenLabs</option>
-            <option value="kokoro">Kokoro</option>
-          </select>
-        </div>
-        <div className={styles.row}>
-          <div>
-            <label className={styles.label} htmlFor="whisper-model-select">
-              Whisper model
-            </label>
-            <span className={styles.caption}>Choose speed vs. transcription quality for voice capture.</span>
-          </div>
-          <select
-            id="whisper-model-select"
-            className={styles.select}
-            value={whisperModel}
-            onChange={(event) => handleWhisperModelChange(event.target.value as "tiny.en" | "base.en" | "small.en")}
-          >
-            <option value="tiny.en">tiny.en</option>
-            <option value="base.en">base.en</option>
-            <option value="small.en">small.en</option>
-          </select>
-        </div>
-        <div className={styles.row}>
-          <div>
-            <label className={styles.label} htmlFor="wake-word-provider-select">
-              Wake-word provider
-            </label>
-            <span className={styles.caption}>Switch between openWakeWord, Porcupine, or push-to-talk only mode.</span>
-          </div>
-          <select
-            id="wake-word-provider-select"
-            className={styles.select}
-            value={wakeWordProvider}
-            onChange={(event) => handleWakeWordProviderChange(event.target.value as WakeWordProviderSetting)}
-          >
-            {WAKE_WORD_PROVIDERS.map((provider) => (
-              <option key={provider} value={provider}>
-                {provider}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div className={styles.row}>
-          <div>
-            <label className={styles.label} htmlFor="openwakeword-threshold">
-              openWakeWord threshold
-            </label>
-            <span className={styles.caption}>Tune wake-word sensitivity when openWakeWord is active.</span>
-          </div>
-          <div className={styles.thresholdControl}>
-            <input
-              id="openwakeword-threshold"
-              className={styles.rangeInput}
-              type="range"
-              min="0"
-              max="1"
-              step="0.05"
-              value={openWakeWordThreshold}
-              disabled={wakeWordProvider !== "openwakeword"}
-              onChange={(event) => handleThresholdChange(Number(event.target.value))}
-            />
-            <span className={styles.rangeValue}>{openWakeWordThreshold.toFixed(2)}</span>
-          </div>
-        </div>
-        <div className={styles.row}>
-          <div>
-            <label className={styles.label} htmlFor="elevenlabs-voice-id">
-              ElevenLabs voice ID
-            </label>
-            <span className={styles.caption}>Set the default voice to use when ElevenLabs is selected.</span>
-          </div>
-          <input
-            id="elevenlabs-voice-id"
-            className={styles.textInput}
-            type="text"
-            value={elevenLabsVoiceIdDraft}
-            onChange={(event) => handleElevenLabsVoiceIdChange(event.target.value)}
-            onBlur={commitElevenLabsVoiceId}
-            placeholder="Voice ID"
-          />
-        </div>
-      </section>
-
-      <section className={styles.section}>
-        <div className={styles.sectionHeader}>
-          <div>
-            <h2>Permissions</h2>
-            <p>Control how Shinra handles approval prompts for tool calls.</p>
-          </div>
-        </div>
-        <div className={styles.row}>
-          <div>
-            <span className={styles.label}>Auto-approve tool permissions</span>
-            <span className={styles.caption}>
-              Bypass approval prompts and auto-approve every tool request. Only enable for trusted, monitored sessions.
-            </span>
-          </div>
-          <button
-            type="button"
-            className={`${styles.toggle} ${autoApprovePermissions ? styles.toggleActive : ""}`}
-            onClick={handleAutoApprovePermissionsToggle}
-          >
-            {autoApprovePermissions ? "Auto" : "Ask"}
-          </button>
-        </div>
-      </section>
-
-      <section className={styles.section}>
-        <div className={styles.sectionHeader}>
-          <div>
-            <h2>Armoury</h2>
-            <p>Toggle local MCP servers on or off here. Changes take effect immediately.</p>
-          </div>
-        </div>
-        <div className={styles.serverList}>
-          {servers.length === 0 ? (
-            <div className={styles.empty}>No servers reported by the backend yet.</div>
-          ) : (
-            servers.map((server) => (
-              <label key={server.id} className={styles.row}>
-                <div>
-                  <span className={styles.label}>{server.name}</span>
-                  <span className={styles.caption}>
-                    {server.toolCount} tools · {server.state}
-                  </span>
-                </div>
-                <input
-                  type="checkbox"
-                  checked={server.enabled}
-                  disabled={server.state === "starting"}
-                  title={server.state === "starting" ? "Server update in progress" : undefined}
-                  onChange={(event) => handleServerToggle(server.id, event.target.checked)}
-                />
-              </label>
-            ))
-          )}
-        </div>
-      </section>
-
-      <section className={styles.section}>
-        <div className={styles.sectionHeader}>
-          <div>
-            <h2>Secure runtime config</h2>
-            <p>
-              Store backend-only secrets in the main process. Missions uses the YouTrack URL and token configured here.
-            </p>
-          </div>
-        </div>
-        {runtimeConfigNotice ? <div className={styles.notice}>{runtimeConfigNotice}</div> : null}
-        {runtimeConfig ? (
-          <div className={styles.configGroups}>
-            <div className={styles.configGroup}>
-              <div className={styles.groupHeader}>
-                <span className={styles.label}>AI provider runtime</span>
-                <span className={styles.caption}>
-                  Select the active provider and store the credentials or deployment settings it needs.
-                </span>
-              </div>
-              <div className={styles.keyGrid}>{renderRuntimeConfigCards(AI_PROVIDER_RUNTIME_CONFIG_KEYS)}</div>
-            </div>
-            <div className={styles.configGroup}>
-              <div className={styles.groupHeader}>
-                <span className={styles.label}>YouTrack credentials</span>
-                <span className={styles.caption}>This is the only YouTrack setup that stays in Settings.</span>
-              </div>
-              <div className={styles.keyGrid}>{renderRuntimeConfigCards(YOUTRACK_RUNTIME_CONFIG_KEYS)}</div>
-            </div>
-            <div className={styles.configGroup}>
-              <div className={styles.groupHeader}>
-                <span className={styles.label}>SQL Server read-only MCP</span>
-                <span className={styles.caption}>
-                  Configure the dedicated SQL login, allowlist, and query caps for the built-in SQL Server tools.
-                </span>
-              </div>
-              <div className={styles.keyGrid}>{renderRuntimeConfigCards(SQL_SERVER_RUNTIME_CONFIG_KEYS)}</div>
-            </div>
-            <div className={styles.configGroup}>
-              <div className={styles.groupHeader}>
-                <span className={styles.label}>Mission git credentials</span>
-                <span className={styles.caption}>
-                  This PAT is dedicated to mission submodule cloning, commits, publish, push, and GitHub author lookup.
-                </span>
-              </div>
-              <div className={styles.keyGrid}>{renderRuntimeConfigCards(MISSION_GIT_RUNTIME_CONFIG_KEYS)}</div>
-            </div>
-            <div className={styles.configGroup}>
-              <div className={styles.groupHeader}>
-                <span className={styles.label}>Other secure keys</span>
-                <span className={styles.caption}>
-                  Everything else here powers the rest of Spira&apos;s backend integrations.
-                </span>
-              </div>
-              <div className={styles.keyGrid}>{renderRuntimeConfigCards(OTHER_RUNTIME_CONFIG_KEYS)}</div>
-            </div>
-          </div>
-        ) : (
-          <div className={styles.empty}>Loading secure runtime configuration…</div>
-        )}
-      </section>
+        ))}
+      </nav>
+      <div className={styles.tabContent}>{renderActiveTab()}</div>
     </div>
   );
 }

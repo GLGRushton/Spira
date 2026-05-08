@@ -10,13 +10,13 @@ import { createWorkSessionStorage, isWorkSessionSnapshot } from "../coding/work-
 import { getDefaultProviderCapabilities } from "../provider/capability-fallback.js";
 import * as clientFactory from "../provider/client-factory.js";
 import type { ProviderHostContinuityState, ProviderSessionConfig } from "../provider/types.js";
+import { AssistantError } from "../util/errors.js";
+import { SpiraEventBus } from "../util/event-bus.js";
 import {
   type RuntimeWorkflowState,
   createRuntimeCheckpointPayload,
   createRuntimeSessionContract,
 } from "./runtime-contract.js";
-import { AssistantError } from "../util/errors.js";
-import { SpiraEventBus } from "../util/event-bus.js";
 import { StationSessionManager } from "./session-manager.js";
 
 export {
