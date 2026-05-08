@@ -7,7 +7,7 @@ import type {
   StoredConversationSummary,
 } from "@spira/shared";
 import type { Logger } from "pino";
-import { DEFAULT_STATION_ID, type StationRegistry } from "../copilot/station-registry.js";
+import { DEFAULT_STATION_ID, type StationRegistry } from "../runtime/station-registry.js";
 import { SpiraError, toErrorPayload } from "../util/errors.js";
 
 type TransportLike = {

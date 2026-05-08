@@ -21,7 +21,7 @@ import {
 } from "@spira/shared";
 import { ZodError } from "zod";
 import { handleChatRuntimeMessage } from "./backend/chat-runtime-router.js";
-import { DEFAULT_STATION_ID, StationRegistry } from "./copilot/station-registry.js";
+import { DEFAULT_STATION_ID, StationRegistry } from "./runtime/station-registry.js";
 import { McpClientPool } from "./mcp/client-pool.js";
 import { McpRegistry } from "./mcp/registry.js";
 import { McpToolAggregator } from "./mcp/tool-aggregator.js";
@@ -77,6 +77,7 @@ let backendEnv: Env | null = null;
 let voiceConfiguration: VoiceConfiguration | null = null;
 let wakeWordEnabled = true;
 let speechEnabled = true;
+let autoApprovePermissions = false;
 let memoryDb: SpiraMemoryDatabase | null = null;
 let runtimeStore: RuntimeStore | null = null;
 let youTrackService: YouTrackService | null = null;
@@ -482,6 +483,7 @@ const shutdown = async (signal: ShutdownReason) => {
   voiceConfiguration = null;
   wakeWordEnabled = true;
   speechEnabled = true;
+  autoApprovePermissions = false;
   memoryDb = null;
   runtimeStore = null;
   youTrackService = null;
@@ -2080,6 +2082,9 @@ const handleClientMessage = async (message: ClientMessage): Promise<void> => {
         wakeWordEnabled = message.settings.wakeWordEnabled;
         voicePipeline?.setMuted(!wakeWordEnabled);
       }
+      if (typeof message.settings.autoApprovePermissions === "boolean") {
+        autoApprovePermissions = message.settings.autoApprovePermissions;
+      }
       if (
         typeof message.settings.whisperModel === "string" ||
         typeof message.settings.wakeWordProvider === "string" ||
@@ -2141,11 +2146,13 @@ const bootstrap = async () => {
   logger.info({ nodeEnv: process.env.NODE_ENV ?? "development", port: env.SPIRA_PORT }, "Starting Spira backend");
 
   bus = new SpiraEventBus();
+  let bootExpiredPermissionRequestIds: string[] = [];
   const memoryDbPath = process.env[SPIRA_MEMORY_DB_PATH_ENV];
   if (typeof memoryDbPath === "string" && memoryDbPath.trim()) {
     memoryDb = SpiraMemoryDatabase.open(memoryDbPath.trim());
     runtimeStore = new RuntimeStore(memoryDb);
     const runtimeRecovery = await RuntimeStore.recoverInterruptedState(memoryDb, env);
+    bootExpiredPermissionRequestIds = runtimeRecovery.expiredPermissionRequestIds;
     if (
       runtimeRecovery.expiredPermissionRequestIds.length > 0 ||
       runtimeRecovery.recoveredSubagentRunIds.length > 0 ||
@@ -2436,6 +2443,7 @@ const bootstrap = async () => {
 
       await mcpRegistry.reloadFromDisk();
     },
+    isAutoApprovePermissionsEnabled: () => autoApprovePermissions,
   });
   stationRegistry.createStation({ stationId: DEFAULT_STATION_ID, label: "Primary" });
   ticketRunService?.recoverInterruptedWork();
@@ -2463,6 +2471,15 @@ const bootstrap = async () => {
 
   bus.on("transport:client-disconnected", () => {
     stationRegistry?.handleClientDisconnected();
+  });
+  bus.on("transport:client-connected", () => {
+    stationRegistry?.handleClientConnected();
+    if (bootExpiredPermissionRequestIds.length > 0 && transport) {
+      for (const requestId of bootExpiredPermissionRequestIds) {
+        transport.send({ type: "permission:complete", requestId, result: "expired" });
+      }
+      bootExpiredPermissionRequestIds = [];
+    }
   });
   bus.on("provider:usage", (record) => {
     runtimeStore?.persistProviderUsage(record);

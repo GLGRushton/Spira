@@ -57,6 +57,7 @@ const PartialUserSettingsSchema = z
     voiceEnabled: z.boolean().optional(),
     wakeWordEnabled: z.boolean().optional(),
     youTrackEnabled: z.boolean().optional(),
+    autoApprovePermissions: z.boolean().optional(),
     ttsProvider: z.enum(["elevenlabs", "kokoro"]).optional(),
     whisperModel: z.enum(["tiny.en", "base.en", "small.en"]).optional(),
     wakeWordProvider: z.enum(["openwakeword", "porcupine", "none"]).optional(),

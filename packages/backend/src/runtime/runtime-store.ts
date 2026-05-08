@@ -301,6 +301,28 @@ export class RuntimeStore {
     return this.memoryDb.listPendingRuntimePermissionRequests(this.stationId).map((record) => record.requestId);
   }
 
+  listPendingPermissionRequests(): PermissionRequestPayload[] {
+    if (!this.memoryDb || typeof this.memoryDb.listPendingRuntimePermissionRequests !== "function") {
+      return [];
+    }
+    return this.memoryDb.listPendingRuntimePermissionRequests(this.stationId).map((record) => record.payload);
+  }
+
+  hasPersistedPermissionRequest(requestId: string): boolean {
+    if (!this.memoryDb || typeof this.memoryDb.getRuntimePermissionRequest !== "function") {
+      return false;
+    }
+    return this.memoryDb.getRuntimePermissionRequest(requestId) !== null;
+  }
+
+  isPermissionRequestStillPending(requestId: string): boolean {
+    if (!this.memoryDb || typeof this.memoryDb.getRuntimePermissionRequest !== "function") {
+      return false;
+    }
+    const record = this.memoryDb.getRuntimePermissionRequest(requestId);
+    return record !== null && record.status === "pending";
+  }
+
   listPersistedSubagentRuns(): SubagentRunSnapshot[] {
     return (this.memoryDb?.listRuntimeSubagentRuns(this.stationId) ?? []).map((record) => record.snapshot);
   }

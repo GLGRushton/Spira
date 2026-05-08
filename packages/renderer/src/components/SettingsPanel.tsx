@@ -56,6 +56,7 @@ export function SettingsPanel() {
   const servers = useMcpStore((store) => store.servers);
   const speechEnabled = useSettingsStore((store) => store.voiceEnabled);
   const wakeWordEnabled = useSettingsStore((store) => store.wakeWordEnabled);
+  const autoApprovePermissions = useSettingsStore((store) => store.autoApprovePermissions);
   const ttsProvider = useSettingsStore((store) => store.ttsProvider);
   const whisperModel = useSettingsStore((store) => store.whisperModel);
   const wakeWordProvider = useSettingsStore((store) => store.wakeWordProvider);
@@ -63,6 +64,7 @@ export function SettingsPanel() {
   const elevenLabsVoiceId = useSettingsStore((store) => store.elevenLabsVoiceId);
   const setVoiceEnabled = useSettingsStore((store) => store.setVoiceEnabled);
   const setWakeWordEnabled = useSettingsStore((store) => store.setWakeWordEnabled);
+  const setAutoApprovePermissions = useSettingsStore((store) => store.setAutoApprovePermissions);
   const setTtsProvider = useSettingsStore((store) => store.setTtsProvider);
   const setWhisperModel = useSettingsStore((store) => store.setWhisperModel);
   const setWakeWordProvider = useSettingsStore((store) => store.setWakeWordProvider);
@@ -112,6 +114,12 @@ export function SettingsPanel() {
     const nextEnabled = !speechEnabled;
     setVoiceEnabled(nextEnabled);
     window.electronAPI.updateSettings({ voiceEnabled: nextEnabled });
+  };
+
+  const handleAutoApprovePermissionsToggle = () => {
+    const nextEnabled = !autoApprovePermissions;
+    setAutoApprovePermissions(nextEnabled);
+    window.electronAPI.updateSettings({ autoApprovePermissions: nextEnabled });
   };
 
   const handleProviderChange = (provider: TtsProvider) => {
@@ -398,6 +406,30 @@ export function SettingsPanel() {
             onBlur={commitElevenLabsVoiceId}
             placeholder="Voice ID"
           />
+        </div>
+      </section>
+
+      <section className={styles.section}>
+        <div className={styles.sectionHeader}>
+          <div>
+            <h2>Permissions</h2>
+            <p>Control how Shinra handles approval prompts for tool calls.</p>
+          </div>
+        </div>
+        <div className={styles.row}>
+          <div>
+            <span className={styles.label}>Auto-approve tool permissions</span>
+            <span className={styles.caption}>
+              Bypass approval prompts and auto-approve every tool request. Only enable for trusted, monitored sessions.
+            </span>
+          </div>
+          <button
+            type="button"
+            className={`${styles.toggle} ${autoApprovePermissions ? styles.toggleActive : ""}`}
+            onClick={handleAutoApprovePermissionsToggle}
+          >
+            {autoApprovePermissions ? "Auto" : "Ask"}
+          </button>
         </div>
       </section>
 

@@ -6,8 +6,8 @@ import type {
   RuntimeLedgerEvent,
   RuntimeSessionContract,
   RuntimeUsageSummary,
-} from "../../runtime/runtime-contract.js";
-import type { RuntimeStore } from "../../runtime/runtime-store.js";
+} from "../runtime-contract.js";
+import type { RuntimeStore } from "../runtime-store.js";
 import {
   appendStationRuntimeLedgerEventIfSession,
   buildStationRuntimeRecoverySection,
@@ -16,7 +16,7 @@ import {
   persistStationRuntimeSessionContract,
   recordStationRuntimeUserMessage,
   syncStationRuntimeState,
-} from "../../runtime/station-runtime-persistence.js";
+} from "../station-runtime-persistence.js";
 import type { PendingPermissionRequest } from "./shared.js";
 
 export interface RuntimePersistenceHelperContext {

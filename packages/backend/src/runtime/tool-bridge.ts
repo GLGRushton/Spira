@@ -34,9 +34,9 @@ import type { McpToolAggregator } from "../mcp/tool-aggregator.js";
 import type { MissionContextSnapshot, MissionProofResultInput } from "../missions/mission-lifecycle.js";
 import type { MissionWorkflowState } from "../missions/mission-workflow-guard.js";
 import type { ProviderToolDefinition, ProviderToolResultObject } from "../provider/types.js";
-import { createHostTools } from "../runtime/host-tools.js";
-import type { RuntimeStore } from "../runtime/runtime-store.js";
-import type { StationSessionStorage } from "../runtime/station-session-storage.js";
+import { createHostTools } from "./host-tools.js";
+import type { RuntimeStore } from "./runtime-store.js";
+import type { StationSessionStorage } from "./station-session-storage.js";
 import { createLogger } from "../util/logger.js";
 
 const logger = createLogger("tool-bridge");

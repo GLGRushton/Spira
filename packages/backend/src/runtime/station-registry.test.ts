@@ -189,6 +189,7 @@ type FakeManager = {
   shutdown: ReturnType<typeof vi.fn>;
   cancelPendingPermissionRequests: ReturnType<typeof vi.fn>;
   resolvePermissionRequest: ReturnType<typeof vi.fn>;
+  listPersistedPendingPermissionRequests: ReturnType<typeof vi.fn>;
   stopManagedSubagent: ReturnType<typeof vi.fn>;
   listManagedSubagents: ReturnType<typeof vi.fn>;
   getWorkSessionSummary: ReturnType<typeof vi.fn>;
@@ -226,6 +227,7 @@ const createRegistry = () => {
         shutdown: vi.fn().mockResolvedValue(undefined),
         cancelPendingPermissionRequests: vi.fn(),
         resolvePermissionRequest: vi.fn().mockReturnValue(false),
+        listPersistedPendingPermissionRequests: vi.fn().mockReturnValue([]),
         stopManagedSubagent: vi.fn().mockResolvedValue(null),
         listManagedSubagents: vi.fn().mockReturnValue([]),
         getWorkSessionSummary: vi.fn().mockReturnValue(null),
@@ -776,6 +778,45 @@ describe("StationRegistry", () => {
 
     await expect(pending).rejects.toMatchObject({
       code: "STATION_RESPONSE_ABORTED",
+    });
+  });
+
+  it("does not cancel pending permission requests when the renderer disconnects", () => {
+    const { registry, managers } = createRegistry();
+    registry.createStation({ stationId: DEFAULT_STATION_ID, label: "Primary" });
+    const manager = managers.get(DEFAULT_STATION_ID);
+
+    registry.handleClientDisconnected();
+
+    expect(manager?.cancelPendingPermissionRequests).not.toHaveBeenCalled();
+  });
+
+  it("replays persisted pending permission requests when a client connects", () => {
+    const { registry, transport, managers } = createRegistry();
+    registry.createStation({ stationId: DEFAULT_STATION_ID, label: "Primary" });
+    const manager = managers.get(DEFAULT_STATION_ID);
+    manager?.listPersistedPendingPermissionRequests.mockReturnValue([
+      {
+        requestId: "perm-replay",
+        stationId: DEFAULT_STATION_ID,
+        kind: "mcp",
+        serverName: "Vision",
+        toolName: "vision_read_screen",
+        toolTitle: "Read screen",
+        readOnly: true,
+        args: {},
+      },
+    ]);
+
+    registry.handleClientConnected();
+
+    expect(transport.send).toHaveBeenCalledWith({
+      type: "permission:request",
+      request: expect.objectContaining({
+        requestId: "perm-replay",
+        stationId: DEFAULT_STATION_ID,
+        toolName: "vision_read_screen",
+      }),
     });
   });
 });

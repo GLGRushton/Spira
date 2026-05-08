@@ -19,7 +19,7 @@ describe("work-session gate", () => {
   it("treats review prompts over repo artifacts as explicit work", () => {
     expect(
       decideWorkSessionMode({
-        text: "Review the current Phase 5 changes in packages/backend/src/copilot/session-manager.ts",
+        text: "Review the current Phase 5 changes in packages/backend/src/runtime/session-manager.ts",
       }),
     ).toMatchObject({
       mode: "work-session",
@@ -78,7 +78,7 @@ describe("work-session gate", () => {
   it("starts a new work session for a new explicit task while one is already active", () => {
     expect(
       decideWorkSessionMode({
-        text: "Review the current diff in packages/backend/src/copilot/station-registry.ts",
+        text: "Review the current diff in packages/backend/src/runtime/station-registry.ts",
         hasActiveWorkSession: true,
       }),
     ).toMatchObject({
@@ -95,7 +95,7 @@ describe("work-session gate", () => {
   it("does not treat weak segue words as mandatory continuation for new tasks", () => {
     expect(
       decideWorkSessionMode({
-        text: "Next, review the current diff in packages/backend/src/copilot/station-registry.ts",
+        text: "Next, review the current diff in packages/backend/src/runtime/station-registry.ts",
         hasActiveWorkSession: true,
       }),
     ).toMatchObject({

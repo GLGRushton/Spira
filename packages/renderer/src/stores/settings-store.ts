@@ -15,6 +15,7 @@ interface SettingsStore extends SettingsState {
   toggleWakeWord: () => void;
   setWakeWordEnabled: (enabled: boolean) => void;
   setYouTrackEnabled: (enabled: boolean) => void;
+  setAutoApprovePermissions: (enabled: boolean) => void;
   setTtsProvider: (provider: TtsProvider) => void;
   setWhisperModel: (model: SettingsState["whisperModel"]) => void;
   setWakeWordProvider: (provider: WakeWordProviderSetting) => void;
@@ -27,6 +28,7 @@ const DEFAULT_SETTINGS: SettingsState = {
   voiceEnabled: true,
   wakeWordEnabled: true,
   youTrackEnabled: false,
+  autoApprovePermissions: false,
   ttsProvider: "kokoro",
   whisperModel: "base.en",
   wakeWordProvider: "openwakeword",
@@ -39,6 +41,7 @@ const toPersistedSettings = (state: SettingsState): SettingsState => ({
   voiceEnabled: state.voiceEnabled,
   wakeWordEnabled: state.wakeWordEnabled,
   youTrackEnabled: state.youTrackEnabled,
+  autoApprovePermissions: state.autoApprovePermissions,
   ttsProvider: state.ttsProvider,
   whisperModel: state.whisperModel,
   wakeWordProvider: state.wakeWordProvider,
@@ -97,6 +100,14 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
       youTrackEnabled: enabled,
     };
     set({ youTrackEnabled: enabled });
+    persistSettings(nextSettings);
+  },
+  setAutoApprovePermissions: (enabled) => {
+    const nextSettings = {
+      ...toPersistedSettings(get()),
+      autoApprovePermissions: enabled,
+    };
+    set({ autoApprovePermissions: enabled });
     persistSettings(nextSettings);
   },
   setTtsProvider: (provider) => {

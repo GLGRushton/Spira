@@ -6,7 +6,7 @@ import type {
   WorkSessionSnapshot,
   WorkSessionValidationResult,
 } from "@spira/shared";
-import type { RuntimeSessionContract } from "../../runtime/runtime-contract.js";
+import type { RuntimeSessionContract } from "../runtime-contract.js";
 import {
   WORK_SESSION_MAX_IMPLEMENTATION_ATTEMPTS,
   WORK_SESSION_MAX_REPEAT_FAILURES,

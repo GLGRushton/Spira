@@ -1,6 +1,6 @@
 import type { AssistantState, WorkSessionPhase, WorkSessionSnapshot } from "@spira/shared";
 import type { ProviderId, ProviderSessionEscalationResult } from "../../provider/types.js";
-import type { RuntimeSessionContract, RuntimeWorkflowState } from "../../runtime/runtime-contract.js";
+import type { RuntimeSessionContract, RuntimeWorkflowState } from "../runtime-contract.js";
 import { WORK_SESSION_WORKFLOW_PHASES } from "./shared.js";
 
 type WorkflowPhase = RuntimeSessionContract["workflowState"]["phase"];

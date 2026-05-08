@@ -14,7 +14,7 @@ import {
   type RuntimeWorkflowState,
   createRuntimeCheckpointPayload,
   createRuntimeSessionContract,
-} from "../runtime/runtime-contract.js";
+} from "./runtime-contract.js";
 import { AssistantError } from "../util/errors.js";
 import { SpiraEventBus } from "../util/event-bus.js";
 import { StationSessionManager } from "./session-manager.js";
@@ -110,6 +110,7 @@ export const createManager = (
     stationId?: string;
     requestedModel?: string | null;
     missionRunId?: string | null;
+    isAutoApprovePermissionsEnabled?: () => boolean;
   },
 ) => {
   const bus = new SpiraEventBus();
@@ -127,6 +128,7 @@ export const createManager = (
         stationId: options.stationId,
         requestedModel: options.requestedModel,
         missionRunId: options.missionRunId ?? undefined,
+        isAutoApprovePermissionsEnabled: options.isAutoApprovePermissionsEnabled,
       }
     : undefined;
 
@@ -254,6 +256,7 @@ export const createRuntimeMemoryDb = (initialState: Record<string, unknown> | nu
             record.status === "pending" &&
             (stationId === undefined || stationId === null || record.stationId === stationId),
         ),
+      getRuntimePermissionRequest: (requestId: string) => runtimePermissionRequests.get(requestId) ?? null,
       resolveRuntimePermissionRequest: vi.fn((requestId: string, status: string, resolvedAt: number) => {
         const record = runtimePermissionRequests.get(requestId);
         if (!record) {

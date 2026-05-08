@@ -51,7 +51,7 @@ import {
   approvePermissionOnce,
   permissionUserNotAvailable,
   rejectPermission,
-} from "../runtime/permission-decisions.js";
+} from "./permission-decisions.js";
 import {
   type RuntimeCheckpointPayload,
   type RuntimeLedgerEvent,
@@ -59,25 +59,26 @@ import {
   type RuntimeUsageSummary,
   createDefaultRuntimeWorkflowState,
   createRuntimeLedgerEvent,
-} from "../runtime/runtime-contract.js";
+} from "./runtime-contract.js";
 import {
   recordRuntimeAssistantMessage,
   recordRuntimeAssistantMessageDelta,
   recordRuntimeCancellationCompleted,
   recordRuntimeCancellationRequested,
+  recordRuntimePermissionResolved,
   recordRuntimeProviderBound,
   recordRuntimeRecoveryCompleted,
   recordRuntimeToolExecutionCompleted,
   recordRuntimeToolExecutionStarted,
   recordRuntimeUsageObserved,
-} from "../runtime/runtime-lifecycle.js";
-import { executeRuntimePermissionRequest } from "../runtime/runtime-permission-lifecycle.js";
-import { completeRuntimeCancellation, requestRuntimeCancellation } from "../runtime/runtime-state-machine.js";
-import { RuntimeStore } from "../runtime/runtime-store.js";
-import { handleSharedTurnEvent, updateRuntimeUsageSummary } from "../runtime/runtime-turn-engine.js";
-import { type StationSessionStorage, createStationSessionStorage } from "../runtime/station-session-storage.js";
-import { StreamAssembler } from "../runtime/stream-handler.js";
-import type { ToolBridgeOptions } from "../runtime/tool-bridge.js";
+} from "./runtime-lifecycle.js";
+import { executeRuntimePermissionRequest } from "./runtime-permission-lifecycle.js";
+import { completeRuntimeCancellation, requestRuntimeCancellation } from "./runtime-state-machine.js";
+import { RuntimeStore } from "./runtime-store.js";
+import { handleSharedTurnEvent, updateRuntimeUsageSummary } from "./runtime-turn-engine.js";
+import { type StationSessionStorage, createStationSessionStorage } from "./station-session-storage.js";
+import { StreamAssembler } from "./stream-handler.js";
+import type { ToolBridgeOptions } from "./tool-bridge.js";
 import { SubagentLockManager } from "../subagent/lock-manager.js";
 import type { SubagentRegistry } from "../subagent/registry.js";
 import { SubagentRunRegistry } from "../subagent/run-registry.js";
@@ -191,6 +192,7 @@ interface SessionManagerOptions {
   setMissionProofStrategy?: ToolBridgeOptions["setMissionProofStrategy"];
   recordMissionProofResult?: ToolBridgeOptions["recordMissionProofResult"];
   saveMissionSummary?: ToolBridgeOptions["saveMissionSummary"];
+  isAutoApprovePermissionsEnabled?: () => boolean;
 }
 
 export type { ManagedSubagentLaunch, SessionPersistence } from "./session-manager/shared.js";
@@ -265,6 +267,7 @@ export class StationSessionManager {
   private readonly setMissionProofStrategy: ToolBridgeOptions["setMissionProofStrategy"];
   private readonly recordMissionProofResult: ToolBridgeOptions["recordMissionProofResult"];
   private readonly saveMissionSummary: ToolBridgeOptions["saveMissionSummary"];
+  private readonly isAutoApprovePermissionsEnabled: () => boolean;
   private activeWorkSession: WorkSessionSnapshot | null = null;
   private hostContinuityState: ProviderHostContinuityState | null = null;
   private resumableHostContinuityState: ProviderHostContinuityState | null = null;
@@ -312,6 +315,7 @@ export class StationSessionManager {
     this.setMissionProofStrategy = options.setMissionProofStrategy;
     this.recordMissionProofResult = options.recordMissionProofResult;
     this.saveMissionSummary = options.saveMissionSummary;
+    this.isAutoApprovePermissionsEnabled = options.isAutoApprovePermissionsEnabled ?? (() => false);
     const persistedRuntimeSession = this.runtimeStore.getRuntimeSession(this.getRuntimeSessionId() ?? "");
     this.activeWorkSession = this.workSessionStorage.load();
     const { hostManifestHash, projectionHash } = this.getCurrentToolManifest();
@@ -520,6 +524,34 @@ export class StationSessionManager {
   private persistWorkSession(snapshot: WorkSessionSnapshot): void {
     this.activeWorkSession = snapshot;
     this.workSessionStorage.save(snapshot);
+  }
+
+  private applyWorkSessionApprovalOutcome(status: "approved" | "denied" | "expired"): void {
+    if (status === "approved") {
+      return;
+    }
+    if (!this.activeWorkSession) {
+      return;
+    }
+    const phase = this.activeWorkSession.currentPhase;
+    if (phase !== "implement" && phase !== "validate") {
+      return;
+    }
+    const stalledReason =
+      status === "denied"
+        ? `${phase === "implement" ? "Implementation" : "Validation"} blocked: a tool permission was denied.`
+        : `${phase === "implement" ? "Implementation" : "Validation"} blocked: a tool permission expired before approval.`;
+    const occurredAt = Date.now();
+    this.updateWorkSession(
+      (snapshot) => ({
+        ...setWorkSessionPhase(snapshot, phase, "active", occurredAt, stalledReason),
+        summary: stalledReason,
+        readyForReview: false,
+        stalledReason,
+        stalledAt: occurredAt,
+      }),
+      occurredAt,
+    );
   }
 
   private updateWorkSession(
@@ -1409,15 +1441,41 @@ export class StationSessionManager {
     this.clearPendingPermissionRequests("expired");
   }
 
+  listPersistedPendingPermissionRequests(): PermissionRequestPayload[] {
+    return this.runtimeStore.listPendingPermissionRequests();
+  }
+
   resolvePermissionRequest(requestId: string, approved: boolean): boolean {
     const pending = this.pendingPermissionRequests.get(requestId);
-    if (!pending) {
-      return false;
+    if (pending) {
+      this.pendingPermissionRequests.delete(requestId);
+      clearTimeout(pending.timeout);
+      pending.resolve(approved ? approvePermissionOnce() : rejectPermission());
+      return true;
     }
 
-    this.pendingPermissionRequests.delete(requestId);
-    clearTimeout(pending.timeout);
-    pending.resolve(approved ? approvePermissionOnce() : rejectPermission());
+    // No live in-memory entry — likely the original tool call's call stack is
+    // gone (backend restart, session reset, or a late click after the request
+    // already resolved). Keep DB + UI in sync so the user's intent is recorded
+    // and any stale prompt clears.
+    return this.persistLatePermissionResolution(requestId, approved ? "approved" : "denied");
+  }
+
+  private persistLatePermissionResolution(requestId: string, status: "approved" | "denied" | "expired"): boolean {
+    if (!this.runtimeStore.hasPersistedPermissionRequest(requestId)) {
+      return false;
+    }
+    if (this.runtimeStore.isPermissionRequestStillPending(requestId)) {
+      this.runtimeStore.resolvePermissionRequest(requestId, status);
+      recordRuntimePermissionResolved(this.runtimeStore, this.getRuntimeSessionId(), {
+        requestId,
+        status,
+        occurredAt: Date.now(),
+      });
+      this.applyWorkSessionApprovalOutcome(status);
+    }
+    this.bus.emit("assistant:permission-complete", requestId, status);
+    this.syncRuntimeState();
     return true;
   }
 
@@ -2573,6 +2631,8 @@ export class StationSessionManager {
       readOnly: visionPermission ? request.readOnly === true : false,
     };
 
+    const autoApprove = this.isAutoApprovePermissionsEnabled();
+
     return await executeRuntimePermissionRequest({
       runtimeStore: this.runtimeStore,
       runtimeSessionId: this.getRuntimeSessionId(),
@@ -2587,25 +2647,28 @@ export class StationSessionManager {
         this.noteTurnActivity();
         this.lastPermissionResolvedAt = Date.now();
         this.runtimeStore.resolvePermissionRequest(requestId, status);
+        this.applyWorkSessionApprovalOutcome(status);
         this.syncRuntimeState();
         this.bus.emit("assistant:permission-complete", requestId, status);
       },
       decide: () =>
-        new Promise<ProviderPermissionResult>((resolve) => {
-          const timeout = setUnrefTimeout(() => {
-            const pending = this.pendingPermissionRequests.get(requestId);
-            if (!pending) {
-              return;
-            }
+        autoApprove
+          ? Promise.resolve(approvePermissionOnce())
+          : new Promise<ProviderPermissionResult>((resolve) => {
+              const timeout = setUnrefTimeout(() => {
+                const pending = this.pendingPermissionRequests.get(requestId);
+                if (!pending) {
+                  return;
+                }
 
-            this.pendingPermissionRequests.delete(requestId);
-            pending.resolve(permissionUserNotAvailable());
-          }, PERMISSION_REQUEST_TIMEOUT_MS);
+                this.pendingPermissionRequests.delete(requestId);
+                pending.resolve(permissionUserNotAvailable());
+              }, PERMISSION_REQUEST_TIMEOUT_MS);
 
-          this.pendingPermissionRequests.set(requestId, { resolve, timeout });
-          this.noteTurnActivity();
-          this.syncRuntimeState();
-        }),
+              this.pendingPermissionRequests.set(requestId, { resolve, timeout });
+              this.noteTurnActivity();
+              this.syncRuntimeState();
+            }),
     });
   }
 

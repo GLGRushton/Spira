@@ -19,9 +19,9 @@ import type {
   ProviderSession,
   ProviderSessionEscalationResult,
 } from "../../provider/types.js";
-import { buildRuntimeCapabilityRegistry, getProviderToolManifest } from "../../runtime/capability-registry.js";
-import type { RuntimeStore } from "../../runtime/runtime-store.js";
-import type { ToolBridgeOptions } from "../../runtime/tool-bridge.js";
+import { buildRuntimeCapabilityRegistry, getProviderToolManifest } from "../capability-registry.js";
+import type { RuntimeStore } from "../runtime-store.js";
+import type { ToolBridgeOptions } from "../tool-bridge.js";
 import type { SubagentRegistry } from "../../subagent/registry.js";
 import type { SubagentRunRegistry } from "../../subagent/run-registry.js";
 import type { SubagentRunner } from "../../subagent/subagent-runner.js";

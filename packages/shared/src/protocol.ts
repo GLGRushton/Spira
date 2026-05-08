@@ -425,6 +425,7 @@ export interface UserSettings {
   voiceEnabled: boolean;
   wakeWordEnabled: boolean;
   youTrackEnabled: boolean;
+  autoApprovePermissions: boolean;
   ttsProvider: TtsProvider;
   whisperModel: "tiny.en" | "base.en" | "small.en";
   wakeWordProvider: WakeWordProviderSetting;

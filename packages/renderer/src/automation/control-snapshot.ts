@@ -84,6 +84,7 @@ export const buildSpiraUiSnapshot = (): SpiraUiSnapshot => {
       voiceEnabled: settings.voiceEnabled,
       wakeWordEnabled: settings.wakeWordEnabled,
       youTrackEnabled: settings.youTrackEnabled,
+      autoApprovePermissions: settings.autoApprovePermissions,
       ttsProvider: settings.ttsProvider,
       whisperModel: settings.whisperModel,
       wakeWordProvider: settings.wakeWordProvider,

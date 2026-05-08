@@ -12,8 +12,8 @@ import type {
   ProviderSessionEvent,
   ProviderSystemMessageSection,
 } from "../provider/types.js";
-import { getProviderToolManifest } from "../runtime/capability-registry.js";
-import type { ToolBridgeOptions } from "../runtime/tool-bridge.js";
+import { getProviderToolManifest } from "./capability-registry.js";
+import type { ToolBridgeOptions } from "./tool-bridge.js";
 import { appRootDir } from "../util/app-paths.js";
 
 const SHINRA_PERSONA_INSTRUCTIONS = [

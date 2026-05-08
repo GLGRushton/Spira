@@ -120,7 +120,7 @@ describe("StationSessionManager", () => {
     };
 
     await expect(
-      manager.sendMessage("Review the current diff in packages/backend/src/copilot/station-registry.ts"),
+      manager.sendMessage("Review the current diff in packages/backend/src/runtime/station-registry.ts"),
     ).resolves.toBeUndefined();
 
     expect(
@@ -128,7 +128,7 @@ describe("StationSessionManager", () => {
     ).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          taskText: "Review the current diff in packages/backend/src/copilot/station-registry.ts",
+          taskText: "Review the current diff in packages/backend/src/runtime/station-registry.ts",
           currentPhase: "discover",
           classification: expect.objectContaining({
             intent: "review",
@@ -180,7 +180,7 @@ describe("StationSessionManager", () => {
       data: {
         toolCallId: "tool-1",
         toolName: "view",
-        arguments: { path: "packages/backend/src/copilot/session-manager.ts" },
+        arguments: { path: "packages/backend/src/runtime/session-manager.ts" },
       },
     });
     expect(manager.getWorkSessionSummary()).toMatchObject({

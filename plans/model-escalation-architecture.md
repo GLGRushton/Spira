@@ -12,7 +12,7 @@ The system should assume it is already operating inside the correct repository, 
 
 The main objective is to avoid sending huge amounts of code to expensive models, while still getting high-quality coding output when required.
 
-## Current implementation status (audited 2026-05-05)
+## Current implementation status (audited 2026-05-08)
 
 This document started as a target architecture. The repository now contains a meaningful first slice of it around the **provider layer, runtime plumbing, and the early WorkSession orchestration spine**. The app-owned coding workflow described below is still only partially implemented end-to-end.
 
@@ -36,33 +36,43 @@ This document started as a target architecture. The repository now contains a me
 - [x] WorkSession state and runtime workflow sync now extend through `implement` and `validate`, including durable execution artifact fields, stalled execution mapping, restart restore for execution phases, and teardown/restart cleanup that removes stale downstream `review` / `complete` state.
 - [x] Restart-time approval reconciliation no longer downgrades restored validate-complete state or re-apply stale approval blocks from open execution phase history.
 - [x] Bridge-safe observability now surfaces the active station WorkSession mode/phase/summary in the renderer and Spira UI control snapshot without leaking mission-style workflow chrome into ordinary chat surfaces.
+- [x] Approval-flow resilience: pending permission requests now survive renderer reload and reconnect, the boot-time orphan sweep emits `permission:complete` so stale prompts clear, late `permission:respond` against a missing in-memory entry is idempotent, the previous silent 60-second timeout is replaced with a 30-minute durable `expired` outcome, and an active `implement` / `validate` WorkSession phase stalls explicitly with `stalledReason` when an approval is denied or expired.
+- [x] User-controlled `autoApprovePermissions` setting (off by default) bypasses prompting for trusted, monitored sessions while still recording every request and resolution in the runtime ledger and DB.
 
 ### Not implemented yet
 
 - [x] WorkSession now owns a deterministic application-managed execution loop for `plan -> implement -> validate`, including persisted patch/validation artifacts, bounded retries, repeat-failure detection, long-running PowerShell validation tracking, and ready-for-review vs stalled outcomes.
 - [x] Review/finish orchestration after execution now includes the `review -> complete` closure path for WorkSession-owned coding tasks, with thin WorkSession closure semantics, managed-review completion sealing, restart reconciliation for crash windows, late-event suppression after seal, explicit reopen clearing stale review state, and deduplicated terminal `complete` history on restore.
+- [x] Approval-flow resilience across UI refreshes or renderer churn (see `plans/permission-lifecycle-resilience.md`).
 - [ ] Dedicated coding agents such as `TaskClassifierAgent`, `SearchTermAgent`, `FileRankerAgent`, `PlanningAgent`, and `BuildFailureAgent`.
 - [ ] Phase-aware budget enforcement and routing policy across the full workflow.
 - [ ] Context packaging rules enforced by the app rather than left to the active model.
 - [ ] Full explicit **escalate-and-continue** execution semantics so a stronger lane resumes the active implementation/validation phase instead of pausing to restate the plan.
-- [ ] Approval-flow resilience across UI refreshes or renderer churn.
 - [ ] Full user-visible per-phase observability for active work, blocking conditions, and handoff history beyond the current Bridge-safe WorkSession summary.
 
 ### Interpretation
 
 The current codebase proves that **provider escalation and runtime continuity are viable**. It does **not** yet prove the broader orchestrator described in the rest of this file. The next iterations should build on the existing persistence and runtime ledger rather than inventing a second state system.
 
-The current codebase now also proves the **entry semantics, early state machine, execution-state foundation, execution loop, review closure, and first observability surface** for app-owned orchestration: the application, not the active model, decides when a station remains conversational and when it enters a coding-oriented WorkSession, it owns the deterministic `classify -> discover -> summarise -> plan -> implement -> validate -> review -> complete` flow across WorkSession and runtime workflow state, it persists execution-oriented state and closure outcomes across restart, and it exposes the active WorkSession summary through Bridge-safe UI and semantic control state. The next missing pieces are to make that workflow **more policy-driven and operationally resilient**: approval-flow resilience, phase-aware routing, stronger budget/context packaging rules, and broader observability for blockers and handoffs.
+The current codebase now also proves the **entry semantics, early state machine, execution-state foundation, execution loop, review closure, first observability surface, and durable approval lifecycle** for app-owned orchestration: the application, not the active model, decides when a station remains conversational and when it enters a coding-oriented WorkSession, it owns the deterministic `classify -> discover -> summarise -> plan -> implement -> validate -> review -> complete` flow across WorkSession and runtime workflow state, it persists execution-oriented state and closure outcomes across restart, it exposes the active WorkSession summary through Bridge-safe UI and semantic control state, and it now keeps permission gating durable across renderer refresh, transport reconnect, and backend restart with an opt-in auto-approve mode for trusted loops. The next missing pieces are to make that workflow **more policy-driven and budget-aware**: phase-aware routing, dedicated coding sub-agents (classifier / search / ranker / planner / build-failure), stronger budget/context packaging rules, full escalate-and-continue execution semantics, and broader observability for blockers and handoffs.
 
-### Likely next slice: Approval-flow resilience
+### Completed slice (2026-05-08): Approval-flow resilience
 
-The next implementation slice should stay operationally focused and harden permission-gated execution across refreshes, interrupted prompts, and stale UI state.
+Implemented in [permission-lifecycle-resilience.md](./permission-lifecycle-resilience.md). Highlights:
 
-1. Persist pending approval requests and blocked reasons so refresh or renderer churn cannot strand a task in silent limbo.
-2. Reattach or explicitly invalidate approvals after restart instead of relying on transient UI prompts surviving.
-3. Keep approval blocking coherent with the now end-to-end WorkSession closure path so implement/validate/review/complete state cannot drift around permission events.
+- Renderer reload no longer expires pending approvals — `handleClientDisconnected` is now a no-op for permissions; only genuine session teardown clears them.
+- On `transport:client-connected`, `StationRegistry.replayPendingPermissionRequests()` re-emits `permission:request` for every persisted pending row so the reconnected renderer re-prompts.
+- Boot-time orphan sweep (already in `recoverInterruptedRuntimeState`) is now visible to the UI: `permission:complete` with `result: "expired"` is emitted on first reconnect after restart.
+- `resolvePermissionRequest` is idempotent against a missing in-memory entry: a late approve/deny still updates the DB row, records a `permission.resolved` ledger event, emits `permission:complete`, and reconciles workflow state.
+- 60-second silent timeout replaced with a 30-minute durable `expired` outcome surfaced to both DB and UI.
+- WorkSession reacts explicitly to non-approved outcomes: an active `implement` / `validate` phase transitions to a stalled snapshot with a concrete `stalledReason` of "permission was denied" or "permission expired before approval".
+- New user-visible setting `autoApprovePermissions` (off by default, surfaced in Settings → Permissions) short-circuits prompting while preserving the full audit trail.
 
-Detailed review lifecycle remains a runtime-workflow concern (`running`, `completed`, `failed`, `missing`, `relaunching`, `stalled`). The next gap is no longer review closure itself; it is making approval gating just as durable and explicit as the coding-task spine.
+Detailed review lifecycle remains a runtime-workflow concern (`running`, `completed`, `failed`, `missing`, `relaunching`, `stalled`).
+
+### Likely next slice
+
+With approval gating durable, the next operational slice is the **first concrete bounded coding agent** that the orchestrator owns. The plan recommends `TaskClassifierAgent` as the smallest useful starting point: it lives in WorkSession's `classify` phase, takes a task string, returns the structured classification JSON described later in this document, and uses GPT-5.4 nano with explicit budget accounting. Shipping it forces us to commit to: (1) a concrete agent abstraction the app drives rather than the model, (2) the first per-phase budget counter, and (3) the first end-to-end test of "structured output, validated by the host." That foundation pays dividends for every later agent.
 
 ---
 

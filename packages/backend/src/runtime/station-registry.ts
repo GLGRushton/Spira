@@ -17,8 +17,8 @@ import type {
   UpgradeProposal,
 } from "@spira/shared";
 import type { McpToolAggregator } from "../mcp/tool-aggregator.js";
-import { clearStationSessionArtifacts, createStationSessionStorage } from "../runtime/station-session-storage.js";
-import type { ToolBridgeOptions } from "../runtime/tool-bridge.js";
+import { clearStationSessionArtifacts, createStationSessionStorage } from "./station-session-storage.js";
+import type { ToolBridgeOptions } from "./tool-bridge.js";
 import { SubagentLockManager } from "../subagent/lock-manager.js";
 import type { SubagentRegistry } from "../subagent/registry.js";
 import { SpiraError } from "../util/errors.js";
@@ -99,6 +99,7 @@ interface StationRegistryOptions {
   saveMissionSummary?: ToolBridgeOptions["saveMissionSummary"];
   requestUpgradeProposal?: (proposal: UpgradeProposal) => Promise<void> | void;
   applyHotCapabilityUpgrade?: () => Promise<void> | void;
+  isAutoApprovePermissionsEnabled?: () => boolean;
   createSessionManager?: (
     stationId: StationId,
     bus: SpiraEventBus,
@@ -127,6 +128,7 @@ interface StationRegistryOptions {
       setMissionProofStrategy?: ToolBridgeOptions["setMissionProofStrategy"];
       recordMissionProofResult?: ToolBridgeOptions["recordMissionProofResult"];
       saveMissionSummary?: ToolBridgeOptions["saveMissionSummary"];
+      isAutoApprovePermissionsEnabled?: () => boolean;
     },
   ) => StationSessionManager;
 }
@@ -227,6 +229,7 @@ export class StationRegistry {
           setMissionProofStrategy: this.options.setMissionProofStrategy,
           recordMissionProofResult: this.options.recordMissionProofResult,
           saveMissionSummary: this.options.saveMissionSummary,
+          isAutoApprovePermissionsEnabled: this.options.isAutoApprovePermissionsEnabled,
         })
       : new StationSessionManager(
           bus,
@@ -259,6 +262,7 @@ export class StationRegistry {
             setMissionProofStrategy: this.options.setMissionProofStrategy,
             recordMissionProofResult: this.options.recordMissionProofResult,
             saveMissionSummary: this.options.saveMissionSummary,
+            isAutoApprovePermissionsEnabled: this.options.isAutoApprovePermissionsEnabled,
           },
         );
     const station: StationContext = {
@@ -416,9 +420,32 @@ export class StationRegistry {
   }
 
   handleClientDisconnected(): void {
+    // Pending permission requests are intentionally NOT expired here. A renderer
+    // refresh briefly drops the transport, and we want the durably-persisted
+    // request to survive so the reconnected renderer can re-render the prompt.
+    // Genuinely terminal teardown still flows through SessionManager.shutdown
+    // and SessionManager.disconnectSession, which both clear pending approvals.
     for (const station of this.stations.values()) {
-      station.manager.cancelPendingPermissionRequests();
       station.pendingToolCalls.clear();
+    }
+  }
+
+  handleClientConnected(): void {
+    this.replayPendingPermissionRequests();
+  }
+
+  replayPendingPermissionRequests(): void {
+    for (const station of this.stations.values()) {
+      const persisted = station.manager.listPersistedPendingPermissionRequests();
+      for (const payload of persisted) {
+        this.options.transport.send({
+          type: "permission:request",
+          request: {
+            ...payload,
+            stationId: station.stationId,
+          },
+        });
+      }
     }
   }
 

@@ -9,3 +9,4 @@ import "./session-manager.work-session-persistence.suite.js";
 import "./session-manager.provider-session.suite.js";
 import "./session-manager.provider-continuity.suite.js";
 import "./session-manager.subagent-timeout-recovery.suite.js";
+import "./session-manager.permission-lifecycle.suite.js";
