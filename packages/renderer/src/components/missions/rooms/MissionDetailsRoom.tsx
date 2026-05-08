@@ -8,7 +8,7 @@ import {
 } from "@spira/shared";
 import { useEffect, useMemo, useState } from "react";
 import { useNavigationStore } from "../../../stores/navigation-store.js";
-import projectStyles from "../../projects/ProjectsPanel.module.css";
+import projectStyles from "../../projects/ProjectsPanel/ProjectsPanel.module.css";
 import shellStyles from "../MissionShell.module.css";
 import { describeMissionNextAction, describeRunStatus } from "../mission-display-utils.js";
 import type { MissionRunController } from "../useMissionRunController.js";

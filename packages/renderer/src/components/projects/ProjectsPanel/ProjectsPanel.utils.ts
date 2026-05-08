@@ -8,8 +8,8 @@ import {
   type YouTrackStatusSummary,
   normalizeYouTrackStateMapping,
 } from "@spira/shared";
+import type { MissionLaneTabId } from "../mission-utils.js";
 import styles from "./ProjectsPanel.module.css";
-import type { MissionLaneTabId } from "./mission-utils.js";
 
 export const EMPTY_SNAPSHOT: ProjectRepoMappingsSnapshot = {
   workspaceRoot: null,

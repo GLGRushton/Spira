@@ -1,6 +1,6 @@
 import type { TicketRunReviewRepoState, TicketRunReviewSubmoduleState, TicketRunSummary } from "@spira/shared";
 import { useEffect, useMemo, useState } from "react";
-import projectStyles from "../../projects/ProjectsPanel.module.css";
+import projectStyles from "../../projects/ProjectsPanel/ProjectsPanel.module.css";
 import { formatDiffDelta } from "../mission-display-utils.js";
 import type { MissionRunController } from "../useMissionRunController.js";
 

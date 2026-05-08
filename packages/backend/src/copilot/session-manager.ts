@@ -1,34 +1,23 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import type { RuntimeStationToolCallRecord, SpiraMemoryDatabase } from "@spira/memory-db";
 import type {
   AssistantState,
   Env,
-  ModelProviderId,
   PermissionRequestPayload,
   StationId,
   SubagentDelegationArgs,
   SubagentDomain,
-  SubagentEnvelope,
-  SubagentRunHandle,
   SubagentRunSnapshot,
   UpgradeProposal,
   WorkSessionClassification,
-  WorkSessionPatchAttempt,
   WorkSessionPhase,
-  WorkSessionPhaseEntry,
   WorkSessionSnapshot,
   WorkSessionSummary,
-  WorkSessionValidationResult,
 } from "@spira/shared";
-import { SUBAGENT_DOMAINS } from "@spira/shared";
 import { decideWorkSessionMode } from "../coding/work-session-gate.js";
 import { type WorkSessionStorage, createWorkSessionStorage } from "../coding/work-session-storage.js";
 import type { McpToolAggregator } from "../mcp/tool-aggregator.js";
-import {
-  type MissionWorkflowState,
-  assertMissionMcpToolAllowedForState,
-  assertMissionWorkflowStateActionAllowed,
-} from "../missions/mission-workflow-guard.js";
+import type { MissionWorkflowState } from "../missions/mission-workflow-guard.js";
 import {
   getDefaultProviderCapabilities,
   normalizeProviderUsageSnapshot,
@@ -58,7 +47,6 @@ import type {
   ProviderUsageRecord,
   ProviderUsageSnapshot,
 } from "../provider/types.js";
-import { buildRuntimeCapabilityRegistry, getProviderToolManifest } from "../runtime/capability-registry.js";
 import {
   approvePermissionOnce,
   permissionUserNotAvailable,
@@ -87,15 +75,6 @@ import { executeRuntimePermissionRequest } from "../runtime/runtime-permission-l
 import { completeRuntimeCancellation, requestRuntimeCancellation } from "../runtime/runtime-state-machine.js";
 import { RuntimeStore } from "../runtime/runtime-store.js";
 import { handleSharedTurnEvent, updateRuntimeUsageSummary } from "../runtime/runtime-turn-engine.js";
-import {
-  appendStationRuntimeLedgerEventIfSession,
-  buildStationRuntimeRecoverySection,
-  createStationRuntimeCheckpoint,
-  getStationManagerRuntimeSessionId,
-  persistStationRuntimeSessionContract,
-  recordStationRuntimeUserMessage,
-  syncStationRuntimeState,
-} from "../runtime/station-runtime-persistence.js";
 import { type StationSessionStorage, createStationSessionStorage } from "../runtime/station-session-storage.js";
 import { StreamAssembler } from "../runtime/stream-handler.js";
 import type { ToolBridgeOptions } from "../runtime/tool-bridge.js";
@@ -103,7 +82,6 @@ import { SubagentLockManager } from "../subagent/lock-manager.js";
 import type { SubagentRegistry } from "../subagent/registry.js";
 import { SubagentRunRegistry } from "../subagent/run-registry.js";
 import { SubagentRunner } from "../subagent/subagent-runner.js";
-import { appRootDir } from "../util/app-paths.js";
 import { AssistantError, formatErrorDetails } from "../util/errors.js";
 import type { SpiraEventBus } from "../util/event-bus.js";
 import { createLogger } from "../util/logger.js";
@@ -114,36 +92,75 @@ import {
   createSessionConfig,
   getSessionSystemMessageHash,
 } from "./session-config.js";
+import { getDelegationDomain, getSubagentRunnerKey } from "./session-manager/delegation-helpers.js";
+import {
+  appendRuntimeLedgerEventIfSessionHelper,
+  buildRuntimeRecoverySectionHelper,
+  createRuntimeCheckpointHelper,
+  getHostContinuitySeedHelper,
+  getRuntimeSessionIdHelper,
+  persistRuntimeSessionContractHelper,
+  recordRuntimeUserMessageHelper,
+  syncRuntimeStateHelper,
+} from "./session-manager/runtime-persistence-helpers.js";
+import {
+  ALL_PROVIDER_IDS,
+  type ActiveTurnWatchdog,
+  type ManagedSubagentLaunch,
+  PERMISSION_REQUEST_TIMEOUT_MS,
+  type PendingPermissionRequest,
+  REVIEW_STALL_TIMEOUT_MS,
+  type ReportedAssistantError,
+  SESSION_INIT_TIMEOUT_MS,
+  type SessionPersistence,
+  TURN_ACTIVITY_TIMEOUT_MS,
+  TURN_FIRST_ACTIVITY_TIMEOUT_MS,
+  TURN_HARD_TIMEOUT_MS,
+  TURN_WATCHDOG_POLL_MS,
+  WORK_SESSION_IMPLEMENTATION_TOOL_NAMES,
+  WORK_SESSION_WORKFLOW_PHASES,
+  type WorkSessionToolCompletion,
+  getMissionServiceToolTitle,
+  isInteractiveHostToolPermissionRequest,
+  isMissionServicePermissionRequest,
+  isVisionPermissionRequest,
+} from "./session-manager/shared.js";
+import {
+  getCurrentToolManifestHelper,
+  getCurrentToolSignatureHelper,
+  getToolBridgeOptionsHelper,
+  maybeRefreshSessionForToolChangesHelper,
+  queuePendingToolRefreshHelper,
+  queueToolRefreshHelper,
+  refreshSessionForToolChangesHelper,
+} from "./session-manager/tool-refresh-helpers.js";
+import {
+  buildPatchAttempt,
+  compactAssistantSummary,
+  createInitialWorkSessionPhaseHistory,
+  extractWorkSessionSearchTerms,
+  getNonWorkSessionWorkflowPhaseHistory,
+  getToolArgsRecord,
+  getToolStringArg,
+  getValidationCommand,
+  getWorkSessionWorkflowBlock as getWorkSessionWorkflowBlockHelper,
+  isValidationCommand,
+  isWorkSessionReadyForReview as isWorkSessionReadyForReviewHelper,
+  recordWorkSessionValidationResult as recordWorkSessionValidationResultHelper,
+  setWorkSessionPhase,
+  startWorkSessionImplementation as startWorkSessionImplementationHelper,
+  startWorkSessionValidation as startWorkSessionValidationHelper,
+} from "./session-manager/work-session-helpers.js";
+import {
+  buildWorkflowReviewState,
+  buildWorkflowStateForSessionEscalation,
+  clearOpenWorkflowPhaseEntryBlocking,
+  getEffectiveWorkflowBlock,
+  shouldRestoreWorkSessionWorkflowState,
+  syncOpenWorkflowPhaseEntryBlocking,
+} from "./session-manager/workflow-helpers.js";
 
 const logger = createLogger("station-session");
-
-const SESSION_INIT_TIMEOUT_MS = 20_000;
-const TURN_FIRST_ACTIVITY_TIMEOUT_MS = 120_000;
-const TURN_ACTIVITY_TIMEOUT_MS = 120_000;
-const TURN_HARD_TIMEOUT_MS = 15 * 60_000;
-const TURN_WATCHDOG_POLL_MS = 1_000;
-const PERMISSION_REQUEST_TIMEOUT_MS = 60_000;
-const REVIEW_STALL_TIMEOUT_MS = 5 * 60_000;
-const WORK_SESSION_WORKFLOW_PHASES: WorkSessionPhase[] = [
-  "classify",
-  "discover",
-  "summarise",
-  "plan",
-  "implement",
-  "validate",
-];
-const ALL_PROVIDER_IDS: ProviderId[] = [
-  "copilot",
-  "azure-openai",
-  "azure-openai-escalation",
-  "openai",
-  "openai-escalation",
-] satisfies ModelProviderId[];
-
-export interface SessionPersistence {
-  load(): string | null;
-  save(sessionId: string | null): void;
-}
 
 interface SendPromptOptions {
   continuityPreamble?: string | null;
@@ -176,143 +193,7 @@ interface SessionManagerOptions {
   saveMissionSummary?: ToolBridgeOptions["saveMissionSummary"];
 }
 
-export interface ManagedSubagentLaunch {
-  handle: SubagentRunHandle;
-  completion: Promise<SubagentRunSnapshot | null>;
-}
-
-type ReportedAssistantError = AssistantError & { reportedToClient?: boolean };
-type PendingPermissionRequest = {
-  resolve: (result: ProviderPermissionResult) => void;
-  timeout: NodeJS.Timeout;
-};
-
-type ActiveTurnWatchdog = {
-  promptEpoch: number;
-  startedAt: number;
-  lastActivityAt: number;
-  firstActivityAt: number | null;
-};
-
-const getPermissionToolName = (request: ProviderPermissionRequest): string | null =>
-  "toolName" in request && typeof request.toolName === "string" ? request.toolName : null;
-
-const isVisionPermissionRequest = (
-  request: ProviderPermissionRequest,
-): request is ProviderPermissionRequest & {
-  kind: "mcp";
-  serverName: string;
-  toolName: string;
-  toolTitle?: string;
-  args?: Record<string, unknown>;
-  readOnly?: boolean;
-} => {
-  const toolName = getPermissionToolName(request);
-  return request.kind === "mcp" && toolName !== null && toolName.startsWith("vision_");
-};
-
-const isMissionServicePermissionRequest = (
-  request: ProviderPermissionRequest,
-): request is ProviderPermissionRequest & {
-  kind: "custom-tool";
-  toolName: "spira_start_mission_service" | "spira_stop_mission_service" | "spira_run_mission_proof";
-  toolCallId?: string;
-  args?: Record<string, unknown>;
-} =>
-  request.kind === "custom-tool" &&
-  (() => {
-    const toolName = getPermissionToolName(request);
-    return (
-      toolName === "spira_start_mission_service" ||
-      toolName === "spira_stop_mission_service" ||
-      toolName === "spira_run_mission_proof"
-    );
-  })();
-
-const getMissionServiceToolTitle = (toolName: string): string => {
-  switch (toolName) {
-    case "spira_start_mission_service":
-      return "Start mission service";
-    case "spira_stop_mission_service":
-      return "Stop mission service";
-    case "spira_run_mission_proof":
-      return "Run mission proof";
-    default:
-      return toolName;
-  }
-};
-
-const INTERACTIVE_HOST_TOOL_NAMES = new Set([
-  "write_file",
-  "apply_patch",
-  "powershell",
-  "write_powershell",
-  "stop_powershell",
-  "spira_escalate_session",
-  "spira_session_set_plan",
-  "spira_session_set_scratchpad",
-  "spira_session_set_context",
-]);
-
-const WORK_SESSION_IMPLEMENTATION_TOOL_NAMES = new Set(["apply_patch", "write_file"]);
-const WORK_SESSION_VALIDATION_COMMAND_TOKENS = new Set([
-  "vitest",
-  "jest",
-  "mocha",
-  "ava",
-  "tap",
-  "playwright",
-  "cypress",
-  "eslint",
-  "biome",
-  "tsc",
-  "test",
-  "tests",
-  "lint",
-  "typecheck",
-  "build",
-  "compile",
-  "check",
-]);
-const WORK_SESSION_MAX_IMPLEMENTATION_ATTEMPTS = 5;
-const WORK_SESSION_MAX_REPEAT_FAILURES = 2;
-
-type WorkSessionToolCompletion = {
-  callId: string;
-  toolName: string;
-  args: Record<string, unknown>;
-  success: boolean;
-  result: unknown;
-  errorMessage: string | null;
-};
-
-const HOST_TOOL_MISSION_ACTIONS = new Map<string, "load-context" | "repo-read" | "repo-write">([
-  ["view", "repo-read"],
-  ["glob", "repo-read"],
-  ["rg", "repo-read"],
-  ["read_powershell", "repo-read"],
-  ["list_powershell", "repo-read"],
-  ["spira_session_get_plan", "load-context"],
-  ["spira_session_get_scratchpad", "load-context"],
-  ["spira_session_get_context", "load-context"],
-  ["write_file", "repo-write"],
-  ["apply_patch", "repo-write"],
-  ["powershell", "repo-write"],
-  ["write_powershell", "repo-write"],
-  ["stop_powershell", "repo-write"],
-  ["spira_session_set_plan", "repo-write"],
-  ["spira_session_set_scratchpad", "repo-write"],
-  ["spira_session_set_context", "repo-write"],
-]);
-
-const isInteractiveHostToolPermissionRequest = (
-  request: ProviderPermissionRequest,
-): request is ProviderPermissionRequest & {
-  kind: "custom-tool";
-  toolName: string;
-  toolCallId?: string;
-  args?: Record<string, unknown>;
-} => request.kind === "custom-tool" && INTERACTIVE_HOST_TOOL_NAMES.has(getPermissionToolName(request) ?? "");
+export type { ManagedSubagentLaunch, SessionPersistence } from "./session-manager/shared.js";
 
 export class StationSessionManager {
   private client: ProviderClient | null = null;
@@ -468,7 +349,7 @@ export class StationSessionManager {
       this.queueToolRefresh();
     });
     const activeWorkSession = this.activeWorkSession;
-    if (activeWorkSession && this.shouldRestoreWorkSessionWorkflowState()) {
+    if (activeWorkSession && shouldRestoreWorkSessionWorkflowState(this.workflowState, activeWorkSession)) {
       this.syncWorkSessionWorkflowState(activeWorkSession.updatedAt);
     }
     if (this.activeWorkSession || reconciledPersistedReviewState) {
@@ -541,13 +422,13 @@ export class StationSessionManager {
       classification: existingSnapshot?.classification ?? classification,
       phaseHistory:
         existingSnapshot?.phaseHistory ??
-        this.createInitialWorkSessionPhaseHistory(
+        createInitialWorkSessionPhaseHistory(
           now,
           restartSession
             ? "WorkSession restarted for a new explicit task."
             : "WorkSession activated from explicit coding intent.",
         ),
-      searchTerms: existingSnapshot?.searchTerms ?? this.extractWorkSessionSearchTerms(taskText),
+      searchTerms: existingSnapshot?.searchTerms ?? extractWorkSessionSearchTerms(taskText),
       candidateFiles: existingSnapshot?.candidateFiles ?? [],
       selectedFiles: existingSnapshot?.selectedFiles ?? [],
       summary: existingSnapshot?.summary ?? "Discovering repository context.",
@@ -560,7 +441,7 @@ export class StationSessionManager {
       fixIterationCount: existingSnapshot?.fixIterationCount ?? 0,
       repeatFailureCount: existingSnapshot?.repeatFailureCount ?? 0,
       lastValidationFingerprint: existingSnapshot?.lastValidationFingerprint ?? null,
-      readyForReview: this.isWorkSessionReadyForReview(existingSnapshot),
+      readyForReview: isWorkSessionReadyForReviewHelper(existingSnapshot),
       reviewSummary: existingSnapshot?.reviewSummary ?? null,
       completedAt: existingSnapshot?.completedAt ?? null,
       stalledReason: existingSnapshot?.stalledReason ?? null,
@@ -577,26 +458,10 @@ export class StationSessionManager {
     }
   }
 
-  private extractWorkSessionSearchTerms(text: string): string[] {
-    const seen = new Set<string>();
-    const terms: string[] = [];
-    for (const token of text.toLowerCase().split(/[^a-z0-9]+/)) {
-      if (token.length < 3 || seen.has(token)) {
-        continue;
-      }
-      seen.add(token);
-      terms.push(token);
-      if (terms.length >= 8) {
-        break;
-      }
-    }
-    return terms;
-  }
-
   private clearWorkSessionState(): void {
     const now = Date.now();
     const activeWorkflowPhase = this.workflowState.phase;
-    const remainingPhaseHistory = this.getNonWorkSessionWorkflowPhaseHistory();
+    const remainingPhaseHistory = getNonWorkSessionWorkflowPhaseHistory(this.workflowState.phaseHistory);
     const shouldResetWorkflow =
       WORK_SESSION_WORKFLOW_PHASES.includes(activeWorkflowPhase as WorkSessionPhase) ||
       activeWorkflowPhase === "review" ||
@@ -632,7 +497,7 @@ export class StationSessionManager {
   }
 
   private resetWorkflowForNewWorkSession(occurredAt: number): void {
-    const remainingPhaseHistory = this.getNonWorkSessionWorkflowPhaseHistory();
+    const remainingPhaseHistory = getNonWorkSessionWorkflowPhaseHistory(this.workflowState.phaseHistory);
     this.workflowState = {
       ...this.workflowState,
       phase: "intake",
@@ -650,63 +515,6 @@ export class StationSessionManager {
         lastUpdatedAt: occurredAt,
       },
     };
-  }
-
-  private getNonWorkSessionWorkflowPhaseHistory(): RuntimeSessionContract["workflowState"]["phaseHistory"] {
-    return this.workflowState.phaseHistory.filter(
-      (entry) =>
-        !WORK_SESSION_WORKFLOW_PHASES.includes(entry.phase as WorkSessionPhase) &&
-        entry.phase !== "review" &&
-        entry.phase !== "complete",
-    );
-  }
-
-  private createInitialWorkSessionPhaseHistory(now: number, summary: string): WorkSessionPhaseEntry[] {
-    return [
-      {
-        phase: "classify",
-        status: "complete",
-        summary,
-        startedAt: now,
-        updatedAt: now,
-        completedAt: now,
-      },
-      {
-        phase: "discover",
-        status: "active",
-        summary: "Discovering repository context.",
-        startedAt: now,
-        updatedAt: now,
-      },
-      {
-        phase: "summarise",
-        status: "pending",
-        summary: null,
-        startedAt: now,
-        updatedAt: now,
-      },
-      {
-        phase: "plan",
-        status: "pending",
-        summary: null,
-        startedAt: now,
-        updatedAt: now,
-      },
-      {
-        phase: "implement",
-        status: "pending",
-        summary: null,
-        startedAt: now,
-        updatedAt: now,
-      },
-      {
-        phase: "validate",
-        status: "pending",
-        summary: null,
-        startedAt: now,
-        updatedAt: now,
-      },
-    ];
   }
 
   private persistWorkSession(snapshot: WorkSessionSnapshot): void {
@@ -732,97 +540,8 @@ export class StationSessionManager {
     this.syncWorkSessionWorkflowState(occurredAt);
   }
 
-  private setWorkSessionPhase(
-    snapshot: WorkSessionSnapshot,
-    phase: WorkSessionPhase,
-    status: "pending" | "active" | "complete" | "skipped",
-    occurredAt: number,
-    summary: string | null,
-  ): WorkSessionSnapshot {
-    return {
-      ...snapshot,
-      currentPhase: status === "active" ? phase : snapshot.currentPhase,
-      summary,
-      phaseHistory: snapshot.phaseHistory.map((entry) => {
-        if (entry.phase !== phase) {
-          return entry;
-        }
-        return {
-          ...entry,
-          status,
-          summary,
-          updatedAt: occurredAt,
-          completedAt: status === "complete" || status === "skipped" ? occurredAt : null,
-        };
-      }),
-    };
-  }
-
-  private compactAssistantSummary(text: string): string {
-    const normalized = text.replace(/\s+/g, " ").trim();
-    return normalized.length <= 160 ? normalized : `${normalized.slice(0, 157)}...`;
-  }
-
-  private getToolArgsRecord(args: unknown): Record<string, unknown> {
-    return args && typeof args === "object" && !Array.isArray(args) ? (args as Record<string, unknown>) : {};
-  }
-
-  private getToolStringArg(args: Record<string, unknown>, key: string): string | null {
-    const value = args[key];
-    return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
-  }
-
-  private mergeUniqueStrings(existing: readonly string[] | undefined, incoming: readonly string[]): string[] {
-    return [...new Set([...(existing ?? []), ...incoming.filter((entry) => entry.trim().length > 0)])];
-  }
-
-  private extractChangedFilesFromPatch(patch: string): string[] {
-    const changedFiles = new Set<string>();
-    for (const line of patch.split(/\r?\n/)) {
-      const updateMatch = line.match(/^\*\*\* (?:Update|Add|Delete) File: (.+)$/);
-      if (updateMatch?.[1]) {
-        changedFiles.add(updateMatch[1].trim());
-        continue;
-      }
-      const moveMatch = line.match(/^\*\*\* Move to: (.+)$/);
-      if (moveMatch?.[1]) {
-        changedFiles.add(moveMatch[1].trim());
-        continue;
-      }
-      const diffMatch = line.match(/^diff --git a\/(.+?) b\/(.+)$/);
-      if (diffMatch?.[2]) {
-        changedFiles.add(diffMatch[2].trim());
-        continue;
-      }
-      const renameMatch = line.match(/^rename to (.+)$/);
-      if (renameMatch?.[1]) {
-        changedFiles.add(renameMatch[1].trim());
-      }
-    }
-    return [...changedFiles];
-  }
-
-  private getChangedFilesFromToolCall(toolName: string, args: Record<string, unknown>): string[] {
-    if (toolName === "write_file") {
-      const path = this.getToolStringArg(args, "path");
-      return path ? [path] : [];
-    }
-    if (toolName === "apply_patch") {
-      const patch = this.getToolStringArg(args, "patch");
-      return patch ? this.extractChangedFilesFromPatch(patch) : [];
-    }
-    return [];
-  }
-
   private isWorkSessionImplementationTool(toolName: string): boolean {
     return WORK_SESSION_IMPLEMENTATION_TOOL_NAMES.has(toolName);
-  }
-
-  private getValidationCommand(toolName: string, args: Record<string, unknown>): string | null {
-    if (toolName === "powershell") {
-      return this.getToolStringArg(args, "command") ?? this.getToolStringArg(args, "description");
-    }
-    return null;
   }
 
   private isWorkSessionValidationTool(
@@ -831,156 +550,19 @@ export class StationSessionManager {
     snapshot?: WorkSessionSnapshot,
   ): boolean {
     if (toolName === "read_powershell") {
-      const shellId = this.getToolStringArg(args, "shellId");
+      const shellId = getToolStringArg(args, "shellId");
       return Boolean(shellId && snapshot?.pendingValidationShellId === shellId);
     }
-    const command = this.getValidationCommand(toolName, args);
-    return Boolean(command && this.isValidationCommand(command));
+    const command = getValidationCommand(toolName, args);
+    return Boolean(command && isValidationCommand(command));
   }
 
-  private isValidationCommand(command: string): boolean {
-    const tokens = command
-      .toLowerCase()
-      .split(/[\s|&;]+/)
-      .map((token) => token.trim().replace(/^['"]+|['"]+$/g, ""))
-      .filter((token) => token.length > 0);
-    return tokens.some((token) => WORK_SESSION_VALIDATION_COMMAND_TOKENS.has(token));
-  }
-
-  private getPowerShellSessionShellId(result: unknown): string | null {
-    const resolvedResult = this.unwrapProviderToolResult(result);
-    if (!resolvedResult || typeof resolvedResult !== "object") {
-      return null;
-    }
-    const shellId = (resolvedResult as Record<string, unknown>).shellId;
-    return typeof shellId === "string" && shellId.trim().length > 0 ? shellId.trim() : null;
-  }
-
-  private getPowerShellSessionStatus(result: unknown): string | null {
-    const resolvedResult = this.unwrapProviderToolResult(result);
-    if (!resolvedResult || typeof resolvedResult !== "object") {
-      return null;
-    }
-    const status = (resolvedResult as Record<string, unknown>).status;
-    return typeof status === "string" && status.trim().length > 0 ? status.trim() : null;
-  }
-
-  private getPowerShellExitCode(result: unknown): number | null {
-    const resolvedResult = this.unwrapProviderToolResult(result);
-    if (!resolvedResult || typeof resolvedResult !== "object") {
-      return null;
-    }
-    const exitCode = (resolvedResult as Record<string, unknown>).exitCode;
-    return typeof exitCode === "number" ? exitCode : null;
-  }
-
-  private unwrapProviderToolResult(result: unknown): unknown {
-    if (!result || typeof result !== "object") {
-      return result;
-    }
-    const textResultForLlm = (result as Record<string, unknown>).textResultForLlm;
-    if (typeof textResultForLlm !== "string" || textResultForLlm.trim().length === 0) {
-      return result;
-    }
-    try {
-      return JSON.parse(textResultForLlm);
-    } catch {
-      return textResultForLlm;
-    }
-  }
-
-  private didValidationToolSucceed(tool: WorkSessionToolCompletion): boolean {
-    if (tool.toolName === "powershell" || tool.toolName === "read_powershell") {
-      const status = this.getPowerShellSessionStatus(tool.result);
-      const exitCode = this.getPowerShellExitCode(tool.result);
-      if (status === "running" || status === "idle") {
-        return false;
-      }
-      if (status === "failed" || status === "stopped" || status === "cancelled" || status === "unrecoverable") {
-        return false;
-      }
-      if (status === "completed") {
-        return exitCode === null ? tool.success : exitCode === 0;
-      }
-    }
-    return tool.success;
-  }
-
-  private summarizeChangedFiles(changedFiles: readonly string[]): string {
-    if (changedFiles.length === 0) {
-      return "repository changes";
-    }
-    if (changedFiles.length === 1) {
-      return changedFiles[0] ?? "repository changes";
-    }
-    return `${changedFiles[0]}, ${changedFiles[1]}${changedFiles.length > 2 ? ", ..." : ""}`;
-  }
-
-  private summarizeValidationOutcome(
+  private recordWorkSessionPatchAttempt(
+    snapshot: WorkSessionSnapshot,
     tool: WorkSessionToolCompletion,
-    command: string,
-  ): { summary: string; fingerprint: string | null } {
-    const validationSucceeded = this.didValidationToolSucceed(tool);
-    const detail = this.getValidationDetail(tool.result, tool.errorMessage);
-    if (validationSucceeded) {
-      return {
-        summary: `Validation passed: ${command}.`,
-        fingerprint: null,
-      };
-    }
-    const detailSummary = detail ? this.compactAssistantSummary(detail) : `Validation failed: ${command}.`;
-    const fingerprintSource = detail?.trim().length ? detail : detailSummary;
-    return {
-      summary: detailSummary,
-      fingerprint: this.buildValidationFingerprint(fingerprintSource),
-    };
-  }
-
-  private getValidationDetail(result: unknown, errorMessage: string | null): string | null {
-    if (errorMessage?.trim()) {
-      return errorMessage.trim();
-    }
-    const resolvedResult = this.unwrapProviderToolResult(result);
-    if (typeof resolvedResult === "string" && resolvedResult.trim()) {
-      return resolvedResult.trim();
-    }
-    if (resolvedResult && typeof resolvedResult === "object") {
-      const resultRecord = resolvedResult as Record<string, unknown>;
-      for (const key of ["error", "message", "summary", "stderr", "stdout", "output", "textResultForLlm"]) {
-        const value = resultRecord[key];
-        if (typeof value === "string" && value.trim()) {
-          return value.trim();
-        }
-      }
-      const stableFallback = [
-        resultRecord.command,
-        resultRecord.description,
-        resultRecord.status,
-        resultRecord.exitCode,
-      ]
-        .map((value) => (typeof value === "string" || typeof value === "number" ? String(value).trim() : ""))
-        .filter((value) => value.length > 0)
-        .join(" | ");
-      if (stableFallback.length > 0) {
-        return stableFallback;
-      }
-      try {
-        return JSON.stringify(resolvedResult);
-      } catch {
-        return null;
-      }
-    }
-    return null;
-  }
-
-  private buildValidationFingerprint(text: string): string {
-    const codeMatch = text.match(/\b(TS\d{4}|ERR_[A-Z0-9_]+|[A-Z]+-\d+)\b/);
-    const normalized = text.replace(/\s+/g, " ").trim();
-    const detailHash = createHash("sha1").update(normalized).digest("hex").slice(0, 8);
-    if (codeMatch?.[1]) {
-      return `${codeMatch[1]}:${detailHash}`;
-    }
-    return createHash("sha1").update(normalized).digest("hex").slice(0, 12);
+    occurredAt: number,
+  ): WorkSessionSnapshot {
+    return buildPatchAttempt(snapshot, tool, occurredAt).snapshot;
   }
 
   private startWorkSessionImplementation(
@@ -989,79 +571,7 @@ export class StationSessionManager {
     args: Record<string, unknown>,
     occurredAt: number,
   ): WorkSessionSnapshot {
-    const changedFiles = this.getChangedFilesFromToolCall(toolName, args);
-    let nextSnapshot = snapshot;
-    if (snapshot.currentPhase === "plan") {
-      nextSnapshot = this.setWorkSessionPhase(
-        nextSnapshot,
-        "plan",
-        "complete",
-        occurredAt,
-        snapshot.planSummary ?? snapshot.summary ?? "Implementation plan prepared.",
-      );
-    }
-    nextSnapshot = this.setWorkSessionPhase(
-      nextSnapshot,
-      "implement",
-      "active",
-      occurredAt,
-      changedFiles.length > 0
-        ? `Applying repository changes to ${this.summarizeChangedFiles(changedFiles)}.`
-        : `Applying repository changes with ${toolName}.`,
-    );
-    return {
-      ...nextSnapshot,
-      currentPhase: "implement",
-      selectedFiles: this.mergeUniqueStrings(nextSnapshot.selectedFiles, changedFiles),
-      readyForReview: false,
-      reviewSummary: null,
-      completedAt: null,
-      repeatFailureCount: snapshot.repeatFailureCount,
-      lastValidationFingerprint: snapshot.lastValidationFingerprint,
-      stalledReason: snapshot.stalledReason,
-      stalledAt: snapshot.stalledAt,
-      pendingValidationShellId: null,
-      pendingValidationCommand: null,
-    };
-  }
-
-  private recordWorkSessionPatchAttempt(
-    snapshot: WorkSessionSnapshot,
-    tool: WorkSessionToolCompletion,
-    occurredAt: number,
-  ): WorkSessionSnapshot {
-    if (!tool.success) {
-      return {
-        ...snapshot,
-        summary: `Implementation attempt failed while running ${tool.toolName}.`,
-      };
-    }
-    const changedFiles = this.getChangedFilesFromToolCall(tool.toolName, tool.args);
-    const patchAttempt: WorkSessionPatchAttempt = {
-      toolCallId: tool.callId,
-      toolName: tool.toolName,
-      changedFiles,
-      summary:
-        changedFiles.length > 0
-          ? `Applied changes to ${this.summarizeChangedFiles(changedFiles)}.`
-          : `Applied repository changes with ${tool.toolName}.`,
-      occurredAt,
-    };
-    return {
-      ...snapshot,
-      patchAttempts: [...(snapshot.patchAttempts ?? []), patchAttempt],
-      selectedFiles: this.mergeUniqueStrings(snapshot.selectedFiles, changedFiles),
-      changedFiles: this.mergeUniqueStrings(snapshot.changedFiles, changedFiles),
-      summary: patchAttempt.summary ?? snapshot.summary,
-      readyForReview: false,
-      reviewSummary: null,
-      completedAt: null,
-      fixIterationCount: snapshot.stalledReason ? 0 : snapshot.fixIterationCount,
-      repeatFailureCount: snapshot.stalledReason ? 0 : snapshot.repeatFailureCount,
-      lastValidationFingerprint: snapshot.stalledReason ? null : snapshot.lastValidationFingerprint,
-      stalledReason: null,
-      stalledAt: null,
-    };
+    return startWorkSessionImplementationHelper(snapshot, toolName, args, occurredAt);
   }
 
   private startWorkSessionValidation(
@@ -1070,36 +580,7 @@ export class StationSessionManager {
     args: Record<string, unknown>,
     occurredAt: number,
   ): WorkSessionSnapshot {
-    const command = this.getValidationCommand(toolName, args) ?? toolName;
-    let nextSnapshot = snapshot;
-    if (snapshot.currentPhase === "implement") {
-      nextSnapshot = this.setWorkSessionPhase(
-        nextSnapshot,
-        "implement",
-        "complete",
-        occurredAt,
-        snapshot.summary ?? "Implementation pass finished.",
-      );
-    }
-    nextSnapshot = this.setWorkSessionPhase(
-      nextSnapshot,
-      "validate",
-      "active",
-      occurredAt,
-      `Running validation: ${command}.`,
-    );
-    return {
-      ...nextSnapshot,
-      currentPhase: "validate",
-      summary: `Running validation: ${command}.`,
-      readyForReview: false,
-      reviewSummary: null,
-      completedAt: null,
-      stalledReason: null,
-      stalledAt: null,
-      pendingValidationShellId: null,
-      pendingValidationCommand: command,
-    };
+    return startWorkSessionValidationHelper(snapshot, toolName, args, occurredAt);
   }
 
   private recordWorkSessionValidationResult(
@@ -1107,146 +588,18 @@ export class StationSessionManager {
     tool: WorkSessionToolCompletion,
     occurredAt: number,
   ): WorkSessionSnapshot {
-    const command =
-      this.getValidationCommand(tool.toolName, tool.args) ?? snapshot.pendingValidationCommand ?? tool.toolName;
-    const powerShellShellId = this.getPowerShellSessionShellId(tool.result);
-    const powerShellStatus = this.getPowerShellSessionStatus(tool.result);
-    if (
-      (tool.toolName === "powershell" || tool.toolName === "read_powershell") &&
-      powerShellShellId &&
-      (powerShellStatus === "running" || powerShellStatus === "idle")
-    ) {
-      return {
-        ...snapshot,
-        summary: `Validation still running: ${command}.`,
-        readyForReview: false,
-        reviewSummary: null,
-        completedAt: null,
-        stalledReason: null,
-        stalledAt: null,
-        pendingValidationShellId: powerShellShellId,
-        pendingValidationCommand: command,
-      };
-    }
-    const validationSucceeded = this.didValidationToolSucceed(tool);
-    const { summary, fingerprint } = this.summarizeValidationOutcome(tool, command);
-    const validationResult: WorkSessionValidationResult = {
-      toolCallId: tool.callId,
-      toolName: tool.toolName,
-      command,
-      success: validationSucceeded,
-      summary,
-      fingerprint,
-      errorMessage: tool.errorMessage,
-      occurredAt,
-    };
-    const nextFixIterationCount = validationSucceeded
-      ? (snapshot.fixIterationCount ?? 0)
-      : (snapshot.fixIterationCount ?? 0) + 1;
-    const repeatFailureCount =
-      validationSucceeded || !fingerprint
-        ? 0
-        : snapshot.lastValidationFingerprint === fingerprint
-          ? (snapshot.repeatFailureCount ?? 0) + 1
-          : 1;
-    let nextSnapshot: WorkSessionSnapshot = {
-      ...snapshot,
-      validationResults: [...(snapshot.validationResults ?? []), validationResult],
-      fixIterationCount: nextFixIterationCount,
-      repeatFailureCount,
-      lastValidationFingerprint: fingerprint,
-      readyForReview: false,
-      reviewSummary: null,
-      completedAt: null,
-      pendingValidationShellId: null,
-      pendingValidationCommand: null,
-    };
-    if (validationSucceeded) {
-      nextSnapshot = this.setWorkSessionPhase(
-        nextSnapshot,
-        "validate",
-        "complete",
-        occurredAt,
-        "Validation passed; ready for review.",
-      );
-      return {
-        ...nextSnapshot,
-        currentPhase: "validate",
-        summary: "Validation passed; ready for review.",
-        readyForReview: true,
-        fixIterationCount: 0,
-        repeatFailureCount: 0,
-        lastValidationFingerprint: null,
-        stalledReason: null,
-        stalledAt: null,
-        pendingValidationShellId: null,
-        pendingValidationCommand: null,
-      };
-    }
-
-    const hitAttemptLimit = nextFixIterationCount >= WORK_SESSION_MAX_IMPLEMENTATION_ATTEMPTS;
-    const hitRepeatFailureLimit = repeatFailureCount >= WORK_SESSION_MAX_REPEAT_FAILURES;
-    if (hitAttemptLimit || hitRepeatFailureLimit) {
-      const stalledReason = hitAttemptLimit
-        ? "Validation exhausted the bounded fix loop."
-        : "Validation repeated the same failure twice; escalation or manual intervention is required.";
-      nextSnapshot = this.setWorkSessionPhase(nextSnapshot, "validate", "active", occurredAt, stalledReason);
-      return {
-        ...nextSnapshot,
-        currentPhase: "validate",
-        summary: stalledReason,
-        readyForReview: false,
-        stalledReason,
-        stalledAt: occurredAt,
-        pendingValidationShellId: null,
-        pendingValidationCommand: null,
-      };
-    }
-
-    nextSnapshot = this.setWorkSessionPhase(nextSnapshot, "validate", "complete", occurredAt, summary);
-    nextSnapshot = this.setWorkSessionPhase(
-      nextSnapshot,
-      "implement",
-      "active",
-      occurredAt,
-      "Validation failed; applying a corrective patch.",
-    );
-    return {
-      ...nextSnapshot,
-      currentPhase: "implement",
-      summary: "Validation failed; applying a corrective patch.",
-      readyForReview: false,
-      stalledReason: null,
-      stalledAt: null,
-      pendingValidationShellId: null,
-      pendingValidationCommand: null,
-    };
+    return recordWorkSessionValidationResultHelper(snapshot, tool, occurredAt);
   }
 
   private getWorkSessionWorkflowBlock(
     snapshot: WorkSessionSnapshot,
     occurredAt: number,
   ): RuntimeSessionContract["workflowState"]["blockedBy"] {
-    if (!snapshot.stalledReason) {
-      return null;
-    }
-    return {
-      kind: "error",
-      reason: snapshot.stalledReason,
-      pendingRequestIds: [],
-      blockedAt: snapshot.stalledAt ?? occurredAt,
-    };
+    return getWorkSessionWorkflowBlockHelper(snapshot, occurredAt);
   }
 
   private isWorkSessionReadyForReview(snapshot: WorkSessionSnapshot | null | undefined): boolean {
-    if (!snapshot) {
-      return false;
-    }
-    if (snapshot.readyForReview !== undefined) {
-      return snapshot.readyForReview;
-    }
-    const validateEntry = snapshot.phaseHistory.find((entry) => entry.phase === "validate");
-    return snapshot.currentPhase === "validate" && validateEntry?.status === "complete" && !snapshot.stalledReason;
+    return isWorkSessionReadyForReviewHelper(snapshot);
   }
 
   private clearWorkflowReviewState(occurredAt: number): void {
@@ -1287,7 +640,7 @@ export class StationSessionManager {
     if (this.activeWorkSession.completedAt) {
       return;
     }
-    if (!this.isWorkSessionReadyForReview(this.activeWorkSession)) {
+    if (!isWorkSessionReadyForReviewHelper(this.activeWorkSession)) {
       return;
     }
     const completionSummary =
@@ -1346,8 +699,8 @@ export class StationSessionManager {
     ) {
       return;
     }
-    const workSessionBlock = this.getWorkSessionWorkflowBlock(this.activeWorkSession, occurredAt);
-    const existingBlock = this.getEffectiveWorkflowBlock();
+    const workSessionBlock = getWorkSessionWorkflowBlockHelper(this.activeWorkSession, occurredAt);
+    const existingBlock = getEffectiveWorkflowBlock(this.workflowState);
     const preservedBlock = workSessionBlock ?? (existingBlock?.kind === "approval" ? existingBlock : null);
     const providerId = this.configuredProviderId;
     const model = this.getCurrentAssistantModel() ?? "work-session";
@@ -1404,113 +757,8 @@ export class StationSessionManager {
     };
   }
 
-  private shouldRestoreWorkSessionWorkflowState(): boolean {
-    if (!this.activeWorkSession) {
-      return false;
-    }
-    if (this.activeWorkSession.completedAt) {
-      return true;
-    }
-    if (this.workflowState.phase === "complete") {
-      return true;
-    }
-    if (this.workflowState.phase === "intake") {
-      return true;
-    }
-    const workflowPhaseIndex = WORK_SESSION_WORKFLOW_PHASES.indexOf(this.workflowState.phase as WorkSessionPhase);
-    const workSessionPhaseIndex = WORK_SESSION_WORKFLOW_PHASES.indexOf(this.activeWorkSession.currentPhase);
-    return workflowPhaseIndex >= 0 && workSessionPhaseIndex >= 0 && workflowPhaseIndex <= workSessionPhaseIndex;
-  }
-
   private getCurrentAssistantModel(): string | null {
     return this.latestUsage?.model ?? this.runtimeUsageSummary.model ?? this.hostContinuityState?.model ?? null;
-  }
-
-  private inferWorkflowPhaseForEscalation(): RuntimeSessionContract["workflowState"]["phase"] {
-    if (this.workflowState.phase !== "intake" && this.workflowState.phase !== "complete") {
-      return this.workflowState.phase;
-    }
-    const openPhaseIndex = this.getOpenWorkflowPhaseIndex();
-    if (openPhaseIndex >= 0) {
-      return this.workflowState.phaseHistory[openPhaseIndex]?.phase ?? this.workflowState.phase;
-    }
-    return this.currentState === "thinking" || this.promptInFlight || this.activeToolCalls.size > 0
-      ? "implement"
-      : "plan";
-  }
-
-  private upsertWorkflowPhaseHistoryEntry(input: {
-    phase: RuntimeSessionContract["workflowState"]["phase"];
-    status: RuntimeSessionContract["workflowState"]["status"];
-    summary: string;
-    providerId: ProviderId;
-    model: string;
-    occurredAt: number;
-    blockedBy: RuntimeSessionContract["workflowState"]["blockedBy"];
-  }): RuntimeSessionContract["workflowState"]["phaseHistory"] {
-    let openPhaseIndex = -1;
-    for (let index = this.workflowState.phaseHistory.length - 1; index >= 0; index -= 1) {
-      const candidate = this.workflowState.phaseHistory[index];
-      if (candidate.phase === input.phase && (candidate.completedAt ?? null) === null) {
-        openPhaseIndex = index;
-        break;
-      }
-    }
-
-    if (openPhaseIndex === -1) {
-      return [
-        ...this.workflowState.phaseHistory,
-        {
-          phase: input.phase,
-          status: input.status,
-          summary: input.summary,
-          providerId: input.providerId,
-          model: input.model,
-          startedAt: input.occurredAt,
-          updatedAt: input.occurredAt,
-          completedAt: input.status === "complete" ? input.occurredAt : null,
-          blockedBy: input.blockedBy,
-        },
-      ];
-    }
-
-    return this.workflowState.phaseHistory.map((entry, index) =>
-      index !== openPhaseIndex
-        ? entry
-        : {
-            ...entry,
-            status: input.status,
-            summary: input.summary,
-            providerId: input.providerId,
-            model: input.model,
-            updatedAt: input.occurredAt,
-            completedAt: input.status === "complete" ? input.occurredAt : null,
-            blockedBy: input.blockedBy,
-          },
-    );
-  }
-
-  private getOpenWorkflowPhaseIndex(): number {
-    for (let index = this.workflowState.phaseHistory.length - 1; index >= 0; index -= 1) {
-      const candidate = this.workflowState.phaseHistory[index];
-      if (candidate.phase === this.workflowState.phase && (candidate.completedAt ?? null) === null) {
-        return index;
-      }
-    }
-    for (let index = this.workflowState.phaseHistory.length - 1; index >= 0; index -= 1) {
-      if ((this.workflowState.phaseHistory[index]?.completedAt ?? null) === null) {
-        return index;
-      }
-    }
-    return -1;
-  }
-
-  private getEffectiveWorkflowBlock(): RuntimeSessionContract["workflowState"]["blockedBy"] {
-    if (this.workflowState.blockedBy) {
-      return this.workflowState.blockedBy;
-    }
-    const openPhaseIndex = this.getOpenWorkflowPhaseIndex();
-    return openPhaseIndex >= 0 ? (this.workflowState.phaseHistory[openPhaseIndex]?.blockedBy ?? null) : null;
   }
 
   private getWorkflowPendingPermissionRequestIds(): string[] {
@@ -1529,71 +777,16 @@ export class StationSessionManager {
     snapshot?: SubagentRunSnapshot | null;
   }): void {
     const occurredAt = input.occurredAt ?? Date.now();
-    const reviewSummary =
-      input.summary ??
-      (input.status === "running"
-        ? "Review running."
-        : input.status === "completed"
-          ? "Review completed."
-          : input.status === "relaunching"
-            ? "Relaunching review."
-            : input.status === "missing"
-              ? "Review run is missing."
-              : input.status === "stalled"
-                ? "Review appears stalled."
-                : "Review failed.");
-    const failureReason =
-      input.status === "failed" || input.status === "missing" || input.status === "stalled"
-        ? (input.failureReason ?? reviewSummary)
-        : null;
-    const blockedBy =
-      input.status === "failed" || input.status === "missing" || input.status === "stalled"
-        ? {
-            kind: "review" as const,
-            reason: failureReason ?? reviewSummary,
-            pendingRequestIds: [],
-            blockedAt: occurredAt,
-          }
-        : null;
-    const workflowStatus =
-      input.status === "completed"
-        ? "complete"
-        : input.status === "stalled"
-          ? "stalled"
-          : blockedBy
-            ? "blocked"
-            : "active";
     const snapshot = input.snapshot ?? (input.runId ? this.subagentRunRegistry.get(input.runId) : null);
     const providerId = snapshot?.providerId ?? this.configuredProviderId;
     const model = snapshot?.observedModel ?? snapshot?.requestedModel ?? this.getCurrentAssistantModel() ?? "review";
-
-    this.workflowState = {
-      ...this.workflowState,
-      phase: "review",
-      status: workflowStatus,
-      summary: reviewSummary,
-      updatedAt: occurredAt,
-      blockedBy,
-      phaseHistory: this.upsertWorkflowPhaseHistoryEntry({
-        phase: "review",
-        status: workflowStatus,
-        summary: reviewSummary,
-        providerId,
-        model,
-        occurredAt,
-        blockedBy,
-      }),
-      review: {
-        ...this.workflowState.review,
-        status: input.status,
-        attempt: input.attempt ?? this.workflowState.review.attempt,
-        runId: input.runId === undefined ? (this.workflowState.review.runId ?? null) : input.runId,
-        ...(input.origin !== undefined ? { origin: input.origin } : {}),
-        summary: reviewSummary,
-        failureReason,
-        lastUpdatedAt: occurredAt,
-      },
-    };
+    this.workflowState = buildWorkflowReviewState({
+      workflowState: this.workflowState,
+      ...input,
+      occurredAt,
+      providerId,
+      model,
+    });
   }
 
   private reconcilePersistedReviewState(): boolean {
@@ -1782,50 +975,8 @@ export class StationSessionManager {
     }
   }
 
-  private syncOpenWorkflowPhaseEntryBlocking(
-    status: RuntimeSessionContract["workflowState"]["status"],
-    blockedBy: RuntimeSessionContract["workflowState"]["blockedBy"],
-    updatedAt: number,
-  ): RuntimeSessionContract["workflowState"]["phaseHistory"] {
-    const openPhaseIndex = this.getOpenWorkflowPhaseIndex();
-    if (openPhaseIndex === -1) {
-      return this.workflowState.phaseHistory;
-    }
-
-    return this.workflowState.phaseHistory.map((entry, index) =>
-      index !== openPhaseIndex
-        ? entry
-        : {
-            ...entry,
-            status,
-            updatedAt,
-            blockedBy,
-          },
-    );
-  }
-
-  private clearOpenWorkflowPhaseEntryBlocking(
-    updatedAt: number,
-  ): RuntimeSessionContract["workflowState"]["phaseHistory"] {
-    const openPhaseIndex = this.getOpenWorkflowPhaseIndex();
-    if (openPhaseIndex === -1) {
-      return this.workflowState.phaseHistory;
-    }
-
-    return this.workflowState.phaseHistory.map((entry, index) =>
-      index !== openPhaseIndex
-        ? entry
-        : {
-            ...entry,
-            status: (entry.completedAt ?? null) !== null ? "complete" : "active",
-            updatedAt,
-            blockedBy: null,
-          },
-    );
-  }
-
   private reconcileWorkflowPermissionBlocking(): void {
-    const currentBlock = this.getEffectiveWorkflowBlock();
+    const currentBlock = getEffectiveWorkflowBlock(this.workflowState);
     if (currentBlock?.kind !== "approval") {
       return;
     }
@@ -1838,8 +989,12 @@ export class StationSessionManager {
 
     if (pendingRequestIds.length === 0) {
       const updatedAt = Date.now();
-      if (this.activeWorkSession && this.shouldRestoreWorkSessionWorkflowState()) {
-        const phaseHistory = this.clearOpenWorkflowPhaseEntryBlocking(updatedAt);
+      if (this.activeWorkSession && shouldRestoreWorkSessionWorkflowState(this.workflowState, this.activeWorkSession)) {
+        const phaseHistory = clearOpenWorkflowPhaseEntryBlocking(
+          this.workflowState.phaseHistory,
+          this.workflowState.phase,
+          updatedAt,
+        );
         this.workflowState = {
           ...this.workflowState,
           updatedAt,
@@ -1858,7 +1013,13 @@ export class StationSessionManager {
         status: nextStatus,
         updatedAt,
         blockedBy: null,
-        phaseHistory: this.syncOpenWorkflowPhaseEntryBlocking(nextStatus, null, updatedAt),
+        phaseHistory: syncOpenWorkflowPhaseEntryBlocking(
+          this.workflowState.phaseHistory,
+          this.workflowState.phase,
+          nextStatus,
+          null,
+          updatedAt,
+        ),
       };
       return;
     }
@@ -1877,70 +1038,29 @@ export class StationSessionManager {
       status: "blocked",
       updatedAt,
       blockedBy,
-      phaseHistory: this.syncOpenWorkflowPhaseEntryBlocking("blocked", blockedBy, updatedAt),
+      phaseHistory: syncOpenWorkflowPhaseEntryBlocking(
+        this.workflowState.phaseHistory,
+        this.workflowState.phase,
+        "blocked",
+        blockedBy,
+        updatedAt,
+      ),
     };
   }
 
   private updateWorkflowStateForSessionEscalation(result: ProviderSessionEscalationResult): void {
     const occurredAt = Date.now();
-    const phase = this.inferWorkflowPhaseForEscalation();
     const pendingRequestIds = this.getWorkflowPendingPermissionRequestIds();
-    const currentBlock = this.getEffectiveWorkflowBlock();
-    const existingNonApprovalBlock = currentBlock && currentBlock.kind !== "approval" ? currentBlock : null;
-    const blockedBy =
-      pendingRequestIds.length > 0 && !existingNonApprovalBlock
-        ? {
-            kind: "approval" as const,
-            reason: "Permission request is pending while the escalated session continues the active phase.",
-            pendingRequestIds,
-            blockedAt: occurredAt,
-          }
-        : existingNonApprovalBlock;
-    const status = blockedBy ? "blocked" : "active";
-    const summary =
-      blockedBy && blockedBy.kind !== "approval"
-        ? result.status === "already-escalated"
-          ? `Escalation target ${result.toModel} already active; ${phase} remains blocked by ${blockedBy.kind}.`
-          : `Escalated from ${result.fromModel ?? "provider default"} to ${result.toModel}; ${phase} remains blocked by ${blockedBy.kind}.`
-        : result.status === "already-escalated"
-          ? `Escalation target ${result.toModel} already active; continuing ${phase}.`
-          : `Escalated from ${result.fromModel ?? "provider default"} to ${result.toModel}; continuing ${phase}.`;
-
-    this.workflowState = {
-      ...this.workflowState,
-      phase,
-      status,
-      summary,
-      updatedAt: occurredAt,
-      phaseHistory: this.upsertWorkflowPhaseHistoryEntry({
-        phase,
-        status,
-        summary,
-        providerId: result.providerId,
-        model: result.toModel,
-        occurredAt,
-        blockedBy,
-      }),
-      handoffs:
-        result.status === "escalated"
-          ? [
-              ...this.workflowState.handoffs,
-              {
-                handoffId: randomUUID(),
-                kind: "model-escalation",
-                phase,
-                reason: "manual-session-escalation",
-                continuationMode: blockedBy ? "blocked" : "continue-current-phase",
-                occurredAt,
-                fromProviderId: result.providerId,
-                toProviderId: result.providerId,
-                fromModel: result.fromModel,
-                toModel: result.toModel,
-              },
-            ]
-          : this.workflowState.handoffs,
-      blockedBy,
-    };
+    this.workflowState = buildWorkflowStateForSessionEscalation({
+      workflowState: this.workflowState,
+      result,
+      currentState: this.currentState,
+      promptInFlight: this.promptInFlight,
+      activeToolCallCount: this.activeToolCalls.size,
+      pendingRequestIds,
+      occurredAt,
+      handoffId: randomUUID(),
+    });
     this.runtimeUsageSummary = {
       ...this.runtimeUsageSummary,
       model: result.toModel,
@@ -2791,7 +1911,7 @@ export class StationSessionManager {
     const reviewLockedWorkSession =
       this.activeWorkSession &&
       !this.activeWorkSession.completedAt &&
-      this.isWorkSessionReadyForReview(this.activeWorkSession) &&
+      isWorkSessionReadyForReviewHelper(this.activeWorkSession) &&
       (this.workflowState.review.status === "running" || this.workflowState.review.status === "relaunching");
     if (
       (this.activeWorkSession?.completedAt || reviewLockedWorkSession) &&
@@ -2827,7 +1947,7 @@ export class StationSessionManager {
       buildToolRecord: (activeToolCall, completeEvent) => ({
         callId: completeEvent.data.toolCallId,
         toolName: activeToolCall?.toolName ?? "unknown",
-        args: this.getToolArgsRecord(activeToolCall?.args),
+        args: getToolArgsRecord(activeToolCall?.args),
         success: !(completeEvent.data.success === false || Boolean(completeEvent.data.error)),
         result: completeEvent.data.result,
         errorMessage: completeEvent.data.error?.message ?? null,
@@ -2847,14 +1967,14 @@ export class StationSessionManager {
           }
           let nextSnapshot = snapshot;
           if (snapshot.currentPhase === "discover") {
-            nextSnapshot = this.setWorkSessionPhase(
+            nextSnapshot = setWorkSessionPhase(
               nextSnapshot,
               "discover",
               "complete",
               occurredAt,
               "Repository context discovered.",
             );
-            nextSnapshot = this.setWorkSessionPhase(
+            nextSnapshot = setWorkSessionPhase(
               nextSnapshot,
               "summarise",
               "active",
@@ -2866,19 +1986,19 @@ export class StationSessionManager {
               currentPhase: "summarise",
             };
           } else if (snapshot.currentPhase === "summarise") {
-            nextSnapshot = this.setWorkSessionPhase(
+            nextSnapshot = setWorkSessionPhase(
               nextSnapshot,
               "summarise",
               "complete",
               occurredAt,
               "Repository findings summarised.",
             );
-            nextSnapshot = this.setWorkSessionPhase(
+            nextSnapshot = setWorkSessionPhase(
               nextSnapshot,
               "plan",
               "active",
               occurredAt,
-              this.compactAssistantSummary(fullText),
+              compactAssistantSummary(fullText),
             );
             nextSnapshot = {
               ...nextSnapshot,
@@ -2889,7 +2009,7 @@ export class StationSessionManager {
             nextSnapshot = {
               ...nextSnapshot,
               planSummary: snapshot.planSummary ?? fullText,
-              summary: this.compactAssistantSummary(fullText),
+              summary: compactAssistantSummary(fullText),
             };
           }
           return nextSnapshot;
@@ -2918,7 +2038,7 @@ export class StationSessionManager {
             return null;
           }
           if (
-            this.isWorkSessionReadyForReview(snapshot) &&
+            isWorkSessionReadyForReviewHelper(snapshot) &&
             (this.workflowState.review.status === "running" || this.workflowState.review.status === "relaunching")
           ) {
             return null;
@@ -2929,14 +2049,14 @@ export class StationSessionManager {
               summary: `Discovering repository context with ${startEvent.data.toolName}.`,
             };
           }
-          const toolArgs = this.getToolArgsRecord(startEvent.data.arguments);
+          const toolArgs = getToolArgsRecord(startEvent.data.arguments);
           if (
             (snapshot.currentPhase === "plan" ||
               snapshot.currentPhase === "implement" ||
               (snapshot.currentPhase === "validate" && snapshot.pendingValidationShellId === null)) &&
             this.isWorkSessionImplementationTool(startEvent.data.toolName)
           ) {
-            return this.startWorkSessionImplementation(snapshot, startEvent.data.toolName, toolArgs, occurredAt);
+            return startWorkSessionImplementationHelper(snapshot, startEvent.data.toolName, toolArgs, occurredAt);
           }
           if (
             snapshot.currentPhase === "validate" &&
@@ -2955,7 +2075,7 @@ export class StationSessionManager {
                 !snapshot.stalledReason)) &&
             this.isWorkSessionValidationTool(startEvent.data.toolName, toolArgs, snapshot)
           ) {
-            return this.startWorkSessionValidation(snapshot, startEvent.data.toolName, toolArgs, occurredAt);
+            return startWorkSessionValidationHelper(snapshot, startEvent.data.toolName, toolArgs, occurredAt);
           }
           if (snapshot.currentPhase === "validate") {
             return {
@@ -2992,7 +2112,7 @@ export class StationSessionManager {
             return null;
           }
           if (
-            this.isWorkSessionReadyForReview(snapshot) &&
+            isWorkSessionReadyForReviewHelper(snapshot) &&
             (this.workflowState.review.status === "running" || this.workflowState.review.status === "relaunching")
           ) {
             return null;
@@ -3008,18 +2128,18 @@ export class StationSessionManager {
               if (snapshot.stalledReason && snapshot.pendingValidationShellId === null) {
                 return snapshot;
               }
-              return this.recordWorkSessionValidationResult(snapshot, toolRecord, occurredAt);
+              return recordWorkSessionValidationResultHelper(snapshot, toolRecord, occurredAt);
             }
             return snapshot;
           }
-          let nextSnapshot = this.setWorkSessionPhase(
+          let nextSnapshot = setWorkSessionPhase(
             snapshot,
             "discover",
             "complete",
             occurredAt,
             "Repository context discovered.",
           );
-          nextSnapshot = this.setWorkSessionPhase(
+          nextSnapshot = setWorkSessionPhase(
             nextSnapshot,
             "summarise",
             "active",
@@ -3528,11 +2648,13 @@ export class StationSessionManager {
 
   private syncRuntimeState(): RuntimeSessionContract | null {
     this.reconcileWorkflowPermissionBlocking();
-    return syncStationRuntimeState(this.getRuntimePersistenceContext());
+    return syncRuntimeStateHelper(this.getRuntimePersistenceContext());
   }
 
   private getRuntimeSessionId(): string | null {
-    return getStationManagerRuntimeSessionId(this.stationId);
+    return getRuntimeSessionIdHelper({
+      stationId: this.stationId,
+    });
   }
 
   private getProviderCapabilities() {
@@ -3544,21 +2666,20 @@ export class StationSessionManager {
     projectionHash: string,
     overrides: Partial<RuntimeSessionContract> = {},
   ): RuntimeSessionContract | null {
-    return persistStationRuntimeSessionContract({
-      context: this.getRuntimePersistenceContext(),
+    return persistRuntimeSessionContractHelper(
+      this.getRuntimePersistenceContext(),
       hostManifestHash,
       projectionHash,
       overrides,
-    });
+    );
   }
 
   private appendRuntimeLedgerEventIfSession(
     event: Omit<RuntimeLedgerEvent, "sessionId"> | null,
     options: { syncState?: boolean } = {},
   ): void {
-    appendStationRuntimeLedgerEventIfSession(
-      this.runtimeStore,
-      this.getRuntimeSessionId(),
+    appendRuntimeLedgerEventIfSessionHelper(
+      this.getRuntimePersistenceContext(),
       event,
       () => {
         this.syncRuntimeState();
@@ -3568,9 +2689,8 @@ export class StationSessionManager {
   }
 
   private recordRuntimeUserMessage(messageId: string, content: string): void {
-    recordStationRuntimeUserMessage(
-      this.runtimeStore,
-      this.getRuntimeSessionId(),
+    recordRuntimeUserMessageHelper(
+      this.getRuntimePersistenceContext(),
       () => {
         this.syncRuntimeState();
       },
@@ -3583,21 +2703,19 @@ export class StationSessionManager {
     kind: RuntimeCheckpointPayload["kind"],
     summary: string,
   ): RuntimeCheckpointPayload | null {
-    return createStationRuntimeCheckpoint({
-      context: this.getRuntimePersistenceContext(),
-      kind,
-      summary,
-      syncRuntimeState: () => this.syncRuntimeState(),
-    });
+    return createRuntimeCheckpointHelper(this.getRuntimePersistenceContext(), kind, summary, () =>
+      this.syncRuntimeState(),
+    );
   }
 
   private buildRuntimeRecoverySection() {
-    const { recoverySection, recoverySource } = buildStationRuntimeRecoverySection({
+    return buildRuntimeRecoverySectionHelper({
       runtimeStore: this.runtimeStore,
       stationId: this.stationId,
+      setActiveRecoverySource: (source) => {
+        this.activeRecoverySource = source;
+      },
     });
-    this.activeRecoverySource = recoverySource;
-    return recoverySection;
   }
 
   private getHostContinuitySeed(
@@ -3605,58 +2723,20 @@ export class StationSessionManager {
     hostManifestHash: string,
     projectionHash: string,
   ): ProviderHostContinuityState | null {
-    const resumableHostContinuity = this.resumableHostContinuityState;
-    const currentSystemMessageHash = this.getCurrentSystemMessageHash();
-    const resumableMatchesCurrentProjection =
-      this.resumableHostContinuityHostManifestHash === hostManifestHash &&
-      this.resumableHostContinuityProjectionHash === projectionHash;
-    const runtimeSessionId = this.getRuntimeSessionId();
-    if (!runtimeSessionId) {
-      return resumableHostContinuity?.providerId === providerId &&
-        resumableMatchesCurrentProjection &&
-        resumableHostContinuity.systemMessageHash === currentSystemMessageHash
-        ? resumableHostContinuity
-        : null;
-    }
-    const runtimeSession = this.runtimeStore.getRuntimeSession(runtimeSessionId);
-    if (!runtimeSession) {
-      return resumableHostContinuity?.providerId === providerId &&
-        resumableMatchesCurrentProjection &&
-        resumableHostContinuity.systemMessageHash === currentSystemMessageHash
-        ? resumableHostContinuity
-        : null;
-    }
-    if (
-      runtimeSession.providerBinding.providerId !== providerId ||
-      runtimeSession.providerBinding.hostManifestHash !== hostManifestHash ||
-      runtimeSession.providerBinding.projectionHash !== projectionHash
-    ) {
-      return null;
-    }
-    if (
-      runtimeSession.turnState.state !== "idle" &&
-      runtimeSession.turnState.state !== "completed" &&
-      runtimeSession.turnState.state !== "error"
-    ) {
-      if (
-        !resumableHostContinuity ||
-        resumableHostContinuity.providerId !== providerId ||
-        !resumableMatchesCurrentProjection ||
-        resumableHostContinuity.systemMessageHash !== currentSystemMessageHash
-      ) {
-        return null;
-      }
-      return resumableHostContinuity;
-    }
-    const hostContinuity = runtimeSession.hostContinuity ?? this.resumableHostContinuityState ?? null;
-    if (
-      !hostContinuity ||
-      hostContinuity.providerId !== providerId ||
-      hostContinuity.systemMessageHash !== currentSystemMessageHash
-    ) {
-      return null;
-    }
-    return hostContinuity;
+    return getHostContinuitySeedHelper(
+      {
+        stationId: this.stationId,
+        runtimeStore: this.runtimeStore,
+        resumableHostContinuityState: this.resumableHostContinuityState,
+        resumableHostContinuityHostManifestHash: this.resumableHostContinuityHostManifestHash,
+        resumableHostContinuityProjectionHash: this.resumableHostContinuityProjectionHash,
+        getCurrentSystemMessageHash: () => this.getCurrentSystemMessageHash(),
+        getCurrentToolManifest: (provider) => this.getCurrentToolManifest(provider),
+      },
+      providerId,
+      hostManifestHash,
+      projectionHash,
+    );
   }
 
   private getRuntimePersistenceContext() {
@@ -3681,184 +2761,114 @@ export class StationSessionManager {
       pendingPermissionRequests: this.pendingPermissionRequests,
       lastPermissionResolvedAt: this.lastPermissionResolvedAt,
       lastCancellationCompletedAt: this.lastCancellationCompletedAt,
-      hostContinuity: this.hostContinuityState,
+      hostContinuityState: this.hostContinuityState,
+      resumableHostContinuityState: this.resumableHostContinuityState,
+      resumableHostContinuityHostManifestHash: this.resumableHostContinuityHostManifestHash,
+      resumableHostContinuityProjectionHash: this.resumableHostContinuityProjectionHash,
+      activeRecoverySource: this.activeRecoverySource,
+      client: this.client,
+      reconcileWorkflowPermissionBlocking: () => this.reconcileWorkflowPermissionBlocking(),
       getProviderCapabilities: () => this.getProviderCapabilities(),
-      getCurrentToolManifest: () => this.getCurrentToolManifest(),
+      getCurrentToolManifest: (provider?: Pick<ProviderClient, "providerId" | "capabilities">) =>
+        this.getCurrentToolManifest(provider),
+      getCurrentSystemMessageHash: () => this.getCurrentSystemMessageHash(),
+      setActiveRecoverySource: (source: "host-checkpoint" | "continuity-preamble" | "host-transcript" | null) => {
+        this.activeRecoverySource = source;
+      },
     };
   }
 
   private getCurrentToolManifest(provider?: Pick<ProviderClient, "providerId" | "capabilities">) {
-    const effectiveProviderId = provider?.providerId ?? this.configuredProviderId;
-    const effectiveCapabilities =
-      provider?.capabilities ?? this.client?.capabilities ?? getDefaultProviderCapabilities(effectiveProviderId);
-    return getProviderToolManifest({
-      aggregator: this.toolAggregator,
-      options: this.getToolBridgeOptions(),
-      providerId: effectiveProviderId,
-      capabilities: effectiveCapabilities,
-    });
+    return getCurrentToolManifestHelper(
+      {
+        toolAggregator: this.toolAggregator,
+        configuredProviderId: this.configuredProviderId,
+        client: this.client,
+        getToolBridgeOptions: () => this.getToolBridgeOptions(),
+      },
+      provider,
+    );
   }
 
   private getCurrentToolSignature(): string {
-    const hostManifestHash = buildRuntimeCapabilityRegistry(
-      this.toolAggregator,
-      this.getToolBridgeOptions(),
-    ).hostManifestHash;
-    if (!this.client) {
-      return hostManifestHash;
-    }
-    const { projectionHash } = this.getCurrentToolManifest(this.client);
-    return `${hostManifestHash}:${projectionHash}`;
+    return getCurrentToolSignatureHelper({
+      toolAggregator: this.toolAggregator,
+      client: this.client,
+      getToolBridgeOptions: () => this.getToolBridgeOptions(),
+      getCurrentToolManifest: (provider) => this.getCurrentToolManifest(provider),
+    });
   }
 
   private getToolBridgeOptions(): ToolBridgeOptions {
-    const subagentsEnabled = this.env.SPIRA_SUBAGENTS_ENABLED;
-    const missionWorkflowState = this.missionRunId ? (this.getMissionWorkflowState?.(this.missionRunId) ?? null) : null;
-    const withMissionAction =
-      <TArgs extends unknown[], TResult>(
-        action: Parameters<typeof assertMissionWorkflowStateActionAllowed>[1],
-        handler: ((...args: TArgs) => TResult) | undefined,
-      ) =>
-      (...args: TArgs): TResult => {
-        if (this.missionRunId && this.getMissionWorkflowState) {
-          const workflowState = this.getMissionWorkflowState(this.missionRunId);
-          if (workflowState) {
-            assertMissionWorkflowStateActionAllowed(workflowState, action);
-          }
-        }
-        if (!handler) {
-          throw new AssistantError(`Mission action ${action} is unavailable.`);
-        }
-        return handler(...args);
-      };
-    const readyDelegationDomains = this.getDelegationDomains();
-    const connectedDelegationDomains = readyDelegationDomains.filter(
-      (domain) =>
-        domain.allowHostTools === true ||
-        this.getDelegationDomainTools(domain.id, this.toolAggregator.getTools()).length,
-    );
-    const missionScoped = this.missionRunId !== null;
-    const delegationEnabled = connectedDelegationDomains.length > 0;
-    const manualSessionEscalationEnabled =
-      this.stationId === "primary" && !missionScoped && isEscalationProvider(this.configuredProviderId);
-    return {
-      workingDirectory: this.workingDirectory ?? appRootDir,
+    return getToolBridgeOptionsHelper({
+      env: this.env,
+      toolAggregator: this.toolAggregator,
+      workingDirectory: this.workingDirectory,
       sessionStorage: this.sessionStorage,
       runtimeStore: this.runtimeStore,
-      runtimeSessionId: this.getRuntimeSessionId(),
       stationId: this.stationId,
-      ...(this.allowUpgradeTools
-        ? {
-            requestUpgradeProposal: this.requestUpgradeProposal,
-            applyHotCapabilityUpgrade: this.applyHotCapabilityUpgrade,
-          }
-        : {}),
-      ...(manualSessionEscalationEnabled
-        ? {
-            requestSessionEscalation: () => this.requestSessionEscalation(),
-          }
-        : {}),
-      ...(missionScoped && this.listMissionServices
-        ? { listMissionServices: withMissionAction("service-read", this.listMissionServices) }
-        : {}),
-      ...(missionScoped && this.startMissionService
-        ? { startMissionService: withMissionAction("service-write", this.startMissionService) }
-        : {}),
-      ...(missionScoped && this.stopMissionService
-        ? { stopMissionService: withMissionAction("service-write", this.stopMissionService) }
-        : {}),
-      ...(missionScoped && this.listMissionProofs
-        ? { listMissionProofs: withMissionAction("proof-read", this.listMissionProofs) }
-        : {}),
-      ...(missionScoped && this.runMissionProof
-        ? { runMissionProof: withMissionAction("record-proof-result", this.runMissionProof) }
-        : {}),
-      ...(missionScoped && this.missionRunId ? { missionRunId: this.missionRunId } : {}),
-      ...(missionScoped ? { missionWorkflowState } : {}),
-      ...(missionScoped && this.getMissionContext ? { getMissionContext: this.getMissionContext } : {}),
-      ...(missionScoped && this.saveMissionClassification
-        ? { saveMissionClassification: this.saveMissionClassification }
-        : {}),
-      ...(missionScoped && this.saveMissionPlan ? { saveMissionPlan: this.saveMissionPlan } : {}),
-      ...(missionScoped && this.setMissionPhase ? { setMissionPhase: this.setMissionPhase } : {}),
-      ...(missionScoped && this.recordMissionValidation
-        ? { recordMissionValidation: this.recordMissionValidation }
-        : {}),
-      ...(missionScoped && this.setMissionProofStrategy
-        ? { setMissionProofStrategy: this.setMissionProofStrategy }
-        : {}),
-      ...(missionScoped && this.recordMissionProofResult
-        ? { recordMissionProofResult: this.recordMissionProofResult }
-        : {}),
-      ...(missionScoped && this.saveMissionSummary ? { saveMissionSummary: this.saveMissionSummary } : {}),
-      ...(subagentsEnabled && delegationEnabled
-        ? {
-            excludeServerIds: this.getDelegatedServerIds(),
-            delegationDomains: connectedDelegationDomains,
-            delegateToDomain: async (
-              domainId: string,
-              args: SubagentDelegationArgs,
-            ): Promise<SubagentEnvelope | SubagentRunHandle> => {
-              if (missionScoped && this.missionRunId && this.getMissionWorkflowState) {
-                const workflowState = this.getMissionWorkflowState(this.missionRunId);
-                if (workflowState) {
-                  assertMissionWorkflowStateActionAllowed(workflowState, "delegate");
-                }
-              }
-              const runner = this.getSubagentRunner(domainId, this.workingDirectory ?? undefined);
-              if (args.mode === "background") {
-                return this.subagentRunRegistry.track(domainId, args, runner.launch(args));
-              }
-
-              return runner.run(args);
-            },
-            readSubagent: async (agentId, options) =>
-              options?.wait
-                ? this.subagentRunRegistry.waitFor(agentId, options.timeoutMs)
-                : this.subagentRunRegistry.get(agentId),
-            listSubagents: (options) => this.subagentRunRegistry.list(options),
-            writeSubagent: (agentId, input) => this.subagentRunRegistry.write(agentId, input),
-            stopSubagent: (agentId) => this.subagentRunRegistry.stop(agentId),
-          }
-        : {}),
-      ...(missionScoped && this.missionRunId && this.getMissionWorkflowState
-        ? {
-            wrapHostToolExecution: async (tool, _args, execute) => {
-              const missionRunId = this.missionRunId;
-              if (!missionRunId) {
-                return execute();
-              }
-              const workflowState = this.getMissionWorkflowState?.(missionRunId);
-              const action = HOST_TOOL_MISSION_ACTIONS.get(tool.name);
-              if (workflowState && action) {
-                assertMissionWorkflowStateActionAllowed(workflowState, action);
-              }
-              return execute();
-            },
-            wrapToolExecution: async (tool, _args, execute) => {
-              const missionRunId = this.missionRunId;
-              if (!missionRunId) {
-                return execute();
-              }
-              const workflowState = this.getMissionWorkflowState?.(missionRunId);
-              if (workflowState) {
-                assertMissionMcpToolAllowedForState(workflowState, tool);
-              }
-              return execute();
-            },
-          }
-        : {}),
-    };
+      missionRunId: this.missionRunId ?? null,
+      configuredProviderId: this.configuredProviderId,
+      providerOverride: this.providerOverride,
+      currentState: this.currentState,
+      activeSessionId: this.activeSessionId,
+      client: this.client,
+      session: this.session,
+      initializingSession: this.initializingSession,
+      allowUpgradeTools: this.allowUpgradeTools,
+      listMissionServices: this.listMissionServices,
+      startMissionService: this.startMissionService,
+      stopMissionService: this.stopMissionService,
+      listMissionProofs: this.listMissionProofs,
+      runMissionProof: this.runMissionProof,
+      getMissionContext: this.getMissionContext,
+      getMissionWorkflowState: this.getMissionWorkflowState,
+      saveMissionClassification: this.saveMissionClassification,
+      saveMissionPlan: this.saveMissionPlan,
+      setMissionPhase: this.setMissionPhase,
+      recordMissionValidation: this.recordMissionValidation,
+      setMissionProofStrategy: this.setMissionProofStrategy,
+      recordMissionProofResult: this.recordMissionProofResult,
+      saveMissionSummary: this.saveMissionSummary,
+      subagentRegistry: this.subagentRegistry,
+      subagentRunRegistry: this.subagentRunRegistry,
+      requestUpgradeProposal: this.requestUpgradeProposal,
+      applyHotCapabilityUpgrade: this.applyHotCapabilityUpgrade,
+      requestSessionEscalation: () => this.requestSessionEscalation(),
+      getSubagentRunner: (domainId, workingDirectory) => this.getSubagentRunner(domainId, workingDirectory),
+      getRuntimeSessionId: () => this.getRuntimeSessionId(),
+      registeredToolSignature: this.registeredToolSignature,
+      pendingToolRefreshSignature: this.pendingToolRefreshSignature,
+      refreshingSessionForToolChanges: this.refreshingSessionForToolChanges,
+      deletePersistedSession: (sessionId, providerId) => this.deletePersistedSession(sessionId, providerId),
+      getStalePersistedSessionCleanupProviderIds: (persistedSessionId, runtimeState, currentProviderId) =>
+        this.getStalePersistedSessionCleanupProviderIds(persistedSessionId, runtimeState, currentProviderId),
+      clearHostContinuityCaches: () => this.clearHostContinuityCaches(),
+      clearBoundSessionIdentity: () => this.clearBoundSessionIdentity(),
+      disconnectSession: () => this.disconnectSession(),
+      syncRuntimeState: () => {
+        this.syncRuntimeState();
+      },
+      setRegisteredToolSignature: (signature) => {
+        this.registeredToolSignature = signature;
+      },
+      setPendingToolRefreshSignature: (signature) => {
+        this.pendingToolRefreshSignature = signature;
+      },
+      setRefreshingSessionForToolChanges: (promise) => {
+        this.refreshingSessionForToolChanges = promise;
+      },
+    });
   }
 
   private getSubagentRunner(domainId: string, workingDirectory?: string): SubagentRunner {
-    const key = this.getSubagentRunnerKey(domainId, workingDirectory);
+    const key = getSubagentRunnerKey(domainId, workingDirectory);
     const existingRunner = this.subagentRunners.get(key);
     if (existingRunner) {
       return existingRunner;
     }
 
-    const domain = this.getDelegationDomain(domainId);
+    const domain = getDelegationDomain(this.subagentRegistry, domainId);
     if (!domain) {
       throw new AssistantError(`Unknown subagent domain ${domainId}`);
     }
@@ -3866,10 +2876,6 @@ export class StationSessionManager {
     const runner = this.createSubagentRunner(domain, workingDirectory);
     this.subagentRunners.set(key, runner);
     return runner;
-  }
-
-  private getSubagentRunnerKey(domainId: string, workingDirectory?: string): string {
-    return `${domainId}::${workingDirectory ?? ""}`;
   }
 
   private createSubagentRunner(domain: SubagentDomain, workingDirectory?: string): SubagentRunner {
@@ -3888,14 +2894,14 @@ export class StationSessionManager {
   }
 
   private recoverManagedSubagent(snapshot: SubagentRunSnapshot) {
-    const domain = this.getDelegationDomain(snapshot.domain);
+    const domain = getDelegationDomain(this.subagentRegistry, snapshot.domain);
     if (!domain) {
       return null;
     }
 
     const recoveredWorkingDirectory = (snapshot as SubagentRunSnapshot & { workingDirectory?: string })
       .workingDirectory;
-    const key = this.getSubagentRunnerKey(domain.id, recoveredWorkingDirectory ?? this.workingDirectory ?? undefined);
+    const key = getSubagentRunnerKey(domain.id, recoveredWorkingDirectory ?? this.workingDirectory ?? undefined);
     const existingRunner = this.subagentRunners.get(key);
     const runner =
       existingRunner ??
@@ -3907,163 +2913,82 @@ export class StationSessionManager {
     return recovered;
   }
 
-  private getDelegationDomains(): SubagentDomain[] {
-    return this.subagentRegistry?.listReady() ?? SUBAGENT_DOMAINS.filter((domain) => domain.ready !== false);
-  }
-
-  private getDelegationDomain(domainId: string): SubagentDomain | null {
-    return this.subagentRegistry?.get(domainId) ?? SUBAGENT_DOMAINS.find((domain) => domain.id === domainId) ?? null;
-  }
-
-  private getDelegatedServerIds(): string[] {
-    return (
-      this.subagentRegistry?.getDelegatedServerIds() ?? [
-        ...new Set(this.getDelegationDomains().flatMap((domain) => domain.serverIds)),
-      ]
-    );
-  }
-
-  private getDelegationDomainTools(domainId: string, tools: ReturnType<McpToolAggregator["getTools"]>) {
-    if (this.subagentRegistry) {
-      return this.subagentRegistry.getDomainTools(domainId, tools);
-    }
-
-    const domain = this.getDelegationDomain(domainId);
-    if (!domain) {
-      return [];
-    }
-
-    const serverIdSet = new Set(domain.serverIds);
-    const scopedTools = tools.filter((tool) => serverIdSet.has(tool.serverId));
-    if (!domain.allowedToolNames || domain.allowedToolNames.length === 0) {
-      return scopedTools;
-    }
-
-    const allowedToolNames = new Set(domain.allowedToolNames);
-    return scopedTools.filter((tool) => allowedToolNames.has(tool.name));
-  }
-
   private async refreshSessionForToolChanges(): Promise<void> {
-    const currentToolSignature = this.getCurrentToolSignature();
-    if (this.registeredToolSignature === currentToolSignature) {
-      this.pendingToolRefreshSignature = null;
-      return;
-    }
-
-    if (!this.session && !this.initializingSession) {
-      if (this.activeSessionId) {
-        const sessionId = this.activeSessionId;
-        const cleanupProviderIds = this.getStalePersistedSessionCleanupProviderIds(
-          sessionId,
-          this.runtimeStore.getStationRuntimeState(),
-          this.client?.providerId ?? this.providerOverride ?? this.configuredProviderId,
-        );
-        let deletionFailed = false;
-        try {
-          for (const providerId of cleanupProviderIds) {
-            try {
-              await this.deletePersistedSession(sessionId, providerId);
-            } catch (error) {
-              deletionFailed = true;
-              this.runtimeStore.queueProviderSessionCleanup(providerId, sessionId);
-              void this.runtimeStore.drainPendingProviderSessionCleanup(this.env);
-              logger.warn({ error, sessionId, providerId }, "Failed to delete stale provider session after tool drift");
-            }
-          }
-        } finally {
-          this.clearHostContinuityCaches();
-          this.clearBoundSessionIdentity();
-          this.syncRuntimeState();
-        }
-        if (deletionFailed) {
-          this.pendingToolRefreshSignature = currentToolSignature;
-          return;
-        }
-      }
-      this.registeredToolSignature = currentToolSignature;
-      this.pendingToolRefreshSignature = null;
-      return;
-    }
-
-    if (this.currentState !== "idle") {
-      this.pendingToolRefreshSignature = currentToolSignature;
-      logger.info(
-        {
-          previousToolSignature: this.registeredToolSignature,
-          currentToolSignature,
-          currentState: this.currentState,
-        },
-        "MCP tool inventory changed during an active turn; deferring station session refresh",
-      );
-      return;
-    }
-
-    if (this.refreshingSessionForToolChanges) {
-      await this.refreshingSessionForToolChanges;
-      await this.refreshSessionForToolChanges();
-      return;
-    }
-
-    logger.info(
-      {
-        previousToolSignature: this.registeredToolSignature,
-        currentToolSignature,
+    await refreshSessionForToolChangesHelper({
+      env: this.env,
+      toolAggregator: this.toolAggregator,
+      workingDirectory: this.workingDirectory,
+      sessionStorage: this.sessionStorage,
+      runtimeStore: this.runtimeStore,
+      stationId: this.stationId,
+      missionRunId: this.missionRunId ?? null,
+      configuredProviderId: this.configuredProviderId,
+      providerOverride: this.providerOverride,
+      currentState: this.currentState,
+      activeSessionId: this.activeSessionId,
+      client: this.client,
+      session: this.session,
+      initializingSession: this.initializingSession,
+      allowUpgradeTools: this.allowUpgradeTools,
+      listMissionServices: this.listMissionServices,
+      startMissionService: this.startMissionService,
+      stopMissionService: this.stopMissionService,
+      listMissionProofs: this.listMissionProofs,
+      runMissionProof: this.runMissionProof,
+      getMissionContext: this.getMissionContext,
+      getMissionWorkflowState: this.getMissionWorkflowState,
+      saveMissionClassification: this.saveMissionClassification,
+      saveMissionPlan: this.saveMissionPlan,
+      setMissionPhase: this.setMissionPhase,
+      recordMissionValidation: this.recordMissionValidation,
+      setMissionProofStrategy: this.setMissionProofStrategy,
+      recordMissionProofResult: this.recordMissionProofResult,
+      saveMissionSummary: this.saveMissionSummary,
+      subagentRegistry: this.subagentRegistry,
+      subagentRunRegistry: this.subagentRunRegistry,
+      requestUpgradeProposal: this.requestUpgradeProposal,
+      applyHotCapabilityUpgrade: this.applyHotCapabilityUpgrade,
+      requestSessionEscalation: () => this.requestSessionEscalation(),
+      getSubagentRunner: (domainId, workingDirectory) => this.getSubagentRunner(domainId, workingDirectory),
+      getRuntimeSessionId: () => this.getRuntimeSessionId(),
+      registeredToolSignature: this.registeredToolSignature,
+      pendingToolRefreshSignature: this.pendingToolRefreshSignature,
+      refreshingSessionForToolChanges: this.refreshingSessionForToolChanges,
+      deletePersistedSession: (sessionId, providerId) => this.deletePersistedSession(sessionId, providerId),
+      getStalePersistedSessionCleanupProviderIds: (persistedSessionId, runtimeState, currentProviderId) =>
+        this.getStalePersistedSessionCleanupProviderIds(persistedSessionId, runtimeState, currentProviderId),
+      clearHostContinuityCaches: () => this.clearHostContinuityCaches(),
+      clearBoundSessionIdentity: () => this.clearBoundSessionIdentity(),
+      disconnectSession: () => this.disconnectSession(),
+      syncRuntimeState: () => {
+        this.syncRuntimeState();
       },
-      "MCP tool inventory changed; refreshing station session",
-    );
-    this.pendingToolRefreshSignature = null;
-    const refreshPromise = (async () => {
-      const sessionId = this.activeSessionId;
-      const cleanupProviderIds = sessionId
-        ? this.getStalePersistedSessionCleanupProviderIds(
-            sessionId,
-            this.runtimeStore.getStationRuntimeState(),
-            this.client?.providerId ?? this.providerOverride ?? this.configuredProviderId,
-          )
-        : [];
-      this.clearHostContinuityCaches();
-      this.clearBoundSessionIdentity();
-      await this.disconnectSession();
-      if (sessionId) {
-        for (const providerId of cleanupProviderIds) {
-          try {
-            await this.deletePersistedSession(sessionId, providerId);
-          } catch (error) {
-            this.runtimeStore.queueProviderSessionCleanup(providerId, sessionId);
-            void this.runtimeStore.drainPendingProviderSessionCleanup(this.env);
-            throw error;
-          }
-        }
-      }
-    })();
-    this.refreshingSessionForToolChanges = refreshPromise;
-
-    try {
-      await refreshPromise;
-    } finally {
-      if (this.refreshingSessionForToolChanges === refreshPromise) {
-        this.refreshingSessionForToolChanges = null;
-      }
-    }
+      setRegisteredToolSignature: (signature) => {
+        this.registeredToolSignature = signature;
+      },
+      setPendingToolRefreshSignature: (signature) => {
+        this.pendingToolRefreshSignature = signature;
+      },
+      setRefreshingSessionForToolChanges: (promise) => {
+        this.refreshingSessionForToolChanges = promise;
+      },
+      getCurrentToolSignature: () => this.getCurrentToolSignature(),
+    });
   }
 
   private async maybeRefreshSessionForToolChanges(): Promise<void> {
-    if (!this.pendingToolRefreshSignature || this.currentState !== "idle") {
-      return;
-    }
-
-    await this.refreshSessionForToolChanges();
+    await maybeRefreshSessionForToolChangesHelper({
+      pendingToolRefreshSignature: this.pendingToolRefreshSignature,
+      currentState: this.currentState,
+      refreshSessionForToolChanges: () => this.refreshSessionForToolChanges(),
+    });
   }
 
   private queueToolRefresh(): void {
-    void this.refreshSessionForToolChanges().catch((error) => {
-      logger.error({ err: error }, "Failed to refresh the provider session after tool changes");
-    });
+    queueToolRefreshHelper(() => this.refreshSessionForToolChanges());
   }
 
   private queuePendingToolRefresh(): void {
-    void this.maybeRefreshSessionForToolChanges().catch((error) => {
-      logger.error({ err: error }, "Failed to refresh the provider session after becoming idle");
-    });
+    queuePendingToolRefreshHelper(() => this.maybeRefreshSessionForToolChanges());
   }
 }

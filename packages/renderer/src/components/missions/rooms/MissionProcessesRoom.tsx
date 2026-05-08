@@ -1,5 +1,5 @@
 import type { TicketRunSummary } from "@spira/shared";
-import projectStyles from "../../projects/ProjectsPanel.module.css";
+import projectStyles from "../../projects/ProjectsPanel/ProjectsPanel.module.css";
 import {
   describeMissionServiceLauncher,
   describeMissionServiceState,

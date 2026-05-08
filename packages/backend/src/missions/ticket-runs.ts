@@ -1,8 +1,6 @@
-import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { access, mkdir, rm } from "node:fs/promises";
 import path from "node:path";
-import { promisify } from "node:util";
 import type { RepoIntelligenceRecord, SpiraMemoryDatabase } from "@spira/memory-db";
 import type {
   ApproveTicketRunRepoIntelligenceResult,
@@ -36,17 +34,13 @@ import type {
   TicketRunProofRunSummary,
   TicketRunProofSnapshot,
   TicketRunProofSnapshotResult,
-  TicketRunProofSummary,
-  TicketRunPullRequestLinks,
   TicketRunPushAction,
   TicketRunRepoIntelligenceCandidatesResult,
   TicketRunRepoIntelligenceEntrySummary,
   TicketRunReviewRepoEntry,
-  TicketRunReviewRepoState,
   TicketRunReviewSnapshot,
   TicketRunReviewSnapshotResult,
   TicketRunReviewSubmoduleEntry,
-  TicketRunReviewSubmoduleState,
   TicketRunSnapshot,
   TicketRunStatus,
   TicketRunSubmoduleGitState,
@@ -57,10 +51,7 @@ import type {
 } from "@spira/shared";
 import { getEffectiveValidations, normalizeProjectKey } from "@spira/shared";
 import fetch from "node-fetch";
-import type { Logger } from "pino";
-import type { ProjectRegistry } from "../projects/registry.js";
 import { ConfigError, SpiraError } from "../util/errors.js";
-import type { SpiraEventBus } from "../util/event-bus.js";
 import { buildLearnedRepoIntelligenceCandidates } from "./mission-intelligence.js";
 import { buildMissionWorkflowRepairPrompt, getMissionWorkflowState } from "./mission-workflow-guard.js";
 import {
@@ -69,747 +60,81 @@ import {
   toMissionProofProfileSummary,
 } from "./proof-registry.js";
 import { type RunMissionProofInput, type RunMissionProofOutput, runMissionProof } from "./proof-runner.js";
-
-const execFileAsync = promisify(execFile);
-const WORKTREE_DIRECTORY_NAME = ".spira-worktrees";
-const MAX_BRANCH_NAME_LENGTH = 63;
-const MAX_SLUG_LENGTH = 40;
-const MINUTE_MS = 60_000;
-const DEFAULT_GIT_COMMAND_TIMEOUT_MS = MINUTE_MS;
-const LONG_RUNNING_GIT_COMMAND_TIMEOUT_MS = 10 * MINUTE_MS;
-const DEFAULT_GIT_COMMAND_MAX_BUFFER_BYTES = 20 * 1024 * 1024;
-const GITHUB_HTTP_EXTRAHEADER_CONFIG_KEY = "http.https://github.com/.extraheader";
-const GITHUB_CREDENTIAL_PROMPT_DISABLED_PATTERN =
-  /Cannot prompt because user interactivity has been disabled|terminal prompts disabled|could not read Username for 'https:\/\/github\.com'/iu;
-const GIT_FAILURE_NOISE_PATTERNS = [/^Git command (?:failed|timed out) in .+?: git /iu, /^Command failed:\s*git\b/iu];
-
-export interface GitCommandResult {
-  stdout: string;
-  stderr: string;
-}
-
-export type GitCommandRunner = (cwd: string, args: readonly string[]) => Promise<GitCommandResult>;
-
-interface ProjectRegistryLike {
-  getSnapshot(): Promise<Awaited<ReturnType<ProjectRegistry["getSnapshot"]>>>;
-}
-
-interface YouTrackWriteService {
-  transitionTicketToInProgress(ticketId: string): Promise<void>;
-}
-
-type SyncableRun = Pick<
-  TicketRunSummary,
-  | "runId"
-  | "stationId"
-  | "ticketId"
-  | "ticketSummary"
-  | "ticketUrl"
-  | "projectKey"
-  | "startedAt"
-  | "createdAt"
-  | "worktrees"
-  | "submodules"
->;
-
-export interface MissionPassResult {
-  status: "completed" | "failed" | "cancelled";
-  summary: string;
-}
-
-export interface MissionPassHandle {
-  stationId: string;
-  reusedLiveAttempt: boolean;
-  completion: Promise<MissionPassResult>;
-}
-
-export interface LaunchMissionPassInput {
-  run: TicketRunSummary;
-  prompt: string;
-}
-
-export interface GenerateCommitDraftInput {
-  run: TicketRunSummary;
-  gitState: TicketRunGitState | TicketRunSubmoduleGitState;
-}
-
-export interface MissionGitIdentity {
-  name: string;
-  email: string;
-}
-
-interface GitHubOriginInfo {
-  repositoryUrl: string;
-  defaultBranch: string | null;
-}
-
-interface GitHubPullRequestResponse {
-  html_url?: string;
-}
-
-interface GitHubPullRequestValidationError {
-  message?: string;
-}
-
-interface GitHubPullRequestErrorResponse {
-  message?: string;
-  errors?: GitHubPullRequestValidationError[];
-}
-
-interface GitRepoStateSnapshot {
-  worktreePath: string;
-  branchName: string;
-  upstreamBranch: string | null;
-  aheadCount: number;
-  behindCount: number;
-  hasDiff: boolean;
-  pushAction: TicketRunPushAction;
-  pullRequestUrls: TicketRunPullRequestLinks;
-  files: TicketRunDiffFileSummary[];
-  diffFingerprint: string | null;
-}
-
-interface ManagedSubmoduleRuntimeState {
-  summary: TicketRunSubmoduleSummary;
-  gitState: TicketRunSubmoduleGitState;
-}
-
-interface ManagedSubmoduleParentRuntimeState {
-  parentRef: TicketRunSubmoduleParentRef;
-  gitState: GitRepoStateSnapshot;
-  headSha: string | null;
-  diffFingerprint: string | null;
-}
-
-interface GitReadOptions {
-  includeFiles?: boolean;
-  allowHistoryFetch?: boolean;
-}
-
-interface GitmodulesEntry {
-  path: string;
-  url: string;
-}
-
-export interface TicketRunServiceOptions {
-  memoryDb: SpiraMemoryDatabase | null;
-  projectRegistry: ProjectRegistryLike;
-  youTrackService: YouTrackWriteService | null;
-  logger: Logger;
-  bus?: SpiraEventBus;
-  now?: () => number;
-  runIdFactory?: () => string;
-  attemptIdFactory?: () => string;
-  runGitCommand?: GitCommandRunner;
-  launchMissionPass?: (input: LaunchMissionPassInput) => Promise<MissionPassHandle>;
-  repairMissionPass?: (input: LaunchMissionPassInput) => Promise<MissionPassResult>;
-  cancelMissionPass?: (stationId: string) => Promise<void>;
-  closeMissionStation?: (stationId: string) => Promise<void>;
-  stopRunServices?: (runId: string) => Promise<void>;
-  generateCommitDraft?: (input: GenerateCommitDraftInput) => Promise<string>;
-  discoverMissionProofProfiles?: (run: TicketRunSummary) => Promise<ResolvedMissionProofProfile[]>;
-  runMissionProof?: (input: RunMissionProofInput) => Promise<RunMissionProofOutput>;
-  resolveMissionGitIdentity?: () => Promise<MissionGitIdentity>;
-  getMissionGitToken?: () => string | null;
-}
-
-const buildGitHubHttpAuthArgs = (token: string): string[] => {
-  const authHeader = Buffer.from(`x-access-token:${token}`).toString("base64");
-  return ["-c", `${GITHUB_HTTP_EXTRAHEADER_CONFIG_KEY}=AUTHORIZATION: basic ${authHeader}`];
-};
-
-const isGitHubCredentialPromptFailure = (error: unknown): boolean => {
-  const text =
-    error instanceof Error ? `${error.message}\n${error.stack ?? ""}` : typeof error === "string" ? error : "";
-  return text.length > 0 && GITHUB_CREDENTIAL_PROMPT_DISABLED_PATTERN.test(text);
-};
-
-const collectNestedGitErrorText = (error: unknown, seen = new Set<object>()): string[] => {
-  if (typeof error === "string") {
-    return [error];
-  }
-
-  if (!(error instanceof Error) && (typeof error !== "object" || error === null)) {
-    return [];
-  }
-
-  const parts: string[] = [];
-  if (error instanceof Error) {
-    parts.push(error.message);
-  }
-
-  if (typeof error === "object" && error !== null) {
-    if (seen.has(error)) {
-      return parts;
-    }
-    seen.add(error);
-
-    const stderr = "stderr" in error && typeof error.stderr === "string" ? error.stderr : null;
-    const stdout = "stdout" in error && typeof error.stdout === "string" ? error.stdout : null;
-    if (stderr) {
-      parts.push(stderr);
-    }
-    if (stdout) {
-      parts.push(stdout);
-    }
-
-    if ("cause" in error && error.cause !== undefined) {
-      parts.push(...collectNestedGitErrorText(error.cause, seen));
-    }
-  }
-
-  return parts;
-};
-
-const extractGitFailureDetail = (error: unknown): string | null => {
-  const lines = collectNestedGitErrorText(error)
-    .flatMap((part) => part.split(/\r?\n/u))
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0)
-    .filter((line) => !line.startsWith("at "))
-    .filter((line) => !GIT_FAILURE_NOISE_PATTERNS.some((pattern) => pattern.test(line)));
-
-  if (lines.length === 0) {
-    return null;
-  }
-
-  const uniqueLines = [...new Set(lines)];
-  const emphasizedLines = uniqueLines.filter(
-    (line) =>
-      /^(?:fatal|remote|error|warning|hint):/iu.test(line) ||
-      /(authentication failed|repository not found|access denied|permission denied|terminal prompts disabled|could not read username|cannot prompt|not a git repository|no url found for submodule path|did not contain)/iu.test(
-        line,
-      ),
-  );
-  const detail = (emphasizedLines.length > 0 ? emphasizedLines : uniqueLines)
-    .slice(0, 3)
-    .join(" ")
-    .replace(/\s+/gu, " ")
-    .trim();
-  return detail.length > 0 ? detail : null;
-};
-
-const stripInlineGitConfigs = (args: readonly string[]): string[] => {
-  const normalized: string[] = [];
-  for (let index = 0; index < args.length; index += 1) {
-    if (args[index] === "-c") {
-      index += 1;
-      continue;
-    }
-    normalized.push(args[index] ?? "");
-  }
-  return normalized;
-};
-
-const resolveGitCommandTimeoutMs = (args: readonly string[]): number => {
-  const normalizedArgs = stripInlineGitConfigs(args);
-  const command = normalizedArgs[0];
-  const subcommand = normalizedArgs[1];
-  if (
-    (command === "submodule" && subcommand === "update") ||
-    (command === "worktree" && (subcommand === "add" || subcommand === "remove" || subcommand === "prune")) ||
-    command === "fetch" ||
-    command === "push"
-  ) {
-    return LONG_RUNNING_GIT_COMMAND_TIMEOUT_MS;
-  }
-  return DEFAULT_GIT_COMMAND_TIMEOUT_MS;
-};
-
-const defaultGitCommandRunner: GitCommandRunner = async (cwd, args) => {
-  try {
-    const result = await execFileAsync("git", args, {
-      cwd,
-      env: {
-        ...process.env,
-        GCM_INTERACTIVE: "Never",
-        GIT_TERMINAL_PROMPT: "0",
-      },
-      maxBuffer: DEFAULT_GIT_COMMAND_MAX_BUFFER_BYTES,
-      timeout: resolveGitCommandTimeoutMs(args),
-      windowsHide: true,
-    });
-    return {
-      stdout: result.stdout,
-      stderr: result.stderr,
-    };
-  } catch (error) {
-    const sanitizedArgs = args.map((arg) =>
-      /^http(?:\..+)?\.extraheader=AUTHORIZATION:\s+/iu.test(arg)
-        ? `${arg.slice(0, arg.indexOf("AUTHORIZATION:"))}AUTHORIZATION: [REDACTED]`
-        : arg,
-    );
-    const timedOut =
-      typeof error === "object" &&
-      error !== null &&
-      "killed" in error &&
-      (error as { killed?: unknown }).killed === true;
-    throw new SpiraError(
-      "TICKET_RUN_GIT_ERROR",
-      `${timedOut ? "Git command timed out" : "Git command failed"} in ${cwd}: git ${sanitizedArgs.join(" ")}`,
-      error,
-    );
-  }
-};
-
-const slugify = (value: string, maxLength: number): string => {
-  const slug = value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .replace(/-{2,}/g, "-");
-
-  return slug.slice(0, maxLength).replace(/-+$/g, "");
-};
-
-const normalizeMissionPrompt = (value: string | undefined): string | null => {
-  if (typeof value !== "string") {
-    return null;
-  }
-
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : null;
-};
-
-const normalizeCommitDraft = (ticketId: string, rawDraft: string, fallbackBullets: string[]): string => {
-  const cleaned = rawDraft
-    .replace(/^```[a-z0-9-]*\s*/gim, "")
-    .replace(/```$/gim, "")
-    .trim();
-  const lines = cleaned
-    .split(/\r?\n/u)
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0);
-  const summaryCandidate = lines.find((line) => !/^(?:[-*]\s+|\d+\.\s+)/u.test(line)) ?? "";
-  const normalizedSummary = (summaryCandidate.match(/^feat\(([^)]+)\):\s*(.+)$/iu)?.[2] ?? summaryCandidate)
-    .replace(/^[-*]\s+/u, "")
-    .trim()
-    .replace(/\.+$/u, "");
-  const summary = normalizedSummary || "update implementation";
-  const extractedBullets = lines
-    .filter((line) => line !== summaryCandidate)
-    .map((line) => line.replace(/^(?:[-*]\s+|\d+\.\s+)/u, "").trim())
-    .filter((line) => line.length > 0)
-    .slice(0, 6);
-  const bullets = (extractedBullets.length > 0 ? extractedBullets : fallbackBullets).slice(0, 6);
-  return [`feat(${ticketId}): ${summary}`, "", ...bullets.map((line) => `- ${line}`)].join("\n");
-};
-
-const buildFallbackCommitBullets = (files: readonly TicketRunDiffFileSummary[]): string[] => {
-  const bullets = files.slice(0, 6).map((file) => {
-    const action =
-      file.status === "A"
-        ? "Add"
-        : file.status === "D"
-          ? "Remove"
-          : file.status === "R"
-            ? "Rename"
-            : file.status === "C"
-              ? "Copy"
-              : "Update";
-    const detailParts: string[] = [action, file.path];
-    if (file.additions !== null || file.deletions !== null) {
-      detailParts.push(
-        `(${file.additions ?? 0} insertion${file.additions === 1 ? "" : "s"}, ${file.deletions ?? 0} deletion${
-          file.deletions === 1 ? "" : "s"
-        })`,
-      );
-    }
-    return detailParts.join(" ");
-  });
-  return bullets.length > 0 ? bullets : ["Review the completed ticket changes and prepare them for publish."];
-};
-
-const isRepoBlockingClose = (gitState: Pick<TicketRunGitState, "hasDiff" | "pushAction">): boolean =>
-  gitState.hasDiff || gitState.pushAction !== "none";
-
-const isRepoVisibleInReview = (gitState: Pick<TicketRunGitState, "hasDiff" | "pushAction">): boolean =>
-  isRepoBlockingClose(gitState);
-
-const isSubmoduleBlockingClose = (
-  gitState: Pick<TicketRunSubmoduleGitState, "hasDiff" | "reconcileRequired" | "pushAction" | "parents">,
-): boolean =>
-  gitState.hasDiff ||
-  gitState.reconcileRequired ||
-  gitState.pushAction !== "none" ||
-  gitState.parents.some((parentState) => !parentState.isAligned);
-
-const isSubmoduleBlockingRepoWorkflow = (
-  gitState: Pick<TicketRunSubmoduleGitState, "hasDiff" | "reconcileRequired" | "pushAction">,
-): boolean => gitState.hasDiff || gitState.reconcileRequired || gitState.pushAction !== "none";
-
-const isSubmoduleVisibleInReview = (
-  gitState: Pick<TicketRunSubmoduleGitState, "hasDiff" | "reconcileRequired" | "pushAction" | "parents">,
-): boolean => isSubmoduleBlockingClose(gitState);
-
-const toReviewRepoState = ({ files: _files, ...gitState }: TicketRunGitState): TicketRunReviewRepoState => gitState;
-
-const toReviewSubmoduleState = ({
-  files: _files,
-  ...gitState
-}: TicketRunSubmoduleGitState): TicketRunReviewSubmoduleState => gitState;
-
-const describeReviewLoadError = (error: unknown, fallbackMessage: string): string =>
-  error instanceof Error && error.message.trim().length > 0 ? error.message : fallbackMessage;
-
-const describeDeleteBlockers = (deleteBlockers: readonly TicketRunDeleteBlocker[]): string =>
-  deleteBlockers.map((blocker) => `${blocker.label} (${blocker.reason})`).join(", ");
-
-const parseGitHubRepositoryUrl = (remoteUrl: string): string | null => {
-  let parsed: URL;
-  try {
-    parsed = new URL(remoteUrl);
-  } catch {
-    return null;
-  }
-
-  if (parsed.protocol !== "https:" || parsed.hostname !== "github.com") {
-    return null;
-  }
-
-  const repositoryPath = parsed.pathname.replace(/\.git$/iu, "").replace(/\/+$/u, "");
-  if (!/^\/[^/]+\/[^/]+$/u.test(repositoryPath)) {
-    return null;
-  }
-
-  return `https://github.com${repositoryPath}`;
-};
-
-const parseRepositoryCoordinates = (repositoryUrl: string): { owner: string; repo: string } | null => {
-  let parsed: URL;
-  try {
-    parsed = new URL(repositoryUrl);
-  } catch {
-    return null;
-  }
-
-  const segments = parsed.pathname.replace(/^\/+|\/+$/gu, "").split("/");
-  if (segments.length !== 2) {
-    return null;
-  }
-
-  const [owner, repo] = segments;
-  if (!owner || !repo) {
-    return null;
-  }
-
-  return { owner, repo };
-};
-
-const parseNameStatusMap = (stdout: string): Map<string, { status: string; previousPath: string | null }> => {
-  const entries = new Map<string, { status: string; previousPath: string | null }>();
-  for (const line of stdout
-    .split(/\r?\n/u)
-    .map((entry) => entry.trim())
-    .filter(Boolean)) {
-    const parts = line.split("\t");
-    const statusToken = parts[0] ?? "";
-    const status = statusToken.slice(0, 1) || "M";
-    if ((status === "R" || status === "C") && parts.length >= 3) {
-      entries.set(parts[2] ?? parts[1] ?? "", {
-        status,
-        previousPath: parts[1] ?? null,
-      });
-      continue;
-    }
-    if (parts[1]) {
-      entries.set(parts[1], { status, previousPath: null });
-    }
-  }
-  return entries;
-};
-
-const parseNumstatMap = (stdout: string): Map<string, { additions: number | null; deletions: number | null }> => {
-  const entries = new Map<string, { additions: number | null; deletions: number | null }>();
-  for (const line of stdout
-    .split(/\r?\n/u)
-    .map((entry) => entry.trim())
-    .filter(Boolean)) {
-    const parts = line.split("\t");
-    if (parts.length < 3) {
-      continue;
-    }
-    const additions = parts[0] === "-" ? null : Number(parts[0]);
-    const deletions = parts[1] === "-" ? null : Number(parts[1]);
-    const path = parts.length >= 4 ? (parts[3] ?? parts[2] ?? "") : (parts[2] ?? "");
-    if (!path) {
-      continue;
-    }
-    entries.set(path, {
-      additions: Number.isFinite(additions) ? additions : null,
-      deletions: Number.isFinite(deletions) ? deletions : null,
-    });
-  }
-  return entries;
-};
-
-const parseNullSeparatedEntries = (stdout: string): string[] => {
-  if (stdout.includes("\u0000")) {
-    return stdout.split("\u0000").filter((entry) => entry.length > 0);
-  }
-  return stdout
-    .split(/\r?\n/u)
-    .map((entry) => entry.trim())
-    .filter((entry) => entry.length > 0);
-};
-
-const parseDiffFiles = (
-  rawDiff: string,
-  nameStatusMap: ReadonlyMap<string, { status: string; previousPath: string | null }>,
-  numstatMap: ReadonlyMap<string, { additions: number | null; deletions: number | null }>,
-): TicketRunDiffFileSummary[] => {
-  const trimmed = rawDiff.trim();
-  if (!trimmed) {
-    return [];
-  }
-  return trimmed
-    .split(/(?=^diff --git )/gmu)
-    .map((chunk) => chunk.trim())
-    .filter((chunk) => chunk.length > 0)
-    .map((chunk) => {
-      const headerMatch = /^diff --git a\/(.+?) b\/(.+)$/mu.exec(chunk);
-      const currentPath = headerMatch?.[2] ?? headerMatch?.[1] ?? "unknown";
-      const statusEntry = nameStatusMap.get(currentPath);
-      const numstatEntry = numstatMap.get(currentPath);
-      const previousPath =
-        statusEntry?.previousPath ?? (headerMatch?.[1] !== currentPath ? (headerMatch?.[1] ?? null) : null);
-      return {
-        path: currentPath,
-        previousPath,
-        status: statusEntry?.status ?? "M",
-        additions: numstatEntry?.additions ?? null,
-        deletions: numstatEntry?.deletions ?? null,
-        patch: chunk,
-      };
-    });
-};
-
-const mergeUntrackedFiles = (
-  files: readonly TicketRunDiffFileSummary[],
-  untrackedPaths: readonly string[],
-): TicketRunDiffFileSummary[] => {
-  if (untrackedPaths.length === 0) {
-    return [...files];
-  }
-
-  const merged = new Map(files.map((file) => [file.path, file] as const));
-  for (const untrackedPath of [...untrackedPaths].sort((left, right) => left.localeCompare(right))) {
-    if (merged.has(untrackedPath)) {
-      continue;
-    }
-    merged.set(untrackedPath, {
-      path: untrackedPath,
-      previousPath: null,
-      status: "A",
-      additions: null,
-      deletions: null,
-      patch: "",
-    });
-  }
-
-  return [...merged.values()];
-};
-
-const normalizeSubmoduleCanonicalUrl = (rawUrl: string): string => {
-  const trimmed = rawUrl.trim();
-  if (!trimmed) {
-    return "";
-  }
-
-  if (!trimmed.includes("://")) {
-    const scpLikeMatch = /^(?:[^@]+@)?([^:]+):(.+)$/u.exec(trimmed);
-    if (scpLikeMatch) {
-      return `${scpLikeMatch[1]}/${scpLikeMatch[2]}`
-        .replace(/\\/gu, "/")
-        .replace(/\.git$/iu, "")
-        .replace(/\/+$/u, "")
-        .toLowerCase();
-    }
-  }
-
-  try {
-    const parsed = new URL(trimmed);
-    const pathname = parsed.pathname.replace(/\.git$/iu, "").replace(/\/+$/u, "");
-    return `${parsed.host}${pathname}`.replace(/\\/gu, "/").toLowerCase();
-  } catch {
-    return trimmed
-      .replace(/\\/gu, "/")
-      .replace(/\.git$/iu, "")
-      .replace(/\/+$/u, "")
-      .toLowerCase();
-  }
-};
-
-const parseGitmodulesEntries = (stdout: string): GitmodulesEntry[] => {
-  const entriesByName = new Map<string, Partial<GitmodulesEntry>>();
-  for (const rawLine of stdout.split(/\r?\n/u)) {
-    const line = rawLine.trim();
-    if (!line) {
-      continue;
-    }
-
-    const separatorIndex = line.indexOf(" ");
-    if (separatorIndex <= 0) {
-      continue;
-    }
-    const key = line.slice(0, separatorIndex);
-    const value = line.slice(separatorIndex + 1).trim();
-    const match = /^submodule\.(.+)\.(path|url)$/u.exec(key);
-    if (!match || !value) {
-      continue;
-    }
-
-    const [, name, property] = match;
-    const current = entriesByName.get(name) ?? {};
-    if (property === "path") {
-      current.path = value;
-    } else {
-      current.url = value;
-    }
-    entriesByName.set(name, current);
-  }
-
-  return [...entriesByName.values()]
-    .filter((entry): entry is GitmodulesEntry => typeof entry.path === "string" && typeof entry.url === "string")
-    .map((entry) => ({ path: entry.path.trim(), url: entry.url.trim() }))
-    .filter((entry) => entry.path.length > 0 && entry.url.length > 0);
-};
-
-const buildSubmoduleDiffFingerprint = (files: readonly TicketRunDiffFileSummary[]): string | null => {
-  if (files.length === 0) {
-    return null;
-  }
-
-  return JSON.stringify(
-    files.map((file) => ({
-      path: file.path,
-      previousPath: file.previousPath,
-      status: file.status,
-      patch: file.patch,
-    })),
-  );
-};
-
-const sortSubmoduleParentRefs = (parentRefs: readonly TicketRunSubmoduleParentRef[]): TicketRunSubmoduleParentRef[] =>
-  [...parentRefs].sort(
-    (left, right) =>
-      left.parentRepoRelativePath.localeCompare(right.parentRepoRelativePath) ||
-      left.submodulePath.localeCompare(right.submodulePath),
-  );
-
-const areSubmoduleSummariesEqual = (
-  left: readonly TicketRunSubmoduleSummary[],
-  right: readonly TicketRunSubmoduleSummary[],
-): boolean =>
-  JSON.stringify(
-    [...left]
-      .map((submodule) => ({
-        canonicalUrl: submodule.canonicalUrl,
-        name: submodule.name,
-        branchName: submodule.branchName,
-        commitMessageDraft: submodule.commitMessageDraft ?? null,
-        parentRefs: sortSubmoduleParentRefs(submodule.parentRefs),
-      }))
-      .sort((a, b) => a.canonicalUrl.localeCompare(b.canonicalUrl)),
-  ) ===
-  JSON.stringify(
-    [...right]
-      .map((submodule) => ({
-        canonicalUrl: submodule.canonicalUrl,
-        name: submodule.name,
-        branchName: submodule.branchName,
-        commitMessageDraft: submodule.commitMessageDraft ?? null,
-        parentRefs: sortSubmoduleParentRefs(submodule.parentRefs),
-      }))
-      .sort((a, b) => a.canonicalUrl.localeCompare(b.canonicalUrl)),
-  );
-
-export const buildTicketRunBranchName = (ticketId: string, summary: string): string => {
-  const normalizedTicketId = slugify(ticketId, MAX_BRANCH_NAME_LENGTH).replace(/^-+|-+$/g, "") || "ticket";
-  const prefix = `feat/${normalizedTicketId}`;
-  const fallbackSlug = "work";
-  const availableSlugLength = Math.max(0, Math.min(MAX_SLUG_LENGTH, MAX_BRANCH_NAME_LENGTH - prefix.length - 1));
-  const summarySlug = slugify(summary, availableSlugLength) || fallbackSlug;
-  const branchName = `${prefix}-${summarySlug}`;
-  return branchName.slice(0, MAX_BRANCH_NAME_LENGTH).replace(/-+$/g, "");
-};
-
-const buildTicketRunMissionDirectory = (workspaceRoot: string, ticketId: string): string => {
-  const ticketSlug = slugify(ticketId, 24) || "ticket";
-  return path.join(workspaceRoot, WORKTREE_DIRECTORY_NAME, ticketSlug);
-};
-
-export const buildTicketRunWorktreePath = (workspaceRoot: string, ticketId: string, repoName: string): string => {
-  const repoSlug = slugify(repoName, 20) || "repo";
-  return path.join(buildTicketRunMissionDirectory(workspaceRoot, ticketId), repoSlug);
-};
-
-const resolveTicketRunWorkspacePath = (
-  worktrees: ReadonlyArray<Pick<TicketRunSummary["worktrees"][number], "worktreePath">>,
-): string => {
-  const firstWorktree = worktrees[0];
-  if (!firstWorktree) {
-    return "the managed worktree";
-  }
-
-  const parents = [...new Set(worktrees.map((worktree) => path.dirname(worktree.worktreePath)))];
-  if (parents.length === 1 && path.basename(parents[0] ?? "") !== WORKTREE_DIRECTORY_NAME) {
-    return parents[0] ?? firstWorktree.worktreePath;
-  }
-
-  return firstWorktree.worktreePath;
-};
-
-const resolveTicketRunMissionDirectory = (
-  worktrees: ReadonlyArray<Pick<TicketRunSummary["worktrees"][number], "worktreePath">>,
-): string | null => {
-  if (worktrees.length === 0) {
-    return null;
-  }
-
-  const parents = [...new Set(worktrees.map((worktree) => path.dirname(worktree.worktreePath)))];
-  return parents.length === 1 ? (parents[0] ?? null) : null;
-};
-
-const describeTicketRunWorkspace = (worktrees: ReadonlyArray<TicketRunSummary["worktrees"][number]>) => {
-  const workspacePath = resolveTicketRunWorkspacePath(worktrees);
-  if (workspacePath === worktrees[0]?.worktreePath) {
-    return {
-      path: workspacePath,
-      noun: "worktree",
-      phrase: `managed worktree at ${workspacePath}`,
-    };
-  }
-
-  const repoCount = worktrees.length;
-  return {
-    path: workspacePath,
-    noun: "mission directory",
-    phrase: `mission directory at ${workspacePath} for ${repoCount} repo${repoCount === 1 ? "" : "s"}`,
-  };
-};
-
-const formatTicketRunWorktreeList = (worktrees: ReadonlyArray<TicketRunSummary["worktrees"][number]>): string =>
-  worktrees.map((worktree) => `- ${worktree.repoRelativePath}: ${worktree.worktreePath}`).join("\n");
-
-const buildDefaultProofSummary = (): TicketRunProofSummary => ({
-  status: "not-run",
-  lastProofRunId: null,
-  lastProofProfileId: null,
-  lastProofAt: null,
-  lastProofSummary: null,
-  staleReason: null,
-});
-
-const buildStaleProofSummary = (run: TicketRunSummary, staleReason: string): TicketRunProofSummary =>
-  run.proof.lastProofRunId
-    ? {
-        ...run.proof,
-        status: "stale",
-        staleReason,
-      }
-    : buildDefaultProofSummary();
+import {
+  buildSubmoduleDiffFingerprint,
+  mergeUntrackedFiles,
+  parseDiffFiles,
+  parseNameStatusMap,
+  parseNullSeparatedEntries,
+  parseNumstatMap,
+} from "./ticket-runs/diff.js";
+import {
+  buildGitHubHttpAuthArgs,
+  defaultGitCommandRunner,
+  extractGitFailureDetail,
+  isGitHubCredentialPromptFailure,
+} from "./ticket-runs/git-commands.js";
+import {
+  type GitHubOriginInfo,
+  type GitHubPullRequestErrorResponse,
+  type GitHubPullRequestResponse,
+  parseGitHubRepositoryUrl,
+  parseRepositoryCoordinates,
+} from "./ticket-runs/github.js";
+import {
+  buildDefaultProofSummary,
+  buildFallbackCommitBullets,
+  buildStaleProofSummary,
+  describeDeleteBlockers,
+  describeReviewLoadError,
+  isRepoBlockingClose,
+  isRepoVisibleInReview,
+  isSubmoduleBlockingClose,
+  isSubmoduleBlockingRepoWorkflow,
+  isSubmoduleVisibleInReview,
+  normalizeCommitDraft,
+  normalizeMissionPrompt,
+  toReviewRepoState,
+  toReviewSubmoduleState,
+} from "./ticket-runs/review.js";
+import {
+  type GitmodulesEntry,
+  areSubmoduleSummariesEqual,
+  normalizeSubmoduleCanonicalUrl,
+  parseGitmodulesEntries,
+  sortSubmoduleParentRefs,
+} from "./ticket-runs/submodules.js";
+import type {
+  GitCommandRunner,
+  GitReadOptions,
+  GitRepoStateSnapshot,
+  ManagedSubmoduleParentRuntimeState,
+  ManagedSubmoduleRuntimeState,
+  MissionGitIdentity,
+  MissionPassHandle,
+  MissionPassResult,
+  SyncableRun,
+  TicketRunServiceOptions,
+} from "./ticket-runs/types.js";
+import {
+  buildTicketRunBranchName,
+  buildTicketRunWorktreePath,
+  describeTicketRunWorkspace,
+  formatTicketRunWorktreeList,
+  resolveTicketRunMissionDirectory,
+} from "./ticket-runs/workspace.js";
+
+export type {
+  GenerateCommitDraftInput,
+  GitCommandResult,
+  GitCommandRunner,
+  LaunchMissionPassInput,
+  MissionGitIdentity,
+  MissionPassHandle,
+  MissionPassResult,
+  TicketRunServiceOptions,
+} from "./ticket-runs/types.js";
+export { buildTicketRunBranchName, buildTicketRunWorktreePath };
 
 export class TicketRunService {
   private readonly now: () => number;
