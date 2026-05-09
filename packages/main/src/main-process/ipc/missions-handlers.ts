@@ -239,6 +239,45 @@ export const createMissionIpcHandlers = (getBridge: () => IpcBridgeHandle | null
   [IPC_CHANNELS.missions.proofRulesDelete]: async (_event: IpcMainInvokeEvent, input?: { ruleId?: string }) =>
     requireBridge(getBridge()).deleteMissionProofRule(requireField(input?.ruleId, "Rule id is required.")),
 
+  [IPC_CHANNELS.missions.repoProfilesList]: async () => requireBridge(getBridge()).listMissionRepoProfiles(),
+
+  [IPC_CHANNELS.missions.repoProfilesUpsert]: async (
+    _event: IpcMainInvokeEvent,
+    input?: { profile?: Parameters<ReturnType<typeof requireBridge>["upsertMissionRepoProfile"]>[0] },
+  ) => {
+    if (!input?.profile) {
+      throw new Error("Profile payload is required.");
+    }
+    return requireBridge(getBridge()).upsertMissionRepoProfile(input.profile);
+  },
+
+  [IPC_CHANNELS.missions.repoProfilesDelete]: async (
+    _event: IpcMainInvokeEvent,
+    input?: { projectKey?: string },
+  ) =>
+    requireBridge(getBridge()).deleteMissionRepoProfile(requireField(input?.projectKey, "Project key is required.")),
+
+  [IPC_CHANNELS.missions.validationProfilesList]: async () =>
+    requireBridge(getBridge()).listMissionValidationProfiles(),
+
+  [IPC_CHANNELS.missions.validationProfilesUpsert]: async (
+    _event: IpcMainInvokeEvent,
+    input?: { profile?: Parameters<ReturnType<typeof requireBridge>["upsertMissionValidationProfile"]>[0] },
+  ) => {
+    if (!input?.profile) {
+      throw new Error("Profile payload is required.");
+    }
+    return requireBridge(getBridge()).upsertMissionValidationProfile(input.profile);
+  },
+
+  [IPC_CHANNELS.missions.validationProfilesDelete]: async (
+    _event: IpcMainInvokeEvent,
+    input?: { profileId?: string },
+  ) =>
+    requireBridge(getBridge()).deleteMissionValidationProfile(
+      requireField(input?.profileId, "Profile id is required."),
+    ),
+
   [IPC_CHANNELS.missions.delete]: async (
     _event: IpcMainInvokeEvent,
     input?: { runId?: string },

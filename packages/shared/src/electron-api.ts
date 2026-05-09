@@ -43,10 +43,14 @@ import type {
   TicketRunRepoIntelligenceCandidatesResult,
   TicketRunReviewSnapshotResult,
   MissionProofRulesSnapshot,
+  MissionRepoProfilesSnapshot,
+  MissionValidationProfilesSnapshot,
   TicketRunSnapshot,
   TicketRunSubmoduleGitStateResult,
   TicketRunSummary,
   UpsertMissionProofRuleInput,
+  UpsertMissionRepoProfileInput,
+  UpsertMissionValidationProfileInput,
 } from "./ticket-run-types.js";
 import type { UpgradeProposal, UpgradeStatus } from "./upgrade.js";
 import type {
@@ -125,6 +129,20 @@ export interface ElectronApi {
   upsertMissionProofRule(rule: UpsertMissionProofRuleInput): Promise<MissionProofRulesSnapshot>;
   /** Phase 2.5 — delete a user proof rule by id; returns the fresh snapshot. */
   deleteMissionProofRule(ruleId: string): Promise<MissionProofRulesSnapshot>;
+  /** Phase 3.2 — list every known repo profile (one per projectKey). */
+  listMissionRepoProfiles(): Promise<MissionRepoProfilesSnapshot>;
+  /** Phase 3.2 — create or update a repo profile; returns the fresh snapshot. */
+  upsertMissionRepoProfile(profile: UpsertMissionRepoProfileInput): Promise<MissionRepoProfilesSnapshot>;
+  /** Phase 3.2 — delete a repo profile by projectKey; returns the fresh snapshot. */
+  deleteMissionRepoProfile(projectKey: string): Promise<MissionRepoProfilesSnapshot>;
+  /** Phase 3.4 — list every validation profile (builtin + user). */
+  listMissionValidationProfiles(): Promise<MissionValidationProfilesSnapshot>;
+  /** Phase 3.4 — create/update a user validation profile; returns the fresh snapshot. */
+  upsertMissionValidationProfile(
+    profile: UpsertMissionValidationProfileInput,
+  ): Promise<MissionValidationProfilesSnapshot>;
+  /** Phase 3.4 — delete a user validation profile by id; returns the fresh snapshot. */
+  deleteMissionValidationProfile(profileId: string): Promise<MissionValidationProfilesSnapshot>;
   /**
    * Phase 2.1 — mark the proof gate as satisfied via manual review.
    * Justification is required and persisted on the run + as a mission event.

@@ -2,7 +2,7 @@
 
 **Parent report:** [mission-workflow-review-2026-05-09.md](../reports/mission-workflow-review-2026-05-09.md).
 **Sister plans:** [model-escalation-architecture.md](./model-escalation-architecture.md) (provider-side), [permission-lifecycle-resilience.md](./permission-lifecycle-resilience.md) (already shipped).
-**Status:** drafted 2026-05-09. **Phases 0, 1, and 2 shipped 2026-05-09 — see [Progress log](#progress-log) at the end of this document.**
+**Status:** drafted 2026-05-09. **Phases 0, 1, 2, and 3 shipped 2026-05-09 — see [Progress log](#progress-log) at the end of this document.**
 
 ## Goal
 
@@ -171,7 +171,7 @@ The plan ships in **seven independent phases**. Each phase is small enough to me
 
 ---
 
-## Phase 3 — Repo intelligence v2 (the "stop discovering the same things" phase)
+## Phase 3 — Repo intelligence v2 (the "stop discovering the same things" phase) ✅ shipped 2026-05-09
 
 **Goal:** the system has cheap, accurate, per-repo knowledge that survives across missions and compounds over time. Spira itself owns this knowledge — target repos do not need to know that Spira exists.
 
@@ -560,3 +560,36 @@ Skipped (premature DRY): consolidating the four duration formatters in the rende
 - **Historical outcomes feed evidence only**, not level changes — leaving room to demote levels that consistently fail in operationally-consistent ways without making the heuristic too eager.
 - **Proof rule "dry-run against a recent ticket" affordance** isn't wired (plan §2.5 mentioned it as a nice-to-have).
 - **Auto-promote learned rules** is Phase 5, not Phase 2.
+
+---
+
+### 2026-05-09 — Phase 3 shipped
+
+#### Phase 3 deliverables
+
+- **§3.1 first-class repo profile record** — Migration v30 adds the `repo_profiles` table keyed by `projectKey` with the documented columns: display name, description, default branch, default build directory, default registry, registry hints, required env vars + SDKs, user-facing copy globs, UI test globs, free-text notes, and `source` (`builtin` / `user` / `learned`). Indexed on `updated_at DESC`. New row type, mapper, and DB methods (`getRepoProfile`, `listRepoProfiles`, `upsertRepoProfile`, `deleteRepoProfile`) in [packages/memory-db/src/database/intelligence.ts](../packages/memory-db/src/database/intelligence.ts) follow the same shape as the existing intelligence reads. The same v30 migration also recreates `validation_profiles` to add the new validation kinds (§3.4) and the `last_observed_runtime_ms` column.
+- **§3.2 / §3.3 RepoProfilesService + admin pane** — New [repo-profiles-service.ts](../packages/backend/src/missions/repo-profiles-service.ts) wraps the DB layer with renderer-friendly types and source defaulting (admin writes → `user`). Protocol messages `missions:repo-profiles:list / :upsert / :delete` plumbed through validation, IPC, electron-api, preload, and ipc-bridge. New [`RepoProfilesEditor`](../packages/renderer/src/components/settings/RepoProfilesEditor.tsx) settings tab — list with source / display-name badges, inline form that doubles as the onboarding wizard (when projectKey is empty it's "add"; otherwise it's "edit"), per-row delete and edit affordances. The `projectKey` input is locked during edit to prevent identity rewrites.
+- **§3.4 validation profile catalog enrichment** — Three new kinds in `TICKET_RUN_MISSION_VALIDATION_KINDS` (`restore`, `format`, `e2e-smoke`) flow through both shared and DB-level `VALIDATION_PROFILE_KINDS`. New `last_observed_runtime_ms` column on `validation_profiles` (Phase 5 will populate it). New `deleteValidationProfile` DB method, [`ValidationProfilesService`](../packages/backend/src/missions/validation-profiles-service.ts), full protocol/IPC stack, and [`ValidationProfilesEditor`](../packages/renderer/src/components/settings/ValidationProfilesEditor.tsx) settings tab. Builtin-profile protection uses the shared `BUILTIN_RECORD_ID_PREFIX` so future services can opt in trivially.
+- **§3.5 repo-aware prompt context** — New [repo-guidance.ts](../packages/backend/src/missions/repo-guidance.ts) builds a `## Repo guidance` section: profile summary (registry / branch / build dir / required SDKs / env vars / globs), top 3 approved briefings, top 3 approved pitfalls, top 6 default validation commands. `tryBuildRepoGuidance` injected into both `buildInitialPrompt` and `buildContinuationPrompt`; failures log but never fault prompt construction. The section uses stable headings and ordering so per-mission attempts share the same prefix for prompt-cache reuse. Returns `null` when there's nothing useful to say (no profile + no approved entries + no validations) so the prompt stays clean for unfamiliar projects.
+- **§3.6 tests** — `repo-profiles-service.test.ts` (5 tests): empty list, full upsert + readback, idempotent updates, delete, source preservation. `validation-profiles-service.test.ts` (6 tests): builtin/user source tagging, every new validation kind, refuse to upsert/delete builtins, delete user profile, `lastObservedRuntimeMs` exposure. `repo-guidance.test.ts` (6 tests): null when scope is empty, null when projectKey is empty, full section rendering, cap enforcement, unapproved entries excluded, lastObservedRuntimeMs preferred over expectedRuntimeMs in the runtime hint. Total Phase 3 tests: 17. Full suite: 739 → 756 tests; all pass.
+
+#### Self-review fixes
+
+After the three review agents (reuse, quality, efficiency) the following landed:
+
+- **Reused `REPO_INTELLIGENCE_ENTRY_SOURCES`** in mappers.ts instead of redeclaring the same `["builtin", "user", "learned"]` vocabulary. Repo profiles and repo intelligence entries genuinely share that source set.
+- **Extracted `BUILTIN_RECORD_ID_PREFIX` + `isBuiltinRecordId`** to a shared backend util ([builtin-id.ts](../packages/backend/src/missions/builtin-id.ts)). Both `proof-rules-service.ts` and `validation-profiles-service.ts` now import it; future CRUD services that distinguish builtins by id-prefix can opt in.
+- **Extracted `splitList`** to renderer-side [admin-form-helpers.ts](../packages/renderer/src/components/settings/admin-form-helpers.ts). Both the repo and validation profile editors share it.
+- **Extracted `sendAdminServiceUnavailable(requestId, label)`** in `index.ts`; the three per-service helpers (`sendProofRulesUnavailable`, `sendRepoProfilesUnavailable`, `sendValidationProfilesUnavailable`) are now one-liner specialisations.
+- **Switched validation-profile confidence input** to `<input type="number" min="0" max="1" step="0.05">` so invalid values fail at the keyboard rather than via the silent `Math.max/min` clamp.
+
+Skipped (premature DRY at three editors): generic `CrudService` base class, generic `<AdminCrudPane>` parametrised wrapper. Both would need significant escape hatches for repo profiles' natural-key shape vs the proof-rules/validation-profiles UUID-id shape; the abstraction cost outweighs the savings until a fourth admin surface lands.
+
+Skipped (negligible at scale): caching `buildRepoGuidanceSection` (~30 indexed-WHERE queries per multi-minute mission), optimistic admin-pane updates (5–50 entries per editor).
+
+#### What's still on hold for Phase 4+
+
+- **Onboarding wizard "first-time profile" prompt** when an unknown projectKey appears mid-mission isn't wired yet — the admin pane covers the same ground for now, just not "auto-prompted on demand."
+- **Export / import JSON** for repo profiles (mentioned in §3.3 as "Useful but not critical") isn't built; the DB is the single source of truth and operators can re-edit through the admin pane.
+- **Edit-existing-profile flow on validation profiles** — current pane supports add + delete only; editing means delete + re-add. Edit support is a future polish if operators tell us it matters.
+- **Spira's own `repo_profile` row** lands as part of Phase 7 (Spira-side application).

@@ -38,6 +38,12 @@ const TICKET_RUN_PROOF_MANUAL_REVIEW_CLEAR_CHANNEL = "missions:ticket-run:proof:
 const PROOF_RULES_LIST_CHANNEL = "missions:proof-rules:list";
 const PROOF_RULES_UPSERT_CHANNEL = "missions:proof-rules:upsert";
 const PROOF_RULES_DELETE_CHANNEL = "missions:proof-rules:delete";
+const REPO_PROFILES_LIST_CHANNEL = "missions:repo-profiles:list";
+const REPO_PROFILES_UPSERT_CHANNEL = "missions:repo-profiles:upsert";
+const REPO_PROFILES_DELETE_CHANNEL = "missions:repo-profiles:delete";
+const VALIDATION_PROFILES_LIST_CHANNEL = "missions:validation-profiles:list";
+const VALIDATION_PROFILES_UPSERT_CHANNEL = "missions:validation-profiles:upsert";
+const VALIDATION_PROFILES_DELETE_CHANNEL = "missions:validation-profiles:delete";
 const TICKET_RUN_DELETE_CHANNEL = "missions:ticket-run:delete";
 const TICKET_RUN_REVIEW_SNAPSHOT_CHANNEL = "missions:ticket-run:review-snapshot:get";
 const TICKET_RUN_GIT_STATE_CHANNEL = "missions:ticket-run:git-state:get";
@@ -298,6 +304,24 @@ const electronAPI: ElectronApi = {
   },
   deleteMissionProofRule(ruleId) {
     return ipcRenderer.invoke(PROOF_RULES_DELETE_CHANNEL, { ruleId });
+  },
+  listMissionRepoProfiles() {
+    return ipcRenderer.invoke(REPO_PROFILES_LIST_CHANNEL);
+  },
+  upsertMissionRepoProfile(profile) {
+    return ipcRenderer.invoke(REPO_PROFILES_UPSERT_CHANNEL, { profile });
+  },
+  deleteMissionRepoProfile(projectKey) {
+    return ipcRenderer.invoke(REPO_PROFILES_DELETE_CHANNEL, { projectKey });
+  },
+  listMissionValidationProfiles() {
+    return ipcRenderer.invoke(VALIDATION_PROFILES_LIST_CHANNEL);
+  },
+  upsertMissionValidationProfile(profile) {
+    return ipcRenderer.invoke(VALIDATION_PROFILES_UPSERT_CHANNEL, { profile });
+  },
+  deleteMissionValidationProfile(profileId) {
+    return ipcRenderer.invoke(VALIDATION_PROFILES_DELETE_CHANNEL, { profileId });
   },
   deleteTicketRun(runId) {
     return ipcRenderer.invoke(TICKET_RUN_DELETE_CHANNEL, { runId });

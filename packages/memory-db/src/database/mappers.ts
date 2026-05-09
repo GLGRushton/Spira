@@ -76,6 +76,7 @@ import type {
   TicketRunValidationRow,
   TicketRunWorktreeRow,
   ValidationProfileRow,
+  RepoProfileRow,
 } from "./rows.js";
 import type {
   McpServerConfigRecord,
@@ -87,12 +88,15 @@ import type {
   PersistedRuntimeSessionRecord,
   ProofDecisionRecord,
   ProofRuleRecord,
+  RepoIntelligenceEntrySource,
   RepoIntelligenceRecord,
+  RepoProfileRecord,
   RuntimePermissionRequestRecord,
   RuntimeSubagentRunRecord,
   SubagentConfigRecord,
   ValidationProfileRecord,
 } from "./types.js";
+import { REPO_INTELLIGENCE_ENTRY_SOURCES } from "./types.js";
 
 export const mapRuntimePermissionRequestRow = (row: RuntimePermissionRequestRow): RuntimePermissionRequestRecord => {
   assertRuntimePermissionRequestStatus(row.status);
@@ -329,7 +333,40 @@ export const mapValidationProfileRow = (row: ValidationProfileRow): ValidationPr
     notes: row.notes === null ? null : String(row.notes),
     confidence: Number(row.confidence),
     expectedRuntimeMs: row.expectedRuntimeMs === null ? null : Number(row.expectedRuntimeMs),
+    lastObservedRuntimeMs:
+      row.lastObservedRuntimeMs === null || row.lastObservedRuntimeMs === undefined
+        ? null
+        : Number(row.lastObservedRuntimeMs),
     prerequisites: parseStringArray(row.prerequisitesJson),
+    source: row.source,
+    createdAt: Number(row.createdAt),
+    updatedAt: Number(row.updatedAt),
+  };
+};
+
+// Phase 3.1 — repo profiles share the source vocabulary with repo_intelligence_entries.
+function assertRepoProfileSource(value: string): asserts value is RepoIntelligenceEntrySource {
+  if (!REPO_INTELLIGENCE_ENTRY_SOURCES.includes(value as RepoIntelligenceEntrySource)) {
+    throw new Error(`Unsupported repo profile source: ${value}`);
+  }
+}
+
+export const mapRepoProfileRow = (row: RepoProfileRow): RepoProfileRecord => {
+  assertRepoProfileSource(row.source);
+  return {
+    projectKey: String(row.projectKey),
+    displayName: String(row.displayName),
+    description: row.description === null ? null : String(row.description),
+    defaultBranch: row.defaultBranch === null ? null : String(row.defaultBranch),
+    defaultBuildWorkingDirectory:
+      row.defaultBuildWorkingDirectory === null ? null : String(row.defaultBuildWorkingDirectory),
+    defaultRegistry: row.defaultRegistry === null ? null : String(row.defaultRegistry),
+    registryHints: parseStringArray(row.registryHintsJson),
+    requiredEnvVars: parseStringArray(row.requiredEnvVarsJson),
+    requiredSdks: parseStringArray(row.requiredSdksJson),
+    userFacingCopyGlobs: parseStringArray(row.userFacingCopyGlobsJson),
+    uiTestGlobs: parseStringArray(row.uiTestGlobsJson),
+    notes: row.notes === null ? null : String(row.notes),
     source: row.source,
     createdAt: Number(row.createdAt),
     updatedAt: Number(row.updatedAt),

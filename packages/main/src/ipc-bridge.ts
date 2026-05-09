@@ -34,10 +34,14 @@ import type {
   TicketRunRepoIntelligenceCandidatesResult,
   TicketRunReviewSnapshotResult,
   MissionProofRulesSnapshot,
+  MissionRepoProfilesSnapshot,
+  MissionValidationProfilesSnapshot,
   TicketRunSnapshot,
   TicketRunSubmoduleGitStateResult,
   TicketRunSummary,
   UpsertMissionProofRuleInput,
+  UpsertMissionRepoProfileInput,
+  UpsertMissionValidationProfileInput,
   YouTrackProjectSummary,
   YouTrackStateMapping,
   YouTrackStatusSummary,
@@ -115,6 +119,12 @@ type MissionsRequestMessage =
   | Extract<ClientMessage, { type: "missions:proof-rules:list" }>
   | Extract<ClientMessage, { type: "missions:proof-rules:upsert" }>
   | Extract<ClientMessage, { type: "missions:proof-rules:delete" }>
+  | Extract<ClientMessage, { type: "missions:repo-profiles:list" }>
+  | Extract<ClientMessage, { type: "missions:repo-profiles:upsert" }>
+  | Extract<ClientMessage, { type: "missions:repo-profiles:delete" }>
+  | Extract<ClientMessage, { type: "missions:validation-profiles:list" }>
+  | Extract<ClientMessage, { type: "missions:validation-profiles:upsert" }>
+  | Extract<ClientMessage, { type: "missions:validation-profiles:delete" }>
   | Extract<ClientMessage, { type: "missions:ticket-run:proof:run" }>
   | Extract<ClientMessage, { type: "missions:ticket-run:proof:manual-review:set" }>
   | Extract<ClientMessage, { type: "missions:ticket-run:proof:manual-review:clear" }>
@@ -153,6 +163,12 @@ type MissionsResponseMessage =
   | Extract<ServerMessage, { type: "missions:proof-rules:list:result" }>
   | Extract<ServerMessage, { type: "missions:proof-rules:upsert:result" }>
   | Extract<ServerMessage, { type: "missions:proof-rules:delete:result" }>
+  | Extract<ServerMessage, { type: "missions:repo-profiles:list:result" }>
+  | Extract<ServerMessage, { type: "missions:repo-profiles:upsert:result" }>
+  | Extract<ServerMessage, { type: "missions:repo-profiles:delete:result" }>
+  | Extract<ServerMessage, { type: "missions:validation-profiles:list:result" }>
+  | Extract<ServerMessage, { type: "missions:validation-profiles:upsert:result" }>
+  | Extract<ServerMessage, { type: "missions:validation-profiles:delete:result" }>
   | Extract<ServerMessage, { type: "missions:ticket-run:proof:run:result" }>
   | Extract<ServerMessage, { type: "missions:ticket-run:proof:manual-review:set:result" }>
   | Extract<ServerMessage, { type: "missions:ticket-run:proof:manual-review:clear:result" }>
@@ -231,6 +247,14 @@ export interface IpcBridgeHandle {
   listMissionProofRules(): Promise<MissionProofRulesSnapshot>;
   upsertMissionProofRule(rule: UpsertMissionProofRuleInput): Promise<MissionProofRulesSnapshot>;
   deleteMissionProofRule(ruleId: string): Promise<MissionProofRulesSnapshot>;
+  listMissionRepoProfiles(): Promise<MissionRepoProfilesSnapshot>;
+  upsertMissionRepoProfile(profile: UpsertMissionRepoProfileInput): Promise<MissionRepoProfilesSnapshot>;
+  deleteMissionRepoProfile(projectKey: string): Promise<MissionRepoProfilesSnapshot>;
+  listMissionValidationProfiles(): Promise<MissionValidationProfilesSnapshot>;
+  upsertMissionValidationProfile(
+    profile: UpsertMissionValidationProfileInput,
+  ): Promise<MissionValidationProfilesSnapshot>;
+  deleteMissionValidationProfile(profileId: string): Promise<MissionValidationProfilesSnapshot>;
   setTicketRunProofManualReview(
     runId: string,
     justification: string,
@@ -863,6 +887,42 @@ export function setupIpcBridge(
       requestBackend(
         { type: "missions:proof-rules:delete", requestId: randomUUID(), ruleId },
         "missions:proof-rules:delete:result",
+        MISSION_REVIEW_REQUEST_TIMEOUT_MS,
+      ).then((response) => response.result),
+    listMissionRepoProfiles: () =>
+      requestBackend(
+        { type: "missions:repo-profiles:list", requestId: randomUUID() },
+        "missions:repo-profiles:list:result",
+        MISSION_REVIEW_REQUEST_TIMEOUT_MS,
+      ).then((response) => response.result),
+    upsertMissionRepoProfile: (profile) =>
+      requestBackend(
+        { type: "missions:repo-profiles:upsert", requestId: randomUUID(), profile },
+        "missions:repo-profiles:upsert:result",
+        MISSION_REVIEW_REQUEST_TIMEOUT_MS,
+      ).then((response) => response.result),
+    deleteMissionRepoProfile: (projectKey) =>
+      requestBackend(
+        { type: "missions:repo-profiles:delete", requestId: randomUUID(), projectKey },
+        "missions:repo-profiles:delete:result",
+        MISSION_REVIEW_REQUEST_TIMEOUT_MS,
+      ).then((response) => response.result),
+    listMissionValidationProfiles: () =>
+      requestBackend(
+        { type: "missions:validation-profiles:list", requestId: randomUUID() },
+        "missions:validation-profiles:list:result",
+        MISSION_REVIEW_REQUEST_TIMEOUT_MS,
+      ).then((response) => response.result),
+    upsertMissionValidationProfile: (profile) =>
+      requestBackend(
+        { type: "missions:validation-profiles:upsert", requestId: randomUUID(), profile },
+        "missions:validation-profiles:upsert:result",
+        MISSION_REVIEW_REQUEST_TIMEOUT_MS,
+      ).then((response) => response.result),
+    deleteMissionValidationProfile: (profileId) =>
+      requestBackend(
+        { type: "missions:validation-profiles:delete", requestId: randomUUID(), profileId },
+        "missions:validation-profiles:delete:result",
         MISSION_REVIEW_REQUEST_TIMEOUT_MS,
       ).then((response) => response.result),
     setTicketRunProofManualReview: (runId, justification) =>

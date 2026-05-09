@@ -15,15 +15,29 @@ import {
   normalizeTitle,
   serializeJson,
 } from "./helpers.js";
-import { mapProofDecisionRow, mapProofRuleRow, mapRepoIntelligenceRow, mapValidationProfileRow } from "./mappers.js";
-import type { ProofDecisionRow, ProofRuleRow, RepoIntelligenceRow, ValidationProfileRow } from "./rows.js";
+import {
+  mapProofDecisionRow,
+  mapProofRuleRow,
+  mapRepoIntelligenceRow,
+  mapRepoProfileRow,
+  mapValidationProfileRow,
+} from "./mappers.js";
+import type {
+  ProofDecisionRow,
+  ProofRuleRow,
+  RepoIntelligenceRow,
+  RepoProfileRow,
+  ValidationProfileRow,
+} from "./rows.js";
 import type {
   ProofDecisionRecord,
   ProofRuleRecord,
   RepoIntelligenceRecord,
+  RepoProfileRecord,
   UpsertProofDecisionInput,
   UpsertProofRuleInput,
   UpsertRepoIntelligenceInput,
+  UpsertRepoProfileInput,
   UpsertValidationProfileInput,
   ValidationProfileRecord,
 } from "./types.js";
@@ -225,6 +239,7 @@ export const createIntelligencePersistence = (context: DatabasePersistenceContex
            notes,
            confidence,
            expected_runtime_ms AS expectedRuntimeMs,
+           last_observed_runtime_ms AS lastObservedRuntimeMs,
            prerequisites_json AS prerequisitesJson,
            source,
            created_at AS createdAt,
@@ -261,6 +276,7 @@ export const createIntelligencePersistence = (context: DatabasePersistenceContex
        notes,
        confidence,
        expected_runtime_ms AS expectedRuntimeMs,
+       last_observed_runtime_ms AS lastObservedRuntimeMs,
        prerequisites_json AS prerequisitesJson,
        source,
        created_at AS createdAt,
@@ -295,6 +311,10 @@ export const createIntelligencePersistence = (context: DatabasePersistenceContex
         typeof input.expectedRuntimeMs === "number" && Number.isFinite(input.expectedRuntimeMs)
           ? Math.max(0, input.expectedRuntimeMs)
           : null,
+      lastObservedRuntimeMs:
+        typeof input.lastObservedRuntimeMs === "number" && Number.isFinite(input.lastObservedRuntimeMs)
+          ? Math.max(0, input.lastObservedRuntimeMs)
+          : (existing?.lastObservedRuntimeMs ?? null),
       prerequisitesJson: serializeJson(normalizeStringArray(input.prerequisites)) ?? "[]",
       source: input.source,
       createdAt: existing?.createdAt ?? now,
@@ -322,6 +342,7 @@ export const createIntelligencePersistence = (context: DatabasePersistenceContex
            notes,
            confidence,
            expected_runtime_ms,
+           last_observed_runtime_ms,
            prerequisites_json,
            source,
            created_at,
@@ -337,6 +358,7 @@ export const createIntelligencePersistence = (context: DatabasePersistenceContex
            @notes,
            @confidence,
            @expectedRuntimeMs,
+           @lastObservedRuntimeMs,
            @prerequisitesJson,
            @source,
            @createdAt,
@@ -352,6 +374,7 @@ export const createIntelligencePersistence = (context: DatabasePersistenceContex
            notes = excluded.notes,
            confidence = excluded.confidence,
            expected_runtime_ms = excluded.expected_runtime_ms,
+           last_observed_runtime_ms = excluded.last_observed_runtime_ms,
            prerequisites_json = excluded.prerequisites_json,
            source = excluded.source,
            updated_at = excluded.updated_at`,
@@ -625,6 +648,156 @@ export const createIntelligencePersistence = (context: DatabasePersistenceContex
     return saved;
   };
 
+  /**
+   * Phase 3.4 — delete a validation profile by id. Returns true if a row was removed.
+   */
+  const deleteValidationProfile = (profileId: string): boolean => {
+    assertDatabaseWritable(context);
+    const result = context.db
+      .prepare("DELETE FROM validation_profiles WHERE id = @profileId")
+      .run({ profileId });
+    return result.changes > 0;
+  };
+
+  // ─── Phase 3.1 — repo_profiles CRUD ────────────────────────────────────────────────
+  // Per-projectKey "what is this repo" record. Singleton per projectKey (PK), so we use
+  // upsert + delete + list/get rather than a scoped-list pattern.
+
+  const REPO_PROFILE_SELECT = `SELECT
+       project_key AS projectKey,
+       display_name AS displayName,
+       description,
+       default_branch AS defaultBranch,
+       default_build_working_directory AS defaultBuildWorkingDirectory,
+       default_registry AS defaultRegistry,
+       registry_hints_json AS registryHintsJson,
+       required_env_vars_json AS requiredEnvVarsJson,
+       required_sdks_json AS requiredSdksJson,
+       user_facing_copy_globs_json AS userFacingCopyGlobsJson,
+       ui_test_globs_json AS uiTestGlobsJson,
+       notes,
+       source,
+       created_at AS createdAt,
+       updated_at AS updatedAt
+     FROM repo_profiles`;
+
+  const getRepoProfile = (projectKey: string): RepoProfileRecord | null => {
+    const trimmed = projectKey.trim();
+    if (!trimmed) return null;
+    const row = context.db
+      .prepare(`${REPO_PROFILE_SELECT} WHERE project_key = @projectKey`)
+      .get({ projectKey: trimmed }) as RepoProfileRow | undefined;
+    return row ? mapRepoProfileRow(row) : null;
+  };
+
+  const listRepoProfiles = (options: { limit?: number } = {}): RepoProfileRecord[] => {
+    const limit = options.limit ?? 100;
+    const rows = context.db
+      .prepare(`${REPO_PROFILE_SELECT} ORDER BY updated_at DESC, project_key ASC LIMIT @limit`)
+      .all({ limit }) as unknown as RepoProfileRow[];
+    return rows.map((row) => mapRepoProfileRow(row));
+  };
+
+  const upsertRepoProfile = (input: UpsertRepoProfileInput): RepoProfileRecord => {
+    assertDatabaseWritable(context);
+    const projectKey = input.projectKey.trim();
+    const displayName = input.displayName.trim();
+    if (!projectKey || !displayName) {
+      throw new Error("Repo profiles require non-empty projectKey and displayName.");
+    }
+    const source = input.source ?? "user";
+    if (source !== "builtin" && source !== "user" && source !== "learned") {
+      throw new Error(`Unsupported repo profile source: ${source}`);
+    }
+    const now = input.createdAt ?? Date.now();
+    const existing = getRepoProfile(projectKey);
+    const payload = {
+      projectKey,
+      displayName,
+      description: normalizeTitle(input.description),
+      defaultBranch: normalizeTitle(input.defaultBranch),
+      defaultBuildWorkingDirectory: normalizeTitle(input.defaultBuildWorkingDirectory),
+      defaultRegistry: normalizeTitle(input.defaultRegistry),
+      registryHintsJson: serializeJson(normalizeStringArray(input.registryHints)) ?? "[]",
+      requiredEnvVarsJson: serializeJson(normalizeStringArray(input.requiredEnvVars)) ?? "[]",
+      requiredSdksJson: serializeJson(normalizeStringArray(input.requiredSdks)) ?? "[]",
+      userFacingCopyGlobsJson: serializeJson(normalizeStringArray(input.userFacingCopyGlobs)) ?? "[]",
+      uiTestGlobsJson: serializeJson(normalizeStringArray(input.uiTestGlobs)) ?? "[]",
+      notes: normalizeTitle(input.notes),
+      source,
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+    };
+
+    context.db
+      .prepare(
+        `INSERT INTO repo_profiles (
+           project_key,
+           display_name,
+           description,
+           default_branch,
+           default_build_working_directory,
+           default_registry,
+           registry_hints_json,
+           required_env_vars_json,
+           required_sdks_json,
+           user_facing_copy_globs_json,
+           ui_test_globs_json,
+           notes,
+           source,
+           created_at,
+           updated_at
+         ) VALUES (
+           @projectKey,
+           @displayName,
+           @description,
+           @defaultBranch,
+           @defaultBuildWorkingDirectory,
+           @defaultRegistry,
+           @registryHintsJson,
+           @requiredEnvVarsJson,
+           @requiredSdksJson,
+           @userFacingCopyGlobsJson,
+           @uiTestGlobsJson,
+           @notes,
+           @source,
+           @createdAt,
+           @updatedAt
+         )
+         ON CONFLICT(project_key) DO UPDATE SET
+           display_name = excluded.display_name,
+           description = excluded.description,
+           default_branch = excluded.default_branch,
+           default_build_working_directory = excluded.default_build_working_directory,
+           default_registry = excluded.default_registry,
+           registry_hints_json = excluded.registry_hints_json,
+           required_env_vars_json = excluded.required_env_vars_json,
+           required_sdks_json = excluded.required_sdks_json,
+           user_facing_copy_globs_json = excluded.user_facing_copy_globs_json,
+           ui_test_globs_json = excluded.ui_test_globs_json,
+           notes = excluded.notes,
+           source = excluded.source,
+           updated_at = excluded.updated_at`,
+      )
+      .run(payload);
+
+    const saved = getRepoProfile(projectKey);
+    if (!saved) {
+      throw new Error(`Failed to load repo profile ${projectKey}.`);
+    }
+    return saved;
+  };
+
+  const deleteRepoProfile = (projectKey: string): boolean => {
+    assertDatabaseWritable(context);
+    const trimmed = projectKey.trim();
+    if (!trimmed) return false;
+    const result = context.db
+      .prepare("DELETE FROM repo_profiles WHERE project_key = @projectKey")
+      .run({ projectKey: trimmed });
+    return result.changes > 0;
+  };
+
   return {
     listRepoIntelligence,
     getRepoIntelligenceEntry,
@@ -635,6 +808,7 @@ export const createIntelligencePersistence = (context: DatabasePersistenceContex
     getValidationProfile,
     upsertValidationProfile,
     seedBuiltinValidationProfiles,
+    deleteValidationProfile,
     listProofRules,
     getProofRule,
     upsertProofRule,
@@ -642,5 +816,9 @@ export const createIntelligencePersistence = (context: DatabasePersistenceContex
     deleteProofRule,
     getProofDecision,
     upsertProofDecision,
+    getRepoProfile,
+    listRepoProfiles,
+    upsertRepoProfile,
+    deleteRepoProfile,
   };
 };

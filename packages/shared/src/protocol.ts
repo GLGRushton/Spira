@@ -50,7 +50,11 @@ import type {
   TicketRunSubmoduleGitStateResult,
   TicketRunSummary,
   MissionProofRulesSnapshot,
+  MissionRepoProfilesSnapshot,
+  MissionValidationProfilesSnapshot,
   UpsertMissionProofRuleInput,
+  UpsertMissionRepoProfileInput,
+  UpsertMissionValidationProfileInput,
 } from "./ticket-run-types.js";
 import type { UpgradeProposal, UpgradeStatus } from "./upgrade.js";
 import type {
@@ -140,6 +144,16 @@ export type ClientMessage =
   | { type: "missions:proof-rules:list"; requestId: string }
   | { type: "missions:proof-rules:upsert"; requestId: string; rule: UpsertMissionProofRuleInput }
   | { type: "missions:proof-rules:delete"; requestId: string; ruleId: string }
+  | { type: "missions:repo-profiles:list"; requestId: string }
+  | { type: "missions:repo-profiles:upsert"; requestId: string; profile: UpsertMissionRepoProfileInput }
+  | { type: "missions:repo-profiles:delete"; requestId: string; projectKey: string }
+  | { type: "missions:validation-profiles:list"; requestId: string }
+  | {
+      type: "missions:validation-profiles:upsert";
+      requestId: string;
+      profile: UpsertMissionValidationProfileInput;
+    }
+  | { type: "missions:validation-profiles:delete"; requestId: string; profileId: string }
   | { type: "missions:ticket-run:proof:run"; requestId: string; runId: string; profileId: string }
   | {
       type: "missions:ticket-run:proof:manual-review:set";
@@ -310,6 +324,24 @@ export type ServerMessage =
   | { type: "missions:proof-rules:list:result"; requestId: string; result: MissionProofRulesSnapshot }
   | { type: "missions:proof-rules:upsert:result"; requestId: string; result: MissionProofRulesSnapshot }
   | { type: "missions:proof-rules:delete:result"; requestId: string; result: MissionProofRulesSnapshot }
+  | { type: "missions:repo-profiles:list:result"; requestId: string; result: MissionRepoProfilesSnapshot }
+  | { type: "missions:repo-profiles:upsert:result"; requestId: string; result: MissionRepoProfilesSnapshot }
+  | { type: "missions:repo-profiles:delete:result"; requestId: string; result: MissionRepoProfilesSnapshot }
+  | {
+      type: "missions:validation-profiles:list:result";
+      requestId: string;
+      result: MissionValidationProfilesSnapshot;
+    }
+  | {
+      type: "missions:validation-profiles:upsert:result";
+      requestId: string;
+      result: MissionValidationProfilesSnapshot;
+    }
+  | {
+      type: "missions:validation-profiles:delete:result";
+      requestId: string;
+      result: MissionValidationProfilesSnapshot;
+    }
   | {
       type: "missions:ticket-run:proof:run:result";
       requestId: string;

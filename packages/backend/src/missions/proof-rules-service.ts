@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { ProofRuleRecord, SpiraMemoryDatabase } from "@spira/memory-db";
 import type { MissionProofRuleRecord, MissionProofRulesSnapshot, UpsertMissionProofRuleInput } from "@spira/shared";
+import { isBuiltinRecordId } from "./builtin-id.js";
 
 /**
  * Phase 2.5 — proof rules admin service.
@@ -10,10 +11,6 @@ import type { MissionProofRuleRecord, MissionProofRulesSnapshot, UpsertMissionPr
  * and removed. This is intentionally permissive — the proof rule scoring already handles
  * arbitrary rules, and the operator's experience matters more than strict policy here.
  */
-
-const BUILTIN_PREFIX = "global-";
-
-const isBuiltinRuleId = (id: string): boolean => id.startsWith(BUILTIN_PREFIX);
 
 const mapRule = (record: ProofRuleRecord): MissionProofRuleRecord => ({
   id: record.id,
@@ -25,7 +22,7 @@ const mapRule = (record: ProofRuleRecord): MissionProofRuleRecord => ({
   summaryKeywords: [...record.summaryKeywords],
   recommendedLevel: record.recommendedLevel,
   rationale: record.rationale,
-  source: isBuiltinRuleId(record.id) ? "builtin" : "user",
+  source: isBuiltinRecordId(record.id) ? "builtin" : "user",
   createdAt: record.createdAt,
   updatedAt: record.updatedAt,
 });
@@ -47,7 +44,7 @@ export class ProofRulesService {
   upsert(input: UpsertMissionProofRuleInput): MissionProofRulesSnapshot {
     const trimmedId = input.id?.trim() ?? "";
     const id = trimmedId.length > 0 ? trimmedId : `user-${randomUUID()}`;
-    if (isBuiltinRuleId(id)) {
+    if (isBuiltinRecordId(id)) {
       throw new Error(`Cannot upsert builtin proof rule "${id}". Builtin rules ship with the application code.`);
     }
     this.memoryDb.upsertProofRule({
@@ -66,7 +63,7 @@ export class ProofRulesService {
 
   /** Delete a user rule. Builtin rules are protected — delete requests for them throw. */
   delete(ruleId: string): MissionProofRulesSnapshot {
-    if (isBuiltinRuleId(ruleId)) {
+    if (isBuiltinRecordId(ruleId)) {
       throw new Error(
         `Cannot delete builtin proof rule "${ruleId}". Remove it from BUILTIN_PROOF_RULES and reseed.`,
       );

@@ -45,6 +45,7 @@ import type {
   ProofRuleRecord,
   RememberMemoryInput,
   RepoIntelligenceRecord,
+  RepoProfileRecord,
   RuntimePermissionRequestRecord,
   RuntimePermissionRequestStatus,
   RuntimeRecoverySummary,
@@ -57,6 +58,7 @@ import type {
   UpsertProofDecisionInput,
   UpsertProofRuleInput,
   UpsertRepoIntelligenceInput,
+  UpsertRepoProfileInput,
   UpsertRuntimeCheckpointInput,
   UpsertRuntimeHostResourceInput,
   UpsertRuntimePermissionRequestInput,
@@ -360,6 +362,10 @@ export class SpiraMemoryDatabase {
     return this.intelligence.seedBuiltinValidationProfiles(entries);
   }
 
+  deleteValidationProfile(profileId: string): boolean {
+    return this.intelligence.deleteValidationProfile(profileId);
+  }
+
   listProofRules(
     options: {
       projectKey?: string | null;
@@ -392,6 +398,23 @@ export class SpiraMemoryDatabase {
 
   upsertProofDecision(input: UpsertProofDecisionInput): ProofDecisionRecord {
     return this.intelligence.upsertProofDecision(input);
+  }
+
+  // Phase 3.1 — repo profiles CRUD.
+  getRepoProfile(projectKey: string): RepoProfileRecord | null {
+    return this.intelligence.getRepoProfile(projectKey);
+  }
+
+  listRepoProfiles(options: { limit?: number } = {}): RepoProfileRecord[] {
+    return this.intelligence.listRepoProfiles(options);
+  }
+
+  upsertRepoProfile(input: UpsertRepoProfileInput): RepoProfileRecord {
+    return this.intelligence.upsertRepoProfile(input);
+  }
+
+  deleteRepoProfile(projectKey: string): boolean {
+    return this.intelligence.deleteRepoProfile(projectKey);
   }
 
   appendMissionEvent(input: AppendMissionEventInput): MissionEventRecord {

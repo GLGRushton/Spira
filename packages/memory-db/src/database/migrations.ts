@@ -982,4 +982,65 @@ export const MIGRATIONS: MigrationDefinition[] = [
       "CREATE INDEX idx_ticket_run_proof_runs_run_id_v29 ON ticket_run_proof_runs(run_id, started_at DESC)",
     ],
   },
+  {
+    // Phase 3.1 — repo_profiles + Phase 3.4 validation_profiles enrichment.
+    //   - New repo_profiles table: per-projectKey "what is this repo" record. Carries display
+    //     metadata, default registry / branch / build dir, required env vars + SDKs (JSON
+    //     arrays), user-facing copy globs, UI test globs, and free-text notes. JS-side source
+    //     tag mirrors the one on repo_intelligence_entries (builtin / user / learned).
+    //   - validation_profiles gains 'restore', 'format', 'e2e-smoke' kinds + a
+    //     last_observed_runtime_ms column for the rolling-average runtime feedback that
+    //     Phase 5 will populate. As with v29 we use the table-rename pattern because SQLite
+    //     can't drop a CHECK constraint in place.
+    version: 30,
+    statements: [
+      `CREATE TABLE repo_profiles (
+        project_key TEXT PRIMARY KEY,
+        display_name TEXT NOT NULL,
+        description TEXT,
+        default_branch TEXT,
+        default_build_working_directory TEXT,
+        default_registry TEXT,
+        registry_hints_json TEXT NOT NULL DEFAULT '[]',
+        required_env_vars_json TEXT NOT NULL DEFAULT '[]',
+        required_sdks_json TEXT NOT NULL DEFAULT '[]',
+        user_facing_copy_globs_json TEXT NOT NULL DEFAULT '[]',
+        ui_test_globs_json TEXT NOT NULL DEFAULT '[]',
+        notes TEXT,
+        source TEXT NOT NULL CHECK(source IN ('builtin', 'user', 'learned')),
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      )`,
+      "CREATE INDEX idx_repo_profiles_updated_v30 ON repo_profiles(updated_at DESC)",
+
+      "ALTER TABLE validation_profiles RENAME TO validation_profiles_v29",
+      `CREATE TABLE validation_profiles (
+        id TEXT PRIMARY KEY,
+        project_key TEXT,
+        repo_relative_path TEXT,
+        label TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK(kind IN ('build', 'unit-test', 'lint', 'typecheck', 'restore', 'format', 'e2e-smoke')),
+        command TEXT NOT NULL,
+        working_directory TEXT NOT NULL,
+        notes TEXT,
+        confidence REAL NOT NULL DEFAULT 0.5,
+        expected_runtime_ms INTEGER,
+        last_observed_runtime_ms INTEGER,
+        prerequisites_json TEXT NOT NULL DEFAULT '[]',
+        source TEXT NOT NULL CHECK(source IN ('builtin', 'user')),
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      )`,
+      `INSERT INTO validation_profiles (
+        id, project_key, repo_relative_path, label, kind, command, working_directory,
+        notes, confidence, expected_runtime_ms, prerequisites_json, source, created_at, updated_at
+      )
+      SELECT
+        id, project_key, repo_relative_path, label, kind, command, working_directory,
+        notes, confidence, expected_runtime_ms, prerequisites_json, source, created_at, updated_at
+      FROM validation_profiles_v29`,
+      "DROP TABLE validation_profiles_v29",
+      "CREATE INDEX idx_validation_profiles_scope_v30 ON validation_profiles(project_key, repo_relative_path, updated_at DESC)",
+    ],
+  },
 ];

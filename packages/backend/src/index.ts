@@ -32,6 +32,8 @@ import {
 } from "./missions/mission-intelligence.js";
 import { MissionLifecycleService } from "./missions/mission-lifecycle.js";
 import { ProofRulesService } from "./missions/proof-rules-service.js";
+import { RepoProfilesService } from "./missions/repo-profiles-service.js";
+import { ValidationProfilesService } from "./missions/validation-profiles-service.js";
 import { MissionServiceRegistry } from "./missions/service-registry.js";
 import { type GenerateCommitDraftInput, TicketRunService } from "./missions/ticket-runs.js";
 import { ProjectRegistry } from "./projects/registry.js";
@@ -87,6 +89,8 @@ let ticketRunService: TicketRunService | null = null;
 let missionServiceRegistry: MissionServiceRegistry | null = null;
 let missionLifecycleService: MissionLifecycleService | null = null;
 let proofRulesService: ProofRulesService | null = null;
+let repoProfilesService: RepoProfilesService | null = null;
+let validationProfilesService: ValidationProfilesService | null = null;
 
 const BACKEND_BUILD_ID = process.env.SPIRA_BUILD_ID?.trim() || "dev";
 const BACKEND_GENERATION = Number(process.env.SPIRA_GENERATION ?? "0");
@@ -1205,20 +1209,21 @@ const handleClientMessage = async (message: ClientMessage): Promise<void> => {
     return;
   }
 
-  // Phase 2.5 — proof rules admin handlers. The unavailable-service guard is identical for
-  // all three; extracting it keeps each handler focused on its own success path.
-  const sendProofRulesUnavailable = (requestId: string): void => {
+  // Phase 2.5 / 3.x — admin services share an identical "service unavailable" guard. The
+  // helper takes the human-readable noun so each handler still surfaces specific copy.
+  const sendAdminServiceUnavailable = (requestId: string, label: string): void => {
     transport?.send({
       type: "missions:request-error",
       requestId,
       ...toErrorPayload(
-        new Error("Proof rules service is unavailable."),
+        new Error(`${label} service is unavailable.`),
         "MISSIONS_UNAVAILABLE",
-        "Proof rules are unavailable.",
+        `${label} are unavailable.`,
         "missions",
       ),
     });
   };
+  const sendProofRulesUnavailable = (requestId: string): void => sendAdminServiceUnavailable(requestId, "Proof rules");
 
   if (message.type === "missions:proof-rules:list") {
     if (!proofRulesService) {
@@ -1274,6 +1279,142 @@ const handleClientMessage = async (message: ClientMessage): Promise<void> => {
         type: "missions:request-error",
         requestId: message.requestId,
         ...toErrorPayload(error, "MISSIONS_PROOF_RULE_DELETE_FAILED", "Failed to delete proof rule.", "missions"),
+      });
+    }
+    return;
+  }
+
+  // Phase 3.2 / 3.3 — repo profiles admin handlers.
+  const sendRepoProfilesUnavailable = (requestId: string): void =>
+    sendAdminServiceUnavailable(requestId, "Repo profiles");
+
+  if (message.type === "missions:repo-profiles:list") {
+    if (!repoProfilesService) {
+      sendRepoProfilesUnavailable(message.requestId);
+      return;
+    }
+    transport?.send({
+      type: "missions:repo-profiles:list:result",
+      requestId: message.requestId,
+      result: repoProfilesService.list(),
+    });
+    return;
+  }
+
+  if (message.type === "missions:repo-profiles:upsert") {
+    if (!repoProfilesService) {
+      sendRepoProfilesUnavailable(message.requestId);
+      return;
+    }
+    try {
+      const result = repoProfilesService.upsert(message.profile);
+      transport?.send({
+        type: "missions:repo-profiles:upsert:result",
+        requestId: message.requestId,
+        result,
+      });
+    } catch (error) {
+      logger.error({ err: error, requestId: message.requestId }, "Failed to upsert repo profile");
+      transport?.send({
+        type: "missions:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(error, "MISSIONS_REPO_PROFILE_UPSERT_FAILED", "Failed to save repo profile.", "missions"),
+      });
+    }
+    return;
+  }
+
+  if (message.type === "missions:repo-profiles:delete") {
+    if (!repoProfilesService) {
+      sendRepoProfilesUnavailable(message.requestId);
+      return;
+    }
+    try {
+      const result = repoProfilesService.delete(message.projectKey);
+      transport?.send({
+        type: "missions:repo-profiles:delete:result",
+        requestId: message.requestId,
+        result,
+      });
+    } catch (error) {
+      logger.error({ err: error, requestId: message.requestId }, "Failed to delete repo profile");
+      transport?.send({
+        type: "missions:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(error, "MISSIONS_REPO_PROFILE_DELETE_FAILED", "Failed to delete repo profile.", "missions"),
+      });
+    }
+    return;
+  }
+
+  // Phase 3.4 — validation profiles admin handlers.
+  const sendValidationProfilesUnavailable = (requestId: string): void =>
+    sendAdminServiceUnavailable(requestId, "Validation profiles");
+
+  if (message.type === "missions:validation-profiles:list") {
+    if (!validationProfilesService) {
+      sendValidationProfilesUnavailable(message.requestId);
+      return;
+    }
+    transport?.send({
+      type: "missions:validation-profiles:list:result",
+      requestId: message.requestId,
+      result: validationProfilesService.list(),
+    });
+    return;
+  }
+
+  if (message.type === "missions:validation-profiles:upsert") {
+    if (!validationProfilesService) {
+      sendValidationProfilesUnavailable(message.requestId);
+      return;
+    }
+    try {
+      const result = validationProfilesService.upsert(message.profile);
+      transport?.send({
+        type: "missions:validation-profiles:upsert:result",
+        requestId: message.requestId,
+        result,
+      });
+    } catch (error) {
+      logger.error({ err: error, requestId: message.requestId }, "Failed to upsert validation profile");
+      transport?.send({
+        type: "missions:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(
+          error,
+          "MISSIONS_VALIDATION_PROFILE_UPSERT_FAILED",
+          "Failed to save validation profile.",
+          "missions",
+        ),
+      });
+    }
+    return;
+  }
+
+  if (message.type === "missions:validation-profiles:delete") {
+    if (!validationProfilesService) {
+      sendValidationProfilesUnavailable(message.requestId);
+      return;
+    }
+    try {
+      const result = validationProfilesService.delete(message.profileId);
+      transport?.send({
+        type: "missions:validation-profiles:delete:result",
+        requestId: message.requestId,
+        result,
+      });
+    } catch (error) {
+      logger.error({ err: error, requestId: message.requestId }, "Failed to delete validation profile");
+      transport?.send({
+        type: "missions:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(
+          error,
+          "MISSIONS_VALIDATION_PROFILE_DELETE_FAILED",
+          "Failed to delete validation profile.",
+          "missions",
+        ),
       });
     }
     return;
@@ -2393,6 +2534,8 @@ const bootstrap = async () => {
   memoryDb?.seedBuiltinProofRules(BUILTIN_PROOF_RULES);
   if (memoryDb) {
     proofRulesService = new ProofRulesService(memoryDb);
+    repoProfilesService = new RepoProfilesService(memoryDb);
+    validationProfilesService = new ValidationProfilesService(memoryDb);
   }
   projectRegistry = new ProjectRegistry(memoryDb);
   missionLifecycleService = new MissionLifecycleService(memoryDb, bus, async (runId) => {

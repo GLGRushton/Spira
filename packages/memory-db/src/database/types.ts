@@ -31,7 +31,15 @@ export const SQLITE_BUSY_TIMEOUT_MS = 5_000;
 export const MEMORY_ENTRY_CATEGORIES = ["user-preference", "fact", "task-context", "correction"] as const;
 export const REPO_INTELLIGENCE_ENTRY_TYPES = ["briefing", "pitfall", "example"] as const;
 export const REPO_INTELLIGENCE_ENTRY_SOURCES = ["builtin", "user", "learned"] as const;
-export const VALIDATION_PROFILE_KINDS = ["build", "unit-test", "lint", "typecheck"] as const;
+export const VALIDATION_PROFILE_KINDS = [
+  "build",
+  "unit-test",
+  "lint",
+  "typecheck",
+  "restore",
+  "format",
+  "e2e-smoke",
+] as const;
 export const RUNTIME_PERMISSION_REQUEST_STATUSES = ["pending", "approved", "denied", "expired"] as const;
 export const RUNTIME_HOST_RESOURCE_STATUSES = [
   "running",
@@ -426,6 +434,8 @@ export interface ValidationProfileRecord {
   notes: string | null;
   confidence: number;
   expectedRuntimeMs: number | null;
+  /** Phase 3.4 — rolling-average observed runtime; populated by Phase 5's learning loop. */
+  lastObservedRuntimeMs: number | null;
   prerequisites: string[];
   source: "builtin" | "user";
   createdAt: number;
@@ -443,8 +453,46 @@ export interface UpsertValidationProfileInput {
   notes?: string | null;
   confidence?: number;
   expectedRuntimeMs?: number | null;
+  /** Phase 3.4 — optional. Editor leaves it untouched on upsert; learner overwrites it. */
+  lastObservedRuntimeMs?: number | null;
   prerequisites?: readonly string[];
   source: "builtin" | "user";
+  createdAt?: number;
+}
+
+/** Phase 3.1 — DB record for a per-project repo profile. */
+export interface RepoProfileRecord {
+  projectKey: string;
+  displayName: string;
+  description: string | null;
+  defaultBranch: string | null;
+  defaultBuildWorkingDirectory: string | null;
+  defaultRegistry: string | null;
+  registryHints: string[];
+  requiredEnvVars: string[];
+  requiredSdks: string[];
+  userFacingCopyGlobs: string[];
+  uiTestGlobs: string[];
+  notes: string | null;
+  source: "builtin" | "user" | "learned";
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface UpsertRepoProfileInput {
+  projectKey: string;
+  displayName: string;
+  description?: string | null;
+  defaultBranch?: string | null;
+  defaultBuildWorkingDirectory?: string | null;
+  defaultRegistry?: string | null;
+  registryHints?: readonly string[];
+  requiredEnvVars?: readonly string[];
+  requiredSdks?: readonly string[];
+  userFacingCopyGlobs?: readonly string[];
+  uiTestGlobs?: readonly string[];
+  notes?: string | null;
+  source?: "builtin" | "user" | "learned";
   createdAt?: number;
 }
 

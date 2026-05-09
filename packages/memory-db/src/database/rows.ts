@@ -177,7 +177,26 @@ export interface ValidationProfileRow {
   notes: string | null;
   confidence: number;
   expectedRuntimeMs: number | null;
+  lastObservedRuntimeMs: number | null;
   prerequisitesJson: string;
+  source: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface RepoProfileRow {
+  projectKey: string;
+  displayName: string;
+  description: string | null;
+  defaultBranch: string | null;
+  defaultBuildWorkingDirectory: string | null;
+  defaultRegistry: string | null;
+  registryHintsJson: string;
+  requiredEnvVarsJson: string;
+  requiredSdksJson: string;
+  userFacingCopyGlobsJson: string;
+  uiTestGlobsJson: string;
+  notes: string | null;
   source: string;
   createdAt: number;
   updatedAt: number;

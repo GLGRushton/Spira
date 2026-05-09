@@ -58,7 +58,19 @@ export const TICKET_RUN_MISSION_PROOF_LEVELS = [
 ] as const;
 export type TicketRunMissionProofLevel = (typeof TICKET_RUN_MISSION_PROOF_LEVELS)[number];
 
-export const TICKET_RUN_MISSION_VALIDATION_KINDS = ["build", "unit-test", "lint", "typecheck"] as const;
+export const TICKET_RUN_MISSION_VALIDATION_KINDS = [
+  "build",
+  "unit-test",
+  "lint",
+  "typecheck",
+  // Phase 3.4 — additional kinds so validation profiles can describe a fuller catalog of
+  // what "validation" looks like for a repo (dependency restore, formatter check,
+  // smoke-only e2e). The rule scoring and recording paths treat all kinds equivalently;
+  // the value is in giving the operator + the agent better vocabulary.
+  "restore",
+  "format",
+  "e2e-smoke",
+] as const;
 export type TicketRunMissionValidationKind = (typeof TICKET_RUN_MISSION_VALIDATION_KINDS)[number];
 
 export const TICKET_RUN_MISSION_VALIDATION_STATUSES = ["pending", "passed", "failed", "skipped"] as const;
@@ -377,6 +389,98 @@ export interface TicketRunMissionEventSummary {
   eventType: string;
   metadata: Record<string, unknown> | null;
   occurredAt: number;
+}
+
+/**
+ * Phase 3.4 — renderer-friendly validation profile snapshot. Mirrors the DB-side
+ * ValidationProfileRecord (which lives in @spira/memory-db) but with renderer-friendly
+ * types and the rolling-runtime field exposed.
+ */
+export interface MissionValidationProfileRecord {
+  id: string;
+  projectKey: string | null;
+  repoRelativePath: string | null;
+  label: string;
+  kind: TicketRunMissionValidationKind;
+  command: string;
+  workingDirectory: string;
+  notes: string | null;
+  confidence: number;
+  expectedRuntimeMs: number | null;
+  /** Rolling-average observed runtime; populated by Phase 5's learning loop. */
+  lastObservedRuntimeMs: number | null;
+  prerequisites: string[];
+  source: "builtin" | "user";
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface MissionValidationProfilesSnapshot {
+  profiles: MissionValidationProfileRecord[];
+}
+
+export interface UpsertMissionValidationProfileInput {
+  /** Optional id; if omitted the service mints one. */
+  id?: string;
+  projectKey?: string | null;
+  repoRelativePath?: string | null;
+  label: string;
+  kind: TicketRunMissionValidationKind;
+  command: string;
+  workingDirectory: string;
+  notes?: string | null;
+  confidence?: number;
+  expectedRuntimeMs?: number | null;
+  prerequisites?: readonly string[];
+}
+
+/**
+ * Phase 3.1 — first-class per-project repo profile. One record per `projectKey`. Carries
+ * the metadata that's most expensive for a fresh mission to re-derive (registry, default
+ * branch, required SDKs, where user-facing copy lives, etc.) so prompt context and the
+ * onboarding wizard can both surface it.
+ *
+ * `source` follows the same vocabulary as repo_intelligence_entries:
+ *  - `builtin`: ships with the application code.
+ *  - `user`: captured by the operator via the admin pane / onboarding wizard.
+ *  - `learned`: written by the Phase 5 learning loop (not yet active).
+ */
+export interface MissionRepoProfileRecord {
+  projectKey: string;
+  displayName: string;
+  description: string | null;
+  defaultBranch: string | null;
+  defaultBuildWorkingDirectory: string | null;
+  defaultRegistry: string | null;
+  registryHints: string[];
+  requiredEnvVars: string[];
+  requiredSdks: string[];
+  userFacingCopyGlobs: string[];
+  uiTestGlobs: string[];
+  notes: string | null;
+  source: "builtin" | "user" | "learned";
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface MissionRepoProfilesSnapshot {
+  profiles: MissionRepoProfileRecord[];
+}
+
+export interface UpsertMissionRepoProfileInput {
+  projectKey: string;
+  displayName: string;
+  description?: string | null;
+  defaultBranch?: string | null;
+  defaultBuildWorkingDirectory?: string | null;
+  defaultRegistry?: string | null;
+  registryHints?: readonly string[];
+  requiredEnvVars?: readonly string[];
+  requiredSdks?: readonly string[];
+  userFacingCopyGlobs?: readonly string[];
+  uiTestGlobs?: readonly string[];
+  notes?: string | null;
+  source?: "builtin" | "user" | "learned";
 }
 
 /**

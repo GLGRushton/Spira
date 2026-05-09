@@ -587,6 +587,23 @@ describe("SpiraMemoryDatabase", () => {
         command TEXT,
         artifacts_json TEXT
       );
+      -- Stub validation_profiles for v30 migration which recreates it.
+      CREATE TABLE validation_profiles (
+        id TEXT PRIMARY KEY,
+        project_key TEXT,
+        repo_relative_path TEXT,
+        label TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        command TEXT NOT NULL,
+        working_directory TEXT NOT NULL,
+        notes TEXT,
+        confidence REAL NOT NULL DEFAULT 0.5,
+        expected_runtime_ms INTEGER,
+        prerequisites_json TEXT NOT NULL DEFAULT '[]',
+        source TEXT NOT NULL DEFAULT 'builtin',
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
       PRAGMA user_version = 24;
     `);
     rawDb.close();

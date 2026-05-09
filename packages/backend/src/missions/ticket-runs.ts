@@ -64,6 +64,7 @@ import {
 } from "./proof-registry.js";
 import { runProofPreflight } from "./proof-preflight.js";
 import { type RunMissionProofInput, type RunMissionProofOutput, runMissionProof } from "./proof-runner.js";
+import { buildRepoGuidanceSection } from "./repo-guidance.js";
 import {
   buildSubmoduleDiffFingerprint,
   mergeUntrackedFiles,
@@ -1967,6 +1968,7 @@ export class TicketRunService {
 
   private buildInitialPrompt(run: TicketRunSummary, prompt: string | null): string {
     const workspace = describeTicketRunWorkspace(run.worktrees);
+    const guidance = this.tryBuildRepoGuidance(run);
     return [
       `Work on ticket ${run.ticketId}: ${run.ticketSummary}.`,
       `Mission workspace: ${workspace.phrase}.`,
@@ -1976,12 +1978,14 @@ export class TicketRunService {
       "Use the existing station context as your scratchpad; do not restart from first principles unless the evidence demands it.",
       prompt ? `Additional operator context: ${prompt}` : "No extra operator context was provided beyond the ticket.",
       "If you stop with open questions or partial work, say so plainly in your final summary.",
+      ...(guidance ? [guidance] : []),
     ].join("\n");
   }
 
   private buildContinuationPrompt(run: TicketRunSummary, prompt: string | null): string {
     const latestAttempt = this.getLatestAttempt(run);
     const workspace = describeTicketRunWorkspace(run.worktrees);
+    const guidance = this.tryBuildRepoGuidance(run);
     return [
       `Continue work on ticket ${run.ticketId}: ${run.ticketSummary}.`,
       `Mission workspace: ${workspace.phrase}.`,
@@ -1992,7 +1996,27 @@ export class TicketRunService {
       prompt
         ? `User follow-up: ${prompt}`
         : "Tighten the solution, resolve remaining issues, and leave a crisp handoff summary.",
+      ...(guidance ? [guidance] : []),
     ].join("\n");
+  }
+
+  /**
+   * Phase 3.5 — best-effort repo-guidance section. Returns null if no memoryDb is wired
+   * (test stubs) or if there's nothing useful to inject. Failures are logged but never
+   * fault prompt construction — guidance is a hint, not a hard requirement.
+   */
+  private tryBuildRepoGuidance(run: TicketRunSummary): string | null {
+    const memoryDb = this.options.memoryDb;
+    if (!memoryDb) return null;
+    try {
+      return buildRepoGuidanceSection(memoryDb, run);
+    } catch (error) {
+      this.options.logger.warn(
+        { err: error, runId: run.runId, ticketId: run.ticketId },
+        "Failed to build repo guidance section; continuing without it",
+      );
+      return null;
+    }
   }
 
   private resolveTargetWorktree(

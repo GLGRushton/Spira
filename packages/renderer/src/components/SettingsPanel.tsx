@@ -11,6 +11,8 @@ import { useMcpStore } from "../stores/mcp-store.js";
 import { useRuntimeConfigStore } from "../stores/runtime-config-store.js";
 import { useSettingsStore } from "../stores/settings-store.js";
 import { ProofRulesEditor } from "./settings/ProofRulesEditor.js";
+import { RepoProfilesEditor } from "./settings/RepoProfilesEditor.js";
+import { ValidationProfilesEditor } from "./settings/ValidationProfilesEditor.js";
 import styles from "./SettingsPanel.module.css";
 
 const YOUTRACK_RUNTIME_CONFIG_KEYS: RuntimeConfigKey[] = ["youTrackBaseUrl", "youTrackToken"];
@@ -296,6 +298,8 @@ export function SettingsPanel() {
     { id: "permissions", label: "Permissions", caption: "Tool approval behaviour" },
     { id: "armoury", label: "Armoury", caption: "MCP servers" },
     { id: "mission-git", label: "Mission git", caption: "Submodule PAT" },
+    { id: "repo-profiles", label: "Repo profiles", caption: "Per-project metadata" },
+    { id: "validation-profiles", label: "Validation profiles", caption: "Build / test / lint catalog" },
     { id: "proof-rules", label: "Proof rules", caption: "Proof level recommendations" },
     { id: "youtrack", label: "YouTrack", caption: "Ticket intake" },
     { id: "sql-server", label: "SQL server", caption: "Read-only MCP login" },
@@ -546,6 +550,10 @@ export function SettingsPanel() {
         );
       case "proof-rules":
         return <ProofRulesEditor />;
+      case "repo-profiles":
+        return <RepoProfilesEditor />;
+      case "validation-profiles":
+        return <ValidationProfilesEditor />;
       case "other":
         return renderRuntimeConfigSection(
           "Other secure keys",
