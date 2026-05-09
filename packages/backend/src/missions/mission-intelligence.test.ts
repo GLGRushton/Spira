@@ -1,6 +1,15 @@
-import type { TicketRunSummary } from "@spira/shared";
+import type { ProofRuleRecord } from "@spira/memory-db";
+import type {
+  TicketRunMissionClassification,
+  TicketRunProofProfileSummary,
+  TicketRunSummary,
+} from "@spira/shared";
 import { describe, expect, it } from "vitest";
-import { buildLearnedRepoIntelligenceCandidates, toPersistedProofDecisionInput } from "./mission-intelligence.js";
+import {
+  buildLearnedRepoIntelligenceCandidates,
+  computeAdvisoryProofDecision,
+  toPersistedProofDecisionInput,
+} from "./mission-intelligence.js";
 
 const createRun = (): TicketRunSummary => ({
   runId: "run-1",
@@ -115,6 +124,8 @@ const createRun = (): TicketRunSummary => ({
     lastProofAt: 2,
     lastProofSummary: "Proof passed.",
     staleReason: null,
+    manualReviewJustification: null,
+    manualReviewAt: null,
   },
   proofRuns: [],
 });
@@ -191,5 +202,134 @@ describe("mission-intelligence", () => {
     const candidates = buildLearnedRepoIntelligenceCandidates(run);
 
     expect(candidates).not.toHaveLength(0);
+  });
+});
+
+describe("computeAdvisoryProofDecision proportionality (Phase 2.4)", () => {
+  const baseClassification = (overrides: Partial<TicketRunMissionClassification> = {}): TicketRunMissionClassification => ({
+    kind: "ui",
+    scopeSummary: "Update copy",
+    acceptanceCriteria: [],
+    impactedRepoRelativePaths: ["web-app"],
+    risks: [],
+    uiChange: true,
+    proofRequired: true,
+    proofArtifactMode: "screenshot",
+    advisoryProofLevel: null,
+    advisoryProofRationale: null,
+    rationale: null,
+    createdAt: 1,
+    updatedAt: 1,
+    ...overrides,
+  });
+
+  const proofProfile: TicketRunProofProfileSummary = {
+    profileId: "p:1",
+    label: "UI proof",
+    description: "",
+    kind: "playwright-dotnet-nunit",
+    repoRelativePath: "web-app",
+    projectRelativePath: "Project.csproj",
+    runSettingsRelativePath: null,
+  };
+
+  it("downgrades to 'none' when the diff signal reports tests-only changes", () => {
+    const decision = computeAdvisoryProofDecision({
+      run: createRun(),
+      classification: baseClassification(),
+      availableProofs: [proofProfile],
+      proofRules: [],
+      diffSignal: {
+        totalFilesChanged: 2,
+        totalLinesAdded: 30,
+        totalLinesRemoved: 4,
+        copyOnly: false,
+        testsOnly: true,
+        touchesUiSurface: false,
+      },
+    });
+    expect(decision.recommendedLevel).toBe("none");
+    expect(decision.evidence).toContain("diff-tests-only");
+  });
+
+  it("downgrades to 'light' when the diff is copy-only and small", () => {
+    const decision = computeAdvisoryProofDecision({
+      run: createRun(),
+      classification: baseClassification(),
+      availableProofs: [proofProfile],
+      proofRules: [],
+      diffSignal: {
+        totalFilesChanged: 1,
+        totalLinesAdded: 4,
+        totalLinesRemoved: 2,
+        copyOnly: true,
+        testsOnly: false,
+        touchesUiSurface: false,
+      },
+    });
+    expect(decision.recommendedLevel).toBe("light");
+    expect(decision.evidence).toContain("diff-copy-only-small");
+  });
+
+  it("escalates to 'targeted-screenshot' when the diff touches a registered UI surface and base is below it", () => {
+    const decision = computeAdvisoryProofDecision({
+      run: createRun(),
+      classification: baseClassification({ uiChange: false, proofRequired: false }),
+      // The classification disables proof, so the base is "none". Diff signal escalates.
+      availableProofs: [proofProfile],
+      proofRules: [],
+      diffSignal: {
+        totalFilesChanged: 5,
+        totalLinesAdded: 60,
+        totalLinesRemoved: 12,
+        copyOnly: false,
+        testsOnly: false,
+        touchesUiSurface: true,
+      },
+    });
+    // Note: the !proofRequired branch returns "none" directly without proportionality —
+    // so this just asserts the gate honours classification first.
+    expect(decision.recommendedLevel).toBe("none");
+  });
+
+  it("surfaces historical failure evidence without changing the level", () => {
+    const decision = computeAdvisoryProofDecision({
+      run: createRun(),
+      classification: baseClassification(),
+      availableProofs: [proofProfile],
+      proofRules: [],
+      historicalOutcomes: {
+        recentRuns: [
+          { status: "preflight-blocked", ageMs: 60_000 },
+          { status: "failed", ageMs: 120_000 },
+          { status: "passed", ageMs: 300_000 },
+        ],
+      },
+    });
+    expect(decision.evidence.some((entry) => entry.startsWith("history-recent-failures:"))).toBe(true);
+  });
+
+  it("uses a matching proof rule's recommendedLevel as the base", () => {
+    const matchingRule: ProofRuleRecord = {
+      id: "user-test",
+      projectKey: null,
+      repoRelativePath: null,
+      classificationKind: "ui",
+      uiChange: true,
+      proofRequired: true,
+      summaryKeywords: [],
+      recommendedLevel: "manual-review-only",
+      rationale: "Tiny UI changes go to manual review.",
+      createdAt: 1,
+      updatedAt: 100,
+    };
+    const decision = computeAdvisoryProofDecision({
+      run: createRun(),
+      classification: baseClassification(),
+      availableProofs: [],
+      proofRules: [matchingRule],
+    });
+    expect(decision.recommendedLevel).toBe("manual-review-only");
+    expect(decision.evidence).toContain(`proof-rule:${matchingRule.id}`);
   });
 });

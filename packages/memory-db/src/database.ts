@@ -382,6 +382,10 @@ export class SpiraMemoryDatabase {
     return this.intelligence.seedBuiltinProofRules(entries);
   }
 
+  deleteProofRule(ruleId: string): boolean {
+    return this.intelligence.deleteProofRule(ruleId);
+  }
+
   getProofDecision(runId: string): ProofDecisionRecord | null {
     return this.intelligence.getProofDecision(runId);
   }

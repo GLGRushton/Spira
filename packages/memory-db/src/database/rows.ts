@@ -247,6 +247,8 @@ export interface TicketRunRow {
   lastProofAt: number | null;
   lastProofSummary: string | null;
   proofStaleReason: string | null;
+  proofManualReviewJustification: string | null;
+  proofManualReviewAt: number | null;
   startedAt: number;
   createdAt: number;
   updatedAt: number;

@@ -210,6 +210,35 @@ export const createMissionIpcHandlers = (getBridge: () => IpcBridgeHandle | null
       typeof input?.maxBytes === "number" ? { maxBytes: input.maxBytes } : undefined,
     ),
 
+  [IPC_CHANNELS.missions.proofManualReviewSet]: async (
+    _event: IpcMainInvokeEvent,
+    input?: { runId?: string; justification?: string },
+  ) =>
+    requireBridge(getBridge()).setTicketRunProofManualReview(
+      requireRunId(input?.runId),
+      requireField(input?.justification, "A justification is required for manual-review-only."),
+    ),
+
+  [IPC_CHANNELS.missions.proofManualReviewClear]: async (
+    _event: IpcMainInvokeEvent,
+    input?: { runId?: string },
+  ) => requireBridge(getBridge()).clearTicketRunProofManualReview(requireRunId(input?.runId)),
+
+  [IPC_CHANNELS.missions.proofRulesList]: async () => requireBridge(getBridge()).listMissionProofRules(),
+
+  [IPC_CHANNELS.missions.proofRulesUpsert]: async (
+    _event: IpcMainInvokeEvent,
+    input?: { rule?: Parameters<ReturnType<typeof requireBridge>["upsertMissionProofRule"]>[0] },
+  ) => {
+    if (!input?.rule) {
+      throw new Error("Rule payload is required.");
+    }
+    return requireBridge(getBridge()).upsertMissionProofRule(input.rule);
+  },
+
+  [IPC_CHANNELS.missions.proofRulesDelete]: async (_event: IpcMainInvokeEvent, input?: { ruleId?: string }) =>
+    requireBridge(getBridge()).deleteMissionProofRule(requireField(input?.ruleId, "Rule id is required.")),
+
   [IPC_CHANNELS.missions.delete]: async (
     _event: IpcMainInvokeEvent,
     input?: { runId?: string },

@@ -894,4 +894,92 @@ export const MIGRATIONS: MigrationDefinition[] = [
       "CREATE INDEX idx_provider_usage_records_session_v28 ON provider_usage_records(session_id, observed_at DESC)",
     ],
   },
+  {
+    // Phase 2.1 / 2.3 — extend the proof status enums and add manual-review audit columns.
+    //   - ticket_runs.proof_status gains 'manual-review' (gate satisfied by operator review)
+    //     and 'preflight-blocked' (preflight refused to spawn the harness).
+    //   - ticket_run_proof_runs.status gains 'preflight-blocked' for the per-run audit row.
+    //   - ticket_runs gains proof_manual_review_justification + proof_manual_review_at columns
+    //     so the audit trail is queryable in the snapshot, not just in mission_events.
+    //
+    // SQLite has no DROP CONSTRAINT and better-sqlite3 blocks writable_schema modifications,
+    // so we use the standard table-rename-and-recreate pattern (same as migration 28 for
+    // provider_usage_records). The recreated tables include the new CHECK values *and* the
+    // two new columns so a single migration handles both shape and constraint changes.
+    version: 29,
+    statements: [
+      "ALTER TABLE ticket_runs RENAME TO ticket_runs_v28",
+      `CREATE TABLE ticket_runs (
+        run_id TEXT PRIMARY KEY,
+        ticket_id TEXT NOT NULL,
+        ticket_summary TEXT NOT NULL,
+        ticket_url TEXT NOT NULL,
+        project_key TEXT NOT NULL,
+        status TEXT NOT NULL CHECK(status IN ('starting', 'ready', 'blocked', 'working', 'awaiting-review', 'error', 'done')),
+        status_message TEXT,
+        station_id TEXT,
+        commit_message_draft TEXT,
+        proof_status TEXT NOT NULL DEFAULT 'not-run' CHECK(proof_status IN ('not-run', 'running', 'passed', 'failed', 'stale', 'manual-review', 'preflight-blocked')),
+        last_proof_run_id TEXT,
+        last_proof_profile_id TEXT,
+        last_proof_at INTEGER,
+        last_proof_summary TEXT,
+        proof_stale_reason TEXT,
+        proof_manual_review_justification TEXT,
+        proof_manual_review_at INTEGER,
+        mission_phase TEXT NOT NULL DEFAULT 'classification' CHECK(mission_phase IN ('classification', 'plan', 'implement', 'validate', 'proof', 'summarize')),
+        mission_phase_updated_at INTEGER NOT NULL DEFAULT 0,
+        classification_json TEXT,
+        plan_json TEXT,
+        summary_json TEXT,
+        previous_pass_context_json TEXT,
+        started_at INTEGER NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      )`,
+      `INSERT INTO ticket_runs (
+        run_id, ticket_id, ticket_summary, ticket_url, project_key, status, status_message,
+        station_id, commit_message_draft, proof_status, last_proof_run_id, last_proof_profile_id,
+        last_proof_at, last_proof_summary, proof_stale_reason,
+        mission_phase, mission_phase_updated_at, classification_json, plan_json, summary_json,
+        previous_pass_context_json, started_at, created_at, updated_at
+      )
+      SELECT
+        run_id, ticket_id, ticket_summary, ticket_url, project_key, status, status_message,
+        station_id, commit_message_draft, proof_status, last_proof_run_id, last_proof_profile_id,
+        last_proof_at, last_proof_summary, proof_stale_reason,
+        mission_phase, mission_phase_updated_at, classification_json, plan_json, summary_json,
+        previous_pass_context_json, started_at, created_at, updated_at
+      FROM ticket_runs_v28`,
+      "DROP TABLE ticket_runs_v28",
+      "CREATE UNIQUE INDEX idx_ticket_runs_ticket_id ON ticket_runs(ticket_id)",
+      "CREATE INDEX idx_ticket_runs_status ON ticket_runs(status, updated_at DESC)",
+
+      "ALTER TABLE ticket_run_proof_runs RENAME TO ticket_run_proof_runs_v28",
+      `CREATE TABLE ticket_run_proof_runs (
+        proof_run_id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL,
+        profile_id TEXT NOT NULL,
+        profile_label TEXT NOT NULL,
+        status TEXT NOT NULL CHECK(status IN ('running', 'passed', 'failed', 'preflight-blocked')),
+        summary TEXT,
+        started_at INTEGER NOT NULL,
+        completed_at INTEGER,
+        exit_code INTEGER,
+        command TEXT,
+        artifacts_json TEXT,
+        FOREIGN KEY(run_id) REFERENCES ticket_runs(run_id) ON DELETE CASCADE
+      )`,
+      `INSERT INTO ticket_run_proof_runs (
+        proof_run_id, run_id, profile_id, profile_label, status, summary,
+        started_at, completed_at, exit_code, command, artifacts_json
+      )
+      SELECT
+        proof_run_id, run_id, profile_id, profile_label, status, summary,
+        started_at, completed_at, exit_code, command, artifacts_json
+      FROM ticket_run_proof_runs_v28`,
+      "DROP TABLE ticket_run_proof_runs_v28",
+      "CREATE INDEX idx_ticket_run_proof_runs_run_id_v29 ON ticket_run_proof_runs(run_id, started_at DESC)",
+    ],
+  },
 ];

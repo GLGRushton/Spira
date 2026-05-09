@@ -105,6 +105,8 @@ const createTicketRunSummary = (overrides: Partial<TicketRunSummary> = {}): Tick
     lastProofProfileId: null,
     lastProofSummary: null,
     staleReason: null,
+    manualReviewJustification: null,
+    manualReviewAt: null,
   },
   proofRuns: [],
   ...overrides,

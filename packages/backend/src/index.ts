@@ -31,6 +31,7 @@ import {
   BUILTIN_VALIDATION_PROFILES,
 } from "./missions/mission-intelligence.js";
 import { MissionLifecycleService } from "./missions/mission-lifecycle.js";
+import { ProofRulesService } from "./missions/proof-rules-service.js";
 import { MissionServiceRegistry } from "./missions/service-registry.js";
 import { type GenerateCommitDraftInput, TicketRunService } from "./missions/ticket-runs.js";
 import { ProjectRegistry } from "./projects/registry.js";
@@ -85,6 +86,7 @@ let projectRegistry: ProjectRegistry | null = null;
 let ticketRunService: TicketRunService | null = null;
 let missionServiceRegistry: MissionServiceRegistry | null = null;
 let missionLifecycleService: MissionLifecycleService | null = null;
+let proofRulesService: ProofRulesService | null = null;
 
 const BACKEND_BUILD_ID = process.env.SPIRA_BUILD_ID?.trim() || "dev";
 const BACKEND_GENERATION = Number(process.env.SPIRA_GENERATION ?? "0");
@@ -1203,6 +1205,162 @@ const handleClientMessage = async (message: ClientMessage): Promise<void> => {
     return;
   }
 
+  // Phase 2.5 — proof rules admin handlers. The unavailable-service guard is identical for
+  // all three; extracting it keeps each handler focused on its own success path.
+  const sendProofRulesUnavailable = (requestId: string): void => {
+    transport?.send({
+      type: "missions:request-error",
+      requestId,
+      ...toErrorPayload(
+        new Error("Proof rules service is unavailable."),
+        "MISSIONS_UNAVAILABLE",
+        "Proof rules are unavailable.",
+        "missions",
+      ),
+    });
+  };
+
+  if (message.type === "missions:proof-rules:list") {
+    if (!proofRulesService) {
+      sendProofRulesUnavailable(message.requestId);
+      return;
+    }
+    transport?.send({
+      type: "missions:proof-rules:list:result",
+      requestId: message.requestId,
+      result: proofRulesService.list(),
+    });
+    return;
+  }
+
+  if (message.type === "missions:proof-rules:upsert") {
+    if (!proofRulesService) {
+      sendProofRulesUnavailable(message.requestId);
+      return;
+    }
+    try {
+      const result = proofRulesService.upsert(message.rule);
+      transport?.send({
+        type: "missions:proof-rules:upsert:result",
+        requestId: message.requestId,
+        result,
+      });
+    } catch (error) {
+      logger.error({ err: error, requestId: message.requestId }, "Failed to upsert proof rule");
+      transport?.send({
+        type: "missions:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(error, "MISSIONS_PROOF_RULE_UPSERT_FAILED", "Failed to save proof rule.", "missions"),
+      });
+    }
+    return;
+  }
+
+  if (message.type === "missions:proof-rules:delete") {
+    if (!proofRulesService) {
+      sendProofRulesUnavailable(message.requestId);
+      return;
+    }
+    try {
+      const result = proofRulesService.delete(message.ruleId);
+      transport?.send({
+        type: "missions:proof-rules:delete:result",
+        requestId: message.requestId,
+        result,
+      });
+    } catch (error) {
+      logger.error({ err: error, requestId: message.requestId }, "Failed to delete proof rule");
+      transport?.send({
+        type: "missions:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(error, "MISSIONS_PROOF_RULE_DELETE_FAILED", "Failed to delete proof rule.", "missions"),
+      });
+    }
+    return;
+  }
+
+  if (message.type === "missions:ticket-run:proof:manual-review:set") {
+    if (!missionLifecycleService || !ticketRunService) {
+      transport?.send({
+        type: "missions:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(
+          new Error("Mission lifecycle is unavailable."),
+          "MISSIONS_UNAVAILABLE",
+          "Missions ticket runs are unavailable.",
+          "missions",
+        ),
+      });
+      return;
+    }
+    try {
+      const updatedRun = missionLifecycleService.setProofManualReviewOnly(message.runId, message.justification);
+      const snapshot = ticketRunService.getSnapshot();
+      transport?.send({
+        type: "missions:ticket-run:proof:manual-review:set:result",
+        requestId: message.requestId,
+        result: { run: updatedRun, snapshot },
+      });
+    } catch (error) {
+      logger.error(
+        { err: error, requestId: message.requestId, runId: message.runId },
+        "Failed to set mission proof to manual-review-only",
+      );
+      transport?.send({
+        type: "missions:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(
+          error,
+          "MISSIONS_PROOF_MANUAL_REVIEW_FAILED",
+          "Failed to mark proof as manual-review.",
+          "missions",
+        ),
+      });
+    }
+    return;
+  }
+
+  if (message.type === "missions:ticket-run:proof:manual-review:clear") {
+    if (!missionLifecycleService || !ticketRunService) {
+      transport?.send({
+        type: "missions:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(
+          new Error("Mission lifecycle is unavailable."),
+          "MISSIONS_UNAVAILABLE",
+          "Missions ticket runs are unavailable.",
+          "missions",
+        ),
+      });
+      return;
+    }
+    try {
+      const updatedRun = missionLifecycleService.clearProofManualReview(message.runId);
+      const snapshot = ticketRunService.getSnapshot();
+      transport?.send({
+        type: "missions:ticket-run:proof:manual-review:clear:result",
+        requestId: message.requestId,
+        result: { run: updatedRun, snapshot },
+      });
+    } catch (error) {
+      logger.error(
+        { err: error, requestId: message.requestId, runId: message.runId },
+        "Failed to clear mission proof manual-review",
+      );
+      transport?.send({
+        type: "missions:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(
+          error,
+          "MISSIONS_PROOF_MANUAL_REVIEW_CLEAR_FAILED",
+          "Failed to clear proof manual-review state.",
+          "missions",
+        ),
+      });
+    }
+    return;
+  }
+
   if (message.type === "missions:ticket-run:proof-artifact:read") {
     if (!ticketRunService) {
       transport?.send({
@@ -2233,6 +2391,9 @@ const bootstrap = async () => {
   memoryDb?.seedBuiltinRepoIntelligence(BUILTIN_REPO_INTELLIGENCE);
   memoryDb?.seedBuiltinValidationProfiles(BUILTIN_VALIDATION_PROFILES);
   memoryDb?.seedBuiltinProofRules(BUILTIN_PROOF_RULES);
+  if (memoryDb) {
+    proofRulesService = new ProofRulesService(memoryDb);
+  }
   projectRegistry = new ProjectRegistry(memoryDb);
   missionLifecycleService = new MissionLifecycleService(memoryDb, bus, async (runId) => {
     if (!ticketRunService) {

@@ -761,3 +761,67 @@
 .proofLogViewerCloseButton:hover {
   border-color: rgba(245, 218, 156, 0.55);
 }
+
+/* Phase 2.1 — manual-review-only panel. Operator marks the proof gate as satisfied
+   by their own review with a free-text justification. The panel surfaces the state
+   prominently so the audit trail is visible without digging through events. */
+.manualReviewPanel {
+  border: 1px solid rgba(245, 218, 156, 0.32);
+  border-radius: var(--radius-sm);
+  background: rgba(36, 28, 8, 0.32);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.manualReviewPanelActive {
+  background: rgba(36, 56, 28, 0.32);
+  border-color: rgba(146, 227, 218, 0.4);
+}
+
+.manualReviewHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  font-size: 13px;
+}
+
+.manualReviewLabel {
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.manualReviewBody {
+  font-size: 12px;
+  color: rgba(241, 230, 204, 0.78);
+}
+
+.manualReviewJustificationPreview {
+  font-style: italic;
+  color: var(--marble-ivory);
+  padding: 8px 10px;
+  background: rgba(0, 0, 0, 0.32);
+  border-radius: 6px;
+  border-left: 2px solid rgba(245, 218, 156, 0.42);
+}
+
+.manualReviewTextarea {
+  width: 100%;
+  min-height: 70px;
+  resize: vertical;
+  font-family: inherit;
+  font-size: 12px;
+  background: rgba(0, 0, 0, 0.24);
+  color: var(--marble-ivory);
+  border: 1px solid rgba(168, 133, 74, 0.28);
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+
+.manualReviewActions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}

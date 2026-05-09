@@ -1,10 +1,11 @@
 import { spawn } from "node:child_process";
 import { createWriteStream } from "node:fs";
-import { access, mkdir, readdir, stat, writeFile } from "node:fs/promises";
+import { mkdir, readdir, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import type { TicketRunProofArtifact, TicketRunProofRunStatus, TicketRunSummary } from "@spira/shared";
 import type { Logger } from "pino";
+import { pathExists } from "../util/fs.js";
 import type { ResolvedMissionProofProfile } from "./proof-registry.js";
 
 const DEFAULT_PROOF_TIMEOUT_MS = 20 * 60_000;
@@ -27,19 +28,6 @@ export interface RunMissionProofOutput {
   command: string;
   artifacts: TicketRunProofArtifact[];
 }
-
-const pathExists = async (targetPath: string): Promise<boolean> => {
-  try {
-    await access(targetPath);
-    return true;
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code === "ENOENT" || code === "ENOTDIR") {
-      return false;
-    }
-    throw error;
-  }
-};
 
 const resolveMissionProofRoot = (run: TicketRunSummary): string => {
   const parentDirectories = [...new Set(run.worktrees.map((worktree) => path.dirname(worktree.worktreePath)))];

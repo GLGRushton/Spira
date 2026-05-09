@@ -19,6 +19,7 @@ import {
   groupMissionTimelineEvents,
   mergeMissionEventStreams,
 } from "./mission-timeline-grouping.js";
+import { ManualReviewPanel } from "./ManualReviewPanel.js";
 import { NowPlayingStrip } from "./NowPlayingStrip.js";
 import { ProofRunsViewer } from "./ProofRunsViewer.js";
 
@@ -592,6 +593,8 @@ export function MissionDetailsRoom({ run, controller }: MissionDetailsRoomProps)
               {run.proof.lastProofSummary ? <div className={styles.phaseCopy}>{run.proof.lastProofSummary}</div> : null}
               {run.proof.staleReason ? <div className={styles.commandHint}>{run.proof.staleReason}</div> : null}
             </div>
+
+            <ManualReviewPanel run={run} controller={controller} />
 
             <div className={styles.subCard}>
               <div className={styles.subCardHeader}>

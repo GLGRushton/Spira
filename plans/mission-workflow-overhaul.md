@@ -2,7 +2,7 @@
 
 **Parent report:** [mission-workflow-review-2026-05-09.md](../reports/mission-workflow-review-2026-05-09.md).
 **Sister plans:** [model-escalation-architecture.md](./model-escalation-architecture.md) (provider-side), [permission-lifecycle-resilience.md](./permission-lifecycle-resilience.md) (already shipped).
-**Status:** drafted 2026-05-09. **Phases 0 and 1 shipped 2026-05-09 — see [Progress log](#progress-log) at the end of this document.**
+**Status:** drafted 2026-05-09. **Phases 0, 1, and 2 shipped 2026-05-09 — see [Progress log](#progress-log) at the end of this document.**
 
 ## Goal
 
@@ -111,7 +111,7 @@ The plan ships in **seven independent phases**. Each phase is small enough to me
 
 ---
 
-## Phase 2 — Proof proportionality + preflight (the "stop wasting an hour" phase)
+## Phase 2 — Proof proportionality + preflight (the "stop wasting an hour" phase) ✅ shipped 2026-05-09
 
 **Goal:** kill LH-402's root cause. Match proof effort to ticket risk; never spawn a heavy proof that has no chance of succeeding.
 
@@ -524,3 +524,39 @@ After spawning three review agents (reuse, quality, efficiency) the following we
 - Inline log viewer is bounded at 256 KB; pagination + larger reads can land alongside Phase 2 if needed.
 - High-frequency live events have no batching yet — fine at expected volumes; revisit if mission attempts produce > ~100 events / second.
 - Five `emitSnapshot` calls remain on the cold path (run-created, run-closed, intel-approve, restart-recover, workspace-prepared) — intentional; structural changes the renderer benefits from re-rendering wholesale.
+
+---
+
+### 2026-05-09 — Phase 2 shipped
+
+#### Phase 2 deliverables
+
+- **§2.1 manual-review-only as a first-class gate state** — `TicketRunProofStatus` extended with `manual-review` and `preflight-blocked` ([ticket-run-types.ts:18](../packages/shared/src/ticket-run-types.ts:18)). `proofPassed` derivation in [ticket-run-workflow.ts:105](../packages/shared/src/ticket-run-workflow.ts:105) now treats `manual-review` as a satisfied gate alongside `passed`. `TicketRunProofSummary` carries `manualReviewJustification` + `manualReviewAt` for the audit trail in the snapshot. New lifecycle methods `setProofManualReviewOnly(runId, justification)` and `clearProofManualReview(runId)` in [mission-lifecycle.ts:248](../packages/backend/src/missions/mission-lifecycle.ts:248) — both go through the same workflow guard as `record-proof-result`. New mission events `proof-set-manual-review-only` and `proof-manual-review-cleared` in the typed taxonomy. Renderer: new `ManualReviewPanel` component slotted into the proof phase of `MissionDetailsRoom`, with two states (active / inactive) and a required free-text justification field. Protocol messages `missions:ticket-run:proof:manual-review:set` / `:clear` plumbed through `client-message-validation.ts`, `electron-api.ts`, `ipc-bridge.ts`, `channels.ts`, `missions-handlers.ts`, `preload.ts`, and `useMissionRunController.ts`.
+
+- **§2.2 proof preflight controller** — New [proof-preflight.ts](../packages/backend/src/missions/proof-preflight.ts) with parallel cheap checks per profile kind. For the `playwright-dotnet-nunit` profile: `dotnet --version` on PATH, `obj/project.assets.json` present, runsettings present, bypass-auth fixture present, disk space ≥1 GB. Returns `{ ok, blockers, warnings, elapsedMs, summary }`. Each check has a typed remediation hint. Default per-check timeout 5 s; checks run in parallel via `Promise.allSettled` (no outer race — the per-check timeout *is* the wall-clock cap, and binary checks kill their child processes on timeout, so there are no orphans). Hooks for `binaryAvailable`, `pathExists`, `freeDiskBytes` are injectable for tests.
+
+- **§2.3 wired preflight into runProof + new `preflight-blocked` status** — Inside `runProof` in [ticket-runs.ts:902-960](../packages/backend/src/missions/ticket-runs.ts:902), the preflight runs *before* the harness spawns. Failed preflight short-circuits to a `preflight-blocked` per-run audit row with command + summary + the blocker list joined for the renderer; no harness spawn, no exit code, no artifacts. New `proof-preflight-started` and `proof-preflight-finished` mission events bookend the preflight pass. Preflight delegate is injectable on `TicketRunService` so tests can stub it (the existing `runMissionProof`, `discoverMissionProofProfiles` pattern).
+
+- **§2.4 proportionality controller** — Two new optional inputs on `AdvisoryProofDecisionInput`: `diffSignal` (filesChanged / linesAdded / linesRemoved / copyOnly / testsOnly / touchesUiSurface) and `historicalOutcomes` (last N proof statuses + ages). New `applyProportionalityOverrides` helper in [mission-intelligence.ts:191](../packages/backend/src/missions/mission-intelligence.ts:191) downgrades to `none` for tests-only diffs, downgrades to `light` for ≤10-line copy-only diffs, escalates to `targeted-screenshot` when a registered UI surface is touched, and surfaces "recent failures" as evidence (advisory only — no level change yet). Three new builtin proof rules added: `global-frontend-copy-manual-review` (typo/casing → manual review), `global-tests-only-none` (tests-only → no proof), `global-mixed-default-targeted` (mixed UI changes → targeted screenshot).
+
+- **§2.5 proof rule editor** — New backend service [proof-rules-service.ts](../packages/backend/src/missions/proof-rules-service.ts) with list / upsert / delete; source (`builtin` vs `user`) is derived from id prefix `global-` so we avoid another schema migration. User rules get auto-minted `user-{uuid}` ids when no id is provided. Builtin rules are read-only (upsert and delete reject `global-*` ids). New `deleteProofRule` on the memory-db API. New protocol messages `missions:proof-rules:list / :upsert / :delete`. Renderer: new `ProofRulesEditor` component lives in a new "Proof rules" tab in `SettingsPanel`. Lists every rule with source / level badges, shows scope and keywords inline, and offers an inline form for adding user rules. Builtin rules show no delete button; user rules can be deleted with one click.
+
+- **§2.6 tests** — `proof-preflight.test.ts` (5 tests): all-pass, missing dotnet → blocker with remediation, missing project.assets.json → "project not restored" blocker, low disk → warning (not blocker), summary string contents. `proof-rules-service.test.ts` (5 tests): builtin/user source derivation, uuid id minting, refusal to upsert into builtin id, refusal to delete builtin, delete returns fresh snapshot. Manual-review tests appended to `mission-lifecycle.test.ts` (4 tests): empty-justification rejection, status + audit event on set, gate satisfaction via `proofPassed`, clearing reverts to `not-run` and emits the cleared event. Proportionality tests appended to `mission-intelligence.test.ts` (5 tests): tests-only downgrade, copy-only-small downgrade, ui-surface escalation gated by classification, historical-failures surfaced as evidence, matching-rule level wins. Total new Phase 2 tests: 19. Full suite: 720 → 739 tests; all pass.
+
+#### Self-review fixes
+
+After the three review agents (reuse, quality, efficiency) the following landed:
+
+- **Removed the orphan-prone preflight budget timer** — the original `Promise.race` against an outer `budgetMs` timeout would resolve while inner checks (and their spawned children) kept running. Per-check timeouts already bound execution and properly kill their children, so the outer race was redundant *and* leaky. Now `runProofPreflight` is just `Promise.allSettled(checks)` with each check enforcing its own deadline.
+- **Extracted shared `pathExists` util** to [packages/backend/src/util/fs.ts](../packages/backend/src/util/fs.ts); both `proof-preflight.ts` and `proof-runner.ts` now import it instead of carrying near-identical local copies.
+- **Extracted `sendProofRulesUnavailable` helper** in `index.ts` to dedupe the three-time copy of the unavailable-service guard across the proof-rules handlers.
+- **Confirmed migration runner overhead is already short-circuited** at `pending.length === 0` before any pragma touches; added a clarifying comment to keep that obvious.
+
+Skipped (premature DRY): consolidating the four duration formatters in the renderer (different output styles per surface), extracting a `withTimeout` util (single use), extracting an `EventEmitter` cast helper (two-line workaround used in two places).
+
+#### What's still on hold for Phase 3+
+
+- **Diff signal isn't auto-computed yet.** `applyProportionalityOverrides` accepts the signal but no caller computes it — it's wired ready for a future PR that hooks into the validate-phase git status. Today the system's behaviour is identical to before unless callers explicitly pass the signal.
+- **Historical outcomes feed evidence only**, not level changes — leaving room to demote levels that consistently fail in operationally-consistent ways without making the heuristic too eager.
+- **Proof rule "dry-run against a recent ticket" affordance** isn't wired (plan §2.5 mentioned it as a nice-to-have).
+- **Auto-promote learned rules** is Phase 5, not Phase 2.

@@ -33,6 +33,8 @@ const baseRun = (overrides: Partial<TicketRunSummary> = {}): TicketRunSummary =>
     lastProofProfileId: null,
     lastProofSummary: null,
     staleReason: null,
+    manualReviewJustification: null,
+    manualReviewAt: null,
   },
   proofRuns: overrides.proofRuns ?? [],
 });

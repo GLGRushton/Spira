@@ -546,6 +546,47 @@ describe("SpiraMemoryDatabase", () => {
         1000,
         'provider'
       );
+      -- Stub tables that later migrations (>= v29) recreate. Schema matches the
+      -- shape ticket_runs / ticket_run_proof_runs would have at the v24 mark.
+      CREATE TABLE ticket_runs (
+        run_id TEXT PRIMARY KEY,
+        ticket_id TEXT NOT NULL,
+        ticket_summary TEXT NOT NULL,
+        ticket_url TEXT NOT NULL,
+        project_key TEXT NOT NULL,
+        status TEXT NOT NULL,
+        status_message TEXT,
+        station_id TEXT,
+        commit_message_draft TEXT,
+        proof_status TEXT NOT NULL DEFAULT 'not-run',
+        last_proof_run_id TEXT,
+        last_proof_profile_id TEXT,
+        last_proof_at INTEGER,
+        last_proof_summary TEXT,
+        proof_stale_reason TEXT,
+        mission_phase TEXT NOT NULL DEFAULT 'classification',
+        mission_phase_updated_at INTEGER NOT NULL DEFAULT 0,
+        classification_json TEXT,
+        plan_json TEXT,
+        summary_json TEXT,
+        previous_pass_context_json TEXT,
+        started_at INTEGER NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE TABLE ticket_run_proof_runs (
+        proof_run_id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL,
+        profile_id TEXT NOT NULL,
+        profile_label TEXT NOT NULL,
+        status TEXT NOT NULL,
+        summary TEXT,
+        started_at INTEGER NOT NULL,
+        completed_at INTEGER,
+        exit_code INTEGER,
+        command TEXT,
+        artifacts_json TEXT
+      );
       PRAGMA user_version = 24;
     `);
     rawDb.close();

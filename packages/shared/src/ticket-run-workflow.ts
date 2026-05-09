@@ -102,7 +102,11 @@ export const getTicketRunMissionWorkflowState = (run: TicketRunSummary): TicketR
   const hasPendingValidation = effectiveValidations.some((validation) => validation.status === "pending");
   const proofRequired = run.classification?.proofRequired === true;
   const proofStrategySaved = !proofRequired || isCurrentAttemptValue(attemptStartedAt, run.proofStrategy?.updatedAt);
-  const proofPassed = !proofRequired || run.proof.status === "passed";
+  // Phase 2.1 — `manual-review` satisfies the gate alongside `passed`. The justification is
+  // recorded with the proof-set-manual-review-only event for audit. `preflight-blocked` and
+  // `failed` do NOT satisfy: they're recoverable transient states, not green-light outcomes.
+  const proofPassed =
+    !proofRequired || run.proof.status === "passed" || run.proof.status === "manual-review";
 
   let nextAction: TicketRunMissionWorkflowState["nextAction"];
   if (!kickoffComplete) {

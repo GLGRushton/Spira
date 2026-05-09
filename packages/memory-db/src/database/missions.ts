@@ -69,6 +69,8 @@ export const createMissionPersistence = (context: DatabasePersistenceContext) =>
            last_proof_at AS lastProofAt,
            last_proof_summary AS lastProofSummary,
            proof_stale_reason AS proofStaleReason,
+           proof_manual_review_justification AS proofManualReviewJustification,
+           proof_manual_review_at AS proofManualReviewAt,
            started_at AS startedAt,
            created_at AS createdAt,
            updated_at AS updatedAt
@@ -286,6 +288,8 @@ export const createMissionPersistence = (context: DatabasePersistenceContext) =>
            last_proof_at AS lastProofAt,
            last_proof_summary AS lastProofSummary,
            proof_stale_reason AS proofStaleReason,
+           proof_manual_review_justification AS proofManualReviewJustification,
+           proof_manual_review_at AS proofManualReviewAt,
            started_at AS startedAt,
            created_at AS createdAt,
            updated_at AS updatedAt
@@ -814,6 +818,8 @@ export const createMissionPersistence = (context: DatabasePersistenceContext) =>
       lastProofAt: proofInput.lastProofAt ?? null,
       lastProofSummary: normalizeTitle(proofInput.lastProofSummary),
       staleReason: normalizeTitle(proofInput.staleReason),
+      manualReviewJustification: normalizeTitle(proofInput.manualReviewJustification),
+      manualReviewAt: proofInput.manualReviewAt ?? null,
     };
     const normalizedProofRuns = (input.proofRuns ?? []).map((proofRun) => {
       const proofRunId = proofRun.proofRunId.trim();
@@ -880,6 +886,8 @@ export const createMissionPersistence = (context: DatabasePersistenceContext) =>
              last_proof_at,
              last_proof_summary,
              proof_stale_reason,
+             proof_manual_review_justification,
+             proof_manual_review_at,
              started_at,
              created_at,
              updated_at
@@ -905,6 +913,8 @@ export const createMissionPersistence = (context: DatabasePersistenceContext) =>
              @lastProofAt,
              @lastProofSummary,
              @proofStaleReason,
+             @proofManualReviewJustification,
+             @proofManualReviewAt,
              @startedAt,
              @createdAt,
              @updatedAt
@@ -930,6 +940,8 @@ export const createMissionPersistence = (context: DatabasePersistenceContext) =>
                last_proof_at = excluded.last_proof_at,
                last_proof_summary = excluded.last_proof_summary,
                proof_stale_reason = excluded.proof_stale_reason,
+               proof_manual_review_justification = excluded.proof_manual_review_justification,
+               proof_manual_review_at = excluded.proof_manual_review_at,
                started_at = excluded.started_at,
                updated_at = excluded.updated_at`,
         )
@@ -955,6 +967,8 @@ export const createMissionPersistence = (context: DatabasePersistenceContext) =>
           lastProofAt: normalizedProof.lastProofAt,
           lastProofSummary: normalizedProof.lastProofSummary,
           proofStaleReason: normalizedProof.staleReason,
+          proofManualReviewJustification: normalizedProof.manualReviewJustification,
+          proofManualReviewAt: normalizedProof.manualReviewAt,
           startedAt,
           createdAt,
           updatedAt: now,

@@ -48,6 +48,11 @@ export interface MissionRunController {
   refreshRepoIntelligence: () => Promise<void>;
   approveRepoIntelligence: (entryId: string) => Promise<void>;
   runMissionProof: (profileId: string) => Promise<void>;
+  /** Phase 2.1 — mark proof gate as satisfied via manual review with a justification. */
+  setMissionProofManualReview: (justification: string) => Promise<void>;
+  /** Phase 2.1 — clear a prior manual-review choice; gate becomes unsatisfied again. */
+  clearMissionProofManualReview: () => Promise<void>;
+  isSettingManualReview: boolean;
   retryTicketRunSync: () => Promise<void>;
   startRunWork: () => Promise<void>;
   continueRunWork: () => Promise<void>;
@@ -162,6 +167,7 @@ export function useMissionRunController(run: TicketRunSummary): MissionRunContro
   const [isRepoIntelligenceLoading, setIsRepoIntelligenceLoading] = useState(false);
   const [approvingRepoIntelligenceEntryId, setApprovingRepoIntelligenceEntryId] = useState<string | null>(null);
   const [runningProofProfileId, setRunningProofProfileId] = useState<string | null>(null);
+  const [isSettingManualReview, setIsSettingManualReview] = useState(false);
   const [continueDraft, setContinueDraft] = useState("");
   const [isRetryingSync, setIsRetryingSync] = useState(false);
   const [isStartingWork, setIsStartingWork] = useState(false);
@@ -1128,6 +1134,43 @@ export function useMissionRunController(run: TicketRunSummary): MissionRunContro
     [refreshMissionProofs, run.runId, setRunSnapshot],
   );
 
+  const setMissionProofManualReview = useCallback(
+    async (justification: string) => {
+      setIsSettingManualReview(true);
+      setProofNotice(null);
+      setProofError(null);
+      try {
+        const result = await window.electronAPI.setTicketRunProofManualReview(run.runId, justification);
+        setRunSnapshot(result.snapshot);
+        setProofNotice(`${result.run.ticketId} proof gate satisfied via manual review.`);
+        await refreshMissionProofs();
+      } catch (error) {
+        console.error("Failed to set proof manual-review", error);
+        setProofError(error instanceof Error ? error.message : "Failed to mark proof as manual-review.");
+      } finally {
+        setIsSettingManualReview(false);
+      }
+    },
+    [refreshMissionProofs, run.runId, setRunSnapshot],
+  );
+
+  const clearMissionProofManualReview = useCallback(async () => {
+    setIsSettingManualReview(true);
+    setProofNotice(null);
+    setProofError(null);
+    try {
+      const result = await window.electronAPI.clearTicketRunProofManualReview(run.runId);
+      setRunSnapshot(result.snapshot);
+      setProofNotice(`${result.run.ticketId} manual-review cleared; proof gate is open again.`);
+      await refreshMissionProofs();
+    } catch (error) {
+      console.error("Failed to clear proof manual-review", error);
+      setProofError(error instanceof Error ? error.message : "Failed to clear manual-review state.");
+    } finally {
+      setIsSettingManualReview(false);
+    }
+  }, [refreshMissionProofs, run.runId, setRunSnapshot]);
+
   const completeRun = useCallback(async () => {
     setIsCompletingRun(true);
     setRunNotice(null);
@@ -1274,6 +1317,9 @@ export function useMissionRunController(run: TicketRunSummary): MissionRunContro
     refreshRepoIntelligence,
     approveRepoIntelligence,
     runMissionProof,
+    setMissionProofManualReview,
+    clearMissionProofManualReview,
+    isSettingManualReview,
     retryTicketRunSync,
     startRunWork,
     continueRunWork,

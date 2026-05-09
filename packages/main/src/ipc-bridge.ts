@@ -33,8 +33,11 @@ import type {
   TicketRunProofSnapshotResult,
   TicketRunRepoIntelligenceCandidatesResult,
   TicketRunReviewSnapshotResult,
+  MissionProofRulesSnapshot,
   TicketRunSnapshot,
   TicketRunSubmoduleGitStateResult,
+  TicketRunSummary,
+  UpsertMissionProofRuleInput,
   YouTrackProjectSummary,
   YouTrackStateMapping,
   YouTrackStatusSummary,
@@ -109,7 +112,12 @@ type MissionsRequestMessage =
   | Extract<ClientMessage, { type: "missions:ticket-run:timeline:get" }>
   | Extract<ClientMessage, { type: "missions:ticket-run:repo-intelligence:get" }>
   | Extract<ClientMessage, { type: "missions:ticket-run:repo-intelligence:approve" }>
+  | Extract<ClientMessage, { type: "missions:proof-rules:list" }>
+  | Extract<ClientMessage, { type: "missions:proof-rules:upsert" }>
+  | Extract<ClientMessage, { type: "missions:proof-rules:delete" }>
   | Extract<ClientMessage, { type: "missions:ticket-run:proof:run" }>
+  | Extract<ClientMessage, { type: "missions:ticket-run:proof:manual-review:set" }>
+  | Extract<ClientMessage, { type: "missions:ticket-run:proof:manual-review:clear" }>
   | Extract<ClientMessage, { type: "missions:ticket-run:proof-artifact:read" }>
   | Extract<ClientMessage, { type: "missions:ticket-run:delete" }>
   | Extract<ClientMessage, { type: "missions:ticket-run:review-snapshot:get" }>
@@ -142,7 +150,12 @@ type MissionsResponseMessage =
   | Extract<ServerMessage, { type: "missions:ticket-run:timeline:get:result" }>
   | Extract<ServerMessage, { type: "missions:ticket-run:repo-intelligence:get:result" }>
   | Extract<ServerMessage, { type: "missions:ticket-run:repo-intelligence:approve:result" }>
+  | Extract<ServerMessage, { type: "missions:proof-rules:list:result" }>
+  | Extract<ServerMessage, { type: "missions:proof-rules:upsert:result" }>
+  | Extract<ServerMessage, { type: "missions:proof-rules:delete:result" }>
   | Extract<ServerMessage, { type: "missions:ticket-run:proof:run:result" }>
+  | Extract<ServerMessage, { type: "missions:ticket-run:proof:manual-review:set:result" }>
+  | Extract<ServerMessage, { type: "missions:ticket-run:proof:manual-review:clear:result" }>
   | Extract<ServerMessage, { type: "missions:ticket-run:proof-artifact:read:result" }>
   | Extract<ServerMessage, { type: "missions:ticket-run:delete:result" }>
   | Extract<ServerMessage, { type: "missions:ticket-run:review-snapshot:result" }>
@@ -215,6 +228,16 @@ export interface IpcBridgeHandle {
   getTicketRunRepoIntelligence(runId: string): Promise<TicketRunRepoIntelligenceCandidatesResult>;
   approveTicketRunRepoIntelligence(runId: string, entryId: string): Promise<ApproveTicketRunRepoIntelligenceResult>;
   runTicketRunProof(runId: string, profileId: string): Promise<RunTicketRunProofResult>;
+  listMissionProofRules(): Promise<MissionProofRulesSnapshot>;
+  upsertMissionProofRule(rule: UpsertMissionProofRuleInput): Promise<MissionProofRulesSnapshot>;
+  deleteMissionProofRule(ruleId: string): Promise<MissionProofRulesSnapshot>;
+  setTicketRunProofManualReview(
+    runId: string,
+    justification: string,
+  ): Promise<{ run: TicketRunSummary; snapshot: TicketRunSnapshot }>;
+  clearTicketRunProofManualReview(
+    runId: string,
+  ): Promise<{ run: TicketRunSummary; snapshot: TicketRunSnapshot }>;
   readTicketRunProofArtifact(
     runId: string,
     proofRunId: string,
@@ -823,6 +846,45 @@ export function setupIpcBridge(
         },
         "missions:ticket-run:proof:run:result",
         MISSION_PROOF_REQUEST_TIMEOUT_MS,
+      ).then((response) => response.result),
+    listMissionProofRules: () =>
+      requestBackend(
+        { type: "missions:proof-rules:list", requestId: randomUUID() },
+        "missions:proof-rules:list:result",
+        MISSION_REVIEW_REQUEST_TIMEOUT_MS,
+      ).then((response) => response.result),
+    upsertMissionProofRule: (rule) =>
+      requestBackend(
+        { type: "missions:proof-rules:upsert", requestId: randomUUID(), rule },
+        "missions:proof-rules:upsert:result",
+        MISSION_REVIEW_REQUEST_TIMEOUT_MS,
+      ).then((response) => response.result),
+    deleteMissionProofRule: (ruleId) =>
+      requestBackend(
+        { type: "missions:proof-rules:delete", requestId: randomUUID(), ruleId },
+        "missions:proof-rules:delete:result",
+        MISSION_REVIEW_REQUEST_TIMEOUT_MS,
+      ).then((response) => response.result),
+    setTicketRunProofManualReview: (runId, justification) =>
+      requestBackend(
+        {
+          type: "missions:ticket-run:proof:manual-review:set",
+          requestId: randomUUID(),
+          runId,
+          justification,
+        },
+        "missions:ticket-run:proof:manual-review:set:result",
+        MISSION_REVIEW_REQUEST_TIMEOUT_MS,
+      ).then((response) => response.result),
+    clearTicketRunProofManualReview: (runId) =>
+      requestBackend(
+        {
+          type: "missions:ticket-run:proof:manual-review:clear",
+          requestId: randomUUID(),
+          runId,
+        },
+        "missions:ticket-run:proof:manual-review:clear:result",
+        MISSION_REVIEW_REQUEST_TIMEOUT_MS,
       ).then((response) => response.result),
     readTicketRunProofArtifact: (runId, proofRunId, artifactId, options) =>
       requestBackend(

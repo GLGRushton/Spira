@@ -586,6 +586,10 @@ export interface UpsertTicketRunProofInput {
   lastProofAt?: number | null;
   lastProofSummary?: string | null;
   staleReason?: string | null;
+  /** Phase 2.1 — operator's free-text justification when status === "manual-review". */
+  manualReviewJustification?: string | null;
+  /** Phase 2.1 — when the manual-review status was set. */
+  manualReviewAt?: number | null;
 }
 
 export interface UpsertTicketRunValidationInput {

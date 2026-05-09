@@ -25,11 +25,57 @@ export interface MissionRepoGuidanceSnapshot {
   validationProfiles: ValidationProfileRecord[];
 }
 
+/**
+ * Phase 2.4 — diff-shape signal that can downgrade or upgrade the recommended proof level.
+ * The caller computes this from the active worktrees' git status; it's optional so callers
+ * that don't have diff state available (e.g. pre-implement decisions) keep working.
+ */
+export interface AdvisoryProofDiffSignal {
+  /** Total files changed across all impacted worktrees. */
+  totalFilesChanged: number;
+  /** Sum of additions across changed files. */
+  totalLinesAdded: number;
+  /** Sum of removals across changed files. */
+  totalLinesRemoved: number;
+  /**
+   * True if every changed file is a "copy carrier" — templates, locale resources, string
+   * constants — and no production logic file was touched. Drives the copy-only rule.
+   */
+  copyOnly: boolean;
+  /** True if every changed file is a test fixture / spec file. */
+  testsOnly: boolean;
+  /**
+   * True if at least one changed file matches a registered UI surface glob for the repo.
+   * Used to escalate the recommendation to targeted-screenshot when the operator has
+   * touched a surface known to need visual proof.
+   */
+  touchesUiSurface: boolean;
+}
+
+/**
+ * Phase 2.4 — historical proof outcomes for the same `(projectKey, repoRelativePath, kind)`
+ * triple. The recommendation engine can use this to demote levels that have been failing
+ * recently in operationally consistent ways (e.g. preflight blockers that haven't been
+ * resolved between runs).
+ */
+export interface AdvisoryProofHistoricalSignal {
+  /** Most-recent-first list capped by the caller (typically last 5). */
+  recentRuns: ReadonlyArray<{
+    status: "passed" | "failed" | "preflight-blocked" | "running";
+    /** ms-since-epoch difference between now and the run's completedAt. */
+    ageMs: number;
+  }>;
+}
+
 export interface AdvisoryProofDecisionInput {
   run: TicketRunSummary;
   classification: TicketRunMissionClassification | null;
   availableProofs: readonly TicketRunProofProfileSummary[];
   proofRules: readonly ProofRuleRecord[];
+  /** Phase 2.4 — optional diff-shape signal. Absent for pre-implement decisions. */
+  diffSignal?: AdvisoryProofDiffSignal;
+  /** Phase 2.4 — optional historical outcomes for this repo + ticket pattern. */
+  historicalOutcomes?: AdvisoryProofHistoricalSignal;
 }
 
 export interface AdvisoryProofDecisionComputation {
@@ -142,8 +188,70 @@ const inferPreliminaryProofLevel = (run: TicketRunSummary): TicketRunMissionProo
   return null;
 };
 
+/**
+ * Phase 2.4 — proportionality overrides applied after the rule-scored recommendation.
+ * Returns either an override level + rationale + evidence, or null if no override applies.
+ *
+ * Diff signal trumps a higher level when:
+ *   - tests-only diff      → "none"  (the change literally cannot regress UI)
+ *   - copy-only ≤10 lines  → "light" (rendered text changed, no logic — visual diff is enough)
+ * Diff signal upgrades when:
+ *   - touchesUiSurface     → at least "targeted-screenshot" (a registered visual surface moved)
+ *
+ * Historical signal is currently advisory only — surfaces in evidence but doesn't change
+ * the level. A future iteration can demote levels that consistently fail with the same
+ * preflight blocker (so the operator gets pushed toward manual-review-only sooner).
+ */
+const applyProportionalityOverrides = (
+  base: TicketRunMissionProofLevel,
+  signal: AdvisoryProofDiffSignal | undefined,
+  history: AdvisoryProofHistoricalSignal | undefined,
+): { level: TicketRunMissionProofLevel; reasons: string[]; evidence: string[] } | null => {
+  if (!signal && !history) return null;
+  const reasons: string[] = [];
+  const evidence: string[] = [];
+  let level = base;
+
+  if (signal) {
+    const totalLines = signal.totalLinesAdded + signal.totalLinesRemoved;
+    if (signal.testsOnly && signal.totalFilesChanged > 0) {
+      level = "none";
+      reasons.push("Diff is tests-only; production paths cannot regress.");
+      evidence.push("diff-tests-only");
+    } else if (signal.copyOnly && totalLines > 0 && totalLines <= 10) {
+      level = "light";
+      reasons.push(`Copy-only diff (${totalLines} line${totalLines === 1 ? "" : "s"}); a light proof is enough.`);
+      evidence.push("diff-copy-only-small");
+    } else if (signal.touchesUiSurface) {
+      // Don't downgrade — only escalate up to targeted-screenshot if the base is below it.
+      const escalated = level === "none" || level === "light" ? "targeted-screenshot" : level;
+      if (escalated !== level) {
+        level = escalated;
+        reasons.push("Diff touches a registered UI surface; recommending targeted screenshot.");
+        evidence.push("diff-ui-surface-touched");
+      }
+    }
+  }
+
+  if (history) {
+    const recentFailures = history.recentRuns.filter(
+      (entry) => entry.status === "failed" || entry.status === "preflight-blocked",
+    ).length;
+    if (recentFailures >= 2 && history.recentRuns.length >= 3) {
+      // Surface the signal as evidence — operators can see "this profile has been failing"
+      // in the rationale even though we don't auto-demote yet.
+      evidence.push(`history-recent-failures:${recentFailures}/${history.recentRuns.length}`);
+    }
+  }
+
+  if (level === base && reasons.length === 0 && evidence.length === 0) {
+    return null;
+  }
+  return { level, reasons, evidence };
+};
+
 export const computeAdvisoryProofDecision = (input: AdvisoryProofDecisionInput): AdvisoryProofDecisionComputation => {
-  const { run, classification, availableProofs, proofRules } = input;
+  const { run, classification, availableProofs, proofRules, diffSignal, historicalOutcomes } = input;
   const searchText = normalizeSearchText(run.ticketSummary);
 
   if (!classification) {
@@ -183,13 +291,17 @@ export const computeAdvisoryProofDecision = (input: AdvisoryProofDecisionInput):
     .filter((entry): entry is { rule: ProofRuleRecord; score: number } => entry.score !== null)
     .sort((left, right) => right.score - left.score || right.rule.updatedAt - left.rule.updatedAt)[0]?.rule;
 
-  const recommendedLevel =
+  const baseLevel: TicketRunMissionProofLevel =
     matchingRule?.recommendedLevel ??
     (includesAnyKeyword(searchText, COPY_CHANGE_KEYWORDS)
       ? "light"
       : availableProofs.length > 0
         ? "targeted-screenshot"
         : "full-ui-proof");
+
+  // Phase 2.4 — apply diff/history overrides after the rule-scored base recommendation.
+  const proportionality = applyProportionalityOverrides(baseLevel, diffSignal, historicalOutcomes);
+  const recommendedLevel = proportionality?.level ?? baseLevel;
 
   const preflightStatus =
     recommendedLevel === "manual-review-only"
@@ -200,18 +312,22 @@ export const computeAdvisoryProofDecision = (input: AdvisoryProofDecisionInput):
           ? "runnable"
           : "blocked";
 
-  const rationale =
+  const baseRationale =
     matchingRule?.rationale ??
-    (recommendedLevel === "light"
+    (baseLevel === "light"
       ? "The ticket reads like a copy-oriented UI change, so a lighter proof path is recommended."
-      : recommendedLevel === "targeted-screenshot"
+      : baseLevel === "targeted-screenshot"
         ? "A UI-facing change with available proof profiles should prefer a targeted proof path first."
         : "The run appears UI-affecting and currently warrants a fuller proof path.");
+  const rationale = proportionality && proportionality.reasons.length > 0
+    ? `${proportionality.reasons.join(" ")} (Base recommendation: ${baseRationale})`
+    : baseRationale;
 
   const evidence = [
     ...(matchingRule ? [`proof-rule:${matchingRule.id}`] : []),
     ...(includesAnyKeyword(searchText, COPY_CHANGE_KEYWORDS) ? ["copy-change-keywords"] : []),
     ...(availableProofs.length > 0 ? ["proof-profiles-available"] : ["no-proof-profiles-available"]),
+    ...(proportionality?.evidence ?? []),
   ];
 
   return {
@@ -432,5 +548,33 @@ export const BUILTIN_PROOF_RULES: Array<Omit<UpsertProofRuleInput, "createdAt">>
     proofRequired: false,
     recommendedLevel: "none",
     rationale: "Backend-only work should not request automated UI proof.",
+  },
+  // Phase 2.4 — extra builtin rules to nudge proportionality before diff signal arrives.
+  {
+    id: "global-frontend-copy-manual-review",
+    classificationKind: "frontend",
+    uiChange: true,
+    proofRequired: true,
+    summaryKeywords: ["typo", "spelling", "punctuation", "capitalization", "casing"],
+    recommendedLevel: "manual-review-only",
+    rationale:
+      "Pure typo / casing fixes are below the threshold where automated UI proof pays its way; operator review is the right gate.",
+  },
+  {
+    id: "global-tests-only-none",
+    classificationKind: "ui",
+    uiChange: false,
+    proofRequired: false,
+    summaryKeywords: ["test", "tests", "spec", "fixture", "mock"],
+    recommendedLevel: "none",
+    rationale: "Tests-only changes can't regress the UI surface; no proof artifact is required.",
+  },
+  {
+    id: "global-mixed-default-targeted",
+    classificationKind: "mixed",
+    uiChange: true,
+    proofRequired: true,
+    recommendedLevel: "targeted-screenshot",
+    rationale: "Mixed changes that touch UI default to a targeted screenshot before escalating to full UI proof.",
   },
 ];

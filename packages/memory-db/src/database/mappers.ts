@@ -430,6 +430,14 @@ export const mapTicketRunProofSummary = (row: TicketRunRow): TicketRunProofSumma
     lastProofAt: row.lastProofAt === null ? null : Number(row.lastProofAt),
     lastProofSummary: row.lastProofSummary === null ? null : String(row.lastProofSummary),
     staleReason: row.proofStaleReason === null ? null : String(row.proofStaleReason),
+    manualReviewJustification:
+      row.proofManualReviewJustification === null || row.proofManualReviewJustification === undefined
+        ? null
+        : String(row.proofManualReviewJustification),
+    manualReviewAt:
+      row.proofManualReviewAt === null || row.proofManualReviewAt === undefined
+        ? null
+        : Number(row.proofManualReviewAt),
   };
 };
 
@@ -546,6 +554,9 @@ export const mapTicketRunPreviousPassContext = (value: unknown): TicketRunPrevio
         lastProofAt: typeof value.proof.lastProofAt === "number" ? value.proof.lastProofAt : null,
         lastProofSummary: typeof value.proof.lastProofSummary === "string" ? value.proof.lastProofSummary : null,
         staleReason: typeof value.proof.staleReason === "string" ? value.proof.staleReason : null,
+        manualReviewJustification:
+          typeof value.proof.manualReviewJustification === "string" ? value.proof.manualReviewJustification : null,
+        manualReviewAt: typeof value.proof.manualReviewAt === "number" ? value.proof.manualReviewAt : null,
       }
     : {
         status: "not-run" as const,
@@ -554,6 +565,8 @@ export const mapTicketRunPreviousPassContext = (value: unknown): TicketRunPrevio
         lastProofAt: null,
         lastProofSummary: null,
         staleReason: null,
+        manualReviewJustification: null,
+        manualReviewAt: null,
       };
 
   return {

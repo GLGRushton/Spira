@@ -49,6 +49,8 @@ import type {
   TicketRunSnapshot,
   TicketRunSubmoduleGitStateResult,
   TicketRunSummary,
+  MissionProofRulesSnapshot,
+  UpsertMissionProofRuleInput,
 } from "./ticket-run-types.js";
 import type { UpgradeProposal, UpgradeStatus } from "./upgrade.js";
 import type {
@@ -135,7 +137,17 @@ export type ClientMessage =
   | { type: "missions:ticket-run:timeline:get"; requestId: string; runId: string }
   | { type: "missions:ticket-run:repo-intelligence:get"; requestId: string; runId: string }
   | { type: "missions:ticket-run:repo-intelligence:approve"; requestId: string; runId: string; entryId: string }
+  | { type: "missions:proof-rules:list"; requestId: string }
+  | { type: "missions:proof-rules:upsert"; requestId: string; rule: UpsertMissionProofRuleInput }
+  | { type: "missions:proof-rules:delete"; requestId: string; ruleId: string }
   | { type: "missions:ticket-run:proof:run"; requestId: string; runId: string; profileId: string }
+  | {
+      type: "missions:ticket-run:proof:manual-review:set";
+      requestId: string;
+      runId: string;
+      justification: string;
+    }
+  | { type: "missions:ticket-run:proof:manual-review:clear"; requestId: string; runId: string }
   | {
       type: "missions:ticket-run:proof-artifact:read";
       requestId: string;
@@ -295,10 +307,23 @@ export type ServerMessage =
       requestId: string;
       result: ApproveTicketRunRepoIntelligenceResult;
     }
+  | { type: "missions:proof-rules:list:result"; requestId: string; result: MissionProofRulesSnapshot }
+  | { type: "missions:proof-rules:upsert:result"; requestId: string; result: MissionProofRulesSnapshot }
+  | { type: "missions:proof-rules:delete:result"; requestId: string; result: MissionProofRulesSnapshot }
   | {
       type: "missions:ticket-run:proof:run:result";
       requestId: string;
       result: RunTicketRunProofResult;
+    }
+  | {
+      type: "missions:ticket-run:proof:manual-review:set:result";
+      requestId: string;
+      result: { run: TicketRunSummary; snapshot: TicketRunSnapshot };
+    }
+  | {
+      type: "missions:ticket-run:proof:manual-review:clear:result";
+      requestId: string;
+      result: { run: TicketRunSummary; snapshot: TicketRunSnapshot };
     }
   | {
       type: "missions:ticket-run:proof-artifact:read:result";

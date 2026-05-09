@@ -10,6 +10,7 @@ import { useEffect, useState } from "react";
 import { useMcpStore } from "../stores/mcp-store.js";
 import { useRuntimeConfigStore } from "../stores/runtime-config-store.js";
 import { useSettingsStore } from "../stores/settings-store.js";
+import { ProofRulesEditor } from "./settings/ProofRulesEditor.js";
 import styles from "./SettingsPanel.module.css";
 
 const YOUTRACK_RUNTIME_CONFIG_KEYS: RuntimeConfigKey[] = ["youTrackBaseUrl", "youTrackToken"];
@@ -295,6 +296,7 @@ export function SettingsPanel() {
     { id: "permissions", label: "Permissions", caption: "Tool approval behaviour" },
     { id: "armoury", label: "Armoury", caption: "MCP servers" },
     { id: "mission-git", label: "Mission git", caption: "Submodule PAT" },
+    { id: "proof-rules", label: "Proof rules", caption: "Proof level recommendations" },
     { id: "youtrack", label: "YouTrack", caption: "Ticket intake" },
     { id: "sql-server", label: "SQL server", caption: "Read-only MCP login" },
     { id: "other", label: "Other keys", caption: "ElevenLabs, Picovoice, Nexus" },
@@ -542,6 +544,8 @@ export function SettingsPanel() {
           "This PAT is dedicated to mission submodule cloning, commits, publish, push, and GitHub author lookup.",
           MISSION_GIT_RUNTIME_CONFIG_KEYS,
         );
+      case "proof-rules":
+        return <ProofRulesEditor />;
       case "other":
         return renderRuntimeConfigSection(
           "Other secure keys",

@@ -45,6 +45,8 @@ const createRunSummary = (): TicketRunSummary => ({
     lastProofAt: null,
     lastProofSummary: null,
     staleReason: null,
+    manualReviewJustification: null,
+    manualReviewAt: null,
   },
   proofRuns: [],
 });

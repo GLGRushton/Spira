@@ -525,6 +525,18 @@ export const createIntelligencePersistence = (context: DatabasePersistenceContex
     return seed(entries);
   };
 
+  /**
+   * Phase 2.5 — delete a single proof rule by id. Returns true if a row was removed.
+   * Caller is responsible for any policy checks (e.g. "don't delete builtins") — this is
+   * intentionally permissive so the editor UI can also recover from accidentally-orphaned
+   * records.
+   */
+  const deleteProofRule = (ruleId: string): boolean => {
+    assertDatabaseWritable(context);
+    const result = context.db.prepare("DELETE FROM proof_rules WHERE id = @ruleId").run({ ruleId });
+    return result.changes > 0;
+  };
+
   const getProofDecision = (runId: string): ProofDecisionRecord | null => {
     const row = context.db
       .prepare(
@@ -627,6 +639,7 @@ export const createIntelligencePersistence = (context: DatabasePersistenceContex
     getProofRule,
     upsertProofRule,
     seedBuiltinProofRules,
+    deleteProofRule,
     getProofDecision,
     upsertProofDecision,
   };

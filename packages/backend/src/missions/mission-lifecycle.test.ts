@@ -62,6 +62,8 @@ describe("MissionLifecycleService", () => {
             lastProofAt: null,
             lastProofSummary: null,
             staleReason: null,
+            manualReviewJustification: null,
+            manualReviewAt: null,
           },
           profiles: [
             {
@@ -244,6 +246,8 @@ describe("MissionLifecycleService", () => {
             lastProofAt: null,
             lastProofSummary: null,
             staleReason: null,
+            manualReviewJustification: null,
+            manualReviewAt: null,
           },
           profiles: [
             {
@@ -344,6 +348,8 @@ describe("MissionLifecycleService", () => {
             lastProofAt: null,
             lastProofSummary: null,
             staleReason: null,
+            manualReviewJustification: null,
+            manualReviewAt: null,
           },
           profiles: [
             {
@@ -400,5 +406,116 @@ describe("MissionLifecycleService", () => {
       database.close();
       rmSync(tempDir, { recursive: true, force: true });
     }
+  });
+
+  // Phase 2.1 — manual-review-only as a first-class satisfied gate state.
+  describe("setProofManualReviewOnly", () => {
+    const setupRunReadyForProof = (database: SpiraMemoryDatabase): void => {
+      // Build a run that has classification + plan + proof strategy stored so the workflow guard
+      // permits record-proof-result. Then we invoke setProofManualReviewOnly which uses the same
+      // assertion gate.
+      const baseRun = createRun(database);
+      database.upsertTicketRun({
+        ...baseRun,
+        classification: {
+          kind: "ui",
+          scopeSummary: "Update labels",
+          acceptanceCriteria: [],
+          impactedRepoRelativePaths: ["apps/web"],
+          risks: [],
+          uiChange: true,
+          proofRequired: true,
+          proofArtifactMode: "screenshot",
+          advisoryProofLevel: null,
+          advisoryProofRationale: null,
+          rationale: null,
+          createdAt: 1,
+          updatedAt: 5,
+        },
+        plan: {
+          steps: ["Edit copy"],
+          touchedRepoRelativePaths: ["apps/web"],
+          validationPlan: ["pnpm typecheck"],
+          proofIntent: "screenshot",
+          blockers: [],
+          assumptions: [],
+          createdAt: 1,
+          updatedAt: 6,
+        },
+        proofStrategy: {
+          adapterId: "playwright",
+          repoRelativePath: "apps/web",
+          scenarioPath: null,
+          scenarioName: null,
+          command: "dotnet test",
+          artifactMode: "screenshot",
+          rationale: "Targeted UI proof.",
+          metadata: null,
+          createdAt: 1,
+          updatedAt: 7,
+        },
+      });
+    };
+
+    it("rejects an empty justification", () => {
+      const { database, tempDir } = createDatabase();
+      try {
+        setupRunReadyForProof(database);
+        const service = new MissionLifecycleService(database);
+        expect(() => service.setProofManualReviewOnly("run-1", "   ")).toThrow(/non-empty justification/);
+      } finally {
+        database.close();
+        rmSync(tempDir, { recursive: true, force: true });
+      }
+    });
+
+    it("sets proof.status = manual-review and records an audit event", () => {
+      const { database, tempDir } = createDatabase();
+      try {
+        setupRunReadyForProof(database);
+        const service = new MissionLifecycleService(database);
+        const updated = service.setProofManualReviewOnly("run-1", "Copy edit, eyeballed in MissionChangesRoom.");
+        expect(updated.proof.status).toBe("manual-review");
+        expect(updated.proof.manualReviewJustification).toMatch(/eyeballed/);
+        expect(updated.proof.manualReviewAt).not.toBeNull();
+        const events = database.listMissionEvents("run-1", 50);
+        expect(events.some((event) => event.eventType === "proof-set-manual-review-only")).toBe(true);
+      } finally {
+        database.close();
+        rmSync(tempDir, { recursive: true, force: true });
+      }
+    });
+
+    it("treats manual-review as a satisfied proof gate", () => {
+      const { database, tempDir } = createDatabase();
+      try {
+        setupRunReadyForProof(database);
+        const service = new MissionLifecycleService(database);
+        service.setProofManualReviewOnly("run-1", "Operator review accepted.");
+        const run = database.getTicketRun("run-1") as TicketRunSummary;
+        const workflow = getMissionWorkflowState(run);
+        expect(workflow.proofPassed).toBe(true);
+      } finally {
+        database.close();
+        rmSync(tempDir, { recursive: true, force: true });
+      }
+    });
+
+    it("clearProofManualReview reverts proof.status to not-run and records an event", () => {
+      const { database, tempDir } = createDatabase();
+      try {
+        setupRunReadyForProof(database);
+        const service = new MissionLifecycleService(database);
+        service.setProofManualReviewOnly("run-1", "First review accepted.");
+        const cleared = service.clearProofManualReview("run-1");
+        expect(cleared.proof.status).toBe("not-run");
+        expect(cleared.proof.manualReviewJustification).toBeNull();
+        const events = database.listMissionEvents("run-1", 50);
+        expect(events.some((event) => event.eventType === "proof-manual-review-cleared")).toBe(true);
+      } finally {
+        database.close();
+        rmSync(tempDir, { recursive: true, force: true });
+      }
+    });
   });
 });

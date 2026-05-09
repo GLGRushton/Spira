@@ -33,6 +33,11 @@ const TICKET_RUN_REPO_INTELLIGENCE_GET_CHANNEL = "missions:ticket-run:repo-intel
 const TICKET_RUN_REPO_INTELLIGENCE_APPROVE_CHANNEL = "missions:ticket-run:repo-intelligence:approve";
 const TICKET_RUN_PROOF_RUN_CHANNEL = "missions:ticket-run:proof:run";
 const TICKET_RUN_PROOF_ARTIFACT_READ_CHANNEL = "missions:ticket-run:proof-artifact:read";
+const TICKET_RUN_PROOF_MANUAL_REVIEW_SET_CHANNEL = "missions:ticket-run:proof:manual-review:set";
+const TICKET_RUN_PROOF_MANUAL_REVIEW_CLEAR_CHANNEL = "missions:ticket-run:proof:manual-review:clear";
+const PROOF_RULES_LIST_CHANNEL = "missions:proof-rules:list";
+const PROOF_RULES_UPSERT_CHANNEL = "missions:proof-rules:upsert";
+const PROOF_RULES_DELETE_CHANNEL = "missions:proof-rules:delete";
 const TICKET_RUN_DELETE_CHANNEL = "missions:ticket-run:delete";
 const TICKET_RUN_REVIEW_SNAPSHOT_CHANNEL = "missions:ticket-run:review-snapshot:get";
 const TICKET_RUN_GIT_STATE_CHANNEL = "missions:ticket-run:git-state:get";
@@ -278,6 +283,21 @@ const electronAPI: ElectronApi = {
       artifactId,
       ...(typeof options?.maxBytes === "number" ? { maxBytes: options.maxBytes } : {}),
     });
+  },
+  setTicketRunProofManualReview(runId, justification) {
+    return ipcRenderer.invoke(TICKET_RUN_PROOF_MANUAL_REVIEW_SET_CHANNEL, { runId, justification });
+  },
+  clearTicketRunProofManualReview(runId) {
+    return ipcRenderer.invoke(TICKET_RUN_PROOF_MANUAL_REVIEW_CLEAR_CHANNEL, { runId });
+  },
+  listMissionProofRules() {
+    return ipcRenderer.invoke(PROOF_RULES_LIST_CHANNEL);
+  },
+  upsertMissionProofRule(rule) {
+    return ipcRenderer.invoke(PROOF_RULES_UPSERT_CHANNEL, { rule });
+  },
+  deleteMissionProofRule(ruleId) {
+    return ipcRenderer.invoke(PROOF_RULES_DELETE_CHANNEL, { ruleId });
   },
   deleteTicketRun(runId) {
     return ipcRenderer.invoke(TICKET_RUN_DELETE_CHANNEL, { runId });

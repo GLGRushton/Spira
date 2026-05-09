@@ -62,6 +62,7 @@ import {
   discoverMissionProofProfiles,
   toMissionProofProfileSummary,
 } from "./proof-registry.js";
+import { runProofPreflight } from "./proof-preflight.js";
 import { type RunMissionProofInput, type RunMissionProofOutput, runMissionProof } from "./proof-runner.js";
 import {
   buildSubmoduleDiffFingerprint,
@@ -902,6 +903,72 @@ export class TicketRunService {
       }
 
       const proofRunId = this.runIdFactory();
+      // Phase 2.3 — preflight before spawning the harness. A blocked preflight short-circuits
+      // the run with a typed `preflight-blocked` outcome so the operator sees concrete remediations
+      // instead of waiting on a 20-minute timeout for a harness that was never going to succeed.
+      this.recordMissionEvent(run, "proof", "proof-preflight-started", {
+        profileId: profile.profileId,
+        profileLabel: profile.label,
+      });
+      const preflight = await this.executeProofPreflight(profile);
+      this.recordMissionEvent(run, "proof", "proof-preflight-finished", {
+        profileId: profile.profileId,
+        profileLabel: profile.label,
+        ok: preflight.ok,
+        blockerCount: preflight.blockers.length,
+        warningCount: preflight.warnings.length,
+        elapsedMs: preflight.elapsedMs,
+        summary: preflight.summary,
+      });
+
+      if (!preflight.ok) {
+        // Persist a per-run audit row with the preflight findings. No harness spawned, no
+        // artifacts, no exit code — just the typed blockers in the summary so the renderer
+        // can surface them.
+        const startedAt = this.now();
+        const completedAt = startedAt + preflight.elapsedMs;
+        const blockedSummary = `Preflight blocked: ${preflight.blockers.map((finding) => finding.message).join(" | ")}`;
+        const blockedProofRun: TicketRunProofRunSummary = {
+          proofRunId,
+          runId: run.runId,
+          profileId: profile.profileId,
+          profileLabel: profile.label,
+          status: "preflight-blocked",
+          summary: blockedSummary,
+          startedAt,
+          completedAt,
+          exitCode: null,
+          command: profile.command,
+          artifacts: [],
+        };
+        run = this.persistRun(run, {
+          proof: {
+            status: "preflight-blocked",
+            lastProofRunId: proofRunId,
+            lastProofProfileId: profile.profileId,
+            lastProofAt: completedAt,
+            lastProofSummary: blockedSummary,
+            staleReason: null,
+            manualReviewJustification: null,
+            manualReviewAt: null,
+          },
+          proofRuns: [blockedProofRun, ...run.proofRuns.filter((candidate) => candidate.proofRunId !== proofRunId)],
+        });
+        this.emitRunUpdate(run.runId);
+        const snapshot = memoryDb.getTicketRunSnapshot();
+        return {
+          run,
+          snapshot,
+          proofSnapshot: {
+            runId: run.runId,
+            proof: run.proof,
+            profiles: profiles.map((candidate) => toMissionProofProfileSummary(candidate)),
+            proofRuns: run.proofRuns,
+          },
+          proofRun: blockedProofRun,
+        };
+      }
+
       const runningProofRun: TicketRunProofRunSummary = {
         proofRunId,
         runId: run.runId,
@@ -923,6 +990,10 @@ export class TicketRunService {
           lastProofAt: null,
           lastProofSummary: null,
           staleReason: null,
+          // Starting an automated proof clears any prior manual-review state. The mission_events
+          // log preserves the audit trail, including the prior justification.
+          manualReviewJustification: null,
+          manualReviewAt: null,
         },
         proofRuns: [runningProofRun, ...run.proofRuns.filter((candidate) => candidate.proofRunId !== proofRunId)],
       });
@@ -972,6 +1043,8 @@ export class TicketRunService {
           lastProofAt: proofOutput.completedAt,
           lastProofSummary: proofOutput.summary,
           staleReason: null,
+          manualReviewJustification: null,
+          manualReviewAt: null,
         },
         proofRuns: [completedProofRun, ...run.proofRuns.filter((candidate) => candidate.proofRunId !== proofRunId)],
       });
@@ -1602,6 +1675,14 @@ export class TicketRunService {
 
   private async executeMissionProof(input: RunMissionProofInput): Promise<RunMissionProofOutput> {
     return this.options.runMissionProof ? this.options.runMissionProof(input) : runMissionProof(input);
+  }
+
+  /**
+   * Phase 2.3 — preflight delegate. Tests inject a stub that returns ok=true so they can
+   * exercise the runProof flow without a real `dotnet` install or worktree-on-disk.
+   */
+  private async executeProofPreflight(profile: ResolvedMissionProofProfile) {
+    return this.options.runProofPreflight ? this.options.runProofPreflight(profile) : runProofPreflight(profile);
   }
 
   private async buildProofSnapshot(run: TicketRunSummary): Promise<TicketRunProofSnapshot> {

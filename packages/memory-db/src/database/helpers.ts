@@ -289,17 +289,47 @@ export const applyMigrations = (db: SqliteDatabase): void => {
   const currentVersion = Number(db.pragma("user_version", { simple: true }) ?? 0);
   const pending = MIGRATIONS.filter((migration) => migration.version > currentVersion);
   if (pending.length === 0) {
+    // Hot path on every db open — short-circuit before touching any pragmas so the steady-state
+    // cost is just the user_version read above.
     return;
   }
 
-  const migrate = db.transaction(() => {
-    for (const migration of pending) {
-      for (const statement of migration.statements) {
-        db.exec(statement);
-      }
-      db.pragma(`user_version = ${migration.version}`);
-    }
-  });
+  // Migrations that recreate referenced tables (e.g. v29 rebuilding ticket_runs to evolve a
+  // CHECK constraint) need two pragmas relaxed:
+  //   - foreign_keys = OFF: lets us drop the renamed shadow table without FK enforcement.
+  //   - legacy_alter_table = ON: stops SQLite 3.25+ from rewriting FK references in
+  //     dependent tables during ALTER TABLE RENAME. Without this, dependent FKs end up
+  //     pointing at the (later-dropped) shadow table and break at runtime.
+  // We restore both pragmas in a finally block and run a foreign_key_check as defence.
+  const wereForeignKeysOn = db.pragma("foreign_keys", { simple: true }) === 1;
+  const previousLegacyAlterTable = db.pragma("legacy_alter_table", { simple: true }) === 1;
+  if (wereForeignKeysOn) {
+    db.pragma("foreign_keys = OFF");
+  }
+  db.pragma("legacy_alter_table = ON");
 
-  migrate();
+  try {
+    const migrate = db.transaction(() => {
+      for (const migration of pending) {
+        for (const statement of migration.statements) {
+          db.exec(statement);
+        }
+        db.pragma(`user_version = ${migration.version}`);
+      }
+    });
+    migrate();
+    if (wereForeignKeysOn) {
+      const violations = db.pragma("foreign_key_check") as unknown[];
+      if (violations.length > 0) {
+        throw new Error(
+          `Foreign key violations detected after migrations: ${JSON.stringify(violations).slice(0, 200)}`,
+        );
+      }
+    }
+  } finally {
+    db.pragma(`legacy_alter_table = ${previousLegacyAlterTable ? "ON" : "OFF"}`);
+    if (wereForeignKeysOn) {
+      db.pragma("foreign_keys = ON");
+    }
+  }
 };

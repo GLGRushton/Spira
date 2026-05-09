@@ -2427,6 +2427,8 @@ describe("TicketRunService", () => {
       youTrackService: null,
       discoverMissionProofProfiles,
       runMissionProof,
+      // Phase 2.3 — stub preflight to "ok" so the runProof flow proceeds to spawn the harness.
+      runProofPreflight: async () => ({ ok: true, blockers: [], warnings: [], elapsedMs: 0, summary: null }),
       runIdFactory: () => "proof-1",
       now: () => 200,
     });

@@ -42,8 +42,11 @@ import type {
   TicketRunProofSnapshotResult,
   TicketRunRepoIntelligenceCandidatesResult,
   TicketRunReviewSnapshotResult,
+  MissionProofRulesSnapshot,
   TicketRunSnapshot,
   TicketRunSubmoduleGitStateResult,
+  TicketRunSummary,
+  UpsertMissionProofRuleInput,
 } from "./ticket-run-types.js";
 import type { UpgradeProposal, UpgradeStatus } from "./upgrade.js";
 import type {
@@ -116,6 +119,24 @@ export interface ElectronApi {
   getTicketRunRepoIntelligence(runId: string): Promise<TicketRunRepoIntelligenceCandidatesResult>;
   approveTicketRunRepoIntelligence(runId: string, entryId: string): Promise<ApproveTicketRunRepoIntelligenceResult>;
   runTicketRunProof(runId: string, profileId: string): Promise<RunTicketRunProofResult>;
+  /** Phase 2.5 — list every known proof rule (builtin + user) for the admin pane. */
+  listMissionProofRules(): Promise<MissionProofRulesSnapshot>;
+  /** Phase 2.5 — create or update a user-authored proof rule; returns the fresh snapshot. */
+  upsertMissionProofRule(rule: UpsertMissionProofRuleInput): Promise<MissionProofRulesSnapshot>;
+  /** Phase 2.5 — delete a user proof rule by id; returns the fresh snapshot. */
+  deleteMissionProofRule(ruleId: string): Promise<MissionProofRulesSnapshot>;
+  /**
+   * Phase 2.1 — mark the proof gate as satisfied via manual review.
+   * Justification is required and persisted on the run + as a mission event.
+   */
+  setTicketRunProofManualReview(
+    runId: string,
+    justification: string,
+  ): Promise<{ run: TicketRunSummary; snapshot: TicketRunSnapshot }>;
+  /** Phase 2.1 — revert a prior manual-review choice; gate becomes unsatisfied again. */
+  clearTicketRunProofManualReview(
+    runId: string,
+  ): Promise<{ run: TicketRunSummary; snapshot: TicketRunSnapshot }>;
   /**
    * Phase 1.4 — read a proof artifact's text content (lazy-loaded inline log viewer).
    * Returns null content for binary or missing artifacts; size-capped to maxBytes (default ~256KB).

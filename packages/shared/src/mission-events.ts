@@ -43,6 +43,12 @@ export const MISSION_EVENT_TYPES = [
   "attempt-shell-command",
   "attempt-awaiting-permission",
   "attempt-permission-resolved",
+  // Proof gate (Phase 2.1)
+  "proof-set-manual-review-only",
+  "proof-manual-review-cleared",
+  // Proof preflight (Phase 2.2 / 2.3)
+  "proof-preflight-started",
+  "proof-preflight-finished",
 ] as const;
 
 export type MissionEventType = (typeof MISSION_EVENT_TYPES)[number];
@@ -170,6 +176,32 @@ export interface MissionEventMetadataMap {
     attemptId: string;
     requestId: string;
     result: "approved" | "denied" | "expired";
+  };
+  // Proof gate — Phase 2.1
+  "proof-set-manual-review-only": {
+    /** Operator's free-text justification — e.g. "5-line copy edit, eyeballed in MissionChangesRoom". */
+    justification: string;
+    /** Whether this manual-review choice replaced a previously failed/blocked proof status. */
+    replacedPriorStatus: string | null;
+  };
+  "proof-manual-review-cleared": {
+    /** What the proof status reverted to (typically "not-run"). */
+    revertedTo: string;
+  };
+  // Proof preflight — Phase 2.2 / 2.3
+  "proof-preflight-started": {
+    profileId: string;
+    profileLabel: string;
+  };
+  "proof-preflight-finished": {
+    profileId: string;
+    profileLabel: string;
+    ok: boolean;
+    blockerCount: number;
+    warningCount: number;
+    elapsedMs: number;
+    /** Brief reason summary when ok = false; e.g. "dotnet not on PATH; node_modules missing". */
+    summary: string | null;
   };
 }
 

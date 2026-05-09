@@ -34,6 +34,11 @@ describe("mission event taxonomy", () => {
       "attempt-shell-command",
       "attempt-awaiting-permission",
       "attempt-permission-resolved",
+      // Phase 2.1 / 2.2 / 2.3 — proof gate + preflight events.
+      "proof-set-manual-review-only",
+      "proof-manual-review-cleared",
+      "proof-preflight-started",
+      "proof-preflight-finished",
     ];
     expect([...MISSION_EVENT_TYPES].sort()).toEqual(expected.sort());
   });

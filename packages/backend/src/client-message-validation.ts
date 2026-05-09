@@ -205,10 +205,43 @@ const ClientMessageSchema = z.discriminatedUnion("type", [
     runId: z.string(),
     entryId: z.string(),
   }),
+  messageSchema("missions:proof-rules:list", {
+    requestId: z.string(),
+  }),
+  messageSchema("missions:proof-rules:upsert", {
+    requestId: z.string(),
+    rule: z.object({
+      id: z.string().optional(),
+      projectKey: z.string().nullable().optional(),
+      repoRelativePath: z.string().nullable().optional(),
+      classificationKind: z
+        .enum(["backend", "frontend", "ui", "infra", "mixed", "unknown"])
+        .nullable()
+        .optional(),
+      uiChange: z.boolean().nullable().optional(),
+      proofRequired: z.boolean().nullable().optional(),
+      summaryKeywords: z.array(z.string()).optional(),
+      recommendedLevel: z.enum(["none", "light", "targeted-screenshot", "full-ui-proof", "manual-review-only"]),
+      rationale: z.string().min(1),
+    }),
+  }),
+  messageSchema("missions:proof-rules:delete", {
+    requestId: z.string(),
+    ruleId: z.string().min(1),
+  }),
   messageSchema("missions:ticket-run:proof:run", {
     requestId: z.string(),
     runId: z.string(),
     profileId: z.string(),
+  }),
+  messageSchema("missions:ticket-run:proof:manual-review:set", {
+    requestId: z.string(),
+    runId: z.string(),
+    justification: z.string().min(1),
+  }),
+  messageSchema("missions:ticket-run:proof:manual-review:clear", {
+    requestId: z.string(),
+    runId: z.string(),
   }),
   messageSchema("missions:ticket-run:proof-artifact:read", {
     requestId: z.string(),

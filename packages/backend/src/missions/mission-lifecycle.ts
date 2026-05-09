@@ -220,6 +220,10 @@ export class MissionLifecycleService {
         lastProofAt: result.proof.lastProofAt ?? null,
         lastProofSummary: result.proof.lastProofSummary ?? null,
         staleReason: result.proof.staleReason ?? null,
+        // Recording a fresh automated proof result supersedes any prior manual-review choice.
+        // The mission_events log preserves the audit trail.
+        manualReviewJustification: null,
+        manualReviewAt: null,
       },
       proofRuns,
     });
@@ -227,6 +231,74 @@ export class MissionLifecycleService {
       status: result.proof.status,
       lastProofRunId: result.proof.lastProofRunId ?? null,
       lastProofProfileId: result.proof.lastProofProfileId ?? null,
+    });
+    return nextRun;
+  }
+
+  /**
+   * Phase 2.1 — operator marks the proof gate as satisfied via manual review. The justification
+   * is required (asserted at the call site) and recorded both on the run and as a mission event.
+   * The choice persists across re-opens unless explicitly cleared via {@link clearProofManualReview}.
+   *
+   * Allowed any time `record-proof-result` would be allowed (i.e. plan saved + proof strategy saved).
+   * Manual review can also be applied after a `failed` or `preflight-blocked` outcome — that's the
+   * whole point: the operator looked, the gate is satisfied, the mission can close.
+   */
+  setProofManualReviewOnly(runId: string, justification: string): TicketRunSummary {
+    const trimmed = justification.trim();
+    if (!trimmed) {
+      throw new Error("Manual-review-only requires a non-empty justification.");
+    }
+    const run = this.requireRun(runId);
+    assertMissionWorkflowActionAllowed(run, "record-proof-result");
+    const previousStatus = run.proof.status;
+    const now = Date.now();
+    const nextRun = this.persistRun({
+      ...run,
+      missionPhase: "proof",
+      missionPhaseUpdatedAt: now,
+      proof: {
+        ...run.proof,
+        status: "manual-review",
+        lastProofAt: now,
+        lastProofSummary: trimmed,
+        staleReason: null,
+        manualReviewJustification: trimmed,
+        manualReviewAt: now,
+      },
+    });
+    this.recordMissionEvent(nextRun, "proof", "proof-set-manual-review-only", {
+      justification: trimmed,
+      replacedPriorStatus: previousStatus === "manual-review" ? null : previousStatus,
+    });
+    return nextRun;
+  }
+
+  /**
+   * Phase 2.1 — clear a prior manual-review choice; the gate becomes unsatisfied again until
+   * the operator re-runs the proof or re-asserts manual review.
+   */
+  clearProofManualReview(runId: string): TicketRunSummary {
+    const run = this.requireRun(runId);
+    if (run.proof.status !== "manual-review") {
+      return run;
+    }
+    const now = Date.now();
+    const nextRun = this.persistRun({
+      ...run,
+      missionPhase: "proof",
+      missionPhaseUpdatedAt: now,
+      proof: {
+        ...run.proof,
+        status: "not-run",
+        lastProofAt: null,
+        lastProofSummary: null,
+        manualReviewJustification: null,
+        manualReviewAt: null,
+      },
+    });
+    this.recordMissionEvent(nextRun, "proof", "proof-manual-review-cleared", {
+      revertedTo: "not-run",
     });
     return nextRun;
   }

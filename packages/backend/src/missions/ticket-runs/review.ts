@@ -110,6 +110,8 @@ export const buildDefaultProofSummary = (): TicketRunProofSummary => ({
   lastProofAt: null,
   lastProofSummary: null,
   staleReason: null,
+  manualReviewJustification: null,
+  manualReviewAt: null,
 });
 
 export const buildStaleProofSummary = (run: TicketRunSummary, staleReason: string): TicketRunProofSummary =>

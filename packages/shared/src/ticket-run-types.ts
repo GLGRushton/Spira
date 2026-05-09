@@ -15,10 +15,22 @@ export type TicketRunCleanupState = (typeof TICKET_RUN_CLEANUP_STATES)[number];
 export const TICKET_RUN_ATTEMPT_STATUSES = ["running", "completed", "failed", "cancelled"] as const;
 export type TicketRunAttemptStatus = (typeof TICKET_RUN_ATTEMPT_STATUSES)[number];
 
-export const TICKET_RUN_PROOF_STATUSES = ["not-run", "running", "passed", "failed", "stale"] as const;
+export const TICKET_RUN_PROOF_STATUSES = [
+  "not-run",
+  "running",
+  "passed",
+  "failed",
+  "stale",
+  // Phase 2.1 — gate satisfied by the operator's manual review (no automated proof artifact required).
+  // Carries a justification recorded with the proof-set-manual-review-only mission event.
+  "manual-review",
+  // Phase 2.3 — proof preflight identified blockers before the harness ran.
+  // Recoverable: operator fixes the blockers and reruns, or chooses manual-review.
+  "preflight-blocked",
+] as const;
 export type TicketRunProofStatus = (typeof TICKET_RUN_PROOF_STATUSES)[number];
 
-export const TICKET_RUN_PROOF_RUN_STATUSES = ["running", "passed", "failed"] as const;
+export const TICKET_RUN_PROOF_RUN_STATUSES = ["running", "passed", "failed", "preflight-blocked"] as const;
 export type TicketRunProofRunStatus = (typeof TICKET_RUN_PROOF_RUN_STATUSES)[number];
 
 export const TICKET_RUN_MISSION_PHASES = [
@@ -158,6 +170,10 @@ export interface TicketRunProofSummary {
   lastProofAt: number | null;
   lastProofSummary: string | null;
   staleReason: string | null;
+  /** Phase 2.1 — operator's free-text justification when the gate is satisfied via manual review. */
+  manualReviewJustification: string | null;
+  /** Phase 2.1 — when the manual-review status was set, for audit display. */
+  manualReviewAt: number | null;
 }
 
 export interface TicketRunProofProfileSummary {
@@ -361,6 +377,41 @@ export interface TicketRunMissionEventSummary {
   eventType: string;
   metadata: Record<string, unknown> | null;
   occurredAt: number;
+}
+
+/**
+ * Phase 2.5 — proof rule snapshot returned to the renderer admin pane.
+ * Mirrors the DB-side ProofRuleRecord but with renderer-friendly types.
+ */
+export interface MissionProofRuleRecord {
+  id: string;
+  projectKey: string | null;
+  repoRelativePath: string | null;
+  classificationKind: TicketRunMissionClassificationKind | null;
+  uiChange: boolean | null;
+  proofRequired: boolean | null;
+  summaryKeywords: string[];
+  recommendedLevel: TicketRunMissionProofLevel;
+  rationale: string;
+  source: "builtin" | "user";
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface MissionProofRulesSnapshot {
+  rules: MissionProofRuleRecord[];
+}
+
+export interface UpsertMissionProofRuleInput {
+  id?: string;
+  projectKey?: string | null;
+  repoRelativePath?: string | null;
+  classificationKind?: TicketRunMissionClassificationKind | null;
+  uiChange?: boolean | null;
+  proofRequired?: boolean | null;
+  summaryKeywords?: readonly string[];
+  recommendedLevel: TicketRunMissionProofLevel;
+  rationale: string;
 }
 
 export interface TicketRunMissionTimelineResult {
