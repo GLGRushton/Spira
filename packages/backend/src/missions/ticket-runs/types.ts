@@ -12,6 +12,7 @@ import type {
 import type { Logger } from "pino";
 import type { ProjectRegistry } from "../../projects/registry.js";
 import type { SpiraEventBus } from "../../util/event-bus.js";
+import type { DependencyWarmingResult, WarmRunDependenciesInput } from "../dependency-warmer.js";
 import type { ProofPreflightResult } from "../proof-preflight.js";
 import type { ResolvedMissionProofProfile } from "../proof-registry.js";
 import type { RunMissionProofInput, RunMissionProofOutput } from "../proof-runner.js";
@@ -121,6 +122,11 @@ export interface TicketRunServiceOptions {
   runMissionProof?: (input: RunMissionProofInput) => Promise<RunMissionProofOutput>;
   /** Phase 2.3 — preflight delegate; defaults to {@link runProofPreflight} from proof-preflight.ts. */
   runProofPreflight?: (profile: ResolvedMissionProofProfile) => Promise<ProofPreflightResult>;
+  /**
+   * Dependency-warming delegate. Defaults to {@link warmRunDependencies}; tests stub it
+   * with `async () => []` to skip the spawn entirely.
+   */
+  warmRunDependencies?: (input: WarmRunDependenciesInput) => Promise<DependencyWarmingResult[]>;
   resolveMissionGitIdentity?: () => Promise<MissionGitIdentity>;
   getMissionGitToken?: () => string | null;
 }

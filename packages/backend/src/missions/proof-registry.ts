@@ -1,6 +1,7 @@
-import { access, readFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import type { TicketRunProofProfileSummary, TicketRunSummary } from "@spira/shared";
+import { pathExists } from "../util/fs.js";
 
 export interface ResolvedMissionProofProfile extends TicketRunProofProfileSummary {
   command: string;
@@ -12,19 +13,6 @@ const LEGAPP_UI_TEST_PROJECT = "LegApp.Admin.UI.Tests\\LegApp.Admin.UI.Tests.csp
 const LEGAPP_UI_TEST_RUNSETTINGS = "LegApp.Admin.UI.Tests\\TestConfiguration.runsettings";
 const LEGAPP_UI_TEST_BASE = "LegApp.Admin.UI.Tests\\PageTests\\Bases\\IsolatedPageTestBase.cs";
 
-const pathExists = async (targetPath: string): Promise<boolean> => {
-  try {
-    await access(targetPath);
-    return true;
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code === "ENOENT" || code === "ENOTDIR") {
-      return false;
-    }
-    throw error;
-  }
-};
-
 const usesPlaywrightHarness = (content: string): boolean => content.includes("Microsoft.Playwright.NUnit");
 
 const usesProceduralAzureAdBypass = (content: string): boolean =>
@@ -32,7 +20,12 @@ const usesProceduralAzureAdBypass = (content: string): boolean =>
 
 const normalizeRelativePath = (value: string): string => value.replace(/\//gu, "\\");
 
-const tryDiscoverLegAppAdminProfile = async (
+/**
+ * Phase 4.4 — exported so {@link TicketRunService} can build a per-worktree cache
+ * (keyed on the worktree's HEAD SHA) without re-walking the filesystem per call.
+ * Returns null when the worktree doesn't host the LegApp Admin recipe.
+ */
+export const discoverProofProfileForWorktree = async (
   run: TicketRunSummary,
   worktree: TicketRunSummary["worktrees"][number],
 ): Promise<ResolvedMissionProofProfile | null> => {
@@ -75,11 +68,6 @@ const tryDiscoverLegAppAdminProfile = async (
     workingDirectory: worktree.worktreePath,
   };
 };
-
-export async function discoverMissionProofProfiles(run: TicketRunSummary): Promise<ResolvedMissionProofProfile[]> {
-  const profiles = await Promise.all(run.worktrees.map((worktree) => tryDiscoverLegAppAdminProfile(run, worktree)));
-  return profiles.flatMap((profile) => (profile ? [profile] : []));
-}
 
 export const toMissionProofProfileSummary = (profile: ResolvedMissionProofProfile): TicketRunProofProfileSummary => ({
   profileId: profile.profileId,

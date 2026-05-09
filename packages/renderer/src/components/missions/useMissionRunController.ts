@@ -31,6 +31,11 @@ export interface MissionRunController {
   isProofLoading: boolean;
   missionTimeline: TicketRunMissionEventSummary[];
   isMissionTimelineLoading: boolean;
+  /** Phase 4.6 — true when the backend reported additional older events beyond the current page. */
+  hasMoreMissionTimeline: boolean;
+  isLoadingOlderMissionEvents: boolean;
+  /** Phase 4.6 — append the next older page of mission events. No-op when none remain. */
+  loadOlderMissionEvents: () => Promise<void>;
   repoIntelligenceEntries: TicketRunRepoIntelligenceEntrySummary[];
   isRepoIntelligenceLoading: boolean;
   approvingRepoIntelligenceEntryId: string | null;
@@ -163,6 +168,10 @@ export function useMissionRunController(run: TicketRunSummary): MissionRunContro
   const [isProofLoading, setIsProofLoading] = useState(false);
   const [missionTimeline, setMissionTimeline] = useState<TicketRunMissionEventSummary[]>([]);
   const [isMissionTimelineLoading, setIsMissionTimelineLoading] = useState(false);
+  // Phase 4.6 — pagination cursor state for the mission timeline. `hasMoreMissionTimeline`
+  // tells the UI whether to render a "load older events" affordance.
+  const [hasMoreMissionTimeline, setHasMoreMissionTimeline] = useState(false);
+  const [isLoadingOlderMissionEvents, setIsLoadingOlderMissionEvents] = useState(false);
   const [repoIntelligenceEntries, setRepoIntelligenceEntries] = useState<TicketRunRepoIntelligenceEntrySummary[]>([]);
   const [isRepoIntelligenceLoading, setIsRepoIntelligenceLoading] = useState(false);
   const [approvingRepoIntelligenceEntryId, setApprovingRepoIntelligenceEntryId] = useState<string | null>(null);
@@ -450,6 +459,7 @@ export function useMissionRunController(run: TicketRunSummary): MissionRunContro
 
       setRunSnapshot(result.snapshot);
       setMissionTimeline(result.events);
+      setHasMoreMissionTimeline(result.hasMore);
     } catch (error) {
       if (missionTimelineRequestIdRef.current !== requestId) {
         return;
@@ -464,9 +474,44 @@ export function useMissionRunController(run: TicketRunSummary): MissionRunContro
     }
   }, [run.runId, setRunSnapshot]);
 
+  // Fetch the next older page using the smallest known event id as the cursor. Reads the
+  // current timeline inside the setMissionTimeline updater so this callback's identity
+  // depends only on run.runId — live event pushes don't churn the "Load older" button.
+  const loadOlderMissionEventsInFlightRef = useRef(false);
+  const loadOlderMissionEvents = useCallback(async () => {
+    if (loadOlderMissionEventsInFlightRef.current) return;
+    let oldestId: number | null = null;
+    setMissionTimeline((current) => {
+      oldestId = current.reduce<number | null>(
+        (smallest, event) => (smallest === null || event.id < smallest ? event.id : smallest),
+        null,
+      );
+      return current;
+    });
+    if (oldestId === null) return;
+    loadOlderMissionEventsInFlightRef.current = true;
+    setIsLoadingOlderMissionEvents(true);
+    try {
+      const result = await window.electronAPI.getTicketRunMissionTimeline(run.runId, { beforeId: oldestId });
+      setMissionTimeline((current) => {
+        const known = new Set(current.map((event) => event.id));
+        const fresh = result.events.filter((event) => !known.has(event.id));
+        return [...current, ...fresh];
+      });
+      setHasMoreMissionTimeline(result.hasMore);
+    } catch (error) {
+      console.error("Failed to load older mission events", error);
+      setRunError(error instanceof Error ? error.message : "Failed to load older mission events.");
+    } finally {
+      setIsLoadingOlderMissionEvents(false);
+      loadOlderMissionEventsInFlightRef.current = false;
+    }
+  }, [run.runId]);
+
   useEffect(() => {
     void run.runId;
     setMissionTimeline([]);
+    setHasMoreMissionTimeline(false);
   }, [run.runId]);
 
   useEffect(() => {
@@ -1300,6 +1345,9 @@ export function useMissionRunController(run: TicketRunSummary): MissionRunContro
     isProofLoading,
     missionTimeline,
     isMissionTimelineLoading,
+    hasMoreMissionTimeline,
+    isLoadingOlderMissionEvents,
+    loadOlderMissionEvents,
     repoIntelligenceEntries,
     isRepoIntelligenceLoading,
     approvingRepoIntelligenceEntryId,

@@ -44,6 +44,8 @@ const createRun = (ticketId: string, status: TicketRunSummary["status"]): Ticket
     lastProofAt: null,
     lastProofSummary: null,
     staleReason: null,
+    manualReviewJustification: null,
+    manualReviewAt: null,
   },
   proofRuns: [],
 });

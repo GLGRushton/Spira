@@ -171,9 +171,12 @@ export const createMissionIpcHandlers = (getBridge: () => IpcBridgeHandle | null
 
   [IPC_CHANNELS.missions.timelineGet]: async (
     _event: IpcMainInvokeEvent,
-    input?: { runId?: string },
+    input?: { runId?: string; beforeId?: number; limit?: number },
   ): Promise<TicketRunMissionTimelineResult> =>
-    requireBridge(getBridge()).getTicketRunMissionTimeline(requireRunId(input?.runId)),
+    requireBridge(getBridge()).getTicketRunMissionTimeline(requireRunId(input?.runId), {
+      beforeId: typeof input?.beforeId === "number" ? input.beforeId : undefined,
+      limit: typeof input?.limit === "number" ? input.limit : undefined,
+    }),
 
   [IPC_CHANNELS.missions.repoIntelligenceGet]: async (
     _event: IpcMainInvokeEvent,

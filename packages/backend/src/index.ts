@@ -1078,7 +1078,10 @@ const handleClientMessage = async (message: ClientMessage): Promise<void> => {
       transport?.send({
         type: "missions:ticket-run:timeline:get:result",
         requestId: message.requestId,
-        result: await ticketRunService.getMissionTimeline(message.runId),
+        result: await ticketRunService.getMissionTimeline(message.runId, {
+          beforeId: message.beforeId ?? null,
+          limit: message.limit,
+        }),
       });
     } catch (error) {
       logger.error(

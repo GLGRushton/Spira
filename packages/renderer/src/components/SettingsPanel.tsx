@@ -288,6 +288,9 @@ export function SettingsPanel() {
     | "ai-provider"
     | "armoury"
     | "mission-git"
+    | "repo-profiles"
+    | "validation-profiles"
+    | "proof-rules"
     | "youtrack"
     | "sql-server"
     | "other";

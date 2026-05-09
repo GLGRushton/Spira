@@ -522,6 +522,11 @@ export interface TicketRunMissionTimelineResult {
   run: TicketRunSummary;
   snapshot: TicketRunSnapshot;
   events: TicketRunMissionEventSummary[];
+  /**
+   * Phase 4.6 — true when an additional older page is available. The renderer can
+   * use the smallest event id in the current page as the next `beforeId`.
+   */
+  hasMore: boolean;
 }
 
 export interface TicketRunRepoIntelligenceEntrySummary {

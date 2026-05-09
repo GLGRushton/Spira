@@ -224,8 +224,12 @@ const electronAPI = {
   getTicketRunProofSnapshot(runId) {
     return ipcRenderer.invoke(TICKET_RUN_PROOFS_GET_CHANNEL, { runId });
   },
-  getTicketRunMissionTimeline(runId) {
-    return ipcRenderer.invoke(TICKET_RUN_TIMELINE_GET_CHANNEL, { runId });
+  getTicketRunMissionTimeline(runId, options) {
+    return ipcRenderer.invoke(TICKET_RUN_TIMELINE_GET_CHANNEL, {
+      runId,
+      beforeId: options?.beforeId,
+      limit: options?.limit,
+    });
   },
   getTicketRunRepoIntelligence(runId) {
     return ipcRenderer.invoke(TICKET_RUN_REPO_INTELLIGENCE_GET_CHANNEL, { runId });

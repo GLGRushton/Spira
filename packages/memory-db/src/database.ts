@@ -366,6 +366,10 @@ export class SpiraMemoryDatabase {
     return this.intelligence.deleteValidationProfile(profileId);
   }
 
+  recordValidationProfileObservedRuntime(profileId: string, runtimeMs: number): boolean {
+    return this.intelligence.recordValidationProfileObservedRuntime(profileId, runtimeMs);
+  }
+
   listProofRules(
     options: {
       projectKey?: string | null;
@@ -421,8 +425,11 @@ export class SpiraMemoryDatabase {
     return this.missions.appendMissionEvent(input);
   }
 
-  listMissionEvents(runId: string, limit = 50): MissionEventRecord[] {
-    return this.missions.listMissionEvents(runId, limit);
+  listMissionEvents(
+    runId: string,
+    optionsOrLimit: number | { beforeId?: number | null; limit?: number } = 50,
+  ): MissionEventRecord[] {
+    return this.missions.listMissionEvents(runId, optionsOrLimit);
   }
 
   listTicketRuns(): TicketRunSummary[] {

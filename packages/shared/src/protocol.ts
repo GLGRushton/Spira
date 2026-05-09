@@ -138,7 +138,15 @@ export type ClientMessage =
   | { type: "missions:ticket-run:work:cancel"; requestId: string; runId: string }
   | { type: "missions:ticket-run:complete"; requestId: string; runId: string }
   | { type: "missions:ticket-run:proofs:get"; requestId: string; runId: string }
-  | { type: "missions:ticket-run:timeline:get"; requestId: string; runId: string }
+  | {
+      type: "missions:ticket-run:timeline:get";
+      requestId: string;
+      runId: string;
+      /** Phase 4.6 — optional page boundary; events with id < beforeId are returned. Newest-first order. */
+      beforeId?: number;
+      /** Phase 4.6 — optional page size; defaults to backend default. */
+      limit?: number;
+    }
   | { type: "missions:ticket-run:repo-intelligence:get"; requestId: string; runId: string }
   | { type: "missions:ticket-run:repo-intelligence:approve"; requestId: string; runId: string; entryId: string }
   | { type: "missions:proof-rules:list"; requestId: string }

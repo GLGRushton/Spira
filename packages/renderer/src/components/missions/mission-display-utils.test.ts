@@ -62,6 +62,8 @@ const createRun = (): TicketRunSummary => ({
     lastProofAt: 10,
     lastProofSummary: "Previous proof passed.",
     staleReason: "A new pass started after the last proof run.",
+    manualReviewJustification: null,
+    manualReviewAt: null,
   },
   proofRuns: [],
 });

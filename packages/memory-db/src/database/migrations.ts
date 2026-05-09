@@ -1043,4 +1043,14 @@ export const MIGRATIONS: MigrationDefinition[] = [
       "CREATE INDEX idx_validation_profiles_scope_v30 ON validation_profiles(project_key, repo_relative_path, updated_at DESC)",
     ],
   },
+  {
+    // v31 — Phase 4.6 cursor-paged mission timeline reads (`WHERE run_id = ? AND id < ?`).
+    // The existing v20 index covers the run_id equality + occurred_at ordering, but the
+    // cursor predicate runs as a residual scan over every row in the run. This covering
+    // index lets long-running missions page back through their event log without scanning.
+    version: 31,
+    statements: [
+      "CREATE INDEX IF NOT EXISTS idx_mission_events_run_id_v31 ON mission_events(run_id, id DESC)",
+    ],
+  },
 ];

@@ -545,10 +545,20 @@ export const createMissionPersistence = (context: DatabasePersistenceContext) =>
     return mapMissionEventRow(row);
   };
 
-  const listMissionEvents = (runId: string, limit = 50): MissionEventRecord[] => {
-    const rows = context.db
-      .prepare(
-        `SELECT
+  /**
+   * List mission events newest-first. Pass `beforeId` for cursor-based pagination — only
+   * events with a strictly smaller id are returned. Limit is clamped to [1, 500] when a
+   * cursor is supplied.
+   */
+  const listMissionEvents = (
+    runId: string,
+    optionsOrLimit: number | { beforeId?: number | null; limit?: number } = {},
+  ): MissionEventRecord[] => {
+    const options = typeof optionsOrLimit === "number" ? { limit: optionsOrLimit } : optionsOrLimit;
+    const limit = Math.max(1, Math.min(500, options.limit ?? 50));
+    const cursor = options.beforeId ?? null;
+    const sql = cursor === null
+      ? `SELECT
            id,
            run_id AS runId,
            attempt_id AS attemptId,
@@ -559,10 +569,21 @@ export const createMissionPersistence = (context: DatabasePersistenceContext) =>
          FROM mission_events
          WHERE run_id = @runId
          ORDER BY occurred_at DESC, id DESC
-         LIMIT @limit`,
-      )
-      .all({ runId, limit }) as unknown as MissionEventRow[];
-
+         LIMIT @limit`
+      : `SELECT
+           id,
+           run_id AS runId,
+           attempt_id AS attemptId,
+           stage,
+           event_type AS eventType,
+           metadata_json AS metadataJson,
+           occurred_at AS occurredAt
+         FROM mission_events
+         WHERE run_id = @runId AND id < @cursor
+         ORDER BY occurred_at DESC, id DESC
+         LIMIT @limit`;
+    const params = cursor === null ? { runId, limit } : { runId, limit, cursor };
+    const rows = context.db.prepare(sql).all(params) as unknown as MissionEventRow[];
     return rows.map((row) => mapMissionEventRow(row));
   };
 

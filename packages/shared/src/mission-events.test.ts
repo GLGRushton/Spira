@@ -39,6 +39,9 @@ describe("mission event taxonomy", () => {
       "proof-manual-review-cleared",
       "proof-preflight-started",
       "proof-preflight-finished",
+      // Phase 4.1 — dependency warming.
+      "workspace-dependencies-warming-started",
+      "workspace-dependencies-warming-finished",
     ];
     expect([...MISSION_EVENT_TYPES].sort()).toEqual(expected.sort());
   });

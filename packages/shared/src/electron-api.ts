@@ -119,7 +119,10 @@ export interface ElectronApi {
   cancelTicketRunWork(runId: string): Promise<CancelTicketRunWorkResult>;
   completeTicketRun(runId: string): Promise<CompleteTicketRunResult>;
   getTicketRunProofSnapshot(runId: string): Promise<TicketRunProofSnapshotResult>;
-  getTicketRunMissionTimeline(runId: string): Promise<TicketRunMissionTimelineResult>;
+  getTicketRunMissionTimeline(
+    runId: string,
+    options?: { beforeId?: number; limit?: number },
+  ): Promise<TicketRunMissionTimelineResult>;
   getTicketRunRepoIntelligence(runId: string): Promise<TicketRunRepoIntelligenceCandidatesResult>;
   approveTicketRunRepoIntelligence(runId: string, entryId: string): Promise<ApproveTicketRunRepoIntelligenceResult>;
   runTicketRunProof(runId: string, profileId: string): Promise<RunTicketRunProofResult>;

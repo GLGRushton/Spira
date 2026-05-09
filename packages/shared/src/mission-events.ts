@@ -49,6 +49,9 @@ export const MISSION_EVENT_TYPES = [
   // Proof preflight (Phase 2.2 / 2.3)
   "proof-preflight-started",
   "proof-preflight-finished",
+  // Dependency warming (Phase 4.1)
+  "workspace-dependencies-warming-started",
+  "workspace-dependencies-warming-finished",
 ] as const;
 
 export type MissionEventType = (typeof MISSION_EVENT_TYPES)[number];
@@ -202,6 +205,24 @@ export interface MissionEventMetadataMap {
     elapsedMs: number;
     /** Brief reason summary when ok = false; e.g. "dotnet not on PATH; node_modules missing". */
     summary: string | null;
+  };
+  // Dependency warming — Phase 4.1
+  "workspace-dependencies-warming-started": {
+    repoRelativePath: string;
+    profileId: string;
+    profileLabel: string;
+    command: string;
+    workingDirectory: string;
+  };
+  "workspace-dependencies-warming-finished": {
+    repoRelativePath: string;
+    profileId: string;
+    profileLabel: string;
+    command: string;
+    status: "ok" | "skipped" | "failed";
+    durationMs: number;
+    exitCode: number | null;
+    error: string | null;
   };
 }
 

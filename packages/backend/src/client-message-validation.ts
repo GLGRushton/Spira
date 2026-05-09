@@ -195,6 +195,8 @@ const ClientMessageSchema = z.discriminatedUnion("type", [
   messageSchema("missions:ticket-run:timeline:get", {
     requestId: z.string(),
     runId: z.string(),
+    beforeId: z.number().int().positive().optional(),
+    limit: z.number().int().positive().max(500).optional(),
   }),
   messageSchema("missions:ticket-run:repo-intelligence:get", {
     requestId: z.string(),

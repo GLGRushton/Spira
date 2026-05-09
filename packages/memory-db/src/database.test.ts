@@ -604,6 +604,16 @@ describe("SpiraMemoryDatabase", () => {
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
       );
+      -- Stub mission_events so v31's CREATE INDEX has a table to attach to.
+      CREATE TABLE mission_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id TEXT NOT NULL,
+        attempt_id TEXT,
+        stage TEXT NOT NULL,
+        event_type TEXT NOT NULL,
+        metadata_json TEXT,
+        occurred_at INTEGER NOT NULL
+      );
       PRAGMA user_version = 24;
     `);
     rawDb.close();

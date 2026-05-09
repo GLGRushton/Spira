@@ -54,12 +54,17 @@ import type {
 import { getEffectiveValidations, normalizeProjectKey } from "@spira/shared";
 import fetch from "node-fetch";
 import { ConfigError, SpiraError } from "../util/errors.js";
+import {
+  type DependencyWarmingResult,
+  type WarmRunDependenciesInput,
+  warmRunDependencies,
+} from "./dependency-warmer.js";
 import { buildLearnedRepoIntelligenceCandidates } from "./mission-intelligence.js";
 import { buildPostmortemFilename, generateMissionPostmortem } from "./post-mortem-generator.js";
 import { buildMissionWorkflowRepairPrompt, getMissionWorkflowState } from "./mission-workflow-guard.js";
 import {
   type ResolvedMissionProofProfile,
-  discoverMissionProofProfiles,
+  discoverProofProfileForWorktree,
   toMissionProofProfileSummary,
 } from "./proof-registry.js";
 import { runProofPreflight } from "./proof-preflight.js";
@@ -149,6 +154,20 @@ export class TicketRunService {
   private interruptedWorkRecovered = false;
   private readonly runLocks = new Map<string, Promise<void>>();
   private readonly reviewSnapshotRequests = new Map<string, Promise<TicketRunReviewSnapshotResult>>();
+  /**
+   * Memoised result of `git rev-parse --git-dir` per worktree path. Treated as a cheap
+   * fast-path: the path-existence check still runs first so externally-deleted worktrees
+   * do not hit a stale cache.
+   */
+  private readonly usableWorktreeCache = new Map<string, true>();
+  /**
+   * Resolved proof profile per worktree path. Invalidated only by removeManagedWorktree;
+   * the discovery itself depends on file presence + content checks that effectively never
+   * change inside a single mission.
+   */
+  private readonly proofDiscoveryCache = new Map<string, ResolvedMissionProofProfile | null>();
+  /** Set of run ids currently in a dependency-warming pass; prevents re-warm storms. */
+  private readonly warmingInFlight = new Set<string>();
   private disposed = false;
 
   constructor(private readonly options: TicketRunServiceOptions) {
@@ -622,11 +641,10 @@ export class TicketRunService {
       this.recordMissionEvent(cancelledRun, cancelledRun.missionPhase, "attempt-cancelled", {
         attemptId: latestAttempt.attemptId,
       });
-      const snapshot = memoryDb.getTicketRunSnapshot();
-      this.emitSnapshot(snapshot);
+      this.emitRunUpdate(cancelledRun.runId);
       return {
         run: cancelledRun,
-        snapshot,
+        snapshot: memoryDb.getTicketRunSnapshot(),
       };
     });
   }
@@ -747,12 +765,21 @@ export class TicketRunService {
     };
   }
 
-  async getMissionTimeline(runId: string, limit = 80): Promise<TicketRunMissionTimelineResult> {
+  async getMissionTimeline(
+    runId: string,
+    options: { beforeId?: number | null; limit?: number } = {},
+  ): Promise<TicketRunMissionTimelineResult> {
     const run = this.getFreshRun(runId);
+    const limit = options.limit ?? 80;
+    // Read limit + 1 so we can report `hasMore` without a follow-up COUNT(*).
+    const probedEvents = this.listMissionEvents(runId, { beforeId: options.beforeId, limit: limit + 1 });
+    const hasMore = probedEvents.length > limit;
+    const events = hasMore ? probedEvents.slice(0, limit) : probedEvents;
     return {
       run,
       snapshot: this.requireMemoryDb().getTicketRunSnapshot(),
-      events: this.listMissionEvents(runId, limit),
+      events,
+      hasMore,
     };
   }
 
@@ -879,11 +906,10 @@ export class TicketRunService {
         entryId: approvedEntry.id,
         repoRelativePath: approvedEntry.repoRelativePath,
       });
-      const snapshot = memoryDb.getTicketRunSnapshot();
-      this.emitSnapshot(snapshot);
+      this.emitRunUpdate(run.runId);
       return {
         run,
-        snapshot,
+        snapshot: memoryDb.getTicketRunSnapshot(),
         entry: this.toRepoIntelligenceEntrySummary(approvedEntry),
       };
     });
@@ -1284,11 +1310,10 @@ export class TicketRunService {
     return this.withRunLock(runId, async () => {
       const run = await this.ensureRunSubmodules(this.getFreshRun(runId));
       const updatedRun = await this.generateAndPersistCommitDraft(run, repoRelativePath);
-      const snapshot = this.requireMemoryDb().getTicketRunSnapshot();
-      this.emitSnapshot(snapshot);
+      this.emitRunUpdate(updatedRun.runId);
       return {
         run: updatedRun,
-        snapshot,
+        snapshot: this.requireMemoryDb().getTicketRunSnapshot(),
         gitState: await this.readGitState(updatedRun, repoRelativePath),
       };
     });
@@ -1301,11 +1326,10 @@ export class TicketRunService {
     return this.withRunLock(runId, async () => {
       const run = await this.ensureRunSubmodules(this.getFreshRun(runId));
       const updatedRun = await this.generateAndPersistSubmoduleCommitDraft(run, canonicalUrl);
-      const snapshot = this.requireMemoryDb().getTicketRunSnapshot();
-      this.emitSnapshot(snapshot);
+      this.emitRunUpdate(updatedRun.runId);
       return {
         run: updatedRun,
-        snapshot,
+        snapshot: this.requireMemoryDb().getTicketRunSnapshot(),
         gitState: (await this.readSubmoduleState(updatedRun, canonicalUrl)).gitState,
       };
     });
@@ -1329,11 +1353,10 @@ export class TicketRunService {
             : candidate,
         ),
       });
-      const snapshot = this.requireMemoryDb().getTicketRunSnapshot();
-      this.emitSnapshot(snapshot);
+      this.emitRunUpdate(nextRun.runId);
       return {
         run: nextRun,
-        snapshot,
+        snapshot: this.requireMemoryDb().getTicketRunSnapshot(),
         gitState: await this.readGitState(nextRun, worktree.repoRelativePath),
       };
     });
@@ -1357,11 +1380,10 @@ export class TicketRunService {
             : candidate,
         ),
       });
-      const snapshot = this.requireMemoryDb().getTicketRunSnapshot();
-      this.emitSnapshot(snapshot);
+      this.emitRunUpdate(nextRun.runId);
       return {
         run: nextRun,
-        snapshot,
+        snapshot: this.requireMemoryDb().getTicketRunSnapshot(),
         gitState: (await this.readSubmoduleState(nextRun, canonicalUrl)).gitState,
       };
     });
@@ -1421,11 +1443,10 @@ export class TicketRunService {
             : candidate,
         ),
       });
-      const snapshot = this.requireMemoryDb().getTicketRunSnapshot();
-      this.emitSnapshot(snapshot);
+      this.emitRunUpdate(nextRun.runId);
       return {
         run: nextRun,
-        snapshot,
+        snapshot: this.requireMemoryDb().getTicketRunSnapshot(),
         gitState: await this.readGitState(nextRun, worktree.repoRelativePath),
         commitSha,
       };
@@ -1499,11 +1520,10 @@ export class TicketRunService {
             : candidate,
         ),
       });
-      const snapshot = this.requireMemoryDb().getTicketRunSnapshot();
-      this.emitSnapshot(snapshot);
+      this.emitRunUpdate(nextRun.runId);
       return {
         run: nextRun,
-        snapshot,
+        snapshot: this.requireMemoryDb().getTicketRunSnapshot(),
         gitState: (await this.readSubmoduleState(nextRun, canonicalUrl)).gitState,
         commitSha,
       };
@@ -1669,9 +1689,22 @@ export class TicketRunService {
   }
 
   private async discoverMissionProofProfiles(run: TicketRunSummary): Promise<ResolvedMissionProofProfile[]> {
-    return this.options.discoverMissionProofProfiles
-      ? this.options.discoverMissionProofProfiles(run)
-      : discoverMissionProofProfiles(run);
+    if (this.options.discoverMissionProofProfiles) {
+      return this.options.discoverMissionProofProfiles(run);
+    }
+    const profiles = await Promise.all(run.worktrees.map((worktree) => this.cachedWorktreeProofDiscovery(run, worktree)));
+    return profiles.flatMap((profile) => (profile ? [profile] : []));
+  }
+
+  private async cachedWorktreeProofDiscovery(
+    run: TicketRunSummary,
+    worktree: TicketRunSummary["worktrees"][number],
+  ): Promise<ResolvedMissionProofProfile | null> {
+    const cached = this.proofDiscoveryCache.get(worktree.worktreePath);
+    if (cached !== undefined) return cached;
+    const profile = await discoverProofProfileForWorktree(run, worktree);
+    this.proofDiscoveryCache.set(worktree.worktreePath, profile);
+    return profile;
   }
 
   private async executeMissionProof(input: RunMissionProofInput): Promise<RunMissionProofOutput> {
@@ -1713,7 +1746,7 @@ export class TicketRunService {
         status: "error",
         statusMessage: error instanceof Error ? error.message : "Failed to start mission work.",
       });
-      this.emitSnapshot(this.requireMemoryDb().getTicketRunSnapshot());
+      this.emitRunUpdate(failedRun.runId);
       throw new ConfigError(failedRun.statusMessage ?? "Failed to start mission work.");
     }
   }
@@ -1966,19 +1999,30 @@ export class TicketRunService {
     this.emitSnapshot(memoryDb.getTicketRunSnapshot());
   }
 
+  /**
+   * Phase 4.5 — prompt order is optimised for provider prompt caching.
+   *
+   * Stable-per-mission sections (repo guidance, workspace layout, the workflow contract
+   * boilerplate) come FIRST so the provider can hash and cache the longest possible prefix
+   * across a mission's attempts. Ticket-specific lines (ticket id, summary, operator
+   * follow-up) come LAST. The cache window is per-(model, system-prompt, user-prefix) so
+   * stable-prefix-first means a real token-cost reduction across attempts.
+   */
   private buildInitialPrompt(run: TicketRunSummary, prompt: string | null): string {
     const workspace = describeTicketRunWorkspace(run.worktrees);
     const guidance = this.tryBuildRepoGuidance(run);
     return [
-      `Work on ticket ${run.ticketId}: ${run.ticketSummary}.`,
+      // ── Stable per-mission prefix (cacheable) ───────────────────────────────────
+      ...(guidance ? [guidance] : []),
       `Mission workspace: ${workspace.phrase}.`,
       `Repositories in scope:\n${formatTicketRunWorktreeList(run.worktrees)}`,
       "The working directory is already set to the mission workspace. Move between repo directories as needed.",
       "Inspect the codebase, implement the ticket, and leave the worktree in a reviewable state.",
       "Use the existing station context as your scratchpad; do not restart from first principles unless the evidence demands it.",
-      prompt ? `Additional operator context: ${prompt}` : "No extra operator context was provided beyond the ticket.",
       "If you stop with open questions or partial work, say so plainly in your final summary.",
-      ...(guidance ? [guidance] : []),
+      // ── Per-attempt suffix (not cacheable) ──────────────────────────────────────
+      `Work on ticket ${run.ticketId}: ${run.ticketSummary}.`,
+      prompt ? `Additional operator context: ${prompt}` : "No extra operator context was provided beyond the ticket.",
     ].join("\n");
   }
 
@@ -1987,16 +2031,18 @@ export class TicketRunService {
     const workspace = describeTicketRunWorkspace(run.worktrees);
     const guidance = this.tryBuildRepoGuidance(run);
     return [
-      `Continue work on ticket ${run.ticketId}: ${run.ticketSummary}.`,
+      // ── Stable per-mission prefix (cacheable) ───────────────────────────────────
+      ...(guidance ? [guidance] : []),
       `Mission workspace: ${workspace.phrase}.`,
       `Repositories in scope:\n${formatTicketRunWorktreeList(run.worktrees)}`,
       "Stay inside the mission workspace and preserve the existing repo layout.",
       "Continue inside the same mission station and preserve context from the prior pass.",
+      // ── Per-attempt suffix (not cacheable) ──────────────────────────────────────
+      `Continue work on ticket ${run.ticketId}: ${run.ticketSummary}.`,
       latestAttempt?.summary ? `Last pass summary: ${latestAttempt.summary}` : "No prior pass summary is available.",
       prompt
         ? `User follow-up: ${prompt}`
         : "Tighten the solution, resolve remaining issues, and leave a crisp handoff summary.",
-      ...(guidance ? [guidance] : []),
     ].join("\n");
   }
 
@@ -2063,12 +2109,17 @@ export class TicketRunService {
   private async isUsableManagedWorktree(
     worktree: Pick<TicketRunSummary["worktrees"][number], "worktreePath">,
   ): Promise<boolean> {
+    // pathExists first so that an externally-deleted worktree never hits a stale cache.
     if (!(await this.pathExists(worktree.worktreePath))) {
+      this.usableWorktreeCache.delete(worktree.worktreePath);
       return false;
     }
-
+    if (this.usableWorktreeCache.has(worktree.worktreePath)) {
+      return true;
+    }
     try {
       await this.runGitCommand(worktree.worktreePath, ["rev-parse", "--git-dir"]);
+      this.usableWorktreeCache.set(worktree.worktreePath, true);
       return true;
     } catch {
       return false;
@@ -2112,6 +2163,9 @@ export class TicketRunService {
   }
 
   private async removeManagedWorktree(worktree: TicketRunSummary["worktrees"][number]): Promise<void> {
+    // Phase 4.2/4.4 — invalidate caches keyed on this worktree path. Idempotent.
+    this.usableWorktreeCache.delete(worktree.worktreePath);
+    this.proofDiscoveryCache.delete(worktree.worktreePath);
     if (!(await this.pathExists(worktree.worktreePath))) {
       try {
         await this.runGitCommand(worktree.repoAbsolutePath, ["worktree", "prune"]);
@@ -3280,16 +3334,105 @@ export class TicketRunService {
       status: updatedRun.status,
       worktreeCount: updatedRun.worktrees.length,
     });
-    this.emitSnapshot(memoryDb.getTicketRunSnapshot());
+    this.emitRunUpdate(updatedRun.runId);
+    // Phase 4.1 — fire-and-forget dependency warming. Failures are recorded in mission_events
+    // (warming-finished with status: "failed") but never fault the syncRunState path; the
+    // first validation pays the cold cost in that case.
+    void this.warmRunDependenciesInBackground(updatedRun);
     return updatedRun;
   }
 
-  private listMissionEvents(runId: string, limit: number): TicketRunMissionEventSummary[] {
+  /**
+   * Phase 4.1 — kick off `restore`-kind validation profile commands in parallel after the
+   * worktree is ready. Skipped silently when no projectKey, no validation profiles, or
+   * disabled by the option flag. The renderer surfaces progress via the warming-started /
+   * warming-finished mission events that this method emits per task.
+   */
+  private async warmRunDependenciesInBackground(run: TicketRunSummary): Promise<void> {
+    const memoryDb = this.options.memoryDb;
+    if (!memoryDb) return;
+    if (!run.projectKey || run.worktrees.length === 0) return;
+    // Guard against a re-warm storm if the operator clicks "Retry sync" while the previous
+    // warming pass is still in flight; one in-flight task per run is enough.
+    if (this.warmingInFlight.has(run.runId)) return;
+    this.warmingInFlight.add(run.runId);
+
+    try {
+      let validationProfiles: ReturnType<typeof memoryDb.listValidationProfiles>;
+      try {
+        validationProfiles = memoryDb.listValidationProfiles({
+          projectKey: run.projectKey,
+          repoRelativePaths: run.worktrees.map((worktree) => worktree.repoRelativePath),
+          limit: 50,
+        });
+      } catch (error) {
+        this.options.logger.warn(
+          { err: error, runId: run.runId, ticketId: run.ticketId },
+          "Failed to list validation profiles for dependency warming; skipping",
+        );
+        return;
+      }
+      if (validationProfiles.length === 0) return;
+
+      const warmer = this.options.warmRunDependencies ?? warmRunDependencies;
+      try {
+        await warmer({
+          run,
+          validationProfiles,
+          logger: this.options.logger,
+          now: this.now,
+          onTaskStarted: (task) => {
+            this.recordMissionEvent(run, "system", "workspace-dependencies-warming-started", {
+              repoRelativePath: task.repoRelativePath,
+              profileId: task.profileId,
+              profileLabel: task.profileLabel,
+              command: task.command,
+              workingDirectory: task.workingDirectory,
+            });
+          },
+          onTaskFinished: (result) => {
+            this.recordMissionEvent(run, "system", "workspace-dependencies-warming-finished", {
+              repoRelativePath: result.repoRelativePath,
+              profileId: result.profileId,
+              profileLabel: result.profileLabel,
+              command: result.command,
+              status: result.status,
+              durationMs: result.durationMs,
+              exitCode: result.exitCode,
+              error: result.error,
+            });
+            if (result.status === "ok") {
+              try {
+                memoryDb.recordValidationProfileObservedRuntime(result.profileId, result.durationMs);
+              } catch (error) {
+                this.options.logger.debug(
+                  { err: error, runId: run.runId, profileId: result.profileId },
+                  "Failed to record warming runtime on validation profile",
+                );
+              }
+            }
+          },
+        });
+      } catch (error) {
+        this.options.logger.warn(
+          { err: error, runId: run.runId, ticketId: run.ticketId },
+          "Dependency warming failed unexpectedly",
+        );
+      }
+    } finally {
+      this.warmingInFlight.delete(run.runId);
+    }
+  }
+
+  private listMissionEvents(
+    runId: string,
+    optionsOrLimit: number | { beforeId?: number | null; limit?: number },
+  ): TicketRunMissionEventSummary[] {
     const memoryDb = this.options.memoryDb;
     if (!memoryDb) {
       return [];
     }
-    return memoryDb.listMissionEvents(runId, limit).map((event) => ({
+    return memoryDb.listMissionEvents(runId, optionsOrLimit).map((event) => ({
       id: event.id,
       runId: event.runId,
       attemptId: event.attemptId,

@@ -659,6 +659,23 @@ export const createIntelligencePersistence = (context: DatabasePersistenceContex
     return result.changes > 0;
   };
 
+  /**
+   * Phase 4.1 — record an observed runtime against a validation profile (e.g. from
+   * dependency warming). Updates only `last_observed_runtime_ms` and `updated_at`; the
+   * existing rolling-average semantics (Phase 5 work) can layer on top later. Returns
+   * true if a row was updated.
+   */
+  const recordValidationProfileObservedRuntime = (profileId: string, runtimeMs: number): boolean => {
+    assertDatabaseWritable(context);
+    if (!Number.isFinite(runtimeMs) || runtimeMs < 0) return false;
+    const result = context.db
+      .prepare(
+        "UPDATE validation_profiles SET last_observed_runtime_ms = @runtimeMs, updated_at = @updatedAt WHERE id = @profileId",
+      )
+      .run({ profileId, runtimeMs: Math.round(runtimeMs), updatedAt: Date.now() });
+    return result.changes > 0;
+  };
+
   // ─── Phase 3.1 — repo_profiles CRUD ────────────────────────────────────────────────
   // Per-projectKey "what is this repo" record. Singleton per projectKey (PK), so we use
   // upsert + delete + list/get rather than a scoped-list pattern.
@@ -809,6 +826,7 @@ export const createIntelligencePersistence = (context: DatabasePersistenceContex
     upsertValidationProfile,
     seedBuiltinValidationProfiles,
     deleteValidationProfile,
+    recordValidationProfileObservedRuntime,
     listProofRules,
     getProofRule,
     upsertProofRule,

@@ -916,6 +916,16 @@ export function MissionDetailsRoom({ run, controller }: MissionDetailsRoomProps)
               {controller.isMissionTimelineLoading ? "Loading mission timeline..." : "No mission events recorded yet."}
             </div>
           )}
+          {controller.hasMoreMissionTimeline ? (
+            <button
+              type="button"
+              className={projectStyles.secondaryButton}
+              onClick={() => void controller.loadOlderMissionEvents()}
+              disabled={controller.isLoadingOlderMissionEvents}
+            >
+              {controller.isLoadingOlderMissionEvents ? "Loading older events..." : "Load older events"}
+            </button>
+          ) : null}
         </div>
       </article>
 

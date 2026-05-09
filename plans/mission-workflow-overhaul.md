@@ -2,7 +2,7 @@
 
 **Parent report:** [mission-workflow-review-2026-05-09.md](../reports/mission-workflow-review-2026-05-09.md).
 **Sister plans:** [model-escalation-architecture.md](./model-escalation-architecture.md) (provider-side), [permission-lifecycle-resilience.md](./permission-lifecycle-resilience.md) (already shipped).
-**Status:** drafted 2026-05-09. **Phases 0, 1, 2, and 3 shipped 2026-05-09 — see [Progress log](#progress-log) at the end of this document.**
+**Status:** drafted 2026-05-09. **Phases 0, 1, 2, 3, and 4 shipped 2026-05-09 — see [Progress log](#progress-log) at the end of this document.**
 
 ## Goal
 
@@ -233,7 +233,7 @@ The plan ships in **seven independent phases**. Each phase is small enough to me
 
 ---
 
-## Phase 4 — Performance (the "make it fast" phase)
+## Phase 4 — Performance (the "make it fast" phase) ✅ shipped 2026-05-09
 
 **Goal:** the things that take time today take less time, and the things that pay no dividend stop happening.
 
@@ -593,3 +593,53 @@ Skipped (negligible at scale): caching `buildRepoGuidanceSection` (~30 indexed-W
 - **Export / import JSON** for repo profiles (mentioned in §3.3 as "Useful but not critical") isn't built; the DB is the single source of truth and operators can re-edit through the admin pane.
 - **Edit-existing-profile flow on validation profiles** — current pane supports add + delete only; editing means delete + re-add. Edit support is a future polish if operators tell us it matters.
 - **Spira's own `repo_profile` row** lands as part of Phase 7 (Spira-side application).
+
+---
+
+### 2026-05-09 — Phase 4 shipped
+
+#### Phase 4 deliverables
+
+- **§4.1 dependency warming after worktree setup** — New [dependency-warmer.ts](../packages/backend/src/missions/dependency-warmer.ts). After a worktree is prepared (or recovered) `syncRunState` fires `warmRunDependenciesInBackground` which runs every registered `restore`-kind validation profile for the project's worktrees in parallel. Per-worktree the highest-confidence profile wins (with worktree-scoped beating any-repo at equal confidence). Best-effort: spawn failures, non-zero exits, and per-task timeouts (`DEFAULT_WARMING_TIMEOUT_MS = 10 min`) all surface as `status: "failed"` results without faulting the syncRunState path. Commands containing shell metacharacters (`<>|&;\`$()`) are skipped — operators can register `pnpm install`-shaped commands but not `FOO=bar npm ci && echo done`. Two new typed mission events `workspace-dependencies-warming-started` / `workspace-dependencies-warming-finished` carry per-task metadata; an in-flight `Set<runId>` guards against re-warm storms when the operator clicks "retry sync" while a warming pass is still running. Successful warmings feed `recordValidationProfileObservedRuntime` on the validation profile so the runtime hint in the repo-guidance section gets sharper over time.
+
+- **§4.2 worktree validation cache** — `isUsableManagedWorktree` (`ticket-runs.ts`) now memoises successful `git rev-parse --git-dir` results in a per-process `Map<worktreePath, true>`. Cache is checked AFTER `pathExists` so an externally-removed worktree never returns a stale-positive; invalidated explicitly in `removeManagedWorktree`. Reduces the rev-parse spawn count from "once per attempt per worktree" to "once per worktree, period."
+
+- **§4.3 snapshot delta channel adoption broadened** — Eight more `emitSnapshot()` callers converted to `emitRunUpdate`: `cancelWork`, `approveRepoIntelligenceCandidate`, `generateCommitDraft`, `generateSubmoduleCommitDraft`, `setCommitDraft`, `setSubmoduleCommitDraft`, `commitRun`, `commitSubmodule`, `launchMissionPass` error path, and `syncRunState` (the workspace-prepared write). Cold-snapshot full emits are now reserved for the documented set: `run-created` (startRun's three writes), `run-closed` (completeRun), `deleteRun` (run pruned), and the post-restart recovery sweep (multi-run state).
+
+- **§4.4 proof discovery cache** — Refactored [proof-registry.ts](../packages/backend/src/missions/proof-registry.ts) to expose `discoverProofProfileForWorktree` (single worktree) and dropped the now-redundant top-level `discoverMissionProofProfiles`. `TicketRunService.cachedWorktreeProofDiscovery` memoises the result per worktree path; invalidated by `removeManagedWorktree`. The earlier draft used a HEAD-SHA gate — dropped during self-review because spawning `git rev-parse HEAD` (~30-100ms on Windows) cost more than the 2-4 file checks the cache was meant to avoid. The simpler "cache once, invalidate on removal" approach is correct because the discovery result depends on file presence + content checks that don't change inside a single mission.
+
+- **§4.5 provider prompt-cache reorder** — `buildInitialPrompt` and `buildContinuationPrompt` now emit stable per-mission sections (repo guidance, workspace layout, instruction boilerplate) BEFORE per-attempt sections (ticket id, summary, operator follow-up, last-attempt summary). Comment dividers (`── Stable per-mission prefix (cacheable) ──` / `── Per-attempt suffix (not cacheable) ──`) make the intent obvious. With the right `cache_control` markers on the system prompt boundary downstream this lets Anthropic's prefix-cache reuse the long stable head across attempts; without them this is purely cosmetic but doesn't regress.
+
+- **§4.6 mission events pagination** — DB layer's `listMissionEvents(runId, optionsOrLimit)` now accepts either a number (back-compat) or `{ beforeId?, limit? }` for cursor-based reads. New migration v31 adds `idx_mission_events_run_id_v31 ON mission_events(run_id, id DESC)` so the cursor predicate is index-covered (the existing v20 index covered run_id + occurred_at ordering only). `getMissionTimeline(runId, { beforeId?, limit? })` reads `limit + 1` rows to compute `hasMore` cheaply; the protocol message + electron-api + IPC bridge all carry the optional cursor through. Renderer: new `loadOlderMissionEvents` + `hasMoreMissionTimeline` + `isLoadingOlderMissionEvents` on `useMissionRunController`, surfaced as a "Load older events" button at the bottom of the timeline section in `MissionDetailsRoom`. The callback's identity depends only on `run.runId` (the oldest-id is read inside a `setMissionTimeline` updater), and an in-flight `useRef` guard rejects concurrent clicks.
+
+- **§4.7 tests** — `dependency-warmer.test.ts` (7 tests): no-op for missing restore profiles, ok-on-exit-0, scope-aware profile selection, failed exit, timeout reporting, shell-metacharacter rejection, spawn-rejection-as-failed-result. `ticket-runs.phase-4.test.ts` (5 tests): prompt order has guidance before ticket lines, paged timeline with `hasMore: false` for fewer events than limit, paged timeline with cursor walk for >limit events, proof discovery cache hit on repeated lookups, worktree validation cache hit across repeated startRun resumes. Plus a `mission-events.test.ts` taxonomy update for the two new warming events. Total Phase 4 tests: 13 new + 1 taxonomy update. Full suite: 756 → 769 tests; all pass (545 backend + 30 memory-db + 75 renderer + 39 main + 40 shared + 40 mcp).
+
+#### Self-review fixes
+
+After the three review agents (reuse, quality, efficiency) the following landed:
+
+- **Re-warm storm guard** — Added `warmingInFlight: Set<runId>` to `TicketRunService` so an operator double-click on "retry sync" can't spawn two concurrent `pnpm install` runs against the same worktree (efficiency review #1).
+- **Drop the `disableDependencyWarming` boolean** — Replaced with the existing `warmRunDependencies: async () => []` delegate stub at the two test sites; one way to do one thing (quality review #5).
+- **Drop the proof-discovery HEAD-SHA cache** — Replaced with simple "cache once, invalidate on remove." Spawning git for HEAD costs more than the file-check work the cache was meant to avoid (efficiency review #2).
+- **`pathExists` first in `isUsableManagedWorktree`** — Re-ordered so an externally-deleted worktree never hits a stale-positive cache (quality review #2).
+- **Drop the dead `discoverMissionProofProfiles` export** in `proof-registry.ts`; `TicketRunService` now owns the worktree-loop (quality review #3).
+- **Collapse `listMissionEvents` and `listMissionEventsPaged`** in memory-db into one method that takes either a number or an options object. Removes the dispatch hop in three files (quality review #4 / #7).
+- **Add covering index `idx_mission_events_run_id_v31`** so the cursor predicate `id < @cursor` is index-covered (efficiency review #4). Migration v31; v24 fixture in `database.test.ts` updated with a stub mission_events table.
+- **`loadOlderMissionEvents` callback dep churn** — Read the oldest id inside a `setMissionTimeline` updater so the callback identity depends only on `run.runId`. Live-event pushes no longer churn the "Load older" button. Added a `useRef` in-flight guard to compensate for the lighter dep array (efficiency review #3 / quality review #8).
+
+Skipped (judgment calls):
+- Quality review's "comment cleanup — drop Phase 4.x prefixes and inline phase tags" is mostly stylistic; left in place where the doc-comment usefully points back to plan context for future readers.
+- Quality review's "extract `finalizeRunMutation` helper" for the 15+ `emitRunUpdate(...) → return { run, snapshot }` tails is a real DRY opportunity, but it would need to thread per-handler extra return shape. Worth doing as a separate cleanup PR.
+- Efficiency review's "cap caches with LRU" — current usage is one entry per worktree path; abandoned worktrees leak a tiny amount of memory. Worth fixing if Spira ever runs a long-lived backend across hundreds of missions; not now.
+
+#### Out-of-scope follow-ups noted by reviewers
+
+- A shared `spawnWithTimeout` util would consolidate three near-identical spawn wrappers (`proof-runner.ts`, `proof-preflight.ts`, `dependency-warmer.ts`). Reviewer flagged as a candidate for a later refactor.
+- `ticket-runs.ts:2110` — class-method `private async pathExists` predates the canonical `util/fs.ts` `pathExists`. Pre-existing, not Phase 4 introduced; safe cleanup target for any future PR that touches that file.
+- Pre-existing typecheck errors in `session-manager.permission-lifecycle.suite.ts` lines 161, 217 (`confidence: 0.9` vs `"heuristic"` literal) remain; flagged previously.
+
+#### What's still on hold for Phase 5+
+
+- **Diff signal** for `applyProportionalityOverrides` (Phase 2.4) is still wired but uncomputed; the warming events from Phase 4.1 + the validation runtime feedback give Phase 5's learning loop more raw data to start with.
+- **Provider-side prompt-cache markers** (the `cache_control: ephemeral` blocks the reorder is meant to enable) live in the provider client, not the prompt builder. Worth confirming the markers are set on the user-prefix when cache hit-rate becomes the metric we tune.
+- **No batching on live event push yet** — Phase 1.1 attempt-action events already have rate limiting at the source; if a future surface produces > ~100 events/sec, the renderer's rolling buffer (cap 20) is the right place to coalesce.

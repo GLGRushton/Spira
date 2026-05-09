@@ -240,7 +240,10 @@ export interface IpcBridgeHandle {
   cancelTicketRunWork(runId: string): Promise<CancelTicketRunWorkResult>;
   completeTicketRun(runId: string): Promise<CompleteTicketRunResult>;
   getTicketRunProofSnapshot(runId: string): Promise<TicketRunProofSnapshotResult>;
-  getTicketRunMissionTimeline(runId: string): Promise<TicketRunMissionTimelineResult>;
+  getTicketRunMissionTimeline(
+    runId: string,
+    options?: { beforeId?: number; limit?: number },
+  ): Promise<TicketRunMissionTimelineResult>;
   getTicketRunRepoIntelligence(runId: string): Promise<TicketRunRepoIntelligenceCandidatesResult>;
   approveTicketRunRepoIntelligence(runId: string, entryId: string): Promise<ApproveTicketRunRepoIntelligenceResult>;
   runTicketRunProof(runId: string, profileId: string): Promise<RunTicketRunProofResult>;
@@ -829,12 +832,14 @@ export function setupIpcBridge(
         "missions:ticket-run:proofs:get:result",
         MISSION_REVIEW_REQUEST_TIMEOUT_MS,
       ).then((response) => response.result),
-    getTicketRunMissionTimeline: (runId) =>
+    getTicketRunMissionTimeline: (runId, options) =>
       requestBackend(
         {
           type: "missions:ticket-run:timeline:get",
           requestId: randomUUID(),
           runId,
+          beforeId: options?.beforeId,
+          limit: options?.limit,
         },
         "missions:ticket-run:timeline:get:result",
         MISSION_REVIEW_REQUEST_TIMEOUT_MS,
