@@ -219,6 +219,13 @@ export type {
   SpiraUiWindowSummary,
 } from "./spira-ui-control.js";
 export type { UpgradeProposal, UpgradeScope, UpgradeStatus } from "./upgrade.js";
+export type {
+  MissionEvent,
+  MissionEventMetadataMap,
+  MissionEventStage,
+  MissionEventType,
+} from "./mission-events.js";
+export { isMissionEventType, MISSION_EVENT_TYPES, validateMissionEventType } from "./mission-events.js";
 export type { ITransport } from "./transport.js";
 export type { VoicePipelineEvent, VoicePipelineState, TranscriptionResult, OrbVisualParams } from "./voice-types.js";
 export type { OcrLine, OcrRectangle, OcrResult, OcrWord } from "./windows-ocr.js";

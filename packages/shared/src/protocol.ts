@@ -41,12 +41,14 @@ import type {
   SyncTicketRunRemoteResult,
   SyncTicketRunSubmoduleRemoteResult,
   TicketRunGitStateResult,
+  TicketRunMissionEventSummary,
   TicketRunMissionTimelineResult,
   TicketRunProofSnapshotResult,
   TicketRunRepoIntelligenceCandidatesResult,
   TicketRunReviewSnapshotResult,
   TicketRunSnapshot,
   TicketRunSubmoduleGitStateResult,
+  TicketRunSummary,
 } from "./ticket-run-types.js";
 import type { UpgradeProposal, UpgradeStatus } from "./upgrade.js";
 import type {
@@ -134,6 +136,14 @@ export type ClientMessage =
   | { type: "missions:ticket-run:repo-intelligence:get"; requestId: string; runId: string }
   | { type: "missions:ticket-run:repo-intelligence:approve"; requestId: string; runId: string; entryId: string }
   | { type: "missions:ticket-run:proof:run"; requestId: string; runId: string; profileId: string }
+  | {
+      type: "missions:ticket-run:proof-artifact:read";
+      requestId: string;
+      runId: string;
+      proofRunId: string;
+      artifactId: string;
+      maxBytes?: number;
+    }
   | { type: "missions:ticket-run:delete"; requestId: string; runId: string }
   | { type: "missions:ticket-run:review-snapshot:get"; requestId: string; runId: string }
   | { type: "missions:ticket-run:git-state:get"; requestId: string; runId: string; repoRelativePath?: string }
@@ -291,6 +301,17 @@ export type ServerMessage =
       result: RunTicketRunProofResult;
     }
   | {
+      type: "missions:ticket-run:proof-artifact:read:result";
+      requestId: string;
+      result: {
+        content: string | null;
+        truncated: boolean;
+        totalBytes: number;
+        mimeKind: "text" | "binary" | "missing";
+        artifactPath: string | null;
+      };
+    }
+  | {
       type: "missions:ticket-run:delete:result";
       requestId: string;
       result: DeleteTicketRunResult;
@@ -386,6 +407,8 @@ export type ServerMessage =
       services: MissionServiceSnapshot;
     }
   | { type: "missions:runs:updated"; snapshot: TicketRunSnapshot }
+  | { type: "missions:run:updated"; runId: string; run: TicketRunSummary }
+  | { type: "missions:run-event:recorded"; event: TicketRunMissionEventSummary }
   | { type: "missions:ticket-run:services:updated"; services: MissionServiceSnapshot }
   | ({ type: "youtrack:request-error"; requestId: string } & ErrorPayload)
   | ({ type: "projects:request-error"; requestId: string } & ErrorPayload)

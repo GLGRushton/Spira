@@ -2,7 +2,7 @@
 
 **Parent report:** [mission-workflow-review-2026-05-09.md](../reports/mission-workflow-review-2026-05-09.md).
 **Sister plans:** [model-escalation-architecture.md](./model-escalation-architecture.md) (provider-side), [permission-lifecycle-resilience.md](./permission-lifecycle-resilience.md) (already shipped).
-**Status:** drafted 2026-05-09.
+**Status:** drafted 2026-05-09. **Phases 0 and 1 shipped 2026-05-09 — see [Progress log](#progress-log) at the end of this document.**
 
 ## Goal
 
@@ -26,7 +26,7 @@ The plan ships in **seven independent phases**. Each phase is small enough to me
 
 ---
 
-## Phase 0 — Foundations (small, low-risk, do first)
+## Phase 0 — Foundations (small, low-risk, do first) ✅ shipped 2026-05-09
 
 **Goal:** put the structural primitives in place that every later phase depends on.
 
@@ -62,7 +62,7 @@ The plan ships in **seven independent phases**. Each phase is small enough to me
 
 ---
 
-## Phase 1 — Visibility (the "what's it doing" phase)
+## Phase 1 — Visibility (the "what's it doing" phase) ✅ shipped 2026-05-09
 
 **Goal:** at any second of any pass, the operator can see what the mission is doing, what it just did, and how long the active phase has been running.
 
@@ -488,3 +488,39 @@ A phase is done when:
 2. The listed tests are passing in CI.
 3. The phase has produced at least one user-visible change documented in the changelog.
 4. The mission running this work has produced its own auto post-mortem under §1.5 (so the system is dogfooding itself).
+
+---
+
+## Progress log
+
+### 2026-05-09 — Phases 0 + 1 shipped
+
+#### Phase 0 deliverables
+
+- **§0.1 typed event taxonomy** — [packages/shared/src/mission-events.ts](../packages/shared/src/mission-events.ts) with `MISSION_EVENT_TYPES`, `MissionEventType`, `MissionEventMetadataMap`, `isMissionEventType`, `validateMissionEventType`. Both `recordMissionEvent` helpers in [ticket-runs.ts](../packages/backend/src/missions/ticket-runs.ts) and [mission-lifecycle.ts](../packages/backend/src/missions/mission-lifecycle.ts) now take a typed `eventType: T` and a metadata payload typed by `MissionEventMetadataMap[T]`. The DB-side `appendMissionEvent` in [missions.ts](../packages/memory-db/src/database/missions.ts:480) validates at write time so a typo bypassing TS still fails loudly. 22 event types catalogued (the 18 existing types plus 4 new live-telemetry types from §1.1).
+- **§0.2 DB indices + WHERE-clause conversion** — Audited migrations and confirmed the v20 indices `idx_repo_intelligence_scope_v20`, `idx_validation_profiles_scope_v20`, `idx_proof_rules_scope_v20`, `idx_mission_events_run_v20` already exist and cover the access patterns. New helper `buildScopedRecordFilter` in [context.ts](../packages/memory-db/src/database/context.ts) builds parameterised WHERE clauses honouring the "repo-agnostic entries match every project" semantics. The three reads in [intelligence.ts](../packages/memory-db/src/database/intelligence.ts) (`listRepoIntelligence`, `listValidationProfiles`, `listProofRules`) now filter at SQL level instead of `SELECT * → .filter()` in JS. Approval filter pushed down too.
+- **§0.3 snapshot delta channel** — Added `missions:run-updated { runId, run }` (per-run delta) alongside the existing `missions:runs-changed` (full snapshot). Wired through the event bus, station registry relay, protocol, and renderer. New `setRun` action on the mission-runs store applies the patch in place. Five high-frequency `emitSnapshot` calls converted to `emitRunUpdate` (attempt-started, attempt-finished, attempt-repair-requested, proof-started, proof-finished); cold-snapshot path retained for run-created / run-closed / approve / restart-recovery / workspace-prepared (structural changes that benefit from a full replay).
+- **§0.4 tests** — `mission-events.test.ts` (4 tests): full-taxonomy contract, `isMissionEventType` rejection, narrowing, error message. `database.test.ts` (3 new tests): unknown-event-type rejection, project-scoping at SQL level, EXPLAIN-QUERY-PLAN sanity check confirming the index is used. `mission-runs-store.test.ts` (4 tests): cold setSnapshot, in-place setRun, append-when-missing, delta-replay convergence with cold snapshot.
+
+#### Phase 1 deliverables
+
+- **§1.1 live-action telemetry** — Four new typed event types (`attempt-action`, `attempt-shell-command`, `attempt-awaiting-permission`, `attempt-permission-resolved`) emitted from inside the mission subagent station. Hook points in [session-manager.ts](../packages/backend/src/runtime/session-manager.ts): `onToolExecutionStart` (shell-like only, status="running"), `onToolExecutionComplete` (all tools, status + duration), `onRequested` permission gate, `onResolved` permission gate. Resolver helper `getLatestMissionAttempt` centralises the lookup; `summariseToolTarget` extracts a path/url/command/pattern hint truncated to 80 chars. New bus event `missions:run-event-recorded` relays each event from the station bus to the transport via [station-registry.ts](../packages/backend/src/runtime/station-registry.ts). Renderer-side: `pushLiveEvent` action on the mission-runs store maintains a per-run rolling buffer (cap 20).
+- **§1.2 Now Playing strip** — [NowPlayingStrip.tsx](../packages/renderer/src/components/missions/rooms/NowPlayingStrip.tsx) under the phase chip in `MissionDetailsRoom`. Three variants: idle (no live activity), active (latest tool/shell/proof event), awaiting (open permission gate, lavender accent). Pulses for live-running events; ticks once a second to keep the elapsed/relative-time label fresh.
+- **§1.3 phase-grouped timeline** — New [mission-timeline-grouping.ts](../packages/renderer/src/components/missions/rooms/mission-timeline-grouping.ts) helper groups events by phase preserving workflow order. Renderer merges the cold-fetched timeline with the live event buffer (Phase 1.1) and groups them; each phase renders as a collapsible `<details>` block with event count and computed duration in the summary. The active phase and the system bucket open by default; completed phases collapse.
+- **§1.4 first-class proof viewer** — [ProofRunsViewer.tsx](../packages/renderer/src/components/missions/rooms/ProofRunsViewer.tsx) replaces the single-latest-run sub-card. Shows every proof run sorted newest first with command, exit code, duration, and grouped artifact chips (Reports + logs / Captures / Other). New backend method `readProofArtifactText` in [ticket-runs.ts](../packages/backend/src/missions/ticket-runs.ts) reads up to 256 KB of a text artifact (binary detection via NUL-byte probe in the first 4 KB) with path-traversal containment check against the proof run's `.spira-proof/<proofRunId>/` directory. New protocol message `missions:ticket-run:proof-artifact:read` and IPC channel `missions:ticket-run:proof-artifact:read` plumbed through `client-message-validation.ts`, `electron-api.ts`, `ipc-bridge.ts`, `channels.ts`, `missions-handlers.ts`, and `preload.ts`. Inline log viewer panel renders the content in a scrollable `<pre>`; "Open externally" fallback for binary or missing artifacts.
+- **§1.5 auto post-mortem stub** — New [post-mortem-generator.ts](../packages/backend/src/missions/post-mortem-generator.ts) with pure `generateMissionPostmortem(run, events)` that produces markdown with header, per-stage timing table, validations, proof runs, files-changed, and an open-observations placeholder. `writePostmortemStub` fires from the close path in [ticket-runs.ts](../packages/backend/src/missions/ticket-runs.ts) and writes to `<workspaceRoot>/reports/{ticketId}-mission-postmortem-{date}.md` using `writeFile(..., { flag: "wx" })` so a handwritten post-mortem for the same ticket is never clobbered. Best-effort: failures log but do not fault the close path; if no workspace root is configured the stub is skipped.
+- **§1.6 tests** — `mission-timeline-grouping.test.ts` (11 tests): workflow ordering, dedup by id, duration computation, edge cases, duration formatter table. `post-mortem-generator.test.ts` (5 tests): full-stub render, per-phase duration computation, empty-section handling, filename normalisation, ticket-id sanitisation. Total new tests across phases 0+1: 27. All pass; full suite (704 → 720 tests) green.
+
+#### Self-review fixes
+
+After spawning three review agents (reuse, quality, efficiency) the following were applied: hoisted `getLatestMissionAttempt` helper in `session-manager.ts` (eliminating 4 inline duplicate lookups), promoted `node:fs/promises` calls to top-level imports in `ticket-runs.ts`, replaced the `access`-then-`writeFile` TOCTOU in `writePostmortemStub` with atomic exclusive create (`flag: "wx"`), and removed a spurious `<span>` wrapper in `ProofRunsViewer` that was breaking the artifact-group flexbox layout. Skipped: consolidating four duration formatters into one (deliberately different output styles per surface — premature abstraction).
+
+#### Out-of-scope work flagged
+
+- A pre-existing TypeScript error in [session-manager.permission-lifecycle.suite.ts](../packages/backend/src/runtime/session-manager.permission-lifecycle.suite.ts) lines 161 and 217 (`confidence: 0.9` vs `WorkSessionClassification.confidence: "heuristic"`) was confirmed via `git stash` to predate this work; flagged as a separate task.
+
+#### What's still on hold for Phase 2+
+
+- Inline log viewer is bounded at 256 KB; pagination + larger reads can land alongside Phase 2 if needed.
+- High-frequency live events have no batching yet — fine at expected volumes; revisit if mission attempts produce > ~100 events / second.
+- Five `emitSnapshot` calls remain on the cold path (run-created, run-closed, intel-approve, restart-recover, workspace-prepared) — intentional; structural changes the renderer benefits from re-rendering wholesale.

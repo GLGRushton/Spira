@@ -1339,4 +1339,160 @@ describe("SpiraMemoryDatabase", () => {
     expect(database.getTicketRunByTicketId("SPI-102")).toBeNull();
     expect(database.getTicketRunSnapshot().runs).toEqual([]);
   });
+
+  // Phase 0.4 — taxonomy guard at the DB write site.
+  it("rejects mission events whose type is not in the taxonomy", () => {
+    const database = createTestDatabase();
+    database.upsertTicketRun({
+      runId: "run-taxonomy",
+      ticketId: "SPI-300",
+      ticketSummary: "Reject unknown event types",
+      ticketUrl: "https://example.youtrack.cloud/issue/SPI-300",
+      projectKey: "SPI",
+      status: "ready",
+      createdAt: 5_000,
+      startedAt: 5_000,
+      worktrees: [],
+    });
+
+    expect(() =>
+      database.appendMissionEvent({
+        runId: "run-taxonomy",
+        attemptId: null,
+        stage: "system",
+        eventType: "definitely-not-a-real-event",
+        metadata: {},
+        occurredAt: 5_100,
+      }),
+    ).toThrow(/Unknown mission event type/);
+
+    // Sanity: a known event still goes through.
+    expect(() =>
+      database.appendMissionEvent({
+        runId: "run-taxonomy",
+        attemptId: null,
+        stage: "system",
+        eventType: "workspace-prepared",
+        metadata: { status: "ready", worktreeCount: 0 },
+        occurredAt: 5_200,
+      }),
+    ).not.toThrow();
+  });
+
+  // Phase 0.2 — the SQL WHERE clause must scope by project_key while preserving the
+  // "repo-agnostic entries are returned for any project" semantics from matchesScopedRecord.
+  it("scopes intelligence reads by project at the SQL level", () => {
+    const database = createTestDatabase();
+    // Repo-agnostic entry — should appear for every project.
+    database.upsertRepoIntelligence({
+      id: "global-briefing",
+      projectKey: null,
+      repoRelativePath: null,
+      type: "briefing",
+      title: "Workflow basics",
+      content: "Phases run sequentially.",
+      tags: [],
+      source: "builtin",
+      approved: true,
+      createdAt: 1_000,
+    });
+    // Project-A entry — only visible when querying A.
+    database.upsertRepoIntelligence({
+      id: "project-a-pitfall",
+      projectKey: "project-a",
+      repoRelativePath: "apps/web",
+      type: "pitfall",
+      title: "Project A pitfall",
+      content: "Use registry X.",
+      tags: [],
+      source: "user",
+      approved: true,
+      createdAt: 1_100,
+    });
+    // Project-B entry — must not leak into a Project-A query.
+    database.upsertRepoIntelligence({
+      id: "project-b-pitfall",
+      projectKey: "project-b",
+      repoRelativePath: "apps/web",
+      type: "pitfall",
+      title: "Project B pitfall",
+      content: "Use registry Y.",
+      tags: [],
+      source: "user",
+      approved: true,
+      createdAt: 1_200,
+    });
+    // Unapproved entry — must not appear unless explicitly included.
+    database.upsertRepoIntelligence({
+      id: "project-a-candidate",
+      projectKey: "project-a",
+      repoRelativePath: "apps/web",
+      type: "example",
+      title: "Project A learned candidate",
+      content: "This compiled cleanly last time.",
+      tags: [],
+      source: "learned",
+      approved: false,
+      createdAt: 1_300,
+    });
+
+    const projectAEntries = database.listRepoIntelligence({
+      projectKey: "project-a",
+      repoRelativePaths: ["apps/web"],
+    });
+    const projectAIds = projectAEntries.map((entry) => entry.id);
+    expect(projectAIds).toContain("global-briefing");
+    expect(projectAIds).toContain("project-a-pitfall");
+    expect(projectAIds).not.toContain("project-b-pitfall");
+    expect(projectAIds).not.toContain("project-a-candidate");
+
+    const withCandidates = database.listRepoIntelligence({
+      projectKey: "project-a",
+      repoRelativePaths: ["apps/web"],
+      includeUnapproved: true,
+    });
+    expect(withCandidates.map((entry) => entry.id)).toContain("project-a-candidate");
+
+    const projectBOnly = database.listRepoIntelligence({
+      projectKey: "project-b",
+    });
+    const projectBIds = projectBOnly.map((entry) => entry.id);
+    expect(projectBIds).toContain("global-briefing");
+    expect(projectBIds).toContain("project-b-pitfall");
+    expect(projectBIds).not.toContain("project-a-pitfall");
+  });
+
+  it("uses the scoped index for repo intelligence queries (EXPLAIN QUERY PLAN sanity check)", () => {
+    const database = createTestDatabase();
+    // Seed enough rows that the planner has a meaningful choice.
+    for (let index = 0; index < 5; index += 1) {
+      database.upsertRepoIntelligence({
+        id: `seed-${index}`,
+        projectKey: index % 2 === 0 ? "alpha" : "beta",
+        repoRelativePath: `apps/seed-${index}`,
+        type: "briefing",
+        title: `Seed ${index}`,
+        content: "Seed content.",
+        tags: [],
+        source: "builtin",
+        approved: true,
+        createdAt: 1_000 + index,
+      });
+    }
+
+    const sqliteHandle = (database as unknown as { db: BetterSqlite3.Database }).db;
+    const plan = sqliteHandle
+      .prepare(
+        `EXPLAIN QUERY PLAN
+           SELECT id FROM repo_intelligence_entries
+           WHERE (project_key IS NULL OR project_key = @scopedProjectKey)
+             AND approved = 1
+           ORDER BY approved DESC, updated_at DESC, created_at DESC`,
+      )
+      .all({ scopedProjectKey: "alpha" }) as { detail: string }[];
+    const detail = plan.map((row) => row.detail).join(" | ");
+    // Either uses our v20 scope index or another scope-prefixed index. We just want
+    // to confirm the planner is not falling back to a bare table scan.
+    expect(detail).toMatch(/idx_repo_intelligence/);
+  });
 });

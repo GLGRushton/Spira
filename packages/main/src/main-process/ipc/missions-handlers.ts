@@ -199,6 +199,17 @@ export const createMissionIpcHandlers = (getBridge: () => IpcBridgeHandle | null
       requireField(input?.profileId, "Profile id is required."),
     ),
 
+  [IPC_CHANNELS.missions.proofArtifactRead]: async (
+    _event: IpcMainInvokeEvent,
+    input?: { runId?: string; proofRunId?: string; artifactId?: string; maxBytes?: number },
+  ) =>
+    requireBridge(getBridge()).readTicketRunProofArtifact(
+      requireRunId(input?.runId),
+      requireField(input?.proofRunId, "Proof run id is required."),
+      requireField(input?.artifactId, "Artifact id is required."),
+      typeof input?.maxBytes === "number" ? { maxBytes: input.maxBytes } : undefined,
+    ),
+
   [IPC_CHANNELS.missions.delete]: async (
     _event: IpcMainInvokeEvent,
     input?: { runId?: string },

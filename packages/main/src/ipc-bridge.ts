@@ -110,6 +110,7 @@ type MissionsRequestMessage =
   | Extract<ClientMessage, { type: "missions:ticket-run:repo-intelligence:get" }>
   | Extract<ClientMessage, { type: "missions:ticket-run:repo-intelligence:approve" }>
   | Extract<ClientMessage, { type: "missions:ticket-run:proof:run" }>
+  | Extract<ClientMessage, { type: "missions:ticket-run:proof-artifact:read" }>
   | Extract<ClientMessage, { type: "missions:ticket-run:delete" }>
   | Extract<ClientMessage, { type: "missions:ticket-run:review-snapshot:get" }>
   | Extract<ClientMessage, { type: "missions:ticket-run:git-state:get" }>
@@ -142,6 +143,7 @@ type MissionsResponseMessage =
   | Extract<ServerMessage, { type: "missions:ticket-run:repo-intelligence:get:result" }>
   | Extract<ServerMessage, { type: "missions:ticket-run:repo-intelligence:approve:result" }>
   | Extract<ServerMessage, { type: "missions:ticket-run:proof:run:result" }>
+  | Extract<ServerMessage, { type: "missions:ticket-run:proof-artifact:read:result" }>
   | Extract<ServerMessage, { type: "missions:ticket-run:delete:result" }>
   | Extract<ServerMessage, { type: "missions:ticket-run:review-snapshot:result" }>
   | Extract<ServerMessage, { type: "missions:ticket-run:git-state:result" }>
@@ -213,6 +215,18 @@ export interface IpcBridgeHandle {
   getTicketRunRepoIntelligence(runId: string): Promise<TicketRunRepoIntelligenceCandidatesResult>;
   approveTicketRunRepoIntelligence(runId: string, entryId: string): Promise<ApproveTicketRunRepoIntelligenceResult>;
   runTicketRunProof(runId: string, profileId: string): Promise<RunTicketRunProofResult>;
+  readTicketRunProofArtifact(
+    runId: string,
+    proofRunId: string,
+    artifactId: string,
+    options?: { maxBytes?: number },
+  ): Promise<{
+    content: string | null;
+    truncated: boolean;
+    totalBytes: number;
+    mimeKind: "text" | "binary" | "missing";
+    artifactPath: string | null;
+  }>;
   deleteTicketRun(runId: string): Promise<DeleteTicketRunResult>;
   getTicketRunReviewSnapshot(runId: string): Promise<TicketRunReviewSnapshotResult>;
   getTicketRunGitState(runId: string, repoRelativePath?: string): Promise<TicketRunGitStateResult>;
@@ -809,6 +823,19 @@ export function setupIpcBridge(
         },
         "missions:ticket-run:proof:run:result",
         MISSION_PROOF_REQUEST_TIMEOUT_MS,
+      ).then((response) => response.result),
+    readTicketRunProofArtifact: (runId, proofRunId, artifactId, options) =>
+      requestBackend(
+        {
+          type: "missions:ticket-run:proof-artifact:read",
+          requestId: randomUUID(),
+          runId,
+          proofRunId,
+          artifactId,
+          ...(typeof options?.maxBytes === "number" ? { maxBytes: options.maxBytes } : {}),
+        },
+        "missions:ticket-run:proof-artifact:read:result",
+        MISSION_REVIEW_REQUEST_TIMEOUT_MS,
       ).then((response) => response.result),
     deleteTicketRun: (runId) =>
       requestBackend(

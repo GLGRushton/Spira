@@ -5,6 +5,7 @@ import type {
   McpServerStatus,
   MissionServiceSnapshot,
   ModelProviderId,
+  TicketRunMissionEventSummary,
   PermissionRequestPayload,
   SubagentCompletedEvent,
   SubagentDeltaEvent,
@@ -18,6 +19,7 @@ import type {
   SubagentToolCallEvent,
   SubagentToolResultEvent,
   TicketRunSnapshot,
+  TicketRunSummary,
   VoicePipelineState,
 } from "@spira/shared";
 import type { ProviderUsageRecord } from "../provider/types.js";
@@ -57,6 +59,8 @@ export interface EventMap {
   "mcp:server-stderr": [serverId: string, line: string];
   "mcp:servers-changed": [statuses: McpServerStatus[]];
   "missions:runs-changed": [snapshot: TicketRunSnapshot];
+  "missions:run-updated": [update: { runId: string; run: TicketRunSummary }];
+  "missions:run-event-recorded": [event: TicketRunMissionEventSummary];
   "missions:ticket-run:services-changed": [snapshot: MissionServiceSnapshot];
   "subagent:catalog-changed": [agents: SubagentDomain[]];
   "subagent:started": [event: SubagentStartedEvent];

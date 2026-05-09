@@ -35,6 +35,7 @@ export const IPC_CHANNELS = {
     repoIntelligenceGet: "missions:ticket-run:repo-intelligence:get",
     repoIntelligenceApprove: "missions:ticket-run:repo-intelligence:approve",
     proofRun: "missions:ticket-run:proof:run",
+    proofArtifactRead: "missions:ticket-run:proof-artifact:read",
     delete: "missions:ticket-run:delete",
     reviewSnapshotGet: "missions:ticket-run:review-snapshot:get",
     gitStateGet: "missions:ticket-run:git-state:get",

@@ -32,6 +32,7 @@ const TICKET_RUN_TIMELINE_GET_CHANNEL = "missions:ticket-run:timeline:get";
 const TICKET_RUN_REPO_INTELLIGENCE_GET_CHANNEL = "missions:ticket-run:repo-intelligence:get";
 const TICKET_RUN_REPO_INTELLIGENCE_APPROVE_CHANNEL = "missions:ticket-run:repo-intelligence:approve";
 const TICKET_RUN_PROOF_RUN_CHANNEL = "missions:ticket-run:proof:run";
+const TICKET_RUN_PROOF_ARTIFACT_READ_CHANNEL = "missions:ticket-run:proof-artifact:read";
 const TICKET_RUN_DELETE_CHANNEL = "missions:ticket-run:delete";
 const TICKET_RUN_REVIEW_SNAPSHOT_CHANNEL = "missions:ticket-run:review-snapshot:get";
 const TICKET_RUN_GIT_STATE_CHANNEL = "missions:ticket-run:git-state:get";
@@ -269,6 +270,14 @@ const electronAPI: ElectronApi = {
   },
   runTicketRunProof(runId, profileId) {
     return ipcRenderer.invoke(TICKET_RUN_PROOF_RUN_CHANNEL, { runId, profileId });
+  },
+  readTicketRunProofArtifact(runId, proofRunId, artifactId, options) {
+    return ipcRenderer.invoke(TICKET_RUN_PROOF_ARTIFACT_READ_CHANNEL, {
+      runId,
+      proofRunId,
+      artifactId,
+      ...(typeof options?.maxBytes === "number" ? { maxBytes: options.maxBytes } : {}),
+    });
   },
   deleteTicketRun(runId) {
     return ipcRenderer.invoke(TICKET_RUN_DELETE_CHANNEL, { runId });

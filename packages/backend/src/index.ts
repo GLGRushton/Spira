@@ -1203,6 +1203,53 @@ const handleClientMessage = async (message: ClientMessage): Promise<void> => {
     return;
   }
 
+  if (message.type === "missions:ticket-run:proof-artifact:read") {
+    if (!ticketRunService) {
+      transport?.send({
+        type: "missions:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(
+          new Error("Ticket run service is unavailable."),
+          "MISSIONS_UNAVAILABLE",
+          "Missions ticket runs are unavailable.",
+          "missions",
+        ),
+      });
+      return;
+    }
+
+    try {
+      const result = await ticketRunService.readProofArtifactText(
+        message.runId,
+        message.proofRunId,
+        message.artifactId,
+        { maxBytes: message.maxBytes },
+      );
+      transport?.send({
+        type: "missions:ticket-run:proof-artifact:read:result",
+        requestId: message.requestId,
+        result,
+      });
+    } catch (error) {
+      logger.error(
+        {
+          err: error,
+          requestId: message.requestId,
+          runId: message.runId,
+          proofRunId: message.proofRunId,
+          artifactId: message.artifactId,
+        },
+        "Failed to read mission proof artifact",
+      );
+      transport?.send({
+        type: "missions:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(error, "MISSIONS_PROOF_ARTIFACT_READ_FAILED", "Failed to read proof artifact.", "missions"),
+      });
+    }
+    return;
+  }
+
   if (message.type === "missions:ticket-run:delete") {
     if (!ticketRunService) {
       transport?.send({
@@ -2489,6 +2536,13 @@ const bootstrap = async () => {
     transport?.send({
       type: "missions:runs:updated",
       snapshot,
+    });
+  });
+  bus.on("missions:run-updated", ({ runId, run }) => {
+    transport?.send({
+      type: "missions:run:updated",
+      runId,
+      run,
     });
   });
   bus.on("missions:ticket-run:services-changed", (services) => {

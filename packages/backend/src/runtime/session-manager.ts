@@ -1864,6 +1864,109 @@ export class StationSessionManager {
     watchdog.firstActivityAt ??= now;
   }
 
+  /**
+   * Phase 1.1 — forward live attempt activity into mission_events when the
+   * station is bound to a mission run. Looks up the latest live attempt and
+   * appends a typed event. No-op when the station is not mission-bound or the
+   * memoryDb / run / attempt is missing.
+   *
+   * Tool calls and shell commands fire on the station's bus regardless; this
+   * just mirrors the meaningful ones into the persistent mission timeline so
+   * the renderer can show "now playing" and the auto post-mortem can read them.
+   */
+  private recordMissionAttemptEvent<T extends "attempt-action" | "attempt-shell-command" | "attempt-awaiting-permission" | "attempt-permission-resolved">(
+    eventType: T,
+    metadata: import("@spira/shared").MissionEventMetadataMap[T],
+  ): void {
+    const memoryDb = this.memoryDb;
+    if (!memoryDb || !this.missionRunId) {
+      return;
+    }
+    const run = memoryDb.getTicketRun(this.missionRunId);
+    if (!run) {
+      return;
+    }
+    const latestAttempt =
+      [...run.attempts].reverse().find((attempt) => attempt.status === "running") ?? run.attempts.at(-1) ?? null;
+    if (!latestAttempt) {
+      return;
+    }
+    try {
+      const record = memoryDb.appendMissionEvent({
+        runId: run.runId,
+        attemptId: latestAttempt.attemptId,
+        stage: run.missionPhase,
+        eventType,
+        metadata: metadata as Record<string, unknown>,
+      });
+      // Push to the station bus so StationRegistry can relay to the transport.
+      // The renderer prepends to its per-run mission timeline buffer (Phase 1.2).
+      this.bus.emit("missions:run-event-recorded", {
+        id: record.id,
+        runId: record.runId,
+        attemptId: record.attemptId,
+        stage: record.stage as import("@spira/shared").TicketRunMissionEventSummary["stage"],
+        eventType: record.eventType,
+        metadata: record.metadata,
+        occurredAt: record.occurredAt,
+      });
+    } catch (error) {
+      // Don't let a telemetry write fault the underlying tool call.
+      logger.warn(
+        { err: error, runId: run.runId, eventType },
+        "Failed to record mission attempt event",
+      );
+    }
+  }
+
+  private static readonly SHELL_LIKE_TOOL_NAMES = new Set([
+    "Bash",
+    "PowerShell",
+    "spira_run_powershell",
+    "spira_start_powershell",
+    "spira_write_powershell",
+  ]);
+
+  /**
+   * Resolves the latest attempt on the bound mission run. Returns null if the station is
+   * not mission-bound or the run/attempts are missing. Centralised so the four event hooks
+   * in the tool-call lifecycle don't each repeat the same lookup pattern.
+   */
+  private getLatestMissionAttempt():
+    | { attemptId: string; sequence: number; status: string }
+    | null {
+    if (!this.missionRunId || !this.memoryDb) {
+      return null;
+    }
+    const run = this.memoryDb.getTicketRun(this.missionRunId);
+    return run?.attempts.at(-1) ?? null;
+  }
+
+  private summariseToolTarget(args: unknown): string | null {
+    if (!args || typeof args !== "object") {
+      return null;
+    }
+    const record = args as Record<string, unknown>;
+    const candidate =
+      typeof record.file_path === "string"
+        ? record.file_path
+        : typeof record.path === "string"
+          ? record.path
+          : typeof record.target === "string"
+            ? record.target
+            : typeof record.url === "string"
+              ? record.url
+              : typeof record.pattern === "string"
+                ? record.pattern
+                : typeof record.command === "string"
+                  ? record.command
+                  : null;
+    if (!candidate) {
+      return null;
+    }
+    return candidate.length > 80 ? `${candidate.slice(0, 77)}...` : candidate;
+  }
+
   private getTurnWatchdogTimeout(promptEpoch: number): AssistantError | null {
     const watchdog = this.activeTurnWatchdog;
     if (!watchdog || watchdog.promptEpoch !== promptEpoch) {
@@ -2158,6 +2261,22 @@ export class StationSessionManager {
           startEvent.data.toolName,
           startEvent.data.arguments ?? {},
         );
+        // Phase 1.1 — emit a "now playing" mission event for shell-like tools so long-running
+        // commands give the operator a visible signal before they complete. Other tools wait
+        // for completion to keep volume sane.
+        if (StationSessionManager.SHELL_LIKE_TOOL_NAMES.has(startEvent.data.toolName)) {
+          const latestAttempt = this.getLatestMissionAttempt();
+          if (latestAttempt) {
+            this.recordMissionAttemptEvent("attempt-shell-command", {
+              attemptId: latestAttempt.attemptId,
+              command: this.summariseToolTarget(startEvent.data.arguments) ?? startEvent.data.toolName,
+              cwd: null,
+              durationMs: null,
+              exitCode: null,
+              status: "running",
+            });
+          }
+        }
       },
       onToolExecutionComplete: (completeEvent, toolRecord, occurredAt) => {
         this.observedToolActivity = true;
@@ -2211,6 +2330,37 @@ export class StationSessionManager {
           occurredAt,
         });
         this.bus.emit("assistant:tool-result", completeEvent.data.toolCallId, completeEvent.data.result ?? null);
+        // Phase 1.1 — record completion as a mission timeline event so post-mortem and
+        // "now playing" surfaces have a canonical record of what the agent just did.
+        {
+          const latestAttempt = this.getLatestMissionAttempt();
+          if (latestAttempt) {
+            const startedAtMs = (toolRecord as { startedAt?: number } | null)?.startedAt;
+            const durationMs =
+              typeof startedAtMs === "number" && Number.isFinite(startedAtMs) ? occurredAt - startedAtMs : null;
+            const target = this.summariseToolTarget((toolRecord as { args?: unknown } | null)?.args);
+            const succeeded = !(completeEvent.data.success === false || Boolean(completeEvent.data.error));
+            const status = succeeded ? "success" : "error";
+            if (StationSessionManager.SHELL_LIKE_TOOL_NAMES.has(toolRecord.toolName)) {
+              this.recordMissionAttemptEvent("attempt-shell-command", {
+                attemptId: latestAttempt.attemptId,
+                command: target ?? toolRecord.toolName,
+                cwd: null,
+                durationMs,
+                exitCode: null,
+                status: succeeded ? "passed" : "failed",
+              });
+            } else {
+              this.recordMissionAttemptEvent("attempt-action", {
+                attemptId: latestAttempt.attemptId,
+                action: toolRecord.toolName,
+                target,
+                durationMs,
+                status,
+              });
+            }
+          }
+        }
       },
       onAssistantUsage: (usage, _usageEvent, occurredAt) => {
         this.runtimeUsageSummary = updateRuntimeUsageSummary(this.runtimeUsageSummary, usage, occurredAt);
@@ -2638,6 +2788,18 @@ export class StationSessionManager {
         this.noteTurnActivity();
         this.bus.emit("assistant:permission-request", permissionPayload);
         this.runtimeStore.persistPermissionRequest(permissionPayload);
+        // Phase 1.1 — surface permission gating in the mission timeline so a long pause
+        // for approval is visible in "now playing" rather than looking like a stall.
+        {
+          const latestAttempt = this.getLatestMissionAttempt();
+          if (latestAttempt) {
+            this.recordMissionAttemptEvent("attempt-awaiting-permission", {
+              attemptId: latestAttempt.attemptId,
+              requestId: permissionPayload.requestId,
+              label: `${permissionPayload.serverName}/${permissionPayload.toolName}`,
+            });
+          }
+        }
       },
       onResolved: (status) => {
         this.noteTurnActivity();
@@ -2646,6 +2808,18 @@ export class StationSessionManager {
         this.applyWorkSessionApprovalOutcome(status);
         this.syncRuntimeState();
         this.bus.emit("assistant:permission-complete", requestId, status);
+        // Phase 1.1 — close the loop on the awaiting-permission event so the timeline
+        // shows the resolution and the post-mortem can compute "time spent on approval".
+        {
+          const latestAttempt = this.getLatestMissionAttempt();
+          if (latestAttempt) {
+            this.recordMissionAttemptEvent("attempt-permission-resolved", {
+              attemptId: latestAttempt.attemptId,
+              requestId,
+              result: status,
+            });
+          }
+        }
       },
       decide: () =>
         autoApprove

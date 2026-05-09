@@ -14,6 +14,7 @@ import type {
   SubagentRunSnapshot,
   TicketRunProofSnapshotResult,
   TicketRunSnapshot,
+  TicketRunSummary,
   UpgradeProposal,
 } from "@spira/shared";
 import type { McpToolAggregator } from "../mcp/tool-aggregator.js";
@@ -158,10 +159,16 @@ export class StationRegistry {
         station.bus.emit("missions:runs-changed", snapshot);
       }
     };
+    const handleMissionRunUpdated = (update: { runId: string; run: TicketRunSummary }) => {
+      for (const station of this.stations.values()) {
+        station.bus.emit("missions:run-updated", update);
+      }
+    };
 
     this.options.rootBus.on("mcp:servers-changed", handleMcpServersChanged);
     this.options.rootBus.on("subagent:catalog-changed", handleSubagentCatalogChanged);
     this.options.rootBus.on("missions:runs-changed", handleMissionRunsChanged);
+    this.options.rootBus.on("missions:run-updated", handleMissionRunUpdated);
     this.rootBusDisposers = [
       () => {
         this.options.rootBus.off("mcp:servers-changed", handleMcpServersChanged);
@@ -171,6 +178,9 @@ export class StationRegistry {
       },
       () => {
         this.options.rootBus.off("missions:runs-changed", handleMissionRunsChanged);
+      },
+      () => {
+        this.options.rootBus.off("missions:run-updated", handleMissionRunUpdated);
       },
     ];
   }
@@ -848,6 +858,11 @@ export class StationRegistry {
       }),
       register("subagent:lock-released", (event) => {
         this.options.transport.send({ type: "subagent:lock-released", event, stationId: station.stationId });
+      }),
+      // Phase 1.1 — relay mission attempt events recorded by SessionManager up to the renderer.
+      // The renderer prepends each event to its per-run timeline buffer (Phase 1.2 / 1.3).
+      register("missions:run-event-recorded", (event) => {
+        this.options.transport.send({ type: "missions:run-event:recorded", event });
       }),
     ];
   }

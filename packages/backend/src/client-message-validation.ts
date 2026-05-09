@@ -210,6 +210,13 @@ const ClientMessageSchema = z.discriminatedUnion("type", [
     runId: z.string(),
     profileId: z.string(),
   }),
+  messageSchema("missions:ticket-run:proof-artifact:read", {
+    requestId: z.string(),
+    runId: z.string(),
+    proofRunId: z.string(),
+    artifactId: z.string(),
+    maxBytes: z.number().int().positive().optional(),
+  }),
   messageSchema("missions:ticket-run:delete", {
     requestId: z.string(),
     runId: z.string(),

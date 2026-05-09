@@ -116,6 +116,22 @@ export interface ElectronApi {
   getTicketRunRepoIntelligence(runId: string): Promise<TicketRunRepoIntelligenceCandidatesResult>;
   approveTicketRunRepoIntelligence(runId: string, entryId: string): Promise<ApproveTicketRunRepoIntelligenceResult>;
   runTicketRunProof(runId: string, profileId: string): Promise<RunTicketRunProofResult>;
+  /**
+   * Phase 1.4 — read a proof artifact's text content (lazy-loaded inline log viewer).
+   * Returns null content for binary or missing artifacts; size-capped to maxBytes (default ~256KB).
+   */
+  readTicketRunProofArtifact(
+    runId: string,
+    proofRunId: string,
+    artifactId: string,
+    options?: { maxBytes?: number },
+  ): Promise<{
+    content: string | null;
+    truncated: boolean;
+    totalBytes: number;
+    mimeKind: "text" | "binary" | "missing";
+    artifactPath: string | null;
+  }>;
   deleteTicketRun(runId: string): Promise<DeleteTicketRunResult>;
   getTicketRunReviewSnapshot(runId: string): Promise<TicketRunReviewSnapshotResult>;
   getTicketRunGitState(runId: string, repoRelativePath?: string): Promise<TicketRunGitStateResult>;

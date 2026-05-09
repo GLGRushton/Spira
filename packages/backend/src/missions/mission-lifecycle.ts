@@ -1,5 +1,7 @@
 import type { ProofDecisionRecord, RepoIntelligenceRecord, SpiraMemoryDatabase } from "@spira/memory-db";
 import type {
+  MissionEventMetadataMap,
+  MissionEventType,
   TicketRunMissionClassification,
   TicketRunMissionPhase,
   TicketRunMissionPlan,
@@ -354,11 +356,11 @@ export class MissionLifecycleService {
     return this.memoryDb.upsertProofDecision(toPersistedProofDecisionInput(run, decision, run.classification));
   }
 
-  private recordMissionEvent(
+  private recordMissionEvent<T extends MissionEventType>(
     run: TicketRunSummary,
     stage: TicketRunMissionPhase,
-    eventType: string,
-    metadata: Record<string, unknown>,
+    eventType: T,
+    metadata: MissionEventMetadataMap[T],
   ): void {
     if (!this.memoryDb) {
       return;

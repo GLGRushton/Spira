@@ -10,9 +10,17 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigationStore } from "../../../stores/navigation-store.js";
 import projectStyles from "../../projects/ProjectsPanel/ProjectsPanel.module.css";
 import shellStyles from "../MissionShell.module.css";
+import { useMissionRunsStore } from "../../../stores/mission-runs-store.js";
 import { describeMissionNextAction, describeRunStatus } from "../mission-display-utils.js";
 import type { MissionRunController } from "../useMissionRunController.js";
 import styles from "./MissionDetailsRoom.module.css";
+import {
+  formatTimelineDuration,
+  groupMissionTimelineEvents,
+  mergeMissionEventStreams,
+} from "./mission-timeline-grouping.js";
+import { NowPlayingStrip } from "./NowPlayingStrip.js";
+import { ProofRunsViewer } from "./ProofRunsViewer.js";
 
 interface MissionDetailsRoomProps {
   run: TicketRunSummary;
@@ -220,8 +228,16 @@ const renderArtifacts = (artifacts: readonly TicketRunProofArtifact[]) => {
 
 export function MissionDetailsRoom({ run, controller }: MissionDetailsRoomProps) {
   const setMissionRoom = useNavigationStore((store) => store.setMissionRoom);
+  const liveEvents = useMissionRunsStore((store) => store.liveEventsByRun[run.runId] ?? []);
   const [expandedCompletedPhases, setExpandedCompletedPhases] = useState<Set<TicketRunMissionPhase>>(() => new Set());
   const [showWorktrees, setShowWorktrees] = useState(false);
+
+  // Phase 1.3 — merge cold-fetched timeline with live event buffer (Phase 1.1) and group by phase.
+  // The grouping helper preserves chronological order within each phase and handles dedup by event id.
+  const timelineGroups = useMemo(
+    () => groupMissionTimelineEvents(mergeMissionEventStreams(controller.missionTimeline, liveEvents)),
+    [controller.missionTimeline, liveEvents],
+  );
 
   const latestAttempt = run.attempts[run.attempts.length - 1] ?? null;
   const latestProofRun = [...run.proofRuns].sort((left, right) => right.startedAt - left.startedAt)[0] ?? null;
@@ -648,22 +664,7 @@ export function MissionDetailsRoom({ run, controller }: MissionDetailsRoomProps)
               )}
             </div>
 
-            {latestProofRun ? (
-              <div className={styles.subCard}>
-                <div className={styles.subCardHeader}>
-                  <strong>Latest proof run</strong>
-                  <span className={styles.metricBadge}>{formatEnumLabel(latestProofRun.status)}</span>
-                </div>
-                <div className={styles.subCardMeta}>
-                  {latestProofRun.profileLabel} · Started {new Date(latestProofRun.startedAt).toLocaleString()}
-                  {latestProofRun.completedAt
-                    ? ` · Finished ${new Date(latestProofRun.completedAt).toLocaleString()}`
-                    : ""}
-                </div>
-                {latestProofRun.summary ? <div className={styles.phaseCopy}>{latestProofRun.summary}</div> : null}
-                {renderArtifacts(latestProofRun.artifacts)}
-              </div>
-            ) : null}
+            <ProofRunsViewer run={run} />
           </div>
         );
       case "summarize":
@@ -763,6 +764,8 @@ export function MissionDetailsRoom({ run, controller }: MissionDetailsRoomProps)
         {renderCommandArea()}
       </article>
 
+      <NowPlayingStrip runId={run.runId} />
+
       <article className={styles.surface}>
         <div className={styles.sectionTopline}>
           <div>
@@ -859,23 +862,50 @@ export function MissionDetailsRoom({ run, controller }: MissionDetailsRoomProps)
           </button>
         </div>
 
-        <div className={styles.worktreeList}>
-          {controller.missionTimeline.length > 0 ? (
-            controller.missionTimeline.map((event) => {
-              const description = describeTimelineEvent(event);
+        <div className={styles.timelineGroupList}>
+          {timelineGroups.length > 0 ? (
+            timelineGroups.map((group) => {
+              const isActivePhase = group.stage !== "system" && group.stage === run.missionPhase;
               return (
-                <div key={event.id} className={styles.worktreeRow}>
-                  <div className={styles.worktreeCopy}>
-                    <strong>{description.title}</strong>
-                    <span>
-                      {formatDateTime(event.occurredAt) ?? "Unknown time"}
-                      {description.detail ? ` · ${description.detail}` : ""}
+                <details
+                  key={group.stage}
+                  className={styles.timelineGroup}
+                  // Active phase and system bucket open by default; others fold away.
+                  open={isActivePhase || group.stage === "system"}
+                >
+                  <summary className={styles.timelineGroupSummary}>
+                    <span className={styles.timelineGroupName}>{formatEnumLabel(group.stage)}</span>
+                    <span className={styles.timelineGroupMeta}>
+                      <span>
+                        {group.events.length} event{group.events.length === 1 ? "" : "s"}
+                      </span>
+                      <span>{formatTimelineDuration(group.durationMs)}</span>
                     </span>
+                    <span className={styles.timelineGroupChevron} aria-hidden="true">
+                      ▾
+                    </span>
+                  </summary>
+                  <div className={styles.timelineGroupBody}>
+                    {[...group.events]
+                      .sort((left, right) => right.occurredAt - left.occurredAt)
+                      .map((event) => {
+                        const description = describeTimelineEvent(event);
+                        return (
+                          <div key={event.id} className={styles.timelineEventRow}>
+                            <div className={styles.timelineEventTitle}>
+                              <strong>{description.title}</strong>
+                              {description.detail ? (
+                                <span className={styles.timelineEventDetail}> · {description.detail}</span>
+                              ) : null}
+                            </div>
+                            <span className={styles.timelineEventTime}>
+                              {formatDateTime(event.occurredAt) ?? ""}
+                            </span>
+                          </div>
+                        );
+                      })}
                   </div>
-                  <div className={styles.worktreeMeta}>
-                    <span className={styles.metricBadgeMuted}>{formatEnumLabel(event.stage)}</span>
-                  </div>
-                </div>
+                </details>
               );
             })
           ) : (

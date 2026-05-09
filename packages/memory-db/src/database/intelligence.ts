@@ -1,4 +1,9 @@
-import { type DatabasePersistenceContext, assertDatabaseWritable, matchesScopedRecord } from "./context.js";
+import {
+  type DatabasePersistenceContext,
+  assertDatabaseWritable,
+  buildScopedRecordFilter,
+  matchesScopedRecord,
+} from "./context.js";
 import {
   assertRepoIntelligenceEntrySource,
   assertRepoIntelligenceEntryType,
@@ -56,36 +61,40 @@ export const createIntelligencePersistence = (context: DatabasePersistenceContex
       limit?: number;
     } = {},
   ): RepoIntelligenceRecord[] => {
-    const rows = context.db
-      .prepare(
-        `SELECT
-           id,
-           project_key AS projectKey,
-           repo_relative_path AS repoRelativePath,
-           type,
-           title,
-           content,
-           tags_json AS tagsJson,
-           source,
-           approved,
-           created_at AS createdAt,
-           updated_at AS updatedAt
-         FROM repo_intelligence_entries
-         ORDER BY approved DESC, updated_at DESC, created_at DESC`,
-      )
-      .all() as unknown as RepoIntelligenceRow[];
-
     const normalizedProjectKey = normalizeTitle(options.projectKey) ?? null;
-    const repoPathSet = new Set(normalizeStringArray(options.repoRelativePaths));
+    const repoPaths = normalizeStringArray(options.repoRelativePaths);
+    const repoPathSet = new Set(repoPaths);
     const tagSet = new Set(normalizeStringArray(options.tags));
     const includeUnapproved = options.includeUnapproved === true;
     const limit = options.limit ?? 20;
+
+    const scopedFilter = buildScopedRecordFilter(normalizedProjectKey, repoPaths);
+    const approvalClause = includeUnapproved ? "" : scopedFilter.whereClause ? "AND approved = 1" : "WHERE approved = 1";
+    const sql = `SELECT
+       id,
+       project_key AS projectKey,
+       repo_relative_path AS repoRelativePath,
+       type,
+       title,
+       content,
+       tags_json AS tagsJson,
+       source,
+       approved,
+       created_at AS createdAt,
+       updated_at AS updatedAt
+     FROM repo_intelligence_entries
+     ${scopedFilter.whereClause}
+     ${approvalClause}
+     ORDER BY approved DESC, updated_at DESC, created_at DESC`;
+
+    const rows = context.db.prepare(sql).all(scopedFilter.params) as unknown as RepoIntelligenceRow[];
 
     return rows
       .map((row) => mapRepoIntelligenceRow(row))
       .filter(
         (entry) =>
-          (includeUnapproved || entry.approved) &&
+          // SQL filters by project/repo/approved; this final pass enforces tags and the
+          // matchesScopedRecord semantics for any edge case the SQL clause doesn't cover.
           matchesScopedRecord(entry, normalizedProjectKey, repoPathSet) &&
           (tagSet.size === 0 || [...tagSet].every((tag) => entry.tags.includes(tag))),
       )
@@ -235,31 +244,32 @@ export const createIntelligencePersistence = (context: DatabasePersistenceContex
       limit?: number;
     } = {},
   ): ValidationProfileRecord[] => {
-    const rows = context.db
-      .prepare(
-        `SELECT
-           id,
-           project_key AS projectKey,
-           repo_relative_path AS repoRelativePath,
-           label,
-           kind,
-           command,
-           working_directory AS workingDirectory,
-           notes,
-           confidence,
-           expected_runtime_ms AS expectedRuntimeMs,
-           prerequisites_json AS prerequisitesJson,
-           source,
-           created_at AS createdAt,
-           updated_at AS updatedAt
-         FROM validation_profiles
-         ORDER BY updated_at DESC, created_at DESC`,
-      )
-      .all() as unknown as ValidationProfileRow[];
-
     const normalizedProjectKey = normalizeTitle(options.projectKey) ?? null;
-    const repoPathSet = new Set(normalizeStringArray(options.repoRelativePaths));
+    const repoPaths = normalizeStringArray(options.repoRelativePaths);
+    const repoPathSet = new Set(repoPaths);
     const limit = options.limit ?? 20;
+
+    const scopedFilter = buildScopedRecordFilter(normalizedProjectKey, repoPaths);
+    const sql = `SELECT
+       id,
+       project_key AS projectKey,
+       repo_relative_path AS repoRelativePath,
+       label,
+       kind,
+       command,
+       working_directory AS workingDirectory,
+       notes,
+       confidence,
+       expected_runtime_ms AS expectedRuntimeMs,
+       prerequisites_json AS prerequisitesJson,
+       source,
+       created_at AS createdAt,
+       updated_at AS updatedAt
+     FROM validation_profiles
+     ${scopedFilter.whereClause}
+     ORDER BY updated_at DESC, created_at DESC`;
+
+    const rows = context.db.prepare(sql).all(scopedFilter.params) as unknown as ValidationProfileRow[];
 
     return rows
       .map((row) => mapValidationProfileRow(row))
@@ -402,28 +412,29 @@ export const createIntelligencePersistence = (context: DatabasePersistenceContex
       limit?: number;
     } = {},
   ): ProofRuleRecord[] => {
-    const rows = context.db
-      .prepare(
-        `SELECT
-           id,
-           project_key AS projectKey,
-           repo_relative_path AS repoRelativePath,
-           classification_kind AS classificationKind,
-           ui_change AS uiChange,
-           proof_required AS proofRequired,
-           summary_keywords_json AS summaryKeywordsJson,
-           recommended_level AS recommendedLevel,
-           rationale,
-           created_at AS createdAt,
-           updated_at AS updatedAt
-         FROM proof_rules
-         ORDER BY updated_at DESC, created_at DESC`,
-      )
-      .all() as unknown as ProofRuleRow[];
-
     const normalizedProjectKey = normalizeTitle(options.projectKey) ?? null;
-    const repoPathSet = new Set(normalizeStringArray(options.repoRelativePaths));
+    const repoPaths = normalizeStringArray(options.repoRelativePaths);
+    const repoPathSet = new Set(repoPaths);
     const limit = options.limit ?? 20;
+
+    const scopedFilter = buildScopedRecordFilter(normalizedProjectKey, repoPaths);
+    const sql = `SELECT
+       id,
+       project_key AS projectKey,
+       repo_relative_path AS repoRelativePath,
+       classification_kind AS classificationKind,
+       ui_change AS uiChange,
+       proof_required AS proofRequired,
+       summary_keywords_json AS summaryKeywordsJson,
+       recommended_level AS recommendedLevel,
+       rationale,
+       created_at AS createdAt,
+       updated_at AS updatedAt
+     FROM proof_rules
+     ${scopedFilter.whereClause}
+     ORDER BY updated_at DESC, created_at DESC`;
+
+    const rows = context.db.prepare(sql).all(scopedFilter.params) as unknown as ProofRuleRow[];
 
     return rows
       .map((row) => mapProofRuleRow(row))

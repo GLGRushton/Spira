@@ -1,8 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { access, mkdir, rm } from "node:fs/promises";
+import { access, mkdir, open, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { RepoIntelligenceRecord, SpiraMemoryDatabase } from "@spira/memory-db";
 import type {
+  MissionEventMetadataMap,
+  MissionEventType,
   ApproveTicketRunRepoIntelligenceResult,
   CancelTicketRunWorkResult,
   CommitTicketRunResult,
@@ -53,6 +55,7 @@ import { getEffectiveValidations, normalizeProjectKey } from "@spira/shared";
 import fetch from "node-fetch";
 import { ConfigError, SpiraError } from "../util/errors.js";
 import { buildLearnedRepoIntelligenceCandidates } from "./mission-intelligence.js";
+import { buildPostmortemFilename, generateMissionPostmortem } from "./post-mortem-generator.js";
 import { buildMissionWorkflowRepairPrompt, getMissionWorkflowState } from "./mission-workflow-guard.js";
 import {
   type ResolvedMissionProofProfile,
@@ -658,6 +661,15 @@ export class TicketRunService {
       this.recordMissionEvent(completedRun, "system", "run-closed", {
         stationCleared,
       });
+      // Phase 1.5 — fire-and-forget auto post-mortem stub. Failures are logged but do not
+      // fault the close path; the underlying mission_events data is still in the DB and
+      // a future run can regenerate the stub.
+      void this.writePostmortemStub(completedRun).catch((error) => {
+        this.options.logger.warn(
+          { err: error, runId: completedRun.runId, ticketId: completedRun.ticketId },
+          "Failed to write mission post-mortem stub",
+        );
+      });
       const snapshot = memoryDb.getTicketRunSnapshot();
       this.emitSnapshot(snapshot);
       return {
@@ -665,6 +677,63 @@ export class TicketRunService {
         snapshot,
       };
     });
+  }
+
+  /**
+   * Phase 1.5 — generate a markdown post-mortem stub at `<workspaceRoot>/reports/{ticketId}-...md`.
+   * Best-effort: if no workspace root is configured, the file is skipped (the data is still in the
+   * DB). The file uses {@link generateMissionPostmortem} for the body.
+   */
+  private async writePostmortemStub(run: TicketRunSummary): Promise<void> {
+    const memoryDb = this.options.memoryDb;
+    if (!memoryDb) {
+      return;
+    }
+    const workspaceRoot = memoryDb.getProjectWorkspaceRoot();
+    if (!workspaceRoot) {
+      this.options.logger.debug(
+        { runId: run.runId, ticketId: run.ticketId },
+        "Skipping post-mortem stub — no workspace root configured.",
+      );
+      return;
+    }
+    const events = memoryDb.listMissionEvents(run.runId, 500);
+    const closedAt = run.updatedAt ?? this.now();
+    const filename = buildPostmortemFilename(run, closedAt);
+    const reportsDir = path.join(workspaceRoot, "reports");
+    const targetPath = path.join(reportsDir, filename);
+
+    await mkdir(reportsDir, { recursive: true });
+    const markdown = generateMissionPostmortem(
+      run,
+      events.map((event) => ({
+        id: event.id,
+        runId: event.runId,
+        attemptId: event.attemptId,
+        stage: event.stage as TicketRunMissionEventSummary["stage"],
+        eventType: event.eventType,
+        metadata: event.metadata,
+        occurredAt: event.occurredAt,
+      })),
+    );
+    try {
+      // Atomic exclusive create — never clobbers an existing post-mortem (handwritten ones
+      // for the same ticket should always win, and concurrent close paths can't race).
+      await writeFile(targetPath, markdown, { encoding: "utf8", flag: "wx" });
+      this.options.logger.info(
+        { runId: run.runId, ticketId: run.ticketId, targetPath },
+        "Wrote auto-generated mission post-mortem stub.",
+      );
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+        this.options.logger.info(
+          { runId: run.runId, ticketId: run.ticketId, targetPath },
+          "Mission post-mortem already exists; leaving the existing file untouched.",
+        );
+        return;
+      }
+      throw error;
+    }
   }
 
   async getProofSnapshot(runId: string): Promise<TicketRunProofSnapshotResult> {
@@ -683,6 +752,93 @@ export class TicketRunService {
       snapshot: this.requireMemoryDb().getTicketRunSnapshot(),
       events: this.listMissionEvents(runId, limit),
     };
+  }
+
+  /**
+   * Phase 1.4 — read a proof artifact's contents (for the inline log viewer).
+   *
+   * Validates that:
+   *  - the run, proof run, and artifact all exist
+   *  - the artifact path is INSIDE the proof run's `.spira-proof/<proofRunId>/` directory
+   *    (defends against path traversal via maliciously persisted artifact paths)
+   *  - the file size is read up to maxBytes; truncation is reported back
+   *
+   * Binary files are detected heuristically (presence of NUL byte in the prefix); the
+   * caller is told via `mimeKind: "binary"` and content is omitted.
+   */
+  async readProofArtifactText(
+    runId: string,
+    proofRunId: string,
+    artifactId: string,
+    options: { maxBytes?: number } = {},
+  ): Promise<{
+    content: string | null;
+    truncated: boolean;
+    totalBytes: number;
+    mimeKind: "text" | "binary" | "missing";
+    artifactPath: string | null;
+  }> {
+    const maxBytes = Math.min(Math.max(options.maxBytes ?? 256 * 1024, 1024), 2 * 1024 * 1024);
+    const run = this.getFreshRun(runId);
+    const proofRun = run.proofRuns.find((candidate) => candidate.proofRunId === proofRunId);
+    if (!proofRun) {
+      throw new SpiraError("MISSIONS_PROOF_RUN_NOT_FOUND", `Proof run ${proofRunId} was not found.`);
+    }
+    const artifact = proofRun.artifacts.find((candidate) => candidate.artifactId === artifactId);
+    if (!artifact) {
+      throw new SpiraError("MISSIONS_PROOF_ARTIFACT_NOT_FOUND", `Proof artifact ${artifactId} was not found.`);
+    }
+
+    // Re-derive the canonical proof run directory and assert containment.
+    const parentDirectories = [...new Set(run.worktrees.map((worktree) => path.dirname(worktree.worktreePath)))];
+    const baseDirectory = parentDirectories[0] ?? run.worktrees[0]?.worktreePath ?? null;
+    if (!baseDirectory) {
+      throw new SpiraError("MISSIONS_PROOF_ROOT_MISSING", "Cannot resolve proof root for this mission.");
+    }
+    const proofRoot = path.resolve(baseDirectory, ".spira-proof", proofRunId);
+    const resolvedArtifact = path.resolve(artifact.path);
+    const proofRootWithSep = proofRoot.endsWith(path.sep) ? proofRoot : `${proofRoot}${path.sep}`;
+    if (resolvedArtifact !== proofRoot && !resolvedArtifact.startsWith(proofRootWithSep)) {
+      throw new SpiraError(
+        "MISSIONS_PROOF_ARTIFACT_FORBIDDEN",
+        "Refused to read proof artifact outside the proof run directory.",
+      );
+    }
+
+    try {
+      const stats = await stat(resolvedArtifact);
+      if (!stats.isFile()) {
+        return { content: null, truncated: false, totalBytes: 0, mimeKind: "missing", artifactPath: resolvedArtifact };
+      }
+      const totalBytes = stats.size;
+      const handle = await open(resolvedArtifact, "r");
+      try {
+        const buffer = Buffer.alloc(Math.min(maxBytes, totalBytes));
+        const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+        const slice = buffer.subarray(0, bytesRead);
+        // Heuristic: presence of NUL in the first 4 KB strongly suggests a binary file.
+        const probe = slice.subarray(0, Math.min(slice.length, 4096));
+        const looksBinary = probe.includes(0);
+        if (looksBinary) {
+          return { content: null, truncated: bytesRead < totalBytes, totalBytes, mimeKind: "binary", artifactPath: resolvedArtifact };
+        }
+        return {
+          content: slice.toString("utf8"),
+          truncated: bytesRead < totalBytes,
+          totalBytes,
+          mimeKind: "text",
+          artifactPath: resolvedArtifact,
+        };
+      } finally {
+        await handle.close();
+      }
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "ENOENT") {
+        return { content: null, truncated: false, totalBytes: 0, mimeKind: "missing", artifactPath: resolvedArtifact };
+      }
+      throw error;
+    }
   }
 
   async getRepoIntelligenceCandidates(runId: string, limit = 20): Promise<TicketRunRepoIntelligenceCandidatesResult> {
@@ -775,7 +931,7 @@ export class TicketRunService {
         profileId: profile.profileId,
         profileLabel: profile.label,
       });
-      this.emitSnapshot(memoryDb.getTicketRunSnapshot());
+      this.emitRunUpdate(run.runId);
 
       let proofOutput: RunMissionProofOutput;
       try {
@@ -825,8 +981,8 @@ export class TicketRunService {
         status: proofOutput.status,
         exitCode: proofOutput.exitCode,
       });
+      this.emitRunUpdate(run.runId);
       const snapshot = memoryDb.getTicketRunSnapshot();
-      this.emitSnapshot(snapshot);
       return {
         run,
         snapshot,
@@ -1521,7 +1677,7 @@ export class TicketRunService {
       reusedLiveAttempt: handle.reusedLiveAttempt,
       promptProvided: prompt !== null,
     });
-    this.emitSnapshot(this.requireMemoryDb().getTicketRunSnapshot());
+    this.emitRunUpdate(nextRun.runId);
     void this.watchAttemptCompletion(nextRun.runId, attempt.attemptId, handle.completion);
     return nextRun;
   }
@@ -1624,7 +1780,7 @@ export class TicketRunService {
         waitReason: workflow.waitReason,
         nextAction: workflow.nextAction,
       });
-      this.emitSnapshot(memoryDb.getTicketRunSnapshot());
+      this.emitRunUpdate(updatedRun.runId);
       this.options.logger.debug(
         { runId: updatedRun.runId, ticketId: updatedRun.ticketId, attemptId, attemptStatus },
         "Mission pass completed",
@@ -1670,7 +1826,7 @@ export class TicketRunService {
       waitReason: workflow.waitReason,
       nextAction: workflow.nextAction,
     });
-    this.emitSnapshot(memoryDb.getTicketRunSnapshot());
+    this.emitRunUpdate(run.runId);
 
     const repairedResult = await this.options.repairMissionPass({
       run,
@@ -3073,11 +3229,11 @@ export class TicketRunService {
     });
   }
 
-  private recordMissionEvent(
+  private recordMissionEvent<T extends MissionEventType>(
     run: Pick<TicketRunSummary, "runId" | "attempts" | "missionPhase">,
     stage: TicketRunMissionEventSummary["stage"],
-    eventType: string,
-    metadata: Record<string, unknown>,
+    eventType: T,
+    metadata: MissionEventMetadataMap[T],
   ): void {
     const memoryDb = this.options.memoryDb;
     if (!memoryDb) {
@@ -3100,5 +3256,25 @@ export class TicketRunService {
     }
 
     this.options.bus?.emit("missions:runs-changed", snapshot ?? this.options.memoryDb.getTicketRunSnapshot());
+  }
+
+  /**
+   * Emit a per-run delta (Phase 0.3). Avoids the full-snapshot rebuild on the renderer
+   * for high-frequency events that touch a single run (attempt-finished, proof progress,
+   * live attempt-action telemetry). Falls back to a full snapshot if the run is missing
+   * (the renderer treats absence as removal and prunes).
+   */
+  private emitRunUpdate(runId: string): void {
+    const memoryDb = this.options.memoryDb;
+    if (!memoryDb) {
+      return;
+    }
+    const run = memoryDb.getTicketRun(runId);
+    if (!run) {
+      // Run was deleted; fall back to full snapshot so the renderer prunes.
+      this.emitSnapshot();
+      return;
+    }
+    this.options.bus?.emit("missions:run-updated", { runId, run });
   }
 }

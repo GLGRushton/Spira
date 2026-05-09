@@ -447,3 +447,317 @@
     justify-content: flex-start;
   }
 }
+
+/* Phase 1.2 — Now Playing strip. Sits under the phase chip; surfaces the latest
+   live attempt action (tool call, shell command, permission gate) so a long pass
+   stops looking like a black box. */
+.nowPlayingStrip {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border: 1px solid rgba(146, 227, 218, 0.2);
+  border-radius: var(--radius-sm);
+  background: linear-gradient(180deg, rgba(8, 14, 36, 0.62), rgba(8, 14, 36, 0.42));
+  color: var(--marble-ivory);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.nowPlayingStripIdle {
+  border-color: rgba(168, 133, 74, 0.16);
+  color: rgba(241, 230, 204, 0.6);
+}
+
+.nowPlayingStripAwaiting {
+  border-color: rgba(184, 158, 216, 0.42);
+  background: linear-gradient(180deg, rgba(36, 18, 54, 0.62), rgba(20, 14, 36, 0.42));
+}
+
+.nowPlayingDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--crystal-glow, #92e3da);
+  box-shadow: 0 0 8px rgba(146, 227, 218, 0.65);
+}
+
+.nowPlayingStripIdle .nowPlayingDot {
+  background: rgba(168, 133, 74, 0.4);
+  box-shadow: none;
+}
+
+.nowPlayingStripAwaiting .nowPlayingDot {
+  background: var(--hymn-bright, #d4bff0);
+  box-shadow: 0 0 10px rgba(212, 191, 240, 0.6);
+}
+
+.nowPlayingDotPulsing {
+  animation: nowPlayingPulse 1.6s ease-in-out infinite;
+}
+
+@keyframes nowPlayingPulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.55; transform: scale(0.85); }
+}
+
+.nowPlayingCopy {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+
+.nowPlayingTitle {
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.nowPlayingDetail {
+  color: rgba(241, 230, 204, 0.62);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.nowPlayingMeta {
+  color: rgba(241, 230, 204, 0.5);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+
+/* Phase 1.3 — phase-grouped timeline. Each group is a collapsible details element
+   with a header that shows the phase name, event count, and total duration. */
+.timelineGroupList {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.timelineGroup {
+  border: 1px solid rgba(168, 133, 74, 0.18);
+  border-radius: var(--radius-sm);
+  background: rgba(8, 14, 36, 0.4);
+  overflow: hidden;
+}
+
+.timelineGroup[open] {
+  border-color: rgba(168, 133, 74, 0.28);
+  background: rgba(8, 14, 36, 0.55);
+}
+
+.timelineGroupSummary {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  cursor: pointer;
+  user-select: none;
+  font-size: 13px;
+  list-style: none;
+}
+
+.timelineGroupSummary::-webkit-details-marker {
+  display: none;
+}
+
+.timelineGroupSummary::marker {
+  content: "";
+}
+
+.timelineGroupName {
+  flex: 1;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--gold-warm, #e0c489);
+  font-size: 11px;
+}
+
+.timelineGroupMeta {
+  display: flex;
+  gap: 10px;
+  color: rgba(241, 230, 204, 0.55);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.timelineGroupChevron {
+  color: rgba(241, 230, 204, 0.4);
+  font-size: 12px;
+}
+
+.timelineGroupBody {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 14px 12px 14px;
+}
+
+.timelineEventRow {
+  display: flex;
+  gap: 10px;
+  font-size: 12px;
+  color: rgba(241, 230, 204, 0.78);
+  padding: 4px 0;
+  border-top: 1px solid rgba(168, 133, 74, 0.08);
+}
+
+.timelineEventRow:first-child {
+  border-top: none;
+}
+
+.timelineEventTitle {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.timelineEventDetail {
+  color: rgba(241, 230, 204, 0.5);
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.timelineEventTime {
+  color: rgba(241, 230, 204, 0.4);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+
+/* Phase 1.4 — proof viewer enhancements. Surfaces command, exit code, duration,
+   and an inline log viewer for stdout/stderr/summary text artifacts. */
+.proofRunList {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.proofRunRow {
+  border: 1px solid rgba(168, 133, 74, 0.18);
+  border-radius: var(--radius-sm);
+  background: rgba(8, 14, 36, 0.4);
+  padding: 10px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.proofRunHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.proofRunMeta {
+  font-size: 11px;
+  color: rgba(241, 230, 204, 0.55);
+  font-variant-numeric: tabular-nums;
+}
+
+.proofRunCommand {
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  color: rgba(146, 227, 218, 0.78);
+  word-break: break-all;
+}
+
+.proofArtifactGroup {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.proofArtifactGroupLabel {
+  width: 100%;
+  color: rgba(241, 230, 204, 0.42);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 10px;
+  margin-top: 2px;
+}
+
+.proofArtifactChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border: 1px solid rgba(146, 227, 218, 0.24);
+  border-radius: 999px;
+  background: rgba(8, 14, 36, 0.55);
+  color: var(--marble-ivory);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.proofArtifactChip:hover {
+  border-color: rgba(146, 227, 218, 0.5);
+}
+
+.proofArtifactChipReport {
+  border-color: rgba(245, 218, 156, 0.32);
+}
+
+.proofLogViewer {
+  margin-top: 8px;
+  border: 1px solid rgba(168, 133, 74, 0.22);
+  border-radius: var(--radius-sm);
+  background: rgba(0, 0, 0, 0.42);
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.proofLogViewerHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 12px;
+  border-bottom: 1px solid rgba(168, 133, 74, 0.18);
+  font-size: 11px;
+  color: rgba(241, 230, 204, 0.62);
+}
+
+.proofLogViewerBody {
+  margin: 0;
+  padding: 10px 12px;
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  line-height: 1.4;
+  color: rgba(241, 230, 204, 0.84);
+  max-height: 360px;
+  overflow: auto;
+  white-space: pre;
+}
+
+.proofLogViewerEmpty {
+  padding: 14px 12px;
+  color: rgba(241, 230, 204, 0.5);
+  font-size: 12px;
+  text-align: center;
+}
+
+.proofLogViewerCloseButton {
+  background: transparent;
+  border: 1px solid rgba(168, 133, 74, 0.28);
+  color: rgba(241, 230, 204, 0.7);
+  padding: 2px 8px;
+  border-radius: 999px;
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.proofLogViewerCloseButton:hover {
+  border-color: rgba(245, 218, 156, 0.55);
+}

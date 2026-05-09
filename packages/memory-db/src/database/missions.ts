@@ -1,4 +1,5 @@
 import type { TicketRunSnapshot, TicketRunSubmoduleParentRef, TicketRunSummary } from "@spira/shared";
+import { isMissionEventType } from "@spira/shared";
 import { type DatabasePersistenceContext, assertDatabaseWritable } from "./context.js";
 import {
   assertTicketRunAttemptStatus,
@@ -484,6 +485,11 @@ export const createMissionPersistence = (context: DatabasePersistenceContext) =>
     const eventType = input.eventType.trim();
     if (!runId || !stage || !eventType) {
       throw new Error("Mission events require non-empty runId, stage, and eventType values.");
+    }
+    if (!isMissionEventType(eventType)) {
+      throw new Error(
+        `Unknown mission event type "${eventType}". Add it to MISSION_EVENT_TYPES in @spira/shared/src/mission-events.ts.`,
+      );
     }
 
     const result = context.db
