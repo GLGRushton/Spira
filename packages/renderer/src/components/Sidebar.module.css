@@ -1,28 +1,48 @@
 .sidebar {
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 18px;
   min-height: 0;
   height: 100%;
-  padding: 18px 16px;
+  padding: 22px 18px 22px 22px;
   overflow-y: auto;
   scrollbar-gutter: stable;
-  border-right: 1px solid var(--border-default);
-  background: linear-gradient(180deg, rgba(19, 26, 52, 0.98), rgba(9, 14, 31, 0.99)),
-    radial-gradient(circle at bottom, rgba(227, 191, 119, 0.06), transparent 28%);
+  position: relative;
+  background:
+    linear-gradient(180deg, rgba(20, 28, 64, 0.92), rgba(8, 13, 34, 0.96)),
+    radial-gradient(circle at 30% 100%, rgba(245, 218, 156, 0.05), transparent 36%);
+}
+
+/* Bevelle gold edge on the right */
+.sidebar::after {
+  content: "";
+  position: absolute;
+  top: 18px;
+  bottom: 18px;
+  right: 0;
+  width: 1px;
+  background: linear-gradient(
+    180deg,
+    transparent 0%,
+    rgba(168, 133, 74, 0.42) 8%,
+    rgba(245, 218, 156, 0.7) 50%,
+    rgba(168, 133, 74, 0.42) 92%,
+    transparent 100%
+  );
+  pointer-events: none;
 }
 
 .sidebar::-webkit-scrollbar {
-  width: 8px;
+  width: 6px;
 }
 
 .sidebar::-webkit-scrollbar-thumb {
-  background: rgba(141, 214, 234, 0.16);
+  background: rgba(168, 133, 74, 0.32);
   border-radius: 999px;
 }
 
 .sidebar::-webkit-scrollbar-thumb:hover {
-  background: rgba(141, 214, 234, 0.28);
+  background: rgba(245, 218, 156, 0.4);
 }
 
 .sidebar::-webkit-scrollbar-track {
@@ -33,81 +53,55 @@
   display: flex;
   align-items: center;
   gap: 12px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid rgba(168, 133, 74, 0.24);
 }
 
 .logoMark {
-  width: 46px;
-  height: 46px;
+  width: 42px;
+  height: 42px;
   display: grid;
   place-items: center;
-  border: 1px solid rgba(227, 191, 119, 0.32);
-  border-radius: 16px;
-  background: radial-gradient(circle at 35% 30%, rgba(227, 191, 119, 0.22), transparent 42%),
-    radial-gradient(circle at top, rgba(141, 214, 234, 0.18), rgba(104, 198, 180, 0.08));
-  color: var(--accent-amber);
-  font-weight: 700;
-  letter-spacing: 0.14em;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), var(--shadow-aura);
-  position: relative;
-  overflow: hidden;
+  flex: 0 0 auto;
+  filter: drop-shadow(0 0 14px rgba(245, 218, 156, 0.32));
 }
 
-.logoCore {
-  position: relative;
-  z-index: 1;
-  font-size: 18px;
-  font-weight: 700;
-  color: var(--text-display);
-  text-shadow: 0 0 12px rgba(227, 191, 119, 0.24);
-}
-
-.logoMote {
-  position: absolute;
-  width: 5px;
-  height: 5px;
-  border-radius: 999px;
-  background: rgba(244, 233, 205, 0.96);
-  box-shadow: 0 0 10px rgba(244, 233, 205, 0.52);
-}
-
-.logoMoteA {
-  top: 8px;
-  right: 9px;
-}
-
-.logoMoteB {
-  bottom: 8px;
-  left: 8px;
-}
-
-.logoMoteC {
-  top: 18px;
-  left: 6px;
+.logoTextWrap {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
 .logoText {
-  font-size: 20px;
-  font-weight: 700;
+  color: var(--gold-bright);
   font-family: var(--font-display);
-  letter-spacing: 0.05em;
-  color: var(--text-display);
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  text-shadow: 0 0 14px rgba(245, 218, 156, 0.18);
 }
 
 .logoCaption {
-  color: var(--text-secondary);
+  font-family: var(--font-body);
+  font-style: italic;
   font-size: 11px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  color: var(--marble-warm);
+  opacity: 0.72;
+  letter-spacing: 0.04em;
 }
 
 .nav {
   display: grid;
-  gap: 10px;
+  gap: 6px;
 }
 
 .collapsibleNavSection {
   display: grid;
-  gap: 10px;
+  gap: 6px;
+  margin-top: 4px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(168, 133, 74, 0.16);
 }
 
 .collapseToggle {
@@ -115,88 +109,106 @@
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 10px 14px;
-  border: 1px solid rgba(141, 214, 234, 0.14);
-  border-radius: 14px;
-  background: linear-gradient(180deg, rgba(18, 25, 53, 0.82), rgba(11, 16, 34, 0.88));
-  color: var(--text-primary);
+  padding: 8px 10px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--marble-warm);
   text-align: left;
   cursor: pointer;
-  transition: border-color 0.2s ease, background 0.2s ease, box-shadow 0.2s ease;
+  transition: background 0.18s ease, border-color 0.18s ease, color 0.18s ease;
 }
 
 .collapseToggle:hover {
-  border-color: rgba(227, 191, 119, 0.24);
-  background: linear-gradient(180deg, rgba(22, 31, 61, 0.92), rgba(12, 18, 42, 0.96));
-  box-shadow: var(--shadow-aura);
+  border-color: rgba(168, 133, 74, 0.34);
+  background: rgba(245, 218, 156, 0.04);
+  color: var(--gold-warm);
 }
 
 .collapseToggleExpanded {
-  border-color: rgba(104, 198, 180, 0.22);
-  background: linear-gradient(180deg, rgba(21, 30, 59, 0.96), rgba(12, 18, 42, 0.98));
+  color: var(--gold-warm);
 }
 
 .collapseToggleLabel {
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.1em;
+  font-family: var(--font-display);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.24em;
   text-transform: uppercase;
 }
 
 .collapseToggleIcon {
-  color: var(--accent-amber);
-  font-size: 18px;
+  color: var(--gold-warm);
+  font-size: 14px;
   line-height: 1;
 }
 
 .collapsibleNavItems {
   display: grid;
-  gap: 10px;
+  gap: 6px;
 }
 
 .stationPanel {
   display: grid;
   gap: 12px;
-  padding: 12px;
-  border: 1px solid rgba(141, 214, 234, 0.14);
-  border-radius: var(--radius-lg);
-  background: radial-gradient(circle at top, rgba(141, 214, 234, 0.06), transparent 48%),
-    linear-gradient(180deg, rgba(15, 21, 46, 0.96), rgba(8, 12, 29, 0.94));
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), var(--shadow-aura);
+  padding: 14px;
+  border: 1px solid rgba(146, 227, 218, 0.18);
+  border-radius: var(--radius-glass);
+  background:
+    radial-gradient(circle at 22% 14%, rgba(146, 227, 218, 0.08), transparent 48%),
+    linear-gradient(180deg, rgba(20, 28, 60, 0.86), rgba(8, 13, 34, 0.92));
+  box-shadow:
+    inset 0 1px 0 rgba(191, 240, 230, 0.16),
+    var(--shadow-crystal);
 }
 
 .stationHeader {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 12px;
+  gap: 10px;
 }
 
 .stationEyebrow {
-  color: var(--text-secondary);
-  font-size: 10px;
-  letter-spacing: 0.14em;
+  font-family: var(--font-display);
+  font-size: 9px;
+  font-weight: 500;
+  letter-spacing: 0.26em;
   text-transform: uppercase;
+  color: var(--gold-warm);
+  opacity: 0.86;
 }
 
 .stationTitle {
-  font-size: 13px;
-  font-weight: 600;
+  font-family: var(--font-body);
+  font-style: italic;
+  font-size: 14px;
+  color: var(--marble-ivory);
 }
 
 .stationCreate {
-  padding: 8px 10px;
-  border: 1px solid rgba(227, 191, 119, 0.28);
-  border-radius: 14px;
-  background: linear-gradient(180deg, rgba(227, 191, 119, 0.12), rgba(104, 198, 180, 0.08));
-  color: var(--text-primary);
-  font-size: 11px;
+  padding: 6px 10px;
+  border: 1px solid rgba(245, 218, 156, 0.28);
+  border-radius: 4px;
+  background: rgba(245, 218, 156, 0.06);
+  color: var(--gold-bright);
+  font-family: var(--font-display);
+  font-size: 9px;
+  font-weight: 500;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
   cursor: pointer;
+  transition: background 0.18s ease, border-color 0.18s ease;
+}
+
+.stationCreate:hover {
+  background: rgba(245, 218, 156, 0.14);
+  border-color: var(--gold-bright);
 }
 
 .stationList {
   display: grid;
-  gap: 8px;
+  gap: 6px;
 }
 
 .stationItem {
@@ -204,59 +216,64 @@
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 10px;
-  padding: 10px 12px;
-  border: 1px solid rgba(141, 214, 234, 0.1);
-  border-radius: 14px;
-  background: linear-gradient(180deg, rgba(23, 30, 63, 0.78), rgba(14, 19, 42, 0.82));
+  padding: 9px 10px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
   color: inherit;
   text-align: left;
   cursor: pointer;
-  transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+  transition: background 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
 }
 
 .stationItem:hover {
-  border-color: rgba(227, 191, 119, 0.22);
-  box-shadow: 0 0 0 1px rgba(227, 191, 119, 0.06), var(--shadow-aura);
+  border-color: rgba(168, 133, 74, 0.34);
+  background: rgba(245, 218, 156, 0.04);
 }
 
 .stationActive {
-  border-color: rgba(227, 191, 119, 0.28);
-  background: linear-gradient(180deg, rgba(104, 198, 180, 0.1), rgba(227, 191, 119, 0.08)),
-    linear-gradient(180deg, rgba(20, 26, 60, 0.86), rgba(15, 21, 46, 0.94));
-  box-shadow: 0 0 0 1px rgba(227, 191, 119, 0.06), var(--shadow-aura);
+  border-color: rgba(245, 218, 156, 0.42);
+  background:
+    linear-gradient(180deg, rgba(245, 218, 156, 0.1), rgba(168, 133, 74, 0.06)),
+    rgba(20, 28, 60, 0.5);
+  box-shadow: 0 0 0 1px rgba(245, 218, 156, 0.16), var(--shadow-aura);
 }
 
 .stationPulse {
-  width: 9px;
-  height: 9px;
+  width: 8px;
+  height: 8px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.24);
-  box-shadow: 0 0 0 2px rgba(10, 14, 24, 0.48), 0 0 14px rgba(255, 255, 255, 0.12), 0 0 24px currentColor;
+  background: rgba(255, 255, 255, 0.4);
+  box-shadow:
+    0 0 0 2px rgba(8, 13, 34, 0.62),
+    0 0 12px currentColor,
+    0 0 22px color-mix(in srgb, currentColor 38%, transparent);
 }
 
 .idle {
-  background: rgba(148, 163, 184, 0.82);
+  background: var(--crystal-glow);
+  color: var(--crystal-glow);
 }
 
 .thinking {
-  background: rgba(79, 139, 189, 0.92);
-  box-shadow: 0 0 14px rgba(79, 139, 189, 0.32);
+  background: var(--hymn-soft);
+  color: var(--hymn-soft);
 }
 
 .speaking {
-  background: rgba(227, 191, 119, 0.92);
-  box-shadow: 0 0 16px rgba(227, 191, 119, 0.36);
+  background: var(--gold-bright);
+  color: var(--gold-bright);
 }
 
 .listening,
 .transcribing {
-  background: rgba(141, 214, 234, 0.92);
-  box-shadow: 0 0 14px rgba(141, 214, 234, 0.32);
+  background: var(--crystal-mist);
+  color: var(--crystal-mist);
 }
 
 .error {
-  background: rgba(248, 113, 113, 0.92);
-  box-shadow: 0 0 14px rgba(248, 113, 113, 0.3);
+  background: var(--sin-blood);
+  color: var(--sin-blood);
 }
 
 .stationCopy {
@@ -266,36 +283,45 @@
 }
 
 .stationLabel {
-  font-size: 13px;
-  font-weight: 600;
+  font-family: var(--font-display);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--marble-ivory);
 }
 
 .stationCaption {
   overflow: hidden;
-  color: var(--text-secondary);
-  font-size: 11px;
+  font-family: var(--font-body);
+  font-style: italic;
+  font-size: 12px;
+  color: var(--marble-warm);
+  opacity: 0.7;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .stationUnread {
-  color: var(--accent-teal);
-  font-size: 18px;
-  line-height: 1;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--gold-bright);
+  box-shadow: 0 0 8px var(--gold-bright);
 }
 
 .navItem {
+  position: relative;
   display: grid;
-  gap: 4px;
-  padding: 12px 14px;
-  border: 1px solid var(--border-default);
+  gap: 1px;
+  padding: 11px 14px 11px 20px;
+  border: 1px solid transparent;
   border-radius: var(--radius-sm);
-  background: linear-gradient(180deg, rgba(25, 33, 70, 0.7), rgba(13, 19, 40, 0.76));
-  color: var(--text-primary);
+  background: transparent;
+  color: var(--marble-warm);
   text-align: left;
   cursor: pointer;
-  transition: border-color 0.2s ease, background 0.2s ease, box-shadow 0.2s ease;
-  position: relative;
+  transition: background 0.18s ease, border-color 0.18s ease, color 0.18s ease, box-shadow 0.18s ease;
   overflow: hidden;
 }
 
@@ -303,40 +329,61 @@
   content: "";
   position: absolute;
   left: 0;
-  top: 8px;
-  bottom: 8px;
-  width: 2px;
-  border-radius: 999px;
-  background: transparent;
-  transition: background 0.2s ease, box-shadow 0.2s ease;
+  top: 50%;
+  width: 6px;
+  height: 6px;
+  margin-top: -3px;
+  background: rgba(245, 218, 156, 0);
+  transform: rotate(45deg);
+  transition: background 0.18s ease, box-shadow 0.18s ease;
 }
 
 .navItem:hover {
-  border-color: rgba(227, 191, 119, 0.22);
-  background: linear-gradient(180deg, rgba(29, 39, 80, 0.78), rgba(15, 21, 46, 0.82));
-  box-shadow: var(--shadow-aura);
+  border-color: rgba(168, 133, 74, 0.32);
+  background: rgba(245, 218, 156, 0.04);
+  color: var(--gold-warm);
+}
+
+.navItem:hover::before {
+  background: var(--gold-warm);
 }
 
 .active {
-  border-color: rgba(227, 191, 119, 0.28);
-  background: linear-gradient(180deg, rgba(104, 198, 180, 0.09), rgba(227, 191, 119, 0.08)),
-    linear-gradient(180deg, rgba(25, 33, 70, 0.82), rgba(15, 21, 46, 0.92));
-  box-shadow: 0 0 0 1px rgba(227, 191, 119, 0.04);
+  border-color: rgba(245, 218, 156, 0.46);
+  background:
+    linear-gradient(180deg, rgba(245, 218, 156, 0.16), rgba(168, 133, 74, 0.08)),
+    rgba(20, 28, 60, 0.6);
+  color: var(--marble-ivory);
+  box-shadow:
+    inset 0 1px 0 rgba(245, 218, 156, 0.22),
+    0 0 0 1px rgba(245, 218, 156, 0.18),
+    var(--shadow-aura);
 }
 
 .active::before {
-  background: linear-gradient(180deg, rgba(141, 214, 234, 0.88), rgba(227, 191, 119, 0.9));
-  box-shadow: 0 0 10px rgba(227, 191, 119, 0.22);
+  background: var(--gold-bright);
+  box-shadow: 0 0 10px var(--gold-bright);
 }
 
 .navLabel {
-  font-size: 14px;
-  font-weight: 600;
+  font-family: var(--font-display);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
 }
 
 .navCaption {
-  color: var(--text-secondary);
+  font-family: var(--font-body);
+  font-style: italic;
   font-size: 11px;
+  color: var(--marble-warm);
+  opacity: 0.62;
+}
+
+.active .navCaption {
+  color: var(--marble-ivory);
+  opacity: 0.78;
 }
 
 .spacer {
@@ -345,5 +392,7 @@
 
 .footer {
   display: grid;
-  gap: 18px;
+  gap: 14px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(168, 133, 74, 0.24);
 }

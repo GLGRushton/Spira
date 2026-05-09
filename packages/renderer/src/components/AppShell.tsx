@@ -27,6 +27,9 @@ import { Sidebar } from "./Sidebar.js";
 import { SpeechController } from "./SpeechController.js";
 import { TitleBar } from "./TitleBar.js";
 import { UpgradeBanner } from "./UpgradeBanner.js";
+import { HymnVocalise } from "./atmosphere/HymnVocalise.js";
+import { MacalaniaDrift } from "./atmosphere/MacalaniaDrift.js";
+import { PyrefleField } from "./atmosphere/PyrefleField.js";
 import { AgentClusterDetail } from "./base/AgentClusterDetail.js";
 import { AgentRoomDetail } from "./base/AgentRoomDetail.js";
 import { BarracksDetail } from "./base/BarracksDetail.js";
@@ -231,6 +234,9 @@ export function AppShell() {
 
   return (
     <div className={`${styles.app} ${missionViewActive ? styles.missionApp : ""}`}>
+      <MacalaniaDrift />
+      <PyrefleField />
+      <HymnVocalise />
       <div className={styles.titleBarSlot}>
         <TitleBar />
       </div>

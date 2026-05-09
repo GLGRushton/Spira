@@ -3,21 +3,31 @@
 }
 
 .text::after {
-  content: "▋";
+  content: "✦";
   display: inline-block;
-  margin-left: 3px;
-  color: var(--accent-cyan);
-  animation: blink 0.9s steps(1) infinite;
+  margin-left: 6px;
+  color: var(--gold-bright);
+  font-size: 0.84em;
+  text-shadow: 0 0 12px rgba(245, 218, 156, 0.6);
+  animation: shinraPulse 1.4s ease-in-out infinite;
 }
 
 .plain {
   margin: 0;
   white-space: pre-wrap;
-  font: inherit;
+  font-family: var(--font-body);
+  font-style: italic;
+  color: var(--marble-warm);
 }
 
-@keyframes blink {
+@keyframes shinraPulse {
+  0%,
+  100% {
+    opacity: 0.4;
+    transform: scale(0.92);
+  }
   50% {
-    opacity: 0;
+    opacity: 1;
+    transform: scale(1.08);
   }
 }

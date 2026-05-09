@@ -1,0 +1,71 @@
+.field {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+  z-index: 0;
+}
+
+.pyrefly {
+  position: absolute;
+  width: var(--mote-size, 5px);
+  height: var(--mote-size, 5px);
+  border-radius: 999px;
+  background: radial-gradient(
+    circle at 50% 50%,
+    rgba(255, 252, 232, 0.96) 0%,
+    var(--mote-tint, rgba(245, 218, 156, 0.78)) 38%,
+    transparent 72%
+  );
+  box-shadow:
+    0 0 var(--mote-glow-near, 12px) var(--mote-tint, rgba(245, 218, 156, 0.42)),
+    0 0 var(--mote-glow-far, 26px) var(--mote-tint, rgba(245, 218, 156, 0.22));
+  opacity: 0;
+  will-change: transform, opacity;
+  animation:
+    pyrefly-drift var(--mote-duration, 14s) ease-in-out var(--mote-delay, 0s) forwards,
+    pyrefly-blink calc(var(--mote-duration, 14s) * 0.55) ease-in-out var(--mote-delay, 0s) infinite;
+  filter: blur(0.4px);
+}
+
+@keyframes pyrefly-drift {
+  0% {
+    transform: translate(var(--mote-x), calc(var(--mote-y) + 18px)) scale(0.4);
+    opacity: 0;
+  }
+  18% {
+    opacity: 0.85;
+    transform: translate(calc(var(--mote-x) + var(--mote-drift-x) * 0.34), calc(var(--mote-y) + 6px)) scale(0.95);
+  }
+  55% {
+    opacity: 0.92;
+    transform: translate(calc(var(--mote-x) + var(--mote-drift-x)), calc(var(--mote-y) + var(--mote-drift-y))) scale(1.05);
+  }
+  88% {
+    opacity: 0.66;
+    transform: translate(calc(var(--mote-x) + var(--mote-drift-x) * 1.18), calc(var(--mote-y) + var(--mote-drift-y) * 1.4)) scale(0.96);
+  }
+  100% {
+    transform: translate(calc(var(--mote-x) + var(--mote-drift-x) * 1.32), calc(var(--mote-y) + var(--mote-drift-y) * 1.6)) scale(0.4);
+    opacity: 0;
+  }
+}
+
+@keyframes pyrefly-blink {
+  0%,
+  100% {
+    filter: blur(0.6px) brightness(0.78);
+  }
+  38% {
+    filter: blur(0px) brightness(1.2);
+  }
+  72% {
+    filter: blur(0.5px) brightness(0.85);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .field {
+    display: none;
+  }
+}

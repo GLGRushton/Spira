@@ -1,11 +1,11 @@
 import type { ReactNode } from "react";
-import styles from "./GlassPanel.module.css";
+import { Plate, type PlatePadding } from "./decor/Plate.js";
 
 interface GlassPanelProps {
   children: ReactNode;
   className?: string;
   glow?: boolean;
-  padding?: "sm" | "md" | "lg";
+  padding?: PlatePadding;
   variant?: "default" | "quiet";
 }
 
@@ -16,14 +16,14 @@ export function GlassPanel({
   padding = "md",
   variant = "default",
 }: GlassPanelProps) {
-  const classes = [
-    styles.panel,
-    styles[padding],
-    variant === "quiet" ? styles.quiet : "",
-    glow && variant !== "quiet" ? styles.glow : "",
-    className ?? "",
-  ]
-    .filter(Boolean)
-    .join(" ");
-  return <section className={classes}>{children}</section>;
+  return (
+    <Plate
+      variant={variant === "quiet" ? "tablet" : "glass"}
+      padding={padding}
+      active={glow && variant !== "quiet"}
+      className={className}
+    >
+      {children}
+    </Plate>
+  );
 }

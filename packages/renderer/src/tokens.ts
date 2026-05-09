@@ -1,16 +1,20 @@
+// FFX X palette — The Cloister Above. Mirrors values in global.css for any
+// component that consumes tokens through TS rather than CSS variables.
 export const tokens = {
   colors: {
-    bg: { primary: "#0a0e27", secondary: "#111638", tertiary: "#1a2048" },
-    accent: { teal: "#00d4aa", cyan: "#00e5ff", gold: "#cc9900", purple: "#7c3aed" },
-    text: { primary: "#e8eaf6", secondary: "#8892b0", muted: "#4a5568" },
-    border: { default: "#1e2d4a", glow: "#00d4aa33" },
+    hull: { deep: "#080d22", mid: "#121a3a", edge: "#1d2750", rim: "#2a3358" },
+    gold: { bright: "#f5da9c", warm: "#e0c489", deep: "#a8854a", shadow: "#5e4720" },
+    crystal: { mist: "#bff0e6", glow: "#92e3da", deep: "#3d7a76" },
+    marble: { ivory: "#f1e6cc", warm: "#d8c8a3" },
+    hymn: { soft: "#b89ed8", bright: "#d4bff0" },
+    sin: { blood: "#a83a3a", deep: "#5e1818" },
     state: {
-      idle: "#00d4aa",
-      thinking: "#7c3aed",
-      listening: "#00e5ff",
-      transcribing: "#00e5ff",
-      speaking: "#cc9900",
-      error: "#ef4444",
+      idle: "#92e3da",
+      thinking: "#b89ed8",
+      listening: "#bff0e6",
+      transcribing: "#bff0e6",
+      speaking: "#f5da9c",
+      error: "#a83a3a",
     },
   },
   spacing: {
@@ -22,9 +26,11 @@ export const tokens = {
     xxl: 32,
   },
   radius: {
-    sm: 8,
-    md: 12,
-    lg: 18,
+    tablet: 4,
+    sm: 6,
+    md: 10,
+    lg: 14,
+    glass: 16,
     pill: 999,
   },
   animation: {
@@ -32,15 +38,21 @@ export const tokens = {
     normal: 0.24,
     slow: 0.4,
     orbLerp: 0.12,
+    swayDuration: 11,
+    hymnPeriod: 7,
   },
   layout: {
-    titleBarHeight: 32,
-    sidebarWidth: 240,
+    titleBarHeight: 38,
+    sidebarWidth: 248,
     panelGap: 16,
   },
   shadow: {
-    glow: "0 0 32px rgba(0, 212, 170, 0.18)",
-    panel: "0 16px 48px rgba(5, 10, 30, 0.35)",
+    panel: "0 18px 48px rgba(4, 6, 18, 0.5)",
+    glow: "0 0 36px rgba(245, 218, 156, 0.18)",
+    aura: "0 0 44px rgba(245, 218, 156, 0.12)",
+    pyrefly: "0 0 14px rgba(245, 218, 156, 0.5), 0 0 28px rgba(245, 218, 156, 0.22)",
+    crystal: "0 0 28px rgba(146, 227, 218, 0.16)",
+    pedestal: "0 18px 38px rgba(4, 6, 18, 0.62), 0 0 32px rgba(168, 133, 74, 0.24)",
   },
 } as const;
 

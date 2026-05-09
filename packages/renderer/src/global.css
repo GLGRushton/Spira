@@ -1,34 +1,86 @@
 :root {
-  --bg-primary: #080d1c;
-  --bg-secondary: #111a33;
-  --bg-tertiary: #1b2647;
-  --accent-teal: #68c6b4;
-  --accent-cyan: #8dd6ea;
-  --accent-gold: #d7b062;
-  --accent-amber: #e3bf77;
-  --accent-purple: #4f8bbd;
-  --text-primary: #e8eaf6;
-  --text-secondary: #96a3be;
-  --text-muted: #7a8aa0;
-  --text-display: #f0e5cb;
-  --border-default: #22314b;
-  --border-glow: rgba(104, 198, 180, 0.28);
-  --state-idle: #68c6b4;
-  --state-thinking: #4f8bbd;
-  --state-listening: #8dd6ea;
-  --state-transcribing: #8dd6ea;
-  --state-speaking: #e3bf77;
-  --state-error: #ef4444;
-  --shadow-panel: 0 16px 48px rgba(4, 8, 24, 0.42);
-  --shadow-glow: 0 0 32px rgba(104, 198, 180, 0.14);
-  --shadow-aura: 0 0 44px rgba(227, 191, 119, 0.08);
+  /* ==== FFX X palette — The Cloister Above ==== */
+
+  /* Hull — Zanarkand-at-dusk indigo, not navy */
+  --hull-deep: #080d22;
+  --hull-mid: #121a3a;
+  --hull-edge: #1d2750;
+  --hull-rim: #2a3358;
+
+  /* Spiran gold — Bevelle/sodium, not brass-cockpit */
+  --gold-bright: #f5da9c;
+  --gold-warm: #e0c489;
+  --gold-deep: #a8854a;
+  --gold-shadow: #5e4720;
+
+  /* Macalania crystal — atmosphere, hover halos, listening */
+  --crystal-mist: #bff0e6;
+  --crystal-glow: #92e3da;
+  --crystal-deep: #3d7a76;
+
+  /* Bevelle marble — rare highlights, important text */
+  --marble-ivory: #f1e6cc;
+  --marble-warm: #d8c8a3;
+
+  /* Hymn — vocalise lavender, used very sparingly (thinking state) */
+  --hymn-soft: #b89ed8;
+  --hymn-bright: #d4bff0;
+
+  /* Sin — error, blood-garnet (replaces Tailwind red) */
+  --sin-blood: #a83a3a;
+  --sin-deep: #5e1818;
+
+  /* ==== Legacy aliases — keep older modules looking right without per-file edits ==== */
+  --bg-primary: var(--hull-deep);
+  --bg-secondary: var(--hull-mid);
+  --bg-tertiary: var(--hull-edge);
+  --accent-teal: var(--crystal-glow);
+  --accent-cyan: var(--crystal-mist);
+  --accent-gold: var(--gold-bright);
+  --accent-amber: var(--gold-warm);
+  --accent-purple: var(--hymn-soft);
+  --text-primary: var(--marble-warm);
+  --text-secondary: rgba(216, 200, 163, 0.62);
+  --text-muted: rgba(216, 200, 163, 0.4);
+  --text-display: var(--marble-ivory);
+  --border-default: rgba(168, 133, 74, 0.22);
+  --border-glow: rgba(245, 218, 156, 0.34);
+  --state-idle: var(--crystal-glow);
+  --state-thinking: var(--hymn-soft);
+  --state-listening: var(--crystal-mist);
+  --state-transcribing: var(--crystal-mist);
+  --state-speaking: var(--gold-bright);
+  --state-error: var(--sin-blood);
+
+  /* ==== Shadows ==== */
+  --shadow-panel: 0 18px 48px rgba(4, 6, 18, 0.5);
+  --shadow-glow: 0 0 36px rgba(245, 218, 156, 0.18);
+  --shadow-aura: 0 0 44px rgba(245, 218, 156, 0.12);
+  --shadow-pyrefly: 0 0 14px rgba(245, 218, 156, 0.5), 0 0 28px rgba(245, 218, 156, 0.22);
+  --shadow-crystal: 0 0 28px rgba(146, 227, 218, 0.16);
+  --shadow-pedestal: 0 18px 38px rgba(4, 6, 18, 0.62), 0 0 32px rgba(168, 133, 74, 0.24);
+
+  /* ==== Layout ==== */
   --titlebar-height: 38px;
-  --sidebar-width: 240px;
-  --radius-sm: 8px;
-  --radius-md: 10px;
+  --sidebar-width: 248px;
+  --radius-sm: 4px;
+  --radius-md: 6px;
   --radius-lg: 14px;
-  --font-ui: "Segoe UI", system-ui, sans-serif;
-  --font-display: "Palatino Linotype", "Book Antiqua", Georgia, serif;
+  --radius-glass: 16px;
+
+  /* ==== Type — Cinzel + Cormorant Garamond + Pinyon Script + JetBrains Mono ==== */
+  --font-display: "Cinzel", "Cormorant SC", "Trajan Pro", serif;
+  --font-body: "Lora", "Crimson Pro", Georgia, serif;
+  --font-hymn: "Pinyon Script", "Italianno", cursive;
+  --font-mono: "JetBrains Mono", "Cascadia Code", "Consolas", monospace;
+  --font-eyebrow: "Cinzel", serif;
+  --font-ui: var(--font-body);
+
+  /* ==== Ambient motion knobs ==== */
+  --sway-deg: 0.18deg;
+  --sway-duration: 11s;
+  --hymn-period: 7s;
+  --pyrefly-density: 1;
 }
 
 * {
@@ -50,14 +102,19 @@ html {
 }
 
 body {
-  font-family: var(--font-ui);
-  background: radial-gradient(ellipse at 14% 100%, rgba(104, 198, 180, 0.15), transparent 42%),
-    radial-gradient(ellipse at 82% 108%, rgba(227, 191, 119, 0.16), transparent 52%),
-    radial-gradient(circle at top, rgba(141, 214, 234, 0.11), transparent 32%),
-    linear-gradient(180deg, #0b1124 0%, #080d1c 52%, #060912 100%);
-  color: var(--text-primary);
+  font-family: var(--font-body);
+  font-size: 15px;
+  line-height: 1.55;
+  font-weight: 400;
+  background:
+    radial-gradient(ellipse at 14% 100%, rgba(146, 227, 218, 0.05), transparent 42%),
+    radial-gradient(ellipse at 82% 108%, rgba(245, 218, 156, 0.07), transparent 52%),
+    radial-gradient(circle at top, rgba(184, 158, 216, 0.04), transparent 42%),
+    linear-gradient(180deg, #060a1c 0%, #080d22 52%, #050715 100%);
+  color: var(--marble-warm);
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
+  font-feature-settings: "liga" 1, "calt" 1;
 }
 
 button,
@@ -71,6 +128,7 @@ select {
 button {
   border: 0;
   background: none;
+  font-family: var(--font-body);
 }
 
 textarea,
@@ -81,14 +139,14 @@ button {
 }
 
 :focus-visible {
-  outline: 2px solid var(--accent-teal);
+  outline: 2px solid var(--gold-bright);
   outline-offset: 2px;
   border-radius: 2px;
 }
 
 ::selection {
-  background: rgba(104, 198, 180, 0.28);
-  color: var(--text-primary);
+  background: rgba(245, 218, 156, 0.3);
+  color: var(--marble-ivory);
 }
 
 ::-webkit-scrollbar {
@@ -97,19 +155,36 @@ button {
 }
 
 ::-webkit-scrollbar-track {
-  background: rgba(13, 20, 41, 0.88);
+  background: rgba(8, 13, 34, 0.92);
 }
 
 ::-webkit-scrollbar-thumb {
   border-radius: 999px;
-  border: 2px solid rgba(13, 20, 41, 0.9);
-  background: linear-gradient(180deg, rgba(104, 198, 180, 0.84), rgba(227, 191, 119, 0.65));
+  border: 2px solid rgba(8, 13, 34, 0.92);
+  background: linear-gradient(180deg, rgba(245, 218, 156, 0.78), rgba(168, 133, 74, 0.7));
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: linear-gradient(180deg, rgba(104, 198, 180, 0.96), rgba(227, 191, 119, 0.82));
+  background: linear-gradient(180deg, rgba(245, 218, 156, 0.96), rgba(168, 133, 74, 0.86));
 }
 
 #root {
   isolation: isolate;
+}
+
+/* Anchor for ambient motion: AppShell adds .swaying which animates this transform. */
+@keyframes spira-sway {
+  0%,
+  100% {
+    transform: rotate(calc(var(--sway-deg) * -1));
+  }
+  50% {
+    transform: rotate(var(--sway-deg));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --pyrefly-density: 0;
+  }
 }

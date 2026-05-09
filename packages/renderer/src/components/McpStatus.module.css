@@ -1,13 +1,15 @@
 .panel {
   display: grid;
-  gap: 10px;
+  gap: 12px;
 }
 
 .title {
-  color: var(--text-secondary);
-  font-size: 11px;
-  letter-spacing: 0.08em;
+  font-family: var(--font-display);
+  font-size: 9px;
+  font-weight: 500;
+  letter-spacing: 0.28em;
   text-transform: uppercase;
+  color: var(--gold-warm);
 }
 
 .list {
@@ -19,10 +21,10 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 10px 12px;
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-sm);
-  background: rgba(10, 14, 39, 0.62);
+  padding: 10px 14px;
+  border: 1px solid rgba(168, 133, 74, 0.28);
+  border-radius: 4px;
+  background: rgba(20, 28, 60, 0.55);
 }
 
 .meta {
@@ -30,18 +32,27 @@
 }
 
 .name {
-  font-size: 13px;
-  font-weight: 600;
+  font-family: var(--font-display);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--marble-ivory);
 }
 
 .caption {
-  color: var(--text-secondary);
-  font-size: 11px;
+  font-family: var(--font-body);
+  font-style: italic;
+  font-size: 12px;
+  color: var(--marble-warm);
+  opacity: 0.78;
 }
 
 .empty {
-  color: var(--text-secondary);
-  font-size: 12px;
+  font-family: var(--font-body);
+  font-style: italic;
+  font-size: 13px;
+  color: var(--marble-warm);
 }
 
 .dot {
@@ -52,20 +63,21 @@
 }
 
 .connected {
-  background: #22c55e;
-  box-shadow: 0 0 12px #22c55e;
+  background: var(--gold-bright);
+  box-shadow: 0 0 12px var(--gold-bright);
 }
 
 .starting {
-  background: #f59e0b;
-  box-shadow: 0 0 12px #f59e0b;
+  background: var(--crystal-mist);
+  box-shadow: 0 0 12px var(--crystal-mist);
 }
 
 .disconnected {
-  background: #64748b;
+  background: var(--marble-warm);
+  opacity: 0.5;
 }
 
 .error {
-  background: #ef4444;
-  box-shadow: 0 0 12px rgba(239, 68, 68, 0.65);
+  background: var(--sin-blood);
+  box-shadow: 0 0 12px rgba(168, 58, 58, 0.6);
 }

@@ -1,6 +1,7 @@
 import type { SpiraUiView } from "@spira/shared";
 import { useEffect, useMemo, useState } from "react";
 import { useStationStore } from "../stores/station-store.js";
+import { YevonSpiral } from "./decor/Glyphs.js";
 import styles from "./Sidebar.module.css";
 import { VoiceIndicator } from "./VoiceIndicator.js";
 
@@ -12,14 +13,14 @@ interface SidebarProps {
 }
 
 const items: Array<{ id: SidebarView; label: string; caption: string }> = [
-  { id: "ship", label: "Ship", caption: "Deck navigation" },
+  { id: "ship", label: "Deck", caption: "Sphere grid overview" },
   { id: "operations", label: "Operations", caption: "Command stations" },
-  { id: "bridge", label: "Bridge", caption: "Mission control + Shinra" },
+  { id: "bridge", label: "Bridge", caption: "Fayth chamber" },
   { id: "barracks", label: "Barracks", caption: "Delegation roster" },
   { id: "mcp", label: "Armoury", caption: "Machina tools" },
-  { id: "agents", label: "Field Office", caption: "Live delegation rooms" },
-  { id: "projects", label: "Missions", caption: "Ticket intake and scope" },
-  { id: "settings", label: "Settings", caption: "Voice, keys, and tuning" },
+  { id: "agents", label: "Cloister", caption: "Live delegation rooms" },
+  { id: "projects", label: "Pilgrimage Log", caption: "Ticket intake and scope" },
+  { id: "settings", label: "Sphere Grid", caption: "Voice, keys, and tuning" },
 ];
 
 const alwaysVisibleItems = items.filter((item) => item.id === "ship" || item.id === "bridge");
@@ -71,14 +72,11 @@ export function Sidebar({ activeView, onViewChange }: SidebarProps) {
     <aside className={styles.sidebar}>
       <div className={styles.logoBlock}>
         <div className={styles.logoMark} aria-hidden="true">
-          <span className={styles.logoCore}>S</span>
-          <span className={`${styles.logoMote} ${styles.logoMoteA}`} />
-          <span className={`${styles.logoMote} ${styles.logoMoteB}`} />
-          <span className={`${styles.logoMote} ${styles.logoMoteC}`} />
+          <YevonSpiral size={36} color="var(--gold-bright)" strokeWidth={1.4} />
         </div>
-        <div>
+        <div className={styles.logoTextWrap}>
           <div className={styles.logoText}>Spira</div>
-          <div className={styles.logoCaption}>Shinra command</div>
+          <div className={styles.logoCaption}>The Cloister Above</div>
         </div>
       </div>
 

@@ -3,25 +3,28 @@
   height: 9px;
   border-radius: 50%;
   display: inline-flex;
-  box-shadow: 0 0 0 2px rgba(8, 12, 30, 0.45), 0 0 12px currentColor, 0 0 22px currentColor;
+  box-shadow:
+    0 0 0 2px rgba(8, 13, 34, 0.62),
+    0 0 12px currentColor,
+    0 0 24px color-mix(in srgb, currentColor 50%, transparent);
 }
 
 .connected {
-  color: var(--accent-teal);
-  background: var(--accent-teal);
+  color: var(--gold-bright);
+  background: var(--gold-bright);
 }
 
 .connecting {
-  color: var(--accent-amber);
-  background: var(--accent-amber);
+  color: var(--gold-warm);
+  background: var(--gold-warm);
 }
 
 .disconnected {
-  color: var(--state-error);
-  background: var(--state-error);
+  color: var(--sin-blood);
+  background: var(--sin-blood);
 }
 
 .upgrading {
-  color: var(--accent-cyan);
-  background: var(--accent-cyan);
+  color: var(--crystal-glow);
+  background: var(--crystal-glow);
 }

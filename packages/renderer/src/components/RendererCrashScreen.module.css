@@ -4,88 +4,118 @@
   height: 100%;
   place-items: center;
   padding: 32px;
+  background:
+    radial-gradient(circle at 50% 110%, rgba(168, 58, 58, 0.16), transparent 52%),
+    radial-gradient(circle at 50% 0%, rgba(184, 158, 216, 0.04), transparent 38%),
+    linear-gradient(180deg, #060a1c 0%, #080d22 52%, #050715 100%);
 }
 
 .panel {
+  position: relative;
   width: min(720px, 100%);
-  border: 1px solid rgba(239, 68, 68, 0.24);
-  border-radius: 18px;
-  background: linear-gradient(180deg, rgba(18, 24, 56, 0.96), rgba(10, 14, 39, 0.98));
-  box-shadow: 0 22px 60px rgba(4, 7, 22, 0.46);
-  padding: 28px;
+  padding: 32px 36px;
+  border: 1px solid rgba(168, 58, 58, 0.5);
+  border-radius: var(--radius-md);
+  background:
+    radial-gradient(circle at 90% 0%, rgba(168, 58, 58, 0.08), transparent 32%),
+    linear-gradient(180deg, rgba(20, 28, 60, 0.96), rgba(8, 13, 34, 0.98));
+  box-shadow:
+    inset 0 1px 0 rgba(245, 218, 156, 0.12),
+    0 22px 60px rgba(4, 6, 18, 0.62);
+  clip-path: polygon(
+    14px 0,
+    calc(100% - 14px) 0,
+    100% 14px,
+    100% calc(100% - 14px),
+    calc(100% - 14px) 100%,
+    14px 100%,
+    0 calc(100% - 14px),
+    0 14px
+  );
 }
 
 .eyebrow {
   display: block;
-  margin-bottom: 10px;
-  color: rgba(255, 255, 255, 0.72);
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.14em;
+  margin-bottom: 14px;
+  font-family: var(--font-display);
+  font-size: 9px;
+  font-weight: 500;
+  letter-spacing: 0.32em;
   text-transform: uppercase;
+  color: var(--gold-warm);
 }
 
 .title {
-  margin-bottom: 12px;
-  font-size: 28px;
+  margin: 0 0 14px;
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 26px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--gold-bright);
+  text-shadow: 0 0 22px rgba(245, 218, 156, 0.22);
   line-height: 1.15;
 }
 
 .message {
-  color: rgba(232, 234, 246, 0.88);
+  font-family: var(--font-body);
+  font-style: italic;
   font-size: 15px;
-  line-height: 1.6;
+  line-height: 1.65;
+  color: var(--marble-ivory);
 }
 
 .actions {
   display: flex;
   gap: 12px;
-  margin-top: 20px;
+  margin-top: 24px;
 }
 
 .reloadButton {
-  border: 1px solid rgba(0, 229, 255, 0.26);
-  border-radius: 999px;
-  background: rgba(0, 229, 255, 0.12);
-  padding: 11px 16px;
-  color: var(--text-primary);
+  padding: 11px 22px;
+  border: 1px solid var(--gold-warm);
+  border-radius: 4px;
+  background: rgba(245, 218, 156, 0.06);
+  color: var(--gold-bright);
   cursor: pointer;
-  font-size: 13px;
-  font-weight: 600;
-  letter-spacing: 0.08em;
+  font-family: var(--font-display);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.24em;
   text-transform: uppercase;
-  transition: transform 0.18s ease, border-color 0.18s ease, background 0.18s ease;
+  transition: background 0.18s ease, border-color 0.18s ease;
 }
 
 .reloadButton:hover {
-  border-color: rgba(0, 229, 255, 0.42);
-  background: rgba(0, 229, 255, 0.18);
-  transform: translateY(-1px);
+  background: rgba(245, 218, 156, 0.16);
+  border-color: var(--gold-bright);
 }
 
 .details {
-  margin-top: 22px;
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  margin-top: 24px;
+  border-top: 1px solid rgba(168, 133, 74, 0.32);
   padding-top: 18px;
 }
 
 .detailsSummary {
   cursor: pointer;
-  color: rgba(255, 255, 255, 0.86);
-  font-size: 13px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
+  font-family: var(--font-display);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.24em;
   text-transform: uppercase;
+  color: var(--gold-warm);
 }
 
 .detailsBody {
-  margin-top: 12px;
+  margin-top: 14px;
   overflow: auto;
-  border-radius: 12px;
-  background: rgba(6, 10, 24, 0.78);
-  padding: 14px;
-  color: rgba(232, 234, 246, 0.84);
-  font-family: "Cascadia Code", "Consolas", monospace;
+  border: 1px solid rgba(168, 133, 74, 0.28);
+  border-radius: 4px;
+  background: rgba(6, 9, 24, 0.86);
+  padding: 14px 16px;
+  color: var(--crystal-mist);
+  font-family: var(--font-mono);
   font-size: 12px;
   line-height: 1.55;
   white-space: pre-wrap;

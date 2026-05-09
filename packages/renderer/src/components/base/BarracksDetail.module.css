@@ -2,13 +2,15 @@
   height: 100%;
   display: grid;
   grid-template-rows: auto auto auto minmax(0, 1fr);
-  gap: 16px;
+  gap: 18px;
 }
 
 .header {
   display: flex;
   justify-content: space-between;
-  gap: 16px;
+  gap: 18px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid rgba(168, 133, 74, 0.32);
 }
 
 .headerActions {
@@ -22,21 +24,32 @@
 .domainEyebrow,
 .sectionLabel,
 .serverMeta {
-  color: var(--text-secondary);
-  font-size: 11px;
-  letter-spacing: 0.08em;
+  font-family: var(--font-display);
+  font-size: 9px;
+  font-weight: 500;
+  letter-spacing: 0.26em;
   text-transform: uppercase;
+  color: var(--gold-warm);
 }
 
 .title {
-  font-size: clamp(22px, 3vw, 32px);
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: clamp(24px, 3vw, 36px);
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--gold-bright);
+  text-shadow: 0 0 18px rgba(245, 218, 156, 0.18);
 }
 
 .caption,
 .formCaption {
-  color: var(--text-secondary);
-  font-size: 13px;
+  font-family: var(--font-body);
+  font-style: italic;
+  font-size: 14px;
   line-height: 1.6;
+  color: var(--marble-warm);
+  opacity: 0.86;
 }
 
 .caption {
@@ -47,51 +60,72 @@
 .metrics {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 12px;
+  gap: 14px;
 }
 
 .metricCard,
 .domainCard,
 .formPanel {
-  padding: 14px;
-  border: 1px solid var(--border-default);
+  position: relative;
+  padding: 16px 18px;
+  border: 1px solid rgba(168, 133, 74, 0.28);
   border-radius: var(--radius-sm);
-  background: rgba(8, 12, 30, 0.52);
+  background: linear-gradient(180deg, rgba(20, 28, 60, 0.6), rgba(8, 13, 34, 0.78));
 }
 
 .metricValue {
   display: block;
   margin-top: 8px;
-  font-size: 18px;
+  font-family: var(--font-display);
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: var(--gold-bright);
 }
 
 .actionButton,
 .secondaryButton,
 .dangerButton,
 .toggleButton {
-  padding: 9px 12px;
-  border-radius: var(--radius-sm);
-  font-size: 12px;
-  font-weight: 600;
+  padding: 9px 16px;
+  border-radius: 4px;
+  font-family: var(--font-display);
+  font-size: 9px;
+  font-weight: 500;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: background 0.18s ease, border-color 0.18s ease, color 0.18s ease;
 }
 
 .actionButton {
-  border: 1px solid rgba(0, 229, 255, 0.28);
-  background: rgba(0, 229, 255, 0.12);
-  color: var(--text-primary);
+  border: 1px solid rgba(245, 218, 156, 0.4);
+  background: rgba(245, 218, 156, 0.08);
+  color: var(--gold-bright);
+}
+
+.actionButton:hover {
+  background: rgba(245, 218, 156, 0.16);
+  border-color: var(--gold-bright);
 }
 
 .secondaryButton,
 .toggleButton {
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  background: rgba(255, 255, 255, 0.04);
-  color: var(--text-primary);
+  border: 1px solid rgba(168, 133, 74, 0.32);
+  background: rgba(20, 28, 60, 0.52);
+  color: var(--marble-warm);
+}
+
+.secondaryButton:hover,
+.toggleButton:hover {
+  border-color: var(--gold-warm);
+  color: var(--gold-bright);
 }
 
 .dangerButton {
-  border: 1px solid rgba(239, 68, 68, 0.24);
-  background: rgba(239, 68, 68, 0.12);
-  color: #fecaca;
+  border: 1px solid rgba(168, 58, 58, 0.4);
+  background: rgba(168, 58, 58, 0.14);
+  color: #f7c5c5;
 }
 
 .formPanel {
@@ -117,13 +151,17 @@
 .formGrid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
+  gap: 14px;
 }
 
 .field {
   display: grid;
   gap: 8px;
-  font-size: 12px;
+  font-family: var(--font-display);
+  font-size: 9px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--gold-warm);
 }
 
 .fullWidth {
@@ -133,17 +171,30 @@
 .input,
 .textarea {
   width: 100%;
-  padding: 10px 12px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: var(--radius-sm);
-  background: rgba(8, 12, 30, 0.68);
-  color: var(--text-primary);
-  font: inherit;
+  padding: 10px 14px;
+  border: 1px solid rgba(168, 133, 74, 0.3);
+  border-radius: 4px;
+  background: rgba(8, 13, 34, 0.7);
+  color: var(--marble-ivory);
+  font-family: var(--font-body);
+  font-style: italic;
+  font-size: 14px;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.input:focus,
+.textarea:focus {
+  border-color: var(--gold-warm);
+  box-shadow: 0 0 0 1px rgba(245, 218, 156, 0.2);
 }
 
 .textarea {
   min-height: 110px;
   resize: vertical;
+  font-family: var(--font-mono);
+  font-style: normal;
+  font-size: 13px;
 }
 
 .toggleRow {
@@ -155,8 +206,10 @@
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  color: var(--text-primary);
-  font-size: 12px;
+  font-family: var(--font-body);
+  font-style: italic;
+  font-size: 14px;
+  color: var(--marble-ivory);
 }
 
 .selectionSection {
@@ -166,31 +219,36 @@
 
 .checkboxGrid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 10px;
 }
 
 .checkboxCard {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 10px 12px;
-  border: 1px solid rgba(0, 229, 255, 0.12);
-  border-radius: var(--radius-sm);
-  background: rgba(8, 12, 30, 0.44);
+  padding: 10px 14px;
+  border: 1px solid rgba(168, 133, 74, 0.26);
+  border-radius: 4px;
+  background: rgba(20, 28, 60, 0.42);
 }
 
 .checkboxMeta {
   margin-top: 4px;
-  color: var(--text-secondary);
-  font-size: 11px;
+  font-family: var(--font-body);
+  font-style: italic;
+  font-size: 12px;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--marble-warm);
+  opacity: 0.78;
 }
 
 .roster {
   min-height: 0;
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+  gap: 14px;
   overflow-y: auto;
 }
 
@@ -198,55 +256,64 @@
   display: grid;
   align-content: start;
   gap: 14px;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.03), transparent 40%), rgba(8, 12, 30, 0.58);
 }
 
 .windows {
-  border-color: rgba(0, 229, 255, 0.18);
+  border-color: rgba(146, 227, 218, 0.28);
 }
 
 .spira {
-  border-color: rgba(0, 212, 170, 0.18);
+  border-color: rgba(245, 218, 156, 0.32);
 }
 
 .nexus {
-  border-color: rgba(139, 92, 246, 0.18);
+  border-color: rgba(184, 158, 216, 0.34);
 }
 
 .custom {
-  border-color: rgba(244, 114, 182, 0.18);
+  border-color: rgba(245, 196, 195, 0.3);
 }
 
 .domainTitle {
   margin-top: 4px;
-  font-size: 20px;
+  font-family: var(--font-display);
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: 0.18em;
   text-transform: uppercase;
+  color: var(--gold-bright);
 }
 
 .domainDescription {
   margin-top: 8px;
-  color: var(--text-secondary);
-  font-size: 12px;
+  font-family: var(--font-body);
+  font-style: italic;
+  font-size: 13px;
   line-height: 1.6;
+  color: var(--marble-warm);
 }
 
 .cardBadge {
   align-self: start;
-  padding: 6px 10px;
-  border: 1px solid rgba(0, 229, 255, 0.14);
+  padding: 5px 12px;
+  border: 1px solid rgba(245, 218, 156, 0.32);
   border-radius: 999px;
-  color: var(--text-primary);
-  font-size: 11px;
-  letter-spacing: 0.08em;
+  font-family: var(--font-display);
+  font-size: 9px;
+  font-weight: 500;
+  letter-spacing: 0.22em;
   text-transform: uppercase;
+  color: var(--gold-bright);
+  background: rgba(245, 218, 156, 0.08);
 }
 
 .cardMeta {
   display: flex;
   flex-wrap: wrap;
-  gap: 10px 16px;
-  color: var(--text-secondary);
-  font-size: 12px;
+  gap: 10px 18px;
+  font-family: var(--font-body);
+  font-size: 13px;
+  color: var(--marble-warm);
 }
 
 .serverGrid {
@@ -255,44 +322,48 @@
 }
 
 .serverCard {
-  padding: 10px 12px;
-  border: 1px solid rgba(0, 229, 255, 0.12);
-  border-radius: var(--radius-sm);
-  background: rgba(8, 12, 30, 0.44);
+  padding: 10px 14px;
+  border: 1px solid rgba(168, 133, 74, 0.26);
+  border-radius: 4px;
+  background: rgba(20, 28, 60, 0.42);
 }
 
 .serverHeader {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
 }
 
 .stateDot {
-  width: 10px;
-  height: 10px;
+  width: 9px;
+  height: 9px;
   border-radius: 999px;
   box-shadow: 0 0 12px currentColor;
 }
 
 .connected {
-  color: var(--accent-teal);
-  background: var(--accent-teal);
+  color: var(--gold-bright);
+  background: var(--gold-bright);
 }
 
 .starting {
-  color: var(--accent-cyan);
-  background: var(--accent-cyan);
+  color: var(--crystal-mist);
+  background: var(--crystal-mist);
 }
 
 .error,
 .disconnected {
-  color: #ef4444;
-  background: #ef4444;
+  color: var(--sin-blood);
+  background: var(--sin-blood);
 }
 
 .serverName {
-  font-size: 13px;
-  font-weight: 600;
+  font-family: var(--font-display);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--marble-ivory);
 }
 
 .toolCloud {
@@ -302,23 +373,27 @@
 }
 
 .toolPill {
-  padding: 6px 10px;
-  border: 1px solid rgba(0, 229, 255, 0.14);
+  padding: 5px 12px;
+  border: 1px solid rgba(146, 227, 218, 0.28);
   border-radius: 999px;
-  background: rgba(0, 229, 255, 0.06);
-  font-size: 12px;
+  background: rgba(146, 227, 218, 0.06);
+  font-family: var(--font-mono);
+  font-size: 11px;
   line-height: 1.4;
+  color: var(--crystal-mist);
 }
 
 .toolOverflow {
   border-style: dashed;
-  color: var(--text-secondary);
+  color: var(--marble-warm);
 }
 
 .emptyState {
-  color: var(--text-secondary);
-  font-size: 12px;
+  font-family: var(--font-body);
+  font-style: italic;
+  font-size: 13px;
   line-height: 1.6;
+  color: var(--marble-warm);
 }
 
 @media (max-width: 960px) {

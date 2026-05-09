@@ -4,6 +4,8 @@ import { useAudioStore } from "../../stores/audio-store.js";
 import { getStation, useStationStore } from "../../stores/station-store.js";
 import styles from "./ShinraOrb.module.css";
 
+export type ShinraOrbSize = "stage" | "chamber" | "strip";
+
 const PYREFLY_COUNT = 24;
 
 const congregationPresets = {
@@ -45,15 +47,20 @@ const congregationPresets = {
   },
 } as const;
 
-export function ShinraOrb() {
+interface ShinraOrbProps {
+  size?: ShinraOrbSize;
+}
+
+export function ShinraOrb({ size = "chamber" }: ShinraOrbProps) {
   const activeStationId = useStationStore((store) => store.activeStationId);
   const state = useStationStore((store) => getStation(store, activeStationId).state);
   const audioDrive = useAudioStore((store) => Math.max(store.audioLevel, store.ttsAmplitude));
   const preset = congregationPresets[state];
+  const moteCount = size === "strip" ? 0 : PYREFLY_COUNT;
 
   const pyreflies = useMemo(
     () =>
-      Array.from({ length: PYREFLY_COUNT }, (_, index) => {
+      Array.from({ length: moteCount }, (_, index) => {
         const angle = (Math.PI * 2 * index) / PYREFLY_COUNT;
         const ring = index % 4;
         const radius = (24 + ring * 14 + (index % 2 === 0 ? 5 : -3)) * preset.spread;
@@ -73,7 +80,7 @@ export function ShinraOrb() {
           } as CSSProperties,
         };
       }),
-    [preset.spread],
+    [preset.spread, moteCount],
   );
 
   const wrapperStyle = {
@@ -84,7 +91,11 @@ export function ShinraOrb() {
   } as CSSProperties;
 
   return (
-    <div className={`${styles.wrapper} ${styles[state]}`} style={wrapperStyle} aria-hidden="true">
+    <div
+      className={`${styles.wrapper} ${styles[state]} ${styles[`size-${size}`]}`}
+      style={wrapperStyle}
+      aria-hidden="true"
+    >
       <div className={styles.voidGlow} />
       <div className={styles.farplaneHalo} />
       <div className={styles.congregation}>

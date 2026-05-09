@@ -3,6 +3,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { useLayoutEffect, useRef, useState } from "react";
 import { getAwaitingAssistantQuestion, getChatSession, useChatStore } from "../../stores/chat-store.js";
 import { useStationStore } from "../../stores/station-store.js";
+import { BevelleArch, YevonSpiral } from "../decor/Glyphs.js";
 import styles from "./ChatPanel.module.css";
 import { ConversationArchivePanel } from "./ConversationArchivePanel.js";
 import { InputBar } from "./InputBar.js";
@@ -10,9 +11,9 @@ import { MessageBubble } from "./MessageBubble.js";
 import { clearClientSessionUi } from "./session-ui.js";
 
 const EXAMPLE_PROMPTS = [
-  "Trace how the bridge chat state flows end to end.",
-  "Refine the current UI without losing the existing tone.",
-  "Find the slowest part of the renderer path and tighten it.",
+  "Trace how the bridge chat flows end to end.",
+  "Refine this surface without losing the cloister tone.",
+  "Find the slowest part of the renderer and tighten it.",
 ];
 
 interface ChatPanelProps {
@@ -97,14 +98,16 @@ export function ChatPanel({ stationId }: ChatPanelProps) {
   return (
     <div className={styles.panel}>
       <div className={styles.toolbar}>
-        <div>
-          <div className={styles.toolbarEyebrow}>Mission log</div>
+        <div className={styles.toolbarCopy}>
+          <div className={styles.toolbarEyebrow}>
+            <YevonSpiral size={11} color="var(--gold-warm)" /> Hymnal Log
+          </div>
           <div className={styles.toolbarTitle}>
-            {activeConversationTitle?.trim() || (activeConversationId ? "Untitled conversation" : "Fresh transmission")}
+            {activeConversationTitle?.trim() || (activeConversationId ? "Untitled chant" : "Fresh transmission")}
           </div>
         </div>
         <button type="button" className={styles.archiveToggle} onClick={() => setArchiveOpen((open) => !open)}>
-          {archiveOpen ? "Hide log" : "Open log"}
+          {archiveOpen ? "Close archive" : "Open archive"}
         </button>
       </div>
       {sessionNotice ? (
@@ -128,10 +131,11 @@ export function ChatPanel({ stationId }: ChatPanelProps) {
         ) : null}
         {messages.length === 0 ? (
           <section className={styles.emptyState}>
-            <div className={styles.emptyEyebrow}>Bridge / Mission log</div>
-            <h3 className={styles.emptyTitle}>Shinra is awaiting orders.</h3>
+            <BevelleArch className={styles.emptyArch} width={260} />
+            <div className={styles.emptyEyebrow}>Bridge · Hymnal Log</div>
+            <h3 className={styles.emptyTitle}>Awaiting Orders</h3>
             <p className={styles.emptyCopy}>
-              Ask for a code change, a system investigation, or a quick read of the repo and I will get to work.
+              Ask for a code change, a system investigation, or a reading of the repo. The Fayth will answer.
             </p>
             <div className={styles.examples}>
               {EXAMPLE_PROMPTS.map((prompt) => (
@@ -144,7 +148,10 @@ export function ChatPanel({ stationId }: ChatPanelProps) {
                     requestComposerFocus(resolvedStationId);
                   }}
                 >
-                  {prompt}
+                  <span className={styles.exampleChipSeal} aria-hidden="true">
+                    <YevonSpiral size={12} color="var(--gold-warm)" />
+                  </span>
+                  <span>{prompt}</span>
                 </button>
               ))}
             </div>

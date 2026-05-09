@@ -9,75 +9,97 @@
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 16px;
+  gap: 18px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid rgba(168, 133, 74, 0.32);
 }
 
 .eyebrow {
-  color: var(--text-secondary);
-  font-size: 11px;
-  letter-spacing: 0.08em;
+  font-family: var(--font-display);
+  font-size: 9px;
+  font-weight: 500;
+  letter-spacing: 0.28em;
   text-transform: uppercase;
+  color: var(--gold-warm);
 }
 
 .title {
-  font-size: clamp(22px, 3vw, 32px);
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: clamp(24px, 3vw, 36px);
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--gold-bright);
+  text-shadow: 0 0 18px rgba(245, 218, 156, 0.18);
 }
 
 .statePill {
-  padding: 8px 12px;
-  border: 1px solid var(--border-default);
+  padding: 8px 14px;
+  border: 1px solid rgba(168, 133, 74, 0.32);
   border-radius: 999px;
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
+  font-family: var(--font-display);
+  font-size: 9px;
+  font-weight: 500;
+  letter-spacing: 0.22em;
   text-transform: uppercase;
 }
 
 .starting {
-  border-color: rgba(0, 229, 255, 0.28);
-  color: var(--accent-cyan);
+  border-color: rgba(146, 227, 218, 0.4);
+  color: var(--crystal-mist);
+  background: rgba(146, 227, 218, 0.1);
 }
 
 .connected {
-  border-color: rgba(0, 212, 170, 0.28);
-  color: var(--accent-teal);
+  border-color: rgba(245, 218, 156, 0.42);
+  color: var(--gold-bright);
+  background: rgba(245, 218, 156, 0.08);
 }
 
 .disconnected {
-  border-color: var(--border-default);
-  color: var(--text-secondary);
+  border-color: rgba(168, 133, 74, 0.3);
+  color: var(--marble-warm);
 }
 
 .error {
-  border-color: rgba(239, 68, 68, 0.32);
-  color: #fda4af;
+  border-color: rgba(168, 58, 58, 0.46);
+  color: #f7c5c5;
+  background: rgba(168, 58, 58, 0.16);
 }
 
 .metrics {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
+  gap: 14px;
 }
 
 .metricCard {
-  padding: 14px;
-  border: 1px solid var(--border-default);
+  position: relative;
+  padding: 14px 16px;
+  border: 1px solid rgba(168, 133, 74, 0.3);
   border-radius: var(--radius-sm);
-  background: rgba(8, 12, 30, 0.52);
+  background:
+    linear-gradient(180deg, rgba(20, 28, 60, 0.6), rgba(8, 13, 34, 0.78));
 }
 
 .metricLabel {
   display: block;
-  color: var(--text-secondary);
-  font-size: 11px;
-  letter-spacing: 0.08em;
+  font-family: var(--font-display);
+  font-size: 9px;
+  font-weight: 500;
+  letter-spacing: 0.26em;
   text-transform: uppercase;
+  color: var(--gold-warm);
 }
 
 .metricValue {
   display: block;
   margin-top: 8px;
-  font-size: 18px;
+  font-family: var(--font-display);
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: var(--gold-bright);
 }
 
 .toolSection {
@@ -95,12 +117,20 @@
 }
 
 .toolTitle {
+  font-family: var(--font-display);
   font-weight: 600;
+  font-size: 14px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--gold-bright);
 }
 
 .toolCaption {
-  color: var(--text-secondary);
-  font-size: 12px;
+  font-family: var(--font-body);
+  font-style: italic;
+  font-size: 13px;
+  color: var(--marble-warm);
+  opacity: 0.78;
 }
 
 .toolGrid {
@@ -112,63 +142,74 @@
 }
 
 .toolChip {
-  padding: 10px 12px;
-  border: 1px solid rgba(0, 229, 255, 0.14);
-  border-radius: var(--radius-sm);
-  background: rgba(17, 22, 56, 0.74);
-  color: var(--text-primary);
+  padding: 9px 14px;
+  border: 1px solid rgba(146, 227, 218, 0.28);
+  border-radius: 4px;
+  background:
+    linear-gradient(180deg, rgba(20, 28, 60, 0.78), rgba(8, 13, 34, 0.86));
+  color: var(--marble-ivory);
+  font-family: var(--font-mono);
   font-size: 12px;
+  letter-spacing: 0.04em;
 }
 
 .empty {
-  color: var(--text-secondary);
+  font-family: var(--font-body);
+  font-style: italic;
+  color: var(--marble-warm);
 }
 
 .errorBox {
-  padding: 12px 14px;
-  border: 1px solid rgba(239, 68, 68, 0.24);
+  padding: 12px 16px;
+  border: 1px solid rgba(168, 58, 58, 0.4);
   border-radius: var(--radius-sm);
-  background: rgba(127, 29, 29, 0.18);
-  color: #fecaca;
-  font-size: 13px;
+  background: rgba(94, 24, 24, 0.18);
+  color: #f7c5c5;
+  font-family: var(--font-body);
+  font-style: italic;
+  font-size: 14px;
 }
 
 .diagnosticSection {
   display: grid;
   gap: 8px;
-  padding: 14px;
-  border: 1px solid var(--border-default);
+  padding: 14px 16px;
+  border: 1px solid rgba(168, 133, 74, 0.28);
   border-radius: var(--radius-sm);
-  background: rgba(8, 12, 30, 0.52);
+  background:
+    linear-gradient(180deg, rgba(20, 28, 60, 0.55), rgba(8, 13, 34, 0.7));
 }
 
 .diagnosticTitle {
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
+  font-family: var(--font-display);
+  font-size: 9px;
+  font-weight: 500;
+  letter-spacing: 0.28em;
   text-transform: uppercase;
-  color: var(--text-secondary);
+  color: var(--gold-warm);
 }
 
 .diagnosticHint {
-  color: var(--text-primary);
-  font-size: 13px;
+  font-family: var(--font-body);
+  font-size: 14px;
   line-height: 1.5;
+  color: var(--marble-ivory);
 }
 
 .logList {
   display: grid;
   gap: 8px;
-  max-height: 180px;
+  max-height: 220px;
   overflow-y: auto;
 }
 
 .logLine {
-  padding: 10px 12px;
-  border-radius: var(--radius-sm);
-  background: rgba(17, 22, 56, 0.74);
-  color: #fecaca;
-  font-family: var(--font-family-mono, "Consolas", monospace);
+  padding: 10px 14px;
+  border-radius: 4px;
+  background: rgba(8, 13, 34, 0.86);
+  border: 1px solid rgba(168, 58, 58, 0.32);
+  color: #f7c5c5;
+  font-family: var(--font-mono);
   font-size: 12px;
   line-height: 1.45;
   white-space: pre-wrap;

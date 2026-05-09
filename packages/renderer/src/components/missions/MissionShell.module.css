@@ -2,87 +2,153 @@
   height: 100%;
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 16px;
 }
 
 .statusBar {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
-  padding: 16px 18px;
-  border: 1px solid rgba(115, 141, 220, 0.18);
-  border-radius: 18px;
-  background: linear-gradient(180deg, rgba(17, 24, 52, 0.94), rgba(8, 12, 28, 0.98));
-  box-shadow: 0 14px 30px rgba(0, 0, 0, 0.24);
+  gap: 18px;
+  padding: 22px 26px 20px 30px;
+  border: 1px solid rgba(168, 133, 74, 0.34);
+  border-radius: var(--radius-sm);
+  background:
+    radial-gradient(circle at 90% 0%, rgba(245, 218, 156, 0.06), transparent 38%),
+    linear-gradient(180deg, rgba(20, 28, 60, 0.92), rgba(8, 13, 34, 0.96));
+  color: var(--marble-ivory);
+  box-shadow:
+    inset 0 1px 0 rgba(245, 218, 156, 0.12),
+    var(--shadow-panel);
+}
+
+.statusBar::after {
+  content: "";
+  position: absolute;
+  left: 14px;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: linear-gradient(
+    180deg,
+    rgba(168, 133, 74, 0.4),
+    rgba(245, 218, 156, 0.86) 50%,
+    rgba(168, 133, 74, 0.4)
+  );
+  box-shadow: 0 0 14px rgba(245, 218, 156, 0.32);
+  pointer-events: none;
+}
+
+.statusBar::before {
+  content: "";
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  bottom: 0;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(245, 218, 156, 0.5) 30%,
+    rgba(245, 218, 156, 0.86) 50%,
+    rgba(245, 218, 156, 0.5) 70%,
+    transparent 100%
+  );
+  pointer-events: none;
 }
 
 .statusCopy {
+  position: relative;
+  z-index: 1;
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
 }
 
 .eyebrow {
-  color: rgba(191, 207, 244, 0.72);
-  font-size: 11px;
-  letter-spacing: 0.16em;
+  font-family: var(--font-display);
+  font-size: 9px;
+  font-weight: 500;
+  letter-spacing: 0.32em;
   text-transform: uppercase;
+  color: var(--gold-warm);
+  opacity: 0.94;
 }
 
 .titleRow {
   display: flex;
-  align-items: center;
-  gap: 10px;
+  align-items: baseline;
+  gap: 14px;
   min-width: 0;
 }
 
 .ticketId {
-  color: #dbe6ff;
+  font-family: var(--font-display);
   font-size: 18px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
+  font-weight: 600;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--gold-bright);
+  white-space: nowrap;
 }
 
 .title {
-  color: var(--text-primary);
-  font-size: 18px;
-  font-weight: 600;
+  font-family: var(--font-body);
+  font-style: italic;
+  font-size: 19px;
+  font-weight: 500;
+  color: var(--marble-ivory);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .statusBadge {
+  position: relative;
+  z-index: 1;
   display: inline-flex;
   align-items: center;
-  min-height: 28px;
-  padding: 0 12px;
-  border: 1px solid rgba(151, 173, 241, 0.3);
+  min-height: 30px;
+  padding: 0 16px;
+  border: 1px solid rgba(245, 218, 156, 0.6);
   border-radius: 999px;
-  background: rgba(36, 52, 104, 0.38);
-  color: #dfe8ff;
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
+  background:
+    linear-gradient(180deg, rgba(245, 218, 156, 0.18), rgba(168, 133, 74, 0.1));
+  color: var(--gold-bright);
+  font-family: var(--font-display);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.22em;
   text-transform: uppercase;
   white-space: nowrap;
+  box-shadow: inset 0 1px 0 rgba(255, 248, 220, 0.32);
 }
 
 .meta {
   display: flex;
   flex-wrap: wrap;
-  gap: 10px;
-  color: var(--text-secondary);
-  font-size: 12px;
+  gap: 8px;
+  font-family: var(--font-body);
+  font-style: italic;
+  font-size: 13px;
+  color: var(--marble-warm);
+  opacity: 0.86;
 }
 
 .metaChip {
-  padding: 4px 10px;
-  border: 1px solid rgba(115, 141, 220, 0.14);
+  padding: 4px 12px;
+  border: 1px solid rgba(168, 133, 74, 0.38);
   border-radius: 999px;
-  background: rgba(10, 15, 32, 0.56);
+  background: rgba(94, 71, 32, 0.16);
+  color: var(--marble-ivory);
+  font-family: var(--font-display);
+  font-style: normal;
+  font-size: 9px;
+  font-weight: 500;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
 }
 
 .contentPanel {
@@ -110,27 +176,59 @@
 .emptyState {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 18px;
 }
 
 .sectionCard {
-  padding: 18px;
-  border: 1px solid rgba(115, 141, 220, 0.14);
-  border-radius: 18px;
-  background: rgba(8, 12, 28, 0.56);
+  position: relative;
+  padding: 22px 24px;
+  border: 1px solid rgba(168, 133, 74, 0.3);
+  border-radius: var(--radius-sm);
+  background:
+    radial-gradient(circle at 90% 0%, rgba(245, 218, 156, 0.05), transparent 38%),
+    linear-gradient(180deg, rgba(20, 28, 60, 0.78), rgba(8, 13, 34, 0.86));
+  color: var(--marble-ivory);
+  box-shadow:
+    inset 0 1px 0 rgba(245, 218, 156, 0.08),
+    var(--shadow-panel);
+}
+
+.sectionCard::after {
+  content: "";
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  bottom: 0;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(168, 133, 74, 0.4) 14%,
+    rgba(245, 218, 156, 0.7) 50%,
+    rgba(168, 133, 74, 0.4) 86%,
+    transparent 100%
+  );
+  pointer-events: none;
 }
 
 .sectionTitle {
-  margin: 0 0 10px;
-  color: var(--text-primary);
+  margin: 0 0 12px;
+  font-family: var(--font-display);
+  font-weight: 600;
   font-size: 16px;
-  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--gold-bright);
+  text-shadow: 0 0 18px rgba(245, 218, 156, 0.18);
 }
 
 .sectionCopy {
   margin: 0;
-  color: var(--text-secondary);
-  line-height: 1.5;
+  font-family: var(--font-body);
+  font-style: italic;
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--marble-ivory);
 }
 
 .factsGrid {
@@ -142,16 +240,20 @@
 .factLabel {
   display: block;
   margin-bottom: 6px;
-  color: rgba(191, 207, 244, 0.72);
-  font-size: 11px;
-  letter-spacing: 0.12em;
+  font-family: var(--font-display);
+  font-size: 9px;
+  font-weight: 500;
+  letter-spacing: 0.26em;
   text-transform: uppercase;
+  color: var(--gold-warm);
 }
 
 .factValue {
-  color: var(--text-primary);
+  font-family: var(--font-body);
+  font-style: italic;
   font-size: 14px;
-  line-height: 1.45;
+  line-height: 1.5;
+  color: var(--marble-ivory);
 }
 
 .worktreeList {
@@ -161,9 +263,9 @@
 
 .worktreeCard {
   padding: 14px 16px;
-  border: 1px solid rgba(115, 141, 220, 0.14);
-  border-radius: 16px;
-  background: rgba(12, 18, 40, 0.62);
+  border: 1px solid rgba(168, 133, 74, 0.26);
+  border-radius: 4px;
+  background: rgba(8, 13, 34, 0.5);
 }
 
 .worktreeTitle {
@@ -172,13 +274,20 @@
   justify-content: space-between;
   gap: 12px;
   margin-bottom: 8px;
-  color: var(--text-primary);
-  font-weight: 700;
+  font-family: var(--font-display);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--marble-ivory);
 }
 
 .worktreeMeta {
   display: grid;
   gap: 4px;
-  color: var(--text-secondary);
+  font-family: var(--font-body);
+  font-style: italic;
   font-size: 13px;
+  color: var(--marble-warm);
+  opacity: 0.86;
 }

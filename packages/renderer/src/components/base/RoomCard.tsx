@@ -1,5 +1,5 @@
-import type { ReactNode } from "react";
-import type { Ref } from "react";
+import type { ReactNode, Ref } from "react";
+import { BevelleArch } from "../decor/Glyphs.js";
 import styles from "./RoomCard.module.css";
 
 type RoomCardStatus =
@@ -13,6 +13,7 @@ type RoomCardStatus =
   | "connected"
   | "disconnected";
 type RoomCardTone = "bridge" | "command" | "mcp" | "ops" | "agent";
+type RoomCardSize = "primary" | "secondary";
 
 interface RoomCardProps {
   active?: boolean;
@@ -27,6 +28,8 @@ interface RoomCardProps {
   roomId?: string;
   children?: ReactNode;
   className?: string;
+  silhouette?: ReactNode;
+  size?: RoomCardSize;
 }
 
 export function RoomCard({
@@ -42,25 +45,39 @@ export function RoomCard({
   roomId,
   children,
   className,
+  silhouette,
+  size = "secondary",
 }: RoomCardProps) {
   return (
     <button
       ref={roomRef}
       type="button"
       data-room-id={roomId}
-      className={[styles.card, styles[tone], active ? styles.active : "", className ?? ""].filter(Boolean).join(" ")}
+      className={[
+        styles.card,
+        styles[tone],
+        styles[`size-${size}`],
+        active ? styles.active : "",
+        className ?? "",
+      ]
+        .filter(Boolean)
+        .join(" ")}
       onClick={onClick}
     >
-      <div className={styles.topline}>
-        <span className={`${styles.statusDot} ${styles[status]}`} />
-        <span className={styles.caption}>{caption}</span>
-        {badge ? <span className={styles.badge}>{badge}</span> : null}
-      </div>
+      <BevelleArch className={styles.arch} width={size === "primary" ? 280 : 200} />
       <div className={styles.body}>
-        <div className={styles.title}>{title}</div>
+        <div className={styles.topline}>
+          <span className={`${styles.statusDot} ${styles[status]}`} />
+          <span className={styles.caption}>{caption}</span>
+          {badge ? <span className={styles.badge}>{badge}</span> : null}
+        </div>
+        <div className={styles.titleRow}>
+          {silhouette ? <span className={styles.silhouette}>{silhouette}</span> : null}
+          <span className={styles.title}>{title}</span>
+        </div>
         <div className={styles.metric}>{metric}</div>
+        {children ? <div className={styles.preview}>{children}</div> : null}
       </div>
-      {children ? <div className={styles.preview}>{children}</div> : null}
     </button>
   );
 }

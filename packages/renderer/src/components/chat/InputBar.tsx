@@ -134,13 +134,13 @@ export function InputBar({ stationId }: InputBarProps) {
       }}
     >
       {awaitingQuestion && !isStreaming && !isResetting ? (
-        <div className={styles.awaitingBanner}>Shinra is awaiting your answer.</div>
+        <div className={styles.awaitingBanner}>Shinra awaits your answer</div>
       ) : null}
       <textarea
         ref={inputRef}
         className={`${styles.input} ${awaitingQuestion && !isStreaming ? styles.awaitingInput : ""}`}
         rows={2}
-        placeholder="Transmit to Shinra…"
+        placeholder="Speak to the Fayth…"
         value={draft}
         disabled={isStreaming || isResetting}
         onChange={(event) => setDraft(event.target.value, resolvedStationId)}

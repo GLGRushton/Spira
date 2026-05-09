@@ -1,0 +1,54 @@
+.burst {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+  z-index: 4;
+}
+
+.spark {
+  position: absolute;
+  left: var(--burst-target-x, 50%);
+  top: var(--burst-target-y, 50%);
+  width: var(--spark-size, 5px);
+  height: var(--spark-size, 5px);
+  margin-left: calc(var(--spark-size, 5px) / -2);
+  margin-top: calc(var(--spark-size, 5px) / -2);
+  border-radius: 999px;
+  background: radial-gradient(
+    circle at 50% 50%,
+    rgba(255, 252, 232, 0.96) 0%,
+    var(--spark-tint, rgba(245, 218, 156, 0.78)) 38%,
+    transparent 72%
+  );
+  box-shadow:
+    0 0 12px var(--spark-tint, rgba(245, 218, 156, 0.42)),
+    0 0 24px var(--spark-tint, rgba(245, 218, 156, 0.22));
+  opacity: 0;
+  transform: translate(var(--spark-from-x), var(--spark-from-y)) scale(0.4);
+  animation: pyrefly-burst var(--spark-duration, 1.2s) cubic-bezier(0.22, 0.6, 0.32, 1) var(--spark-delay, 0s) forwards;
+  filter: blur(0.4px);
+}
+
+@keyframes pyrefly-burst {
+  0% {
+    transform: translate(var(--spark-from-x), var(--spark-from-y)) scale(0.4);
+    opacity: 0;
+  }
+  18% {
+    opacity: 0.95;
+  }
+  60% {
+    opacity: 1;
+  }
+  100% {
+    transform: translate(0, 0) scale(0.7);
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .burst {
+    display: none;
+  }
+}

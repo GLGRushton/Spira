@@ -12,31 +12,38 @@
 
 .trail {
   position: absolute;
-  height: 2px;
+  height: 1.6px;
   transform-origin: 0 50%;
-  opacity: 0.32;
+  opacity: 0.46;
+  background: linear-gradient(90deg, currentColor 0%, color-mix(in srgb, currentColor 26%, transparent) 100%);
+  filter: blur(0.4px);
 }
 
 .orb {
   position: absolute;
-  width: 16px;
-  height: 16px;
+  width: 14px;
+  height: 14px;
   border-radius: 999px;
-  box-shadow: 0 0 18px currentColor;
+  background: radial-gradient(
+    circle at 38% 32%,
+    rgba(255, 252, 232, 0.96) 0%,
+    currentColor 38%,
+    color-mix(in srgb, currentColor 42%, transparent) 78%
+  );
+  box-shadow:
+    0 0 14px currentColor,
+    0 0 28px color-mix(in srgb, currentColor 56%, transparent);
 }
 
 .pending,
 .running {
-  color: var(--accent-cyan);
-  background: radial-gradient(circle, rgba(0, 229, 255, 0.95), rgba(0, 229, 255, 0.18));
+  color: var(--crystal-mist);
 }
 
 .success {
-  color: var(--accent-teal);
-  background: radial-gradient(circle, rgba(0, 212, 170, 0.95), rgba(0, 212, 170, 0.2));
+  color: var(--gold-bright);
 }
 
 .error {
-  color: #ef4444;
-  background: radial-gradient(circle, rgba(239, 68, 68, 0.95), rgba(239, 68, 68, 0.18));
+  color: var(--sin-blood);
 }
