@@ -48,8 +48,11 @@ const SQL_SERVER_RUNTIME_CONFIG_KEYS: RuntimeConfigKey[] = [
   "sqlServerTimeoutMs",
 ];
 const SQL_SERVER_RUNTIME_CONFIG_KEY_SET = new Set<RuntimeConfigKey>(SQL_SERVER_RUNTIME_CONFIG_KEYS);
-const MISSION_GIT_RUNTIME_CONFIG_KEYS: RuntimeConfigKey[] = ["missionGitHubToken"];
-const MISSION_GIT_RUNTIME_CONFIG_KEY_SET = new Set<RuntimeConfigKey>(MISSION_GIT_RUNTIME_CONFIG_KEYS);
+const MISSION_GIT_RUNTIME_CONFIG_KEYS: RuntimeConfigKey[] = ["missionGitHubToken", "missionGitSshSigningKey"];
+const MISSION_GIT_RUNTIME_CONFIG_KEY_SET = new Set<RuntimeConfigKey>([
+  ...MISSION_GIT_RUNTIME_CONFIG_KEYS,
+  "missionGitSshSigningEnabled",
+]);
 const OTHER_RUNTIME_CONFIG_KEYS = RUNTIME_CONFIG_KEYS.filter(
   (key) =>
     !AI_PROVIDER_RUNTIME_CONFIG_KEY_SET.has(key) &&
@@ -508,6 +511,63 @@ export function SettingsPanel() {
     </section>
   );
 
+  const renderMissionGitTab = () => {
+    const sshKeyEntry = runtimeConfig?.missionGitSshSigningKey ?? null;
+    const sshEnabledEntry = runtimeConfig?.missionGitSshSigningEnabled ?? null;
+    const keyConfigured = sshKeyEntry?.configured === true;
+    const signingOn = keyConfigured && sshEnabledEntry?.currentValue === "true";
+    const toggleBusy = activeRuntimeConfigKey === "missionGitSshSigningEnabled";
+
+    const handleSshSigningToggle = () => {
+      if (!keyConfigured || toggleBusy) {
+        return;
+      }
+      void updateRuntimeConfig("missionGitSshSigningEnabled", signingOn ? "false" : "true");
+    };
+
+    return (
+      <section className={styles.section}>
+        <div className={styles.sectionHeader}>
+          <div>
+            <h2>Mission git credentials</h2>
+            <p>
+              The PAT is dedicated to mission submodule cloning, commits, publish, push, and GitHub author lookup. SSH
+              signing applies <code>gpg.format=ssh</code> + <code>user.signingKey</code> + <code>commit.gpgsign=true</code>{" "}
+              to mission commits when enabled.
+            </p>
+          </div>
+        </div>
+        {runtimeConfigNotice ? <div className={styles.notice}>{runtimeConfigNotice}</div> : null}
+        {runtimeConfig ? (
+          <>
+            <div className={styles.row}>
+              <div>
+                <span className={styles.label}>SSH signing</span>
+                <span className={styles.caption}>
+                  {keyConfigured
+                    ? "Sign mission commits with the SSH key configured below."
+                    : "Set an SSH signing key below to enable this toggle."}
+                </span>
+              </div>
+              <button
+                type="button"
+                className={`${styles.toggle} ${signingOn ? styles.toggleActive : ""}`}
+                onClick={handleSshSigningToggle}
+                disabled={!keyConfigured || toggleBusy}
+                title={keyConfigured ? undefined : "Configure an SSH signing key first."}
+              >
+                {signingOn ? "Signing" : "Off"}
+              </button>
+            </div>
+            <div className={styles.keyGrid}>{renderRuntimeConfigCards(MISSION_GIT_RUNTIME_CONFIG_KEYS)}</div>
+          </>
+        ) : (
+          <div className={styles.empty}>Loading secure runtime configuration…</div>
+        )}
+      </section>
+    );
+  };
+
   const renderRuntimeConfigSection = (title: string, description: string, keys: RuntimeConfigKey[]) => (
     <section className={styles.section}>
       <div className={styles.sectionHeader}>
@@ -552,11 +612,7 @@ export function SettingsPanel() {
           SQL_SERVER_RUNTIME_CONFIG_KEYS,
         );
       case "mission-git":
-        return renderRuntimeConfigSection(
-          "Mission git credentials",
-          "This PAT is dedicated to mission submodule cloning, commits, publish, push, and GitHub author lookup.",
-          MISSION_GIT_RUNTIME_CONFIG_KEYS,
-        );
+        return renderMissionGitTab();
       case "proof-rules":
         return <ProofRulesEditor />;
       case "repo-profiles":

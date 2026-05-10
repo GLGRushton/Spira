@@ -185,7 +185,9 @@ const buildSessionSystemMessage = (options: {
         content: [
           "Prefer short, clear answers. Use the name Shinra naturally when self-identifying, but keep the focus on solving the user's task.",
           BACKGROUND_AGENT_MODEL_WARNING,
-          HOST_EDITING_TOOL_INSTRUCTIONS,
+          // claude-agent uses Claude Code's preset built-ins (Read/Edit/Write/Bash/…),
+          // so the apply_patch / write_file guidance does not apply.
+          options.providerId === "claude-agent" ? "" : HOST_EDITING_TOOL_INSTRUCTIONS,
           upgradeToolInstructions,
           sessionEscalationToolInstructions,
           toolAwarenessInstructions,

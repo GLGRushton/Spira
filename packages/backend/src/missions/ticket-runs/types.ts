@@ -150,6 +150,7 @@ export interface TicketRunServiceOptions {
   validationProfileAutoPromotionThreshold?: number;
   resolveMissionGitIdentity?: () => Promise<MissionGitIdentity>;
   getMissionGitToken?: () => string | null;
+  getMissionSshSigning?: () => { enabled: boolean; key: string | null };
   /**
    * Test seam — overrides for the per-step startup timeouts. Production code uses
    * STARTUP_WORKTREE_ADD_TIMEOUT_MS / STARTUP_SUBMODULE_HYDRATE_TIMEOUT_MS; tests pass small

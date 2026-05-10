@@ -14,6 +14,8 @@ export const RUNTIME_CONFIG_KEYS = [
   "openAiEscalationModel",
   "claudeAgentModel",
   "missionGitHubToken",
+  "missionGitSshSigningKey",
+  "missionGitSshSigningEnabled",
   "elevenLabsApiKey",
   "picovoiceAccessKey",
   "nexusModsApiKey",

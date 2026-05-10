@@ -154,12 +154,23 @@ const toSdkPermissionResult = (result: ProviderPermissionResult, args: Record<st
   }
 };
 
+const SPIRA_MCP_TOOL_PREFIX = `mcp__${SPIRA_MCP_SERVER_NAME}__`;
+
 const buildCanUseTool =
   (tools: readonly ProviderToolDefinition[], context: TurnContext): CanUseTool =>
   async (toolName, input) => {
+    const args = (input ?? {}) as Record<string, unknown>;
+
+    // Tools without the Spira MCP prefix are Claude Code's preset built-ins
+    // (Read, Edit, Bash, Glob, Grep, Write, TodoWrite, etc.). The user opted
+    // into the preset by selecting this provider, so auto-allow them — they
+    // do not flow through Spira's permission registry.
+    if (!toolName.startsWith(SPIRA_MCP_TOOL_PREFIX)) {
+      return { behavior: "allow", updatedInput: args };
+    }
+
     const baseName = stripMcpPrefix(toolName);
     const definition = tools.find((entry) => entry.name === baseName);
-    const args = (input ?? {}) as Record<string, unknown>;
 
     if (definition?.skipPermission) {
       return { behavior: "allow", updatedInput: args };
@@ -250,8 +261,17 @@ class ClaudeAgentProviderSession implements ProviderSession {
       const sdkOptions: Options = {
         cwd: this.config.workingDirectory,
         ...(this.currentModel ? { model: this.currentModel } : {}),
-        systemPrompt: flattenSystemMessage(this.config.systemMessage),
-        tools: [],
+        // Append our Shinra/mission instructions to Claude Code's preset system
+        // prompt so we keep its tool-use, brevity, and parallel-call tuning.
+        systemPrompt: {
+          type: "preset",
+          preset: "claude_code",
+          append: flattenSystemMessage(this.config.systemMessage),
+        },
+        // Enable Claude Code's built-in tools (Read, Edit, Bash, Glob, Grep,
+        // Write, TodoWrite, …). The model is heavily tuned for these names,
+        // which is the biggest perf win over our MCP-wrapped equivalents.
+        tools: { type: "preset", preset: "claude_code" },
         mcpServers: {
           [SPIRA_MCP_SERVER_NAME]: buildSpiraSdkMcpServer(SPIRA_MCP_SERVER_NAME, this.config.tools),
         },

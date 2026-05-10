@@ -31,7 +31,13 @@ import {
 
 const logger = createLogger("capability-tools");
 
-const COPILOT_RESERVED_HOST_TOOL_NAMES = new Set([
+// Spira host tools whose function is already covered by the provider's own
+// native toolset. Copilot has dedicated GPT-5 file/shell tools, and the
+// claude-agent provider runs against Claude Code's preset built-ins
+// (Read/Edit/Bash/Glob/Grep/Write). Surfacing the Spira-named duplicates
+// alongside makes the model pause to disambiguate — measurably slower with
+// no upside — so we hide them for these providers.
+const NATIVE_HOST_TOOL_OVERLAP_NAMES = new Set([
   "view",
   "glob",
   "rg",
@@ -71,8 +77,8 @@ const getHostCapabilitySource = (toolName: string): RuntimeCapabilitySource => {
 };
 
 const getSuppressedProviders = (source: RuntimeCapabilitySource, toolName: string): ProviderId[] => {
-  if ((source === "host-tool" || source === "host-resource") && COPILOT_RESERVED_HOST_TOOL_NAMES.has(toolName)) {
-    return ["copilot"];
+  if ((source === "host-tool" || source === "host-resource") && NATIVE_HOST_TOOL_OVERLAP_NAMES.has(toolName)) {
+    return ["copilot", "claude-agent"];
   }
   return [];
 };

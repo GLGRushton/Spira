@@ -3091,6 +3091,11 @@ const bootstrap = async () => {
     },
     resolveMissionGitIdentity: async () => fetchGitHubIdentity(env.MISSION_GITHUB_TOKEN?.trim() ?? "", logger),
     getMissionGitToken: () => env.MISSION_GITHUB_TOKEN?.trim() ?? null,
+    getMissionSshSigning: () => {
+      const key = env.MISSION_GIT_SSH_SIGNING_KEY?.trim();
+      const enabled = env.MISSION_GIT_SSH_SIGNING_ENABLED?.trim().toLowerCase() === "true";
+      return { enabled: enabled && Boolean(key), key: key ? key : null };
+    },
   });
   missionServiceRegistry = new MissionServiceRegistry({
     ticketRunService,

@@ -81,6 +81,8 @@ export const EnvSchema = z.object({
   OPENAI_ESCALATION_MODEL: BlankStringAsUndefinedSchema.pipe(z.string().optional()),
   CLAUDE_AGENT_MODEL: BlankStringAsUndefinedSchema.pipe(z.string().optional()),
   MISSION_GITHUB_TOKEN: z.string().optional(),
+  MISSION_GIT_SSH_SIGNING_KEY: z.string().optional(),
+  MISSION_GIT_SSH_SIGNING_ENABLED: z.string().optional(),
   YOUTRACK_BASE_URL: z.string().optional(),
   YOUTRACK_TOKEN: z.string().optional(),
   SQL_SERVER_SERVER: z.string().optional(),

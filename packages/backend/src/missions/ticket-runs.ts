@@ -1713,8 +1713,7 @@ export class TicketRunService {
           `user.name=${identity.name}`,
           "-c",
           `user.email=${identity.email}`,
-          "-c",
-          "commit.gpgsign=false",
+          ...this.buildCommitSigningArgs(),
           "commit",
           `--author=${identity.name} <${identity.email}>`,
           "--cleanup=strip",
@@ -1785,8 +1784,7 @@ export class TicketRunService {
           `user.name=${identity.name}`,
           "-c",
           `user.email=${identity.email}`,
-          "-c",
-          "commit.gpgsign=false",
+          ...this.buildCommitSigningArgs(),
           "commit",
           `--author=${identity.name} <${identity.email}>`,
           "--cleanup=strip",
@@ -3171,6 +3169,21 @@ export class TicketRunService {
       throw new ConfigError("Mission git identity resolution is unavailable.");
     }
     return this.options.resolveMissionGitIdentity();
+  }
+
+  private buildCommitSigningArgs(): string[] {
+    const signing = this.options.getMissionSshSigning?.();
+    if (!signing?.enabled || !signing.key) {
+      return ["-c", "commit.gpgsign=false"];
+    }
+    return [
+      "-c",
+      "gpg.format=ssh",
+      "-c",
+      `user.signingKey=${signing.key}`,
+      "-c",
+      "commit.gpgsign=true",
+    ];
   }
 
   private getOptionalMissionGitToken(): string | null {

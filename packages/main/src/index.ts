@@ -307,6 +307,20 @@ const RUNTIME_CONFIG_METADATA: Record<
       "Used for mission submodule hydration, commits, publish, push, and deriving the GitHub author identity.",
     secret: true,
   },
+  missionGitSshSigningKey: {
+    envKey: "MISSION_GIT_SSH_SIGNING_KEY",
+    label: "Mission SSH signing key",
+    description:
+      "Path to the SSH public key (or the literal key string) used to sign mission commits when SSH signing is enabled.",
+    secret: false,
+  },
+  missionGitSshSigningEnabled: {
+    envKey: "MISSION_GIT_SSH_SIGNING_ENABLED",
+    label: "Mission SSH signing enabled",
+    description:
+      "When true and a signing key is set, mission commits are signed via gpg.format=ssh + user.signingKey + commit.gpgsign.",
+    secret: false,
+  },
   elevenLabsApiKey: {
     envKey: "ELEVENLABS_API_KEY",
     label: "ElevenLabs API key",
