@@ -240,6 +240,16 @@ export type {
   MissionEventType,
 } from "./mission-events.js";
 export { isMissionEventType, MISSION_EVENT_TYPES, validateMissionEventType } from "./mission-events.js";
+export type {
+  WorkSessionEvent,
+  WorkSessionEventMetadataMap,
+  WorkSessionEventType,
+} from "./work-session-events.js";
+export {
+  isWorkSessionEventType,
+  WORK_SESSION_EVENT_TYPES,
+  validateWorkSessionEventType,
+} from "./work-session-events.js";
 export type { ITransport } from "./transport.js";
 export type { VoicePipelineEvent, VoicePipelineState, TranscriptionResult, OrbVisualParams } from "./voice-types.js";
 export type { OcrLine, OcrRectangle, OcrResult, OcrWord } from "./windows-ocr.js";

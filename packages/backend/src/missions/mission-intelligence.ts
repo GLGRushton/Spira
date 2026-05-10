@@ -5,6 +5,7 @@ import type {
   RepoIntelligenceRecord,
   UpsertProofRuleInput,
   UpsertRepoIntelligenceInput,
+  UpsertRepoProfileInput,
   UpsertValidationProfileInput,
   ValidationProfileRecord,
 } from "@spira/memory-db";
@@ -449,6 +450,34 @@ export const buildLearnedRepoIntelligenceCandidates = (
     };
   });
 };
+
+/**
+ * Phase 7.2 — builtin Spira repo profile. Adopting Spira's own repo into the same
+ * profile model as third-party target repos means the renderer's repo-guidance section
+ * can prepend Spira-specific defaults (registry, required SDKs, UI test globs) on
+ * Spira-side WorkSessions. The seed only fires when the projectKey is missing or
+ * already a builtin row, so user edits via the admin pane are preserved.
+ */
+export const BUILTIN_REPO_PROFILES: Array<Omit<UpsertRepoProfileInput, "source">> = [
+  {
+    projectKey: "Spira",
+    displayName: "Spira workspace",
+    description:
+      "Spira's own monorepo. The mission/work-session frameworks live in packages/backend; the renderer surfaces are in packages/renderer.",
+    defaultBranch: "main",
+    defaultBuildWorkingDirectory: ".",
+    defaultRegistry: "https://registry.npmjs.org/",
+    registryHints: [],
+    requiredEnvVars: [],
+    requiredSdks: ["node 22+", "pnpm 9+"],
+    userFacingCopyGlobs: [
+      "packages/renderer/src/**/*.tsx",
+      "packages/renderer/src/**/*.module.css",
+    ],
+    uiTestGlobs: ["packages/renderer/src/**/*.test.tsx"],
+    notes: "Repo profile seeded by Phase 7.2; edit through Settings → Repo profiles to override.",
+  },
+];
 
 export const BUILTIN_REPO_INTELLIGENCE: Array<Omit<UpsertRepoIntelligenceInput, "source">> = [
   {

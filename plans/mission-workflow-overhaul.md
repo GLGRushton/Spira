@@ -2,7 +2,7 @@
 
 **Parent report:** [mission-workflow-review-2026-05-09.md](../reports/mission-workflow-review-2026-05-09.md).
 **Sister plans:** [model-escalation-architecture.md](./model-escalation-architecture.md) (provider-side), [permission-lifecycle-resilience.md](./permission-lifecycle-resilience.md) (already shipped).
-**Status:** drafted 2026-05-09. **Phases 0–5 shipped 2026-05-09; Phase 6 shipped 2026-05-10 — see [Progress log](#progress-log) at the end of this document.**
+**Status:** drafted 2026-05-09. **Phases 0–5 shipped 2026-05-09; Phases 6 + 7 shipped 2026-05-10 — see [Progress log](#progress-log) at the end of this document. Cross-phase follow-ups consolidated into [mission-workflow-followups.md](./mission-workflow-followups.md).**
 
 ## Goal
 
@@ -401,7 +401,7 @@ For each candidate, compute a single confidence score from these signals:
 
 ---
 
-## Phase 7 — Spira-side application (the "this helps the primary station too" phase)
+## Phase 7 — Spira-side application (the "this helps the primary station too" phase) ✅ shipped 2026-05-10
 
 **Goal:** the primitives built in Phases 0-6 drive the primary station's WorkSession upgrade flow when Spira is upgrading itself.
 
@@ -743,3 +743,54 @@ Skipped (judgment calls):
 
 - **Phase 7 — Spira-side application** is the last phase: map WorkSession events into the same typed taxonomy, add a builtin Spira `repo_profile`, run preflight before WorkSession's `validate` phase, and generate WorkSession post-mortems on close.
 - The Phase 5 follow-ups (weekly-digest cron, "trust signal" labels in the prompt, rollback-last-N action, validation-profile auto-promotion) remain queued.
+
+---
+
+### 2026-05-10 — Phase 7 shipped
+
+#### Phase 7 deliverables
+
+- **§7.1 WorkSession telemetry surface** — New typed taxonomy in [packages/shared/src/work-session-events.ts](../packages/shared/src/work-session-events.ts) (8 event types: started, phase-entered, phase-completed, validation-recorded, stalled, preflight-started, preflight-finished, closed). New v32 migration adds `work_session_events` (mirrors mission_events shape but keyed on sessionId+stationId, no FK to ticket_runs). New [memory-db repo](../packages/memory-db/src/database/work-session-events.ts) with batched insert + cursor-paged read + station-scoped read. Diff helper [work-session-telemetry.ts](../packages/backend/src/runtime/session-manager/work-session-telemetry.ts) walks two consecutive snapshots and emits typed events for transitions; wired into `persistWorkSession` so every WorkSession state change writes telemetry without touching the existing helpers. Identity short-circuit avoids no-op writes from update transforms that return the same snapshot.
+- **§7.2 Spira repo profile + intelligence seed** — New `BUILTIN_REPO_PROFILES` in [mission-intelligence.ts](../packages/backend/src/missions/mission-intelligence.ts) for the Spira monorepo (display name, default branch `main`, registry, required SDKs `node 22+ / pnpm 9+`, UI test globs). New [seedBuiltinRepoProfiles](../packages/memory-db/src/database/intelligence.ts) helper with conflict-resolution policy: only seeds when the row is missing or already a builtin (so operator edits via the admin pane are preserved). Existing `seedBuiltinRepoIntelligence` and `seedBuiltinValidationProfiles` continue to cover Spira-side briefings/pitfalls and validation commands; nothing new gets written into the Spira repo itself.
+- **§7.3 WorkSession preflight** — New [work-session-preflight.ts](../packages/backend/src/runtime/session-manager/work-session-preflight.ts) runs cheap parallel checks before the WorkSession's `validate` phase: node binary on PATH, node_modules present at the workspace root, optional dev-server port-in-use probe via node:net. Each check returns a typed blocker with a concrete remediation; inconclusive port probes surface as warnings rather than swallowing as "free." Hooks injectable for tests; no spawn happens in the test path.
+- **§7.4 WorkSession auto post-mortem** — New [work-session-postmortem.ts](../packages/backend/src/runtime/session-manager/work-session-postmortem.ts) generates a markdown stub (header, task, phase timing table, validations, friction signals, files changed, observations placeholder) and writes it atomically to `<workspaceRoot>/reports/spira-worksession-{date}-{sessionId}-{ms}.md`. Filename includes a millisecond suffix so a same-day reopen + close cycle doesn't silently EEXIST. New [work-session-outcome.ts](../packages/backend/src/runtime/session-manager/work-session-outcome.ts) classifier mirrors the 4-way mission outcome shape (`clean-pass | pass-with-friction | fail-with-recovery | fail-final`); `everStalled` is supplied from a `worksession-stalled` event lookup against the events table since the snapshot's own `stalledAt` is sticky-cleared on validation pass. Wired into `clearWorkSessionState` via an extracted `emitClosingWorkSessionTelemetry` helper.
+- **§7.5 tests** — `work-session-telemetry.test.ts` (6 tests): started, phase-completed + entered, validation-recorded for fresh entries, newly-set stall, re-stall after clear, no-op for unchanged. `work-session-outcome.test.ts` (6 tests): clean-pass, friction kinds, fail-with-recovery via `everStalled`, fail-final variants. `work-session-postmortem.test.ts` (3 tests): full-stub render, fail-final friction note, deterministic ms-suffixed filename. `work-session-preflight.test.ts` (7 tests): all-pass, missing node, missing node_modules, port-in-use blocker, port-probe-inconclusive warning, skip when no workspace, summary string contents. Total Phase 7 tests: 22 new. Suite total: ~829 passing (606 backend + 30 memory-db + 75 renderer + 39 main + 40 shared + 39 mcp).
+
+#### Self-review fixes
+
+After the three review agents (reuse, quality, efficiency) the following landed:
+
+- **Fixed the broken `fail-with-recovery` proxy** — `stalledAt` is sticky-cleared on validation success so the snapshot can't tell us "ever stalled this run." Added an `everStalled` parameter on the classifier; the close path computes it from `listWorkSessionEvents(...)` looking for any `worksession-stalled` event. (Quality high.)
+- **Wrapped `writeWorkSessionTelemetry` in a transaction** + new `appendWorkSessionEvents` batch insert that drops the post-insert SELECT-by-id. Multi-event diffs at phase boundaries collapse from N×(INSERT+SELECT+fsync) to one transaction. (Efficiency high #2.)
+- **Short-circuited `persistWorkSession` on snapshot identity** — common no-op transforms (e.g. stall-and-pending returning the same snapshot) skip the diff + storage write entirely. (Efficiency high #1.)
+- **Re-stall detection compares on `stalledAt` not `stalledReason`** — same-reason re-stalls now emit a fresh event. (Quality medium.)
+- **Renamed `completed` to a derived flag** off `outcome.kind === clean-pass | pass-with-friction` so the close event metadata matches what's actually being measured (`reachedReadyForReview` semantically). (Quality medium #3.)
+- **Filename includes ms suffix** so same-day reopen + close cycles don't silently EEXIST. (Quality high #3.)
+- **Treat inconclusive port probes as warnings** instead of "free" — bound timeout returns null and surfaces as a warning. (Quality medium.)
+- **Hoisted `node:net` to a top-level static import** in `work-session-preflight.ts`. (Quality minor.)
+- **Reused `formatDurationMs` + `formatTimestamp` + `escapePipes` + `sanitizeFilenameFragment`** from `post-mortem-generator.ts` (now exported) instead of redefining in the WorkSession post-mortem. (Reuse #1.)
+- **Used `validateWorkSessionEventType` from shared** in the memory-db helper instead of hand-rolling the check. (Quality minor.)
+- **Built a `Map<phase, entry>` for previous-status lookup** in `diffWorkSessionForTelemetry` — bounded if `phaseHistory` ever grows beyond the current 6-entry shape. (Efficiency low.)
+- **Dropped the dead `normalizeTitle` re-export** from `work-session-events.ts`. (Quality minor.)
+- **Extracted `emitClosingWorkSessionTelemetry`** so `clearWorkSessionState` reads as a pure state-reset again. (Quality medium.)
+
+Skipped (judgment calls — recorded in the follow-ups plan):
+- **Extract `binaryAvailable` shared helper** to dedupe 4 spawn-with-timeout sites — real win but bigger refactor across `proof-preflight.ts`, `proof-runner.ts`, `dependency-warmer.ts`, `work-session-preflight.ts`. Captured in follow-ups.
+- **Extract a shared `OutcomeKind` + `outcomeLearningWeight`** so mission and WorkSession classifiers share vocabulary. Captured.
+- **Atomic-write postmortem helper** to dedupe with `ticket-runs.ts:writePostmortemStub`. Captured.
+- **Generic event-log repository factory** — premature DRY at two implementations.
+- **Phase entry diff invariants** (duplicate-phase guards) — `phaseHistory` is mutated in place in current helpers; if that contract ever changes the invariant test catches it.
+- **`projectKey: "Spira"` casing review** — repository convention for "self-targeting" hasn't been established yet. Flagged in follow-ups for proper resolution.
+- **Comment cleanup** ("Phase X.Y —" prefixes across the new files) — defer to a single sweep across the whole repo as part of the follow-ups doc.
+
+#### Out-of-scope follow-ups noted by reviewers
+
+All consolidated into [mission-workflow-followups.md](./mission-workflow-followups.md):
+- Shared `binaryAvailable` / `spawnWithTimeout` util (4 callers)
+- Shared `OutcomeKind` + `outcomeLearningWeight`
+- Shared `atomicWritePostmortem`
+- `work_session_events` retention policy (matches the existing `mission_events` situation)
+- Generic event-log repo factory once a third example appears
+- Resolve `projectKey: "Spira"` casing convention
+- Five duration formatters across the workspace (pre-existing)
+- Pre-existing typecheck errors in `session-manager.permission-lifecycle.suite.ts`

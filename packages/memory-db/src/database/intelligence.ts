@@ -828,6 +828,30 @@ export const createIntelligencePersistence = (context: DatabasePersistenceContex
     return result.changes > 0;
   };
 
+  /**
+   * Phase 7.2 — bulk-upsert builtin repo profiles. Skips overwriting an existing user
+   * profile for the same projectKey: the seed only fires when the row is missing or its
+   * source is already "builtin" (so a re-seed across upgrades doesn't trample operator edits).
+   */
+  const seedBuiltinRepoProfiles = (
+    profiles: readonly Omit<UpsertRepoProfileInput, "source">[],
+  ): RepoProfileRecord[] => {
+    assertDatabaseWritable(context);
+    const seed = context.db.transaction((items: readonly Omit<UpsertRepoProfileInput, "source">[]) => {
+      const results: RepoProfileRecord[] = [];
+      for (const item of items) {
+        const existing = getRepoProfile(item.projectKey);
+        if (existing && existing.source !== "builtin") {
+          results.push(existing);
+          continue;
+        }
+        results.push(upsertRepoProfile({ ...item, source: "builtin" }));
+      }
+      return results;
+    });
+    return seed(profiles);
+  };
+
   return {
     listRepoIntelligence,
     getRepoIntelligenceEntry,
@@ -851,5 +875,6 @@ export const createIntelligencePersistence = (context: DatabasePersistenceContex
     listRepoProfiles,
     upsertRepoProfile,
     deleteRepoProfile,
+    seedBuiltinRepoProfiles,
   };
 };

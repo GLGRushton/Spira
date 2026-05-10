@@ -229,9 +229,12 @@ const renderArtifacts = (artifacts: readonly TicketRunProofArtifact[]) => {
   );
 };
 
+/** Stable empty-array sentinel — see NowPlayingStrip.tsx for the loop the fresh `[]` triggered. */
+const EMPTY_LIVE_EVENTS: readonly TicketRunMissionEventSummary[] = [];
+
 export function MissionDetailsRoom({ run, controller }: MissionDetailsRoomProps) {
   const setMissionRoom = useNavigationStore((store) => store.setMissionRoom);
-  const liveEvents = useMissionRunsStore((store) => store.liveEventsByRun[run.runId] ?? []);
+  const liveEvents = useMissionRunsStore((store) => store.liveEventsByRun[run.runId] ?? EMPTY_LIVE_EVENTS);
   const [expandedCompletedPhases, setExpandedCompletedPhases] = useState<Set<TicketRunMissionPhase>>(() => new Set());
   const [showWorktrees, setShowWorktrees] = useState(false);
 

@@ -1053,4 +1053,24 @@ export const MIGRATIONS: MigrationDefinition[] = [
       "CREATE INDEX IF NOT EXISTS idx_mission_events_run_id_v31 ON mission_events(run_id, id DESC)",
     ],
   },
+  {
+    // v32 — Phase 7.1 WorkSession event log. Mirrors mission_events shape (id auto-PK,
+    // station_id grouping, stage + event_type discriminators, JSON metadata, occurredAt).
+    // Distinct table to avoid the mission_events FK to ticket_runs; WorkSessions live
+    // outside the ticket-runs lifecycle and have their own (sessionId, stationId) scope.
+    version: 32,
+    statements: [
+      `CREATE TABLE work_session_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT NOT NULL,
+        station_id TEXT NOT NULL,
+        phase TEXT NOT NULL,
+        event_type TEXT NOT NULL,
+        metadata_json TEXT,
+        occurred_at INTEGER NOT NULL
+      )`,
+      "CREATE INDEX idx_work_session_events_session_v32 ON work_session_events(session_id, id DESC)",
+      "CREATE INDEX idx_work_session_events_station_v32 ON work_session_events(station_id, occurred_at DESC)",
+    ],
+  },
 ];

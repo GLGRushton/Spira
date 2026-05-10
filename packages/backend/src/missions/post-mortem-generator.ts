@@ -24,7 +24,7 @@ const PHASE_ORDER: TicketRunMissionPhase[] = [
   "summarize",
 ];
 
-const formatTimestamp = (ms: number | null | undefined): string => {
+export const formatTimestamp = (ms: number | null | undefined): string => {
   if (typeof ms !== "number" || !Number.isFinite(ms)) {
     return "—";
   }
@@ -97,7 +97,15 @@ const computePhaseTimings = (
   return rows;
 };
 
-const escapePipes = (value: string): string => value.replace(/\|/g, "\\|");
+export const escapePipes = (value: string): string => value.replace(/\|/g, "\\|");
+
+/** Sanitize an arbitrary string into a filename-safe slug. Used by both mission and WorkSession post-mortems. */
+export const sanitizeFilenameFragment = (value: string, maxLength = 48): string =>
+  value
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, maxLength);
 
 const renderHeader = (run: TicketRunSummary, runStart: number, runEnd: number): string => {
   const elapsed = Math.max(0, runEnd - runStart);

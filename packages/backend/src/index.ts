@@ -28,6 +28,7 @@ import { fetchGitHubIdentity } from "./missions/github-identity.js";
 import {
   BUILTIN_PROOF_RULES,
   BUILTIN_REPO_INTELLIGENCE,
+  BUILTIN_REPO_PROFILES,
   BUILTIN_VALIDATION_PROFILES,
 } from "./missions/mission-intelligence.js";
 import { MissionLifecycleService } from "./missions/mission-lifecycle.js";
@@ -2657,6 +2658,7 @@ const bootstrap = async () => {
   memoryDb?.seedBuiltinRepoIntelligence(BUILTIN_REPO_INTELLIGENCE);
   memoryDb?.seedBuiltinValidationProfiles(BUILTIN_VALIDATION_PROFILES);
   memoryDb?.seedBuiltinProofRules(BUILTIN_PROOF_RULES);
+  memoryDb?.seedBuiltinRepoProfiles(BUILTIN_REPO_PROFILES);
   if (memoryDb) {
     proofRulesService = new ProofRulesService(memoryDb);
     repoProfilesService = new RepoProfilesService(memoryDb);

@@ -146,6 +146,12 @@ import {
   startWorkSessionValidation as startWorkSessionValidationHelper,
 } from "./session-manager/work-session-helpers.js";
 import {
+  writeWorkSessionClosed,
+  writeWorkSessionTelemetry,
+} from "./session-manager/work-session-telemetry.js";
+import { classifyWorkSessionOutcome } from "./session-manager/work-session-outcome.js";
+import { writeWorkSessionPostmortem } from "./session-manager/work-session-postmortem.js";
+import {
   buildWorkflowReviewState,
   buildWorkflowStateForSessionEscalation,
   clearOpenWorkflowPhaseEntryBlocking,
@@ -458,7 +464,60 @@ export class StationSessionManager {
     }
   }
 
+  /**
+   * Emit the close event + the post-mortem stub for a WorkSession that's about to be
+   * cleared. Best-effort: errors are logged but never thrown. The "everStalled" signal
+   * is sourced from the work_session_events table since the snapshot's `stalledAt` is
+   * sticky-cleared on validation success.
+   */
+  private emitClosingWorkSessionTelemetry(closingSnapshot: WorkSessionSnapshot): void {
+    try {
+      const everStalled = this.workSessionEverStalled(closingSnapshot.sessionId);
+      const outcome = classifyWorkSessionOutcome(closingSnapshot, { everStalled });
+      const reachedReadyForReview =
+        outcome.kind === "clean-pass" || outcome.kind === "pass-with-friction";
+      writeWorkSessionClosed(
+        this.memoryDb,
+        closingSnapshot,
+        { completed: reachedReadyForReview, outcome: outcome.kind, reason: outcome.reason },
+        (error) =>
+          logger.warn(
+            { err: error, sessionId: closingSnapshot.sessionId },
+            "Failed to write WorkSession close telemetry; continuing",
+          ),
+      );
+      void writeWorkSessionPostmortem(this.memoryDb, closingSnapshot, outcome).catch((error) =>
+        logger.warn(
+          { err: error, sessionId: closingSnapshot.sessionId },
+          "Failed to write WorkSession post-mortem; continuing",
+        ),
+      );
+    } catch (error) {
+      logger.warn(
+        { err: error, sessionId: closingSnapshot.sessionId },
+        "Unexpected error during WorkSession close; continuing",
+      );
+    }
+  }
+
+  private workSessionEverStalled(sessionId: string): boolean {
+    if (!this.memoryDb) return false;
+    try {
+      // Page through enough events to find any worksession-stalled marker. 500 covers
+      // the practical maximum for a single session; if more exist the operator has bigger
+      // problems than the missed signal.
+      const events = this.memoryDb.listWorkSessionEvents(sessionId, { limit: 500 });
+      return events.some((event) => event.eventType === "worksession-stalled");
+    } catch {
+      return false;
+    }
+  }
+
   private clearWorkSessionState(): void {
+    const closingSnapshot = this.activeWorkSession;
+    if (closingSnapshot) {
+      this.emitClosingWorkSessionTelemetry(closingSnapshot);
+    }
     const now = Date.now();
     const activeWorkflowPhase = this.workflowState.phase;
     const remainingPhaseHistory = getNonWorkSessionWorkflowPhaseHistory(this.workflowState.phaseHistory);
@@ -518,8 +577,16 @@ export class StationSessionManager {
   }
 
   private persistWorkSession(snapshot: WorkSessionSnapshot): void {
+    const previous = this.activeWorkSession;
+    if (previous === snapshot) return; // identity short-circuit — common no-op transform
     this.activeWorkSession = snapshot;
     this.workSessionStorage.save(snapshot);
+    writeWorkSessionTelemetry(this.memoryDb, previous, snapshot, (error) =>
+      logger.warn(
+        { err: error, sessionId: snapshot.sessionId, stationId: snapshot.stationId },
+        "Failed to write WorkSession telemetry; continuing",
+      ),
+    );
   }
 
   private applyWorkSessionApprovalOutcome(status: "approved" | "denied" | "expired"): void {

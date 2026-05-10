@@ -7,6 +7,15 @@ import { useEffect, useState } from "react";
 import { useMissionRunsStore } from "../../../stores/mission-runs-store.js";
 import styles from "./MissionDetailsRoom.module.css";
 
+/**
+ * Stable empty-array sentinel for the live-events selector. A fresh `[]` literal in the
+ * selector returns a new reference on every call, which Zustand's default Object.is
+ * comparator interprets as a state change → schedules a re-render → re-runs the selector
+ * → another fresh `[]` → infinite loop. The sentinel keeps the reference stable when the
+ * run has no live events yet.
+ */
+const EMPTY_LIVE_EVENTS: readonly TicketRunMissionEventSummary[] = [];
+
 interface NowPlayingStripProps {
   runId: string;
   /** Phase 6.4 — optional per-phase budget envelope; renders a "typical X-Y" hint when present. */
@@ -199,7 +208,7 @@ const findOpenAwaitingPermission = (
  * "X elapsed" label stays current without re-rendering anything else.
  */
 export function NowPlayingStrip({ runId, phaseBudget, currentPhase }: NowPlayingStripProps) {
-  const liveEvents = useMissionRunsStore((store) => store.liveEventsByRun[runId] ?? []);
+  const liveEvents = useMissionRunsStore((store) => store.liveEventsByRun[runId] ?? EMPTY_LIVE_EVENTS);
   const [nowMs, setNowMs] = useState(() => Date.now());
 
   useEffect(() => {

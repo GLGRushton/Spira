@@ -10,6 +10,10 @@ import type {
 import BetterSqlite3 from "better-sqlite3";
 
 export * from "./database/types.js";
+export type {
+  AppendWorkSessionEventInput,
+  WorkSessionEventRecord,
+} from "./database/work-session-events.js";
 
 import type { DatabasePersistenceContext } from "./database/context.js";
 import { createConversationPersistence } from "./database/conversations.js";
@@ -20,6 +24,11 @@ import { createMemoryEntryPersistence } from "./database/memories.js";
 import { createMissionPersistence } from "./database/missions.js";
 import { createRuntimePersistence } from "./database/runtime.js";
 import { createToolingPersistence } from "./database/tooling.js";
+import {
+  type AppendWorkSessionEventInput,
+  type WorkSessionEventRecord,
+  createWorkSessionEventsRepository,
+} from "./database/work-session-events.js";
 import type {
   AppendConversationMessageInput,
   AppendMissionEventInput,
@@ -94,6 +103,7 @@ export class SpiraMemoryDatabase {
   private readonly missions;
   private readonly tooling;
   private readonly memories;
+  private readonly workSessionEvents;
 
   private constructor(
     private readonly db: SqliteDatabase,
@@ -110,6 +120,7 @@ export class SpiraMemoryDatabase {
     this.missions = createMissionPersistence(context);
     this.tooling = createToolingPersistence(context);
     this.memories = createMemoryEntryPersistence(context);
+    this.workSessionEvents = createWorkSessionEventsRepository(context);
   }
 
   close(): void {
@@ -422,6 +433,12 @@ export class SpiraMemoryDatabase {
     return this.intelligence.deleteRepoProfile(projectKey);
   }
 
+  seedBuiltinRepoProfiles(
+    profiles: readonly Omit<UpsertRepoProfileInput, "source">[],
+  ): RepoProfileRecord[] {
+    return this.intelligence.seedBuiltinRepoProfiles(profiles);
+  }
+
   appendMissionEvent(input: AppendMissionEventInput): MissionEventRecord {
     return this.missions.appendMissionEvent(input);
   }
@@ -431,6 +448,28 @@ export class SpiraMemoryDatabase {
     optionsOrLimit: number | { beforeId?: number | null; limit?: number } = 50,
   ): MissionEventRecord[] {
     return this.missions.listMissionEvents(runId, optionsOrLimit);
+  }
+
+  appendWorkSessionEvent(input: AppendWorkSessionEventInput): WorkSessionEventRecord {
+    return this.workSessionEvents.appendWorkSessionEvent(input);
+  }
+
+  appendWorkSessionEvents(inputs: readonly AppendWorkSessionEventInput[]): WorkSessionEventRecord[] {
+    return this.workSessionEvents.appendWorkSessionEvents(inputs);
+  }
+
+  listWorkSessionEvents(
+    sessionId: string,
+    options: { beforeId?: number | null; limit?: number } = {},
+  ): WorkSessionEventRecord[] {
+    return this.workSessionEvents.listWorkSessionEvents(sessionId, options);
+  }
+
+  listWorkSessionEventsByStation(
+    stationId: string,
+    options: { limit?: number } = {},
+  ): WorkSessionEventRecord[] {
+    return this.workSessionEvents.listWorkSessionEventsByStation(stationId, options);
   }
 
   listTicketRuns(): TicketRunSummary[] {
