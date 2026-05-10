@@ -31,7 +31,7 @@ const formatTimestamp = (ms: number | null | undefined): string => {
   return new Date(ms).toISOString().replace("T", " ").replace(/\.\d{3}Z$/u, "Z");
 };
 
-const formatDurationMs = (ms: number): string => {
+export const formatDurationMs = (ms: number): string => {
   if (ms < 1_000) return `${ms} ms`;
   if (ms < 60_000) return `${(ms / 1_000).toFixed(1)} s`;
   if (ms < 3_600_000) {
@@ -190,16 +190,25 @@ const renderFilesChanged = (run: TicketRunSummary): string => {
   return lines.join("\n");
 };
 
-const renderOpenObservations = (): string =>
-  [
-    "## Open observations",
-    "",
+const renderOpenObservations = (events: readonly TicketRunMissionEventSummary[]): string => {
+  const abortEvent = events.find((event) => event.eventType === "mission-aborted");
+  const abortMetadata = abortEvent?.metadata as { reason?: unknown; phaseAtAbort?: unknown } | undefined;
+  const lines = ["## Open observations", ""];
+  if (abortEvent && typeof abortMetadata?.reason === "string") {
+    lines.push(`**Mission was aborted in phase ${stableString(abortMetadata.phaseAtAbort)}.**`, "");
+    lines.push(`Operator reason: ${abortMetadata.reason}`, "");
+  }
+  lines.push(
     "<!-- Reviewer notes go here. Worth capturing: -->",
     "<!-- - What slowed this mission down? -->",
     "<!-- - What helped? -->",
     "<!-- - What should the next mission of this shape do differently? -->",
     "",
-  ].join("\n");
+  );
+  return lines.join("\n");
+};
+
+const stableString = (value: unknown): string => (typeof value === "string" ? value : String(value ?? "unknown"));
 
 /**
  * Build the markdown post-mortem stub for a closed mission. Pure function — no I/O.
@@ -221,7 +230,7 @@ export const generateMissionPostmortem = (
     renderValidations(run.validations),
     renderProofRuns(run.proofRuns),
     renderFilesChanged(run),
-    renderOpenObservations(),
+    renderOpenObservations(events),
   ].join("\n");
 };
 

@@ -52,6 +52,15 @@ export const MISSION_EVENT_TYPES = [
   // Dependency warming (Phase 4.1)
   "workspace-dependencies-warming-started",
   "workspace-dependencies-warming-finished",
+  // Learning loop (Phase 5)
+  "mission-outcome-classified",
+  "validation-profile-candidate-observed",
+  "learned-candidate-promoted",
+  "learned-candidate-revoked",
+  // Polish (Phase 6)
+  "validations-superseded",
+  "mission-state-reconciled",
+  "mission-aborted",
 ] as const;
 
 export type MissionEventType = (typeof MISSION_EVENT_TYPES)[number];
@@ -223,6 +232,72 @@ export interface MissionEventMetadataMap {
     durationMs: number;
     exitCode: number | null;
     error: string | null;
+  };
+  // Learning loop — Phase 5
+  "mission-outcome-classified": {
+    /** "clean-pass" | "pass-with-friction" | "fail-with-recovery" | "fail-final" */
+    outcome: string;
+    rationale: string;
+    retriedValidationKinds: readonly string[];
+    usedManualReview: boolean;
+  };
+  "validation-profile-candidate-observed": {
+    candidateId: string;
+    projectKey: string | null;
+    repoRelativePath: string | null;
+    /** Validation kind inferred from the command pattern (e.g. "build", "lint"). */
+    kind: string;
+    command: string;
+    workingDirectory: string;
+    /** Total successful observations of this command across runs at the moment of observation. */
+    successCount: number;
+  };
+  "learned-candidate-promoted": {
+    candidateId: string;
+    type: string;
+    confidence: number;
+    threshold: number;
+    /** Schema version of the confidence formula used. Bump when scoring changes. */
+    formulaVersion: number;
+    /** Run ids that contributed positive evidence at the moment of promotion. */
+    contributingRunIds: readonly string[];
+    /** Run ids that contributed negative evidence at the moment of promotion. */
+    contradictingRunIds: readonly string[];
+  };
+  "learned-candidate-revoked": {
+    candidateId: string;
+    type: string;
+    /** Operator-supplied reason or "auto" for system-driven revocation. */
+    reason: string;
+    /** Snapshot of the contributing run ids that must NOT auto-re-promote on the same evidence. */
+    blockedContributingRunIds: readonly string[];
+    /** When true, the candidate is archived rather than just demoted. */
+    archived: boolean;
+  };
+  // Polish — Phase 6
+  "validations-superseded": {
+    /** Validation kind that the operator marked as recovered. */
+    kind: string;
+    /** Newer (winning) validation id. */
+    winnerValidationId: string;
+    /** Validation ids that are now flagged as superseded. */
+    supersededValidationIds: readonly string[];
+  };
+  "mission-state-reconciled": {
+    /** Field that was reconciled (e.g. "statusMessage", "missionPhase"). */
+    field: string;
+    /** Previous value as a stable string (or "null"). */
+    previousValue: string;
+    /** New canonical value as a stable string. */
+    nextValue: string;
+    /** Short reason the reconciler fired. */
+    reason: string;
+  };
+  "mission-aborted": {
+    /** Operator-supplied reason for the abort; surfaces in the post-mortem stub. */
+    reason: string;
+    /** Mission phase the run was in at the moment of abort. */
+    phaseAtAbort: string;
   };
 }
 

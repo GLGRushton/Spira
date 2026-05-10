@@ -63,6 +63,8 @@ export const describeRunStatus = (run: TicketRunSummary): string => {
       return "Error";
     case "done":
       return "Done";
+    case "aborted":
+      return "Aborted";
   }
 };
 

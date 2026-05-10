@@ -279,6 +279,17 @@ const ClientMessageSchema = z.discriminatedUnion("type", [
     requestId: z.string(),
     profileId: z.string().min(1),
   }),
+  messageSchema("missions:learned-candidates:list", {
+    requestId: z.string(),
+  }),
+  messageSchema("missions:learned-candidates:revoke", {
+    requestId: z.string(),
+    input: z.object({
+      candidateId: z.string().min(1),
+      reason: z.string().min(1),
+      archive: z.boolean().optional(),
+    }),
+  }),
   messageSchema("missions:ticket-run:proof:run", {
     requestId: z.string(),
     runId: z.string(),
@@ -292,6 +303,16 @@ const ClientMessageSchema = z.discriminatedUnion("type", [
   messageSchema("missions:ticket-run:proof:manual-review:clear", {
     requestId: z.string(),
     runId: z.string(),
+  }),
+  messageSchema("missions:ticket-run:validations:supersede", {
+    requestId: z.string(),
+    runId: z.string(),
+    kind: z.string().min(1),
+  }),
+  messageSchema("missions:ticket-run:abort", {
+    requestId: z.string(),
+    runId: z.string(),
+    reason: z.string().min(1),
   }),
   messageSchema("missions:ticket-run:proof-artifact:read", {
     requestId: z.string(),

@@ -33,9 +33,11 @@ import type {
   TicketRunProofSnapshotResult,
   TicketRunRepoIntelligenceCandidatesResult,
   TicketRunReviewSnapshotResult,
+  MissionLearnedCandidatesSnapshot,
   MissionProofRulesSnapshot,
   MissionRepoProfilesSnapshot,
   MissionValidationProfilesSnapshot,
+  RevokeMissionLearnedCandidateInput,
   TicketRunSnapshot,
   TicketRunSubmoduleGitStateResult,
   TicketRunSummary,
@@ -125,9 +127,13 @@ type MissionsRequestMessage =
   | Extract<ClientMessage, { type: "missions:validation-profiles:list" }>
   | Extract<ClientMessage, { type: "missions:validation-profiles:upsert" }>
   | Extract<ClientMessage, { type: "missions:validation-profiles:delete" }>
+  | Extract<ClientMessage, { type: "missions:learned-candidates:list" }>
+  | Extract<ClientMessage, { type: "missions:learned-candidates:revoke" }>
   | Extract<ClientMessage, { type: "missions:ticket-run:proof:run" }>
   | Extract<ClientMessage, { type: "missions:ticket-run:proof:manual-review:set" }>
   | Extract<ClientMessage, { type: "missions:ticket-run:proof:manual-review:clear" }>
+  | Extract<ClientMessage, { type: "missions:ticket-run:validations:supersede" }>
+  | Extract<ClientMessage, { type: "missions:ticket-run:abort" }>
   | Extract<ClientMessage, { type: "missions:ticket-run:proof-artifact:read" }>
   | Extract<ClientMessage, { type: "missions:ticket-run:delete" }>
   | Extract<ClientMessage, { type: "missions:ticket-run:review-snapshot:get" }>
@@ -169,9 +175,13 @@ type MissionsResponseMessage =
   | Extract<ServerMessage, { type: "missions:validation-profiles:list:result" }>
   | Extract<ServerMessage, { type: "missions:validation-profiles:upsert:result" }>
   | Extract<ServerMessage, { type: "missions:validation-profiles:delete:result" }>
+  | Extract<ServerMessage, { type: "missions:learned-candidates:list:result" }>
+  | Extract<ServerMessage, { type: "missions:learned-candidates:revoke:result" }>
   | Extract<ServerMessage, { type: "missions:ticket-run:proof:run:result" }>
   | Extract<ServerMessage, { type: "missions:ticket-run:proof:manual-review:set:result" }>
   | Extract<ServerMessage, { type: "missions:ticket-run:proof:manual-review:clear:result" }>
+  | Extract<ServerMessage, { type: "missions:ticket-run:validations:supersede:result" }>
+  | Extract<ServerMessage, { type: "missions:ticket-run:abort:result" }>
   | Extract<ServerMessage, { type: "missions:ticket-run:proof-artifact:read:result" }>
   | Extract<ServerMessage, { type: "missions:ticket-run:delete:result" }>
   | Extract<ServerMessage, { type: "missions:ticket-run:review-snapshot:result" }>
@@ -258,12 +268,24 @@ export interface IpcBridgeHandle {
     profile: UpsertMissionValidationProfileInput,
   ): Promise<MissionValidationProfilesSnapshot>;
   deleteMissionValidationProfile(profileId: string): Promise<MissionValidationProfilesSnapshot>;
+  listMissionLearnedCandidates(): Promise<MissionLearnedCandidatesSnapshot>;
+  revokeMissionLearnedCandidate(
+    input: RevokeMissionLearnedCandidateInput,
+  ): Promise<MissionLearnedCandidatesSnapshot>;
   setTicketRunProofManualReview(
     runId: string,
     justification: string,
   ): Promise<{ run: TicketRunSummary; snapshot: TicketRunSnapshot }>;
   clearTicketRunProofManualReview(
     runId: string,
+  ): Promise<{ run: TicketRunSummary; snapshot: TicketRunSnapshot }>;
+  supersedeTicketRunValidations(
+    runId: string,
+    kind: string,
+  ): Promise<{ run: TicketRunSummary; snapshot: TicketRunSnapshot }>;
+  abortTicketRun(
+    runId: string,
+    reason: string,
   ): Promise<{ run: TicketRunSummary; snapshot: TicketRunSnapshot }>;
   readTicketRunProofArtifact(
     runId: string,
@@ -344,6 +366,22 @@ const isBackendResponseMessage = (message: ServerMessage): message is BackendRes
     message.type === "missions:ticket-run:repo-intelligence:get:result" ||
     message.type === "missions:ticket-run:repo-intelligence:approve:result" ||
     message.type === "missions:ticket-run:proof:run:result" ||
+    message.type === "missions:ticket-run:proof:manual-review:set:result" ||
+    message.type === "missions:ticket-run:proof:manual-review:clear:result" ||
+    message.type === "missions:ticket-run:proof-artifact:read:result" ||
+    message.type === "missions:proof-rules:list:result" ||
+    message.type === "missions:proof-rules:upsert:result" ||
+    message.type === "missions:proof-rules:delete:result" ||
+    message.type === "missions:repo-profiles:list:result" ||
+    message.type === "missions:repo-profiles:upsert:result" ||
+    message.type === "missions:repo-profiles:delete:result" ||
+    message.type === "missions:validation-profiles:list:result" ||
+    message.type === "missions:validation-profiles:upsert:result" ||
+    message.type === "missions:validation-profiles:delete:result" ||
+    message.type === "missions:learned-candidates:list:result" ||
+    message.type === "missions:learned-candidates:revoke:result" ||
+    message.type === "missions:ticket-run:validations:supersede:result" ||
+    message.type === "missions:ticket-run:abort:result" ||
     message.type === "missions:ticket-run:delete:result" ||
     message.type === "missions:ticket-run:review-snapshot:result" ||
     message.type === "missions:ticket-run:git-state:result" ||
@@ -930,6 +968,18 @@ export function setupIpcBridge(
         "missions:validation-profiles:delete:result",
         MISSION_REVIEW_REQUEST_TIMEOUT_MS,
       ).then((response) => response.result),
+    listMissionLearnedCandidates: () =>
+      requestBackend(
+        { type: "missions:learned-candidates:list", requestId: randomUUID() },
+        "missions:learned-candidates:list:result",
+        MISSION_REVIEW_REQUEST_TIMEOUT_MS,
+      ).then((response) => response.result),
+    revokeMissionLearnedCandidate: (input) =>
+      requestBackend(
+        { type: "missions:learned-candidates:revoke", requestId: randomUUID(), input },
+        "missions:learned-candidates:revoke:result",
+        MISSION_REVIEW_REQUEST_TIMEOUT_MS,
+      ).then((response) => response.result),
     setTicketRunProofManualReview: (runId, justification) =>
       requestBackend(
         {
@@ -949,6 +999,18 @@ export function setupIpcBridge(
           runId,
         },
         "missions:ticket-run:proof:manual-review:clear:result",
+        MISSION_REVIEW_REQUEST_TIMEOUT_MS,
+      ).then((response) => response.result),
+    supersedeTicketRunValidations: (runId, kind) =>
+      requestBackend(
+        { type: "missions:ticket-run:validations:supersede", requestId: randomUUID(), runId, kind },
+        "missions:ticket-run:validations:supersede:result",
+        MISSION_REVIEW_REQUEST_TIMEOUT_MS,
+      ).then((response) => response.result),
+    abortTicketRun: (runId, reason) =>
+      requestBackend(
+        { type: "missions:ticket-run:abort", requestId: randomUUID(), runId, reason },
+        "missions:ticket-run:abort:result",
         MISSION_REVIEW_REQUEST_TIMEOUT_MS,
       ).then((response) => response.result),
     readTicketRunProofArtifact: (runId, proofRunId, artifactId, options) =>

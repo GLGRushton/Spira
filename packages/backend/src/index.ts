@@ -34,6 +34,7 @@ import { MissionLifecycleService } from "./missions/mission-lifecycle.js";
 import { ProofRulesService } from "./missions/proof-rules-service.js";
 import { RepoProfilesService } from "./missions/repo-profiles-service.js";
 import { ValidationProfilesService } from "./missions/validation-profiles-service.js";
+import { LearnedCandidatesService } from "./missions/learned-candidates-service.js";
 import { MissionServiceRegistry } from "./missions/service-registry.js";
 import { type GenerateCommitDraftInput, TicketRunService } from "./missions/ticket-runs.js";
 import { ProjectRegistry } from "./projects/registry.js";
@@ -91,6 +92,7 @@ let missionLifecycleService: MissionLifecycleService | null = null;
 let proofRulesService: ProofRulesService | null = null;
 let repoProfilesService: RepoProfilesService | null = null;
 let validationProfilesService: ValidationProfilesService | null = null;
+let learnedCandidatesService: LearnedCandidatesService | null = null;
 
 const BACKEND_BUILD_ID = process.env.SPIRA_BUILD_ID?.trim() || "dev";
 const BACKEND_GENERATION = Number(process.env.SPIRA_GENERATION ?? "0");
@@ -1423,6 +1425,51 @@ const handleClientMessage = async (message: ClientMessage): Promise<void> => {
     return;
   }
 
+  // Phase 5.4 — learned-candidate admin handlers.
+  const sendLearnedCandidatesUnavailable = (requestId: string): void =>
+    sendAdminServiceUnavailable(requestId, "Learned candidates");
+
+  if (message.type === "missions:learned-candidates:list") {
+    if (!learnedCandidatesService) {
+      sendLearnedCandidatesUnavailable(message.requestId);
+      return;
+    }
+    transport?.send({
+      type: "missions:learned-candidates:list:result",
+      requestId: message.requestId,
+      result: learnedCandidatesService.list(),
+    });
+    return;
+  }
+
+  if (message.type === "missions:learned-candidates:revoke") {
+    if (!learnedCandidatesService) {
+      sendLearnedCandidatesUnavailable(message.requestId);
+      return;
+    }
+    try {
+      const result = learnedCandidatesService.revoke(message.input);
+      transport?.send({
+        type: "missions:learned-candidates:revoke:result",
+        requestId: message.requestId,
+        result,
+      });
+    } catch (error) {
+      logger.error({ err: error, requestId: message.requestId }, "Failed to revoke learned candidate");
+      transport?.send({
+        type: "missions:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(
+          error,
+          "MISSIONS_LEARNED_CANDIDATE_REVOKE_FAILED",
+          "Failed to revoke learned candidate.",
+          "missions",
+        ),
+      });
+    }
+    return;
+  }
+
   if (message.type === "missions:ticket-run:proof:manual-review:set") {
     if (!missionLifecycleService || !ticketRunService) {
       transport?.send({
@@ -1500,6 +1547,81 @@ const handleClientMessage = async (message: ClientMessage): Promise<void> => {
           "Failed to clear proof manual-review state.",
           "missions",
         ),
+      });
+    }
+    return;
+  }
+
+  if (message.type === "missions:ticket-run:validations:supersede") {
+    if (!missionLifecycleService || !ticketRunService) {
+      transport?.send({
+        type: "missions:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(
+          new Error("Mission lifecycle is unavailable."),
+          "MISSIONS_UNAVAILABLE",
+          "Missions ticket runs are unavailable.",
+          "missions",
+        ),
+      });
+      return;
+    }
+    try {
+      const updatedRun = missionLifecycleService.supersedeValidationsByKind(message.runId, message.kind);
+      transport?.send({
+        type: "missions:ticket-run:validations:supersede:result",
+        requestId: message.requestId,
+        result: { run: updatedRun, snapshot: ticketRunService.getSnapshot() },
+      });
+    } catch (error) {
+      logger.error(
+        { err: error, requestId: message.requestId, runId: message.runId },
+        "Failed to supersede validations",
+      );
+      transport?.send({
+        type: "missions:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(
+          error,
+          "MISSIONS_VALIDATIONS_SUPERSEDE_FAILED",
+          "Failed to supersede earlier validations.",
+          "missions",
+        ),
+      });
+    }
+    return;
+  }
+
+  if (message.type === "missions:ticket-run:abort") {
+    if (!ticketRunService) {
+      transport?.send({
+        type: "missions:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(
+          new Error("Ticket run service is unavailable."),
+          "MISSIONS_UNAVAILABLE",
+          "Missions ticket runs are unavailable.",
+          "missions",
+        ),
+      });
+      return;
+    }
+    try {
+      const result = await ticketRunService.abortRun(message.runId, message.reason);
+      transport?.send({
+        type: "missions:ticket-run:abort:result",
+        requestId: message.requestId,
+        result,
+      });
+    } catch (error) {
+      logger.error(
+        { err: error, requestId: message.requestId, runId: message.runId },
+        "Failed to abort mission run",
+      );
+      transport?.send({
+        type: "missions:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(error, "MISSIONS_ABORT_FAILED", "Failed to abort mission run.", "missions"),
       });
     }
     return;
@@ -2539,6 +2661,7 @@ const bootstrap = async () => {
     proofRulesService = new ProofRulesService(memoryDb);
     repoProfilesService = new RepoProfilesService(memoryDb);
     validationProfilesService = new ValidationProfilesService(memoryDb);
+    learnedCandidatesService = new LearnedCandidatesService({ memoryDb, logger, bus });
   }
   projectRegistry = new ProjectRegistry(memoryDb);
   missionLifecycleService = new MissionLifecycleService(memoryDb, bus, async (runId) => {

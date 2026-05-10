@@ -314,6 +314,7 @@ export class SpiraMemoryDatabase {
       repoRelativePaths?: readonly string[];
       tags?: readonly string[];
       includeUnapproved?: boolean;
+      source?: RepoIntelligenceRecord["source"];
       limit?: number;
     } = {},
   ): RepoIntelligenceRecord[] {

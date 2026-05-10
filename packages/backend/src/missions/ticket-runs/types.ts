@@ -127,6 +127,17 @@ export interface TicketRunServiceOptions {
    * with `async () => []` to skip the spawn entirely.
    */
   warmRunDependencies?: (input: WarmRunDependenciesInput) => Promise<DependencyWarmingResult[]>;
+  /**
+   * Phase 5.4 — global kill-switch for auto-promotion of learned candidates. Defaults
+   * to true. Settings UI exposes this so an operator can pause auto-promotion without
+   * losing the audit trail or candidate corpus.
+   */
+  autoPromoteLearnedCandidates?: boolean;
+  /**
+   * Phase 5.4 — per-type override for the promotion confidence thresholds. Settings
+   * UI exposes this for advanced operators; tests use it to drive deterministic flips.
+   */
+  learnedCandidatePromotionThresholds?: Partial<Record<"briefing" | "example" | "pitfall", number>>;
   resolveMissionGitIdentity?: () => Promise<MissionGitIdentity>;
   getMissionGitToken?: () => string | null;
 }

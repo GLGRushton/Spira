@@ -42,9 +42,11 @@ import type {
   TicketRunProofSnapshotResult,
   TicketRunRepoIntelligenceCandidatesResult,
   TicketRunReviewSnapshotResult,
+  MissionLearnedCandidatesSnapshot,
   MissionProofRulesSnapshot,
   MissionRepoProfilesSnapshot,
   MissionValidationProfilesSnapshot,
+  RevokeMissionLearnedCandidateInput,
   TicketRunSnapshot,
   TicketRunSubmoduleGitStateResult,
   TicketRunSummary,
@@ -146,6 +148,12 @@ export interface ElectronApi {
   ): Promise<MissionValidationProfilesSnapshot>;
   /** Phase 3.4 — delete a user validation profile by id; returns the fresh snapshot. */
   deleteMissionValidationProfile(profileId: string): Promise<MissionValidationProfilesSnapshot>;
+  /** Phase 5.4 — list every learned intelligence candidate (pending + promoted + revoked). */
+  listMissionLearnedCandidates(): Promise<MissionLearnedCandidatesSnapshot>;
+  /** Phase 5.4 — revoke a learned candidate (operator override + audit). */
+  revokeMissionLearnedCandidate(
+    input: RevokeMissionLearnedCandidateInput,
+  ): Promise<MissionLearnedCandidatesSnapshot>;
   /**
    * Phase 2.1 — mark the proof gate as satisfied via manual review.
    * Justification is required and persisted on the run + as a mission event.
@@ -157,6 +165,16 @@ export interface ElectronApi {
   /** Phase 2.1 — revert a prior manual-review choice; gate becomes unsatisfied again. */
   clearTicketRunProofManualReview(
     runId: string,
+  ): Promise<{ run: TicketRunSummary; snapshot: TicketRunSnapshot }>;
+  /** Phase 6.1 — supersede earlier failed/pending validations of a kind via the latest passing one. */
+  supersedeTicketRunValidations(
+    runId: string,
+    kind: string,
+  ): Promise<{ run: TicketRunSummary; snapshot: TicketRunSnapshot }>;
+  /** Phase 6.5 — abort a mission with an operator reason. Closes the run with status="aborted". */
+  abortTicketRun(
+    runId: string,
+    reason: string,
   ): Promise<{ run: TicketRunSummary; snapshot: TicketRunSnapshot }>;
   /**
    * Phase 1.4 — read a proof artifact's text content (lazy-loaded inline log viewer).

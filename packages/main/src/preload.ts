@@ -35,6 +35,8 @@ const TICKET_RUN_PROOF_RUN_CHANNEL = "missions:ticket-run:proof:run";
 const TICKET_RUN_PROOF_ARTIFACT_READ_CHANNEL = "missions:ticket-run:proof-artifact:read";
 const TICKET_RUN_PROOF_MANUAL_REVIEW_SET_CHANNEL = "missions:ticket-run:proof:manual-review:set";
 const TICKET_RUN_PROOF_MANUAL_REVIEW_CLEAR_CHANNEL = "missions:ticket-run:proof:manual-review:clear";
+const TICKET_RUN_VALIDATIONS_SUPERSEDE_CHANNEL = "missions:ticket-run:validations:supersede";
+const TICKET_RUN_ABORT_CHANNEL = "missions:ticket-run:abort";
 const PROOF_RULES_LIST_CHANNEL = "missions:proof-rules:list";
 const PROOF_RULES_UPSERT_CHANNEL = "missions:proof-rules:upsert";
 const PROOF_RULES_DELETE_CHANNEL = "missions:proof-rules:delete";
@@ -44,6 +46,8 @@ const REPO_PROFILES_DELETE_CHANNEL = "missions:repo-profiles:delete";
 const VALIDATION_PROFILES_LIST_CHANNEL = "missions:validation-profiles:list";
 const VALIDATION_PROFILES_UPSERT_CHANNEL = "missions:validation-profiles:upsert";
 const VALIDATION_PROFILES_DELETE_CHANNEL = "missions:validation-profiles:delete";
+const LEARNED_CANDIDATES_LIST_CHANNEL = "missions:learned-candidates:list";
+const LEARNED_CANDIDATES_REVOKE_CHANNEL = "missions:learned-candidates:revoke";
 const TICKET_RUN_DELETE_CHANNEL = "missions:ticket-run:delete";
 const TICKET_RUN_REVIEW_SNAPSHOT_CHANNEL = "missions:ticket-run:review-snapshot:get";
 const TICKET_RUN_GIT_STATE_CHANNEL = "missions:ticket-run:git-state:get";
@@ -300,6 +304,12 @@ const electronAPI: ElectronApi = {
   clearTicketRunProofManualReview(runId) {
     return ipcRenderer.invoke(TICKET_RUN_PROOF_MANUAL_REVIEW_CLEAR_CHANNEL, { runId });
   },
+  supersedeTicketRunValidations(runId, kind) {
+    return ipcRenderer.invoke(TICKET_RUN_VALIDATIONS_SUPERSEDE_CHANNEL, { runId, kind });
+  },
+  abortTicketRun(runId, reason) {
+    return ipcRenderer.invoke(TICKET_RUN_ABORT_CHANNEL, { runId, reason });
+  },
   listMissionProofRules() {
     return ipcRenderer.invoke(PROOF_RULES_LIST_CHANNEL);
   },
@@ -326,6 +336,12 @@ const electronAPI: ElectronApi = {
   },
   deleteMissionValidationProfile(profileId) {
     return ipcRenderer.invoke(VALIDATION_PROFILES_DELETE_CHANNEL, { profileId });
+  },
+  listMissionLearnedCandidates() {
+    return ipcRenderer.invoke(LEARNED_CANDIDATES_LIST_CHANNEL);
+  },
+  revokeMissionLearnedCandidate(input) {
+    return ipcRenderer.invoke(LEARNED_CANDIDATES_REVOKE_CHANNEL, { input });
   },
   deleteTicketRun(runId) {
     return ipcRenderer.invoke(TICKET_RUN_DELETE_CHANNEL, { runId });

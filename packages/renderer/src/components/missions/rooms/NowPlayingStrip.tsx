@@ -1,11 +1,28 @@
-import type { TicketRunMissionEventSummary } from "@spira/shared";
+import type {
+  TicketRunMissionEventSummary,
+  TicketRunMissionPhase,
+  TicketRunPhaseBudgetSnapshot,
+} from "@spira/shared";
 import { useEffect, useState } from "react";
 import { useMissionRunsStore } from "../../../stores/mission-runs-store.js";
 import styles from "./MissionDetailsRoom.module.css";
 
 interface NowPlayingStripProps {
   runId: string;
+  /** Phase 6.4 — optional per-phase budget envelope; renders a "typical X-Y" hint when present. */
+  phaseBudget?: TicketRunPhaseBudgetSnapshot;
+  /** Current mission phase used to look up the matching budget entry. */
+  currentPhase?: TicketRunMissionPhase;
 }
+
+const formatBudgetWindow = (lowMs: number, highMs: number): string => {
+  const formatMinutes = (ms: number) => {
+    if (ms < 60_000) return `${Math.round(ms / 1_000)}s`;
+    return `${Math.round(ms / 60_000)} min`;
+  };
+  if (lowMs === highMs) return `typical ${formatMinutes(lowMs)}`;
+  return `typical ${formatMinutes(lowMs)}–${formatMinutes(highMs)}`;
+};
 
 interface NowPlayingState {
   variant: "idle" | "active" | "awaiting";
@@ -181,7 +198,7 @@ const findOpenAwaitingPermission = (
  * Drives off the live event buffer pushed via Phase 1.1; ticks once a second so the
  * "X elapsed" label stays current without re-rendering anything else.
  */
-export function NowPlayingStrip({ runId }: NowPlayingStripProps) {
+export function NowPlayingStrip({ runId, phaseBudget, currentPhase }: NowPlayingStripProps) {
   const liveEvents = useMissionRunsStore((store) => store.liveEventsByRun[runId] ?? []);
   const [nowMs, setNowMs] = useState(() => Date.now());
 
@@ -213,6 +230,12 @@ export function NowPlayingStrip({ runId }: NowPlayingStripProps) {
     metaLabel = state.pulsing ? formatElapsed(delta) : formatRelative(delta);
   }
 
+  // Phase 6.4 — append a typical-window hint when we have a budget for the current phase.
+  const budgetEntry = currentPhase
+    ? phaseBudget?.entries.find((entry) => entry.phase === currentPhase)
+    : undefined;
+  const budgetLabel = budgetEntry ? formatBudgetWindow(budgetEntry.lowMs, budgetEntry.highMs) : null;
+
   return (
     <div className={className} role="status" aria-live="polite">
       <span className={dotClassName} aria-hidden="true" />
@@ -221,6 +244,7 @@ export function NowPlayingStrip({ runId }: NowPlayingStripProps) {
         {state.detail ? <span className={styles.nowPlayingDetail}>{state.detail}</span> : null}
       </div>
       {metaLabel ? <span className={styles.nowPlayingMeta}>{metaLabel}</span> : null}
+      {budgetLabel ? <span className={styles.nowPlayingMeta}>· {budgetLabel}</span> : null}
     </div>
   );
 }

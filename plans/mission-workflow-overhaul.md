@@ -2,7 +2,7 @@
 
 **Parent report:** [mission-workflow-review-2026-05-09.md](../reports/mission-workflow-review-2026-05-09.md).
 **Sister plans:** [model-escalation-architecture.md](./model-escalation-architecture.md) (provider-side), [permission-lifecycle-resilience.md](./permission-lifecycle-resilience.md) (already shipped).
-**Status:** drafted 2026-05-09. **Phases 0, 1, 2, 3, and 4 shipped 2026-05-09 — see [Progress log](#progress-log) at the end of this document.**
+**Status:** drafted 2026-05-09. **Phases 0–5 shipped 2026-05-09; Phase 6 shipped 2026-05-10 — see [Progress log](#progress-log) at the end of this document.**
 
 ## Goal
 
@@ -281,7 +281,7 @@ The plan ships in **seven independent phases**. Each phase is small enough to me
 
 ---
 
-## Phase 5 — Learning loop (the "every mission makes the next one easier" phase)
+## Phase 5 — Learning loop (the "every mission makes the next one easier" phase) ✅ shipped 2026-05-09
 
 **Goal:** every closed mission — pass *or* fail — feeds the intelligence stores, and the system's recommendations get better over time without human curation.
 
@@ -367,7 +367,7 @@ For each candidate, compute a single confidence score from these signals:
 
 ---
 
-## Phase 6 — Polish and the operator-facing extras
+## Phase 6 — Polish and the operator-facing extras ✅ shipped 2026-05-10
 
 **Goal:** close the long tail of papercuts the post-mortems flagged.
 
@@ -643,3 +643,103 @@ Skipped (judgment calls):
 - **Diff signal** for `applyProportionalityOverrides` (Phase 2.4) is still wired but uncomputed; the warming events from Phase 4.1 + the validation runtime feedback give Phase 5's learning loop more raw data to start with.
 - **Provider-side prompt-cache markers** (the `cache_control: ephemeral` blocks the reorder is meant to enable) live in the provider client, not the prompt builder. Worth confirming the markers are set on the user-prefix when cache hit-rate becomes the metric we tune.
 - **No batching on live event push yet** — Phase 1.1 attempt-action events already have rate limiting at the source; if a future surface produces > ~100 events/sec, the renderer's rolling buffer (cap 20) is the right place to coalesce.
+
+---
+
+### 2026-05-09 — Phase 5 shipped
+
+#### Phase 5 deliverables
+
+- **§5.1 outcome classifier** — New [mission-outcome.ts](../packages/backend/src/missions/mission-outcome.ts) replaces `isCleanMissionForLearning` with a four-way classifier (`clean-pass`, `pass-with-friction`, `fail-with-recovery`, `fail-final`). Each closed mission now records a `mission-outcome-classified` event with the kind, rationale, retried validation kinds, and `usedManualReview` flag. The classifier inspects superseded validation history (a kind that had a failed entry then a passing successor counts as a retry) plus the proof gate state. `outcomeLearningWeight` exposes the per-outcome multiplier (`clean-pass = 1`, `pass-with-friction = 0.5`, `fail-with-recovery = 0.25`, `fail-final = -2`) used downstream by the auto-promotion formula. `buildLearnedRepoIntelligenceCandidates` now requires the classification as input and emits `pitfall`-typed candidates for `fail-final`/`fail-with-recovery` outcomes (negative-evidence learning) instead of always emitting `example`.
+
+- **§5.2 per-attempt-shell-command learning** — New [validation-candidate-learner.ts](../packages/backend/src/missions/validation-candidate-learner.ts) walks the project's accumulated `attempt-shell-command` events and proposes a `validation_profile` candidate when ≥ N (default 3) distinct missions have observed the same `(projectKey, repoRelativePath, command, cwd)` triple succeed. Kind is inferred from the command itself via simple heuristics (`npm ci` → restore, `eslint` → lint, `vitest` → unit-test, `dotnet test` → unit-test, `playwright` → e2e-smoke, etc.). Already-registered profiles are filtered out. Each proposal emits a `validation-profile-candidate-observed` event so the audit trail is complete; persistence as an actual profile is left to the operator until Phase 5.4's auto-promotion thresholds graduate to validation profiles too.
+
+- **§5.3 cross-mission weekly digest** — New [weekly-digest-generator.ts](../packages/backend/src/missions/weekly-digest-generator.ts) is a pure markdown generator with a deterministic `buildWeeklyDigestFilename(windowEndMs)`. The output covers: header + window, outcome distribution across closed missions, top-N longest phases (computed from `mission_events` deltas), top-N preflight blocker reasons (frequency table over `proof-preflight-finished` failures), top-N failed proof recipes (by profile id), and the most recently updated pending learned candidates. Cron wiring is intentionally out of scope for this phase; the generator is invoked on demand from a future operator-facing trigger.
+
+- **§5.4 confidence-based auto-promotion + revoke** — New [learned-candidate-promoter.ts](../packages/backend/src/missions/learned-candidate-promoter.ts) implements the full scoring formula from the plan: positive-evidence weight summed across corroborating runs, multiplied by recency (90-day half-life) and diversity (×1.2 when ≥ 3 distinct ticket kinds), minus 2× contradiction count. Per-type thresholds (`briefing = 3`, `example = 4`, `pitfall = 6`) are settings-tunable. Promotion writes a `learned-candidate-promoted` mission event with the formula version (`PROMOTION_FORMULA_VERSION = 1`), the contributing-run ids, and the contradicting-run ids — so any decision can be replayed later. Revocation (handled by the new [LearnedCandidatesService](../packages/backend/src/missions/learned-candidates-service.ts)) demotes the entry, records the contributing-run set as a "blocked-evidence" tag set so the candidate cannot auto-re-promote on the same evidence, and supports an `archive` mode for entries the operator deems wrong rather than just stale. Thresholds and the global `autoPromoteLearnedCandidates` kill-switch are exposed via `TicketRunServiceOptions`. New protocol messages `missions:learned-candidates:list/:revoke` plumb through `client-message-validation`, `electron-api`, `preload`, `ipc-bridge`, `channels`, and `missions-handlers`. Renderer: new [LearnedCandidatesEditor](../packages/renderer/src/components/settings/LearnedCandidatesEditor.tsx) settings tab lists every learned candidate (with promoted/pending/revoked/archived status, contributing-run snapshots, blocked-run snapshots) and supports inline revoke / archive with a required reason.
+
+- **§5.5 tests** — `mission-outcome.test.ts` (9 tests): every outcome kind, including null when the run isn't closed cleanly enough; documented learning weights. `validation-candidate-learner.test.ts` (7 tests): kind inference table, threshold enforcement, distinct-run counting, suppression of already-registered profiles, kind-not-inferred skip. `learned-candidate-promoter.test.ts` (9 tests): briefing promotion at 3 distinct clean-pass runs, refusal at 2, pitfall threshold (6) holdout, contradiction subtraction, threshold override, already-approved skip, revoked-skip, promoted/revoked tag builders. `weekly-digest-generator.test.ts` (3 tests): deterministic filename, empty-window fallbacks, full-window rendering. Plus a `mission-events.test.ts` taxonomy update for the four new event types and `mission-intelligence.test.ts` updates for the now-required `outcome` parameter on `buildLearnedRepoIntelligenceCandidates`. Total Phase 5 tests: 28 new + 2 updates. Full suite: 769 → ~796 tests; all pass (573 backend + 30 memory-db + 75 renderer + 39 main + 40 shared + 39 mcp).
+
+#### Self-review fixes
+
+After the three review agents (reuse, quality, efficiency) the following landed:
+
+- **Defer the learning-loop sweeps off the synchronous close path** — `observeValidationProfileCandidates` and `runLearnedCandidatePromotionSweep` now run inside `setImmediate`, so close latency is bounded by the cheap classification + candidate-write path. Errors are caught and logged. (efficiency review #2.)
+- **Fix the `entries.length === 0` early-return bug** — a clean-pass run that produced no *new* candidates was skipping the validation-profile observer AND the promotion sweep, both of which are still meaningful (an older candidate may now have enough corroborating evidence to flip). (efficiency review #3.)
+- **Memoise `classifyMissionOutcome` inside `scoreLearnedCandidates`** — the same run id appears in many candidate groups; cache cuts O(candidates × members) classifications down to O(distinct run ids). (efficiency review #5.)
+- **Push the `source` filter into `listRepoIntelligence`** at the SQL level — the admin pane was fetching 1,000 rows and discarding non-learned ones in JS; now it's an indexed `WHERE source = 'learned'`. (efficiency review #4.)
+- **Reuse `formatDurationMs` from `post-mortem-generator.ts`** in the digest generator (now exported). The old digest variant was missing the hour bucket — long phases would render as "120 min" instead of "2 h". (reuse review #1.)
+- **Reuse `hashFragment` from `mission-intelligence.ts`** (now exported) instead of the bespoke 31-mul hash in the validation-candidate learner. Also fixes the parallel id-scheme: the candidate `id` and the observation map key now derive from the same `buildCandidateKey` string. (reuse review #2 + quality review #1.)
+- **Inline `weightForOutcome`** — the wrapper added a layer over `outcomeLearningWeight` for one call site that already branches; replaced with the direct call. (quality review.)
+- **Drop the unused `T extends string` generic** on `computeFrequencyTable` — only `string` callers exist; the generic was dead generality. (quality review.)
+- **Make `outcome` parameter required** on `buildLearnedRepoIntelligenceCandidates` — the only caller already classifies once and passes; removing the `= classifyMissionOutcome(run)` default removes the optional/default-call ambiguity and dropped a dead import. (quality review.)
+- **Drop `STATUS_LABELS` identity map and the always-true `sourceBadgeUser` ternary** in the learned-candidates editor — both were dead code. (quality review.)
+- **Flatten the `fail-final` rationale ternary chain** into an if/else cascade in `mission-outcome.ts` — easier to read. (quality review.)
+- **Pre-existing bug fix** — added the missing admin-handler entries (`missions:proof-rules:*:result`, `missions:repo-profiles:*:result`, `missions:validation-profiles:*:result`, `missions:ticket-run:proof:manual-review:*:result`, `missions:ticket-run:proof-artifact:read:result`) to `isBackendResponseMessage` in `ipc-bridge.ts`. Without these, all three admin editors and the manual-review surface were silently timing out at runtime — phase 2/3 work shipped without them.
+
+Skipped (judgment calls):
+- **Extracting a `LearningLoopService`** to host `observeValidationProfileCandidates` and `runLearnedCandidatePromotionSweep` — quality review's #6 was a real abstraction win, but threading the dependencies (memoryDb, logger, ticketRunService) cleanly is its own refactor; defer. The `setImmediate` deferral fix already covers the latency concern.
+- **Schema change to replace tag-encoded revocation history** with dedicated `RepoIntelligenceRecord` columns — quality review #4. Tag prefixes (`promoted-run:`, `revoked-run:`, `revoked`, `archived`) work for now; a schema migration is its own PR.
+- **Pushing the `(projectKey, eventType)` filter into a SQL join** for the validation-candidate query — efficiency review #1's bigger fix. The `source` pushdown above + the `setImmediate` deferral cover the immediate pain; the join-shaped query lands when the validation-candidate sweep actually exhibits N+1 latency in production.
+- **Removing the 500-event cap in `observeValidationProfileCandidates`** — efficiency review's silent-correctness concern. The fix is real but the cap rarely matters today; coupled with paging it can land alongside the SQL pushdown above.
+- **Comment cleanup (drop "Phase 5.x —" prefixes)** — stylistic; left for context now, removeable in a sweep.
+- **Test-fixture extraction** for the four `TicketRunSummary` builders — reuse review #3. Real DRY opportunity; defer to a dedicated test-support PR.
+
+#### Out-of-scope follow-ups noted by reviewers
+
+- Tag-prefix scanning logic is duplicated between `learned-candidate-promoter.ts` and `learned-candidates-service.ts`; a shared `parseLearnedTagState(record)` would consolidate. Pre-existing pattern — also worth migrating the inline `run:`/`ticket:`/`classification:`/`outcome:` literals to `TAG_PREFIXES`.
+- The N+1 against `mission_events` in `observeValidationProfileCandidates` is now off the close path but still present; a SQL-side join scoped by `(projectKey, eventType)` would eliminate it entirely.
+- `summarize` in `learned-candidates-service.ts` overlaps with `toRepoIntelligenceEntrySummary` in `ticket-runs.ts`; could share base mapper + audit-trail extension. Same for `MissionLearnedCandidateRecord` extending `TicketRunRepoIntelligenceEntrySummary`.
+- Pre-existing typecheck errors in `session-manager.permission-lifecycle.suite.ts` lines 161, 217 still flagged.
+
+#### What's still on hold for Phase 6+
+
+- **Weekly-digest cron + on-disk write** — the generator is pure and fully tested but no scheduler invokes it yet. Operator can call it from a future `/digest` action or admin-pane button.
+- **"Trust signal" labels in the prompt** — auto-promoted entries don't yet annotate themselves as "high-confidence" / "promoted" / "provisional" in the repo-guidance section. The data is there (tag scan); a Phase 6 polish item.
+- **"Rollback last N promotions"** action in the admin pane — single revoke is wired; bulk rollback is a future polish.
+- **Auto-promotion for `validation_profile` candidates** — Phase 5.4's auto-promotion currently covers `briefing` / `example` / `pitfall` repo-intelligence types. Extending to `validation_profile` candidates needs the same scoring shape but a different storage target (the `validation_profiles` table, not `repo_intelligence_entries`). Deferred.
+
+---
+
+### 2026-05-10 — Phase 6 shipped
+
+#### Phase 6 deliverables
+
+- **§6.1 validation result supersession** — New backend method `MissionLifecycleService.supersedeValidationsByKind(runId, kind)` finds the latest passing validation of `kind` and updates its `supersedesValidationIds` to claim every earlier failed/pending peer that isn't already superseded. New typed event `validations-superseded`. Renderer: the validate-phase rendering computes a per-kind supersedable set (kinds with a passing winner AND an effective older failure) and shows a "Supersede earlier *kind* failures" button on the winner's card. New protocol message `missions:ticket-run:validations:supersede` plumbed through validation, electron-api, preload, ipc-bridge, channels, and missions-handlers. Hook: `controller.supersedeValidationsByKind(kind)`.
+- **§6.2 mission state reconciliation** — New [mission-state-reconciler.ts](../packages/backend/src/missions/mission-state-reconciler.ts) is a pure deterministic patch over `TicketRunSummary`. Currently surfaces two patches that can fire from the close path: clear `proof.staleReason` when `proof.status` has moved off "stale", and rewrite a stale "Working / preparing / starting" `statusMessage` on a closed run. Each patch applied emits a `mission-state-reconciled` event with field/previousValue/nextValue/reason so drift is observable from the timeline. Wired into the close path via `runStateReconciliation` immediately after the run is persisted as `done`. Self-review removed an originally-included third patch (validate→summarize) that was unreachable from the only call site.
+- **§6.3 permission-on-mission-thread overlay** — New [MissionPermissionBanner.tsx](../packages/renderer/src/components/missions/rooms/MissionPermissionBanner.tsx) reads `usePermissionStore` with a selector that returns the matching request directly (so unrelated permission events don't re-render the banner). Renders nothing when no request is open for this run's station. Click jumps to the station so the existing `PermissionPrompt` overlay can take over. Slotted above the `NowPlayingStrip` on the mission detail view.
+- **§6.4 per-phase budget hint** — New [phase-budget.ts](../packages/backend/src/missions/phase-budget.ts) computes per-(projectKey, phase) p25/median/p75 envelopes from recent closed runs. The shared `computePhaseTotalsFromEvents` now also powers `weekly-digest-generator.ts:computeLongestPhases` (deduplicated). `getMissionTimeline` returns a `phaseBudget` field on `TicketRunMissionTimelineResult`; the renderer surfaces it in the now-playing strip as a soft "typical 12–25 min" hint when it matches the run's current phase. Memoised on `TicketRunService` per projectKey on a watermark equal to the latest peer-run `updatedAt` — recompute fires only when a new peer closes.
+- **§6.5 abort-and-postmortem action** — New `aborted` status on `TicketRunStatus`. New backend `TicketRunService.abortRun(runId, reason)` that cancels the in-flight pass, stops services, closes the station (all error-tolerant), persists the run with `status: "aborted"` + `statusMessage: "Mission aborted: <reason>"`, records `mission-aborted` + `run-closed` events, and writes the post-mortem stub. The post-mortem generator now surfaces the abort reason in the open-observations section. Renderer: new [AbortMissionPanel](../packages/renderer/src/components/missions/rooms/AbortMissionPanel.tsx) inline form (collapsed → expanded textarea + Cancel/Confirm) replaces an earlier `window.prompt`-based affordance. New protocol message `missions:ticket-run:abort` and electron-api `abortTicketRun(runId, reason)`. The new shared `tearDownStationAndServices` helper centralises the cancel/stop/close pattern across `completeRun` and `abortRun`.
+- **§6.6 tests** — `mission-state-reconciler.test.ts` (4 tests): no-op for canonical state, clears `proof.staleReason`, rewrites stale `statusMessage`, leaves real contradictions for the workflow guard. `phase-budget.test.ts` (4 tests): minSamples gate, median + p25/p75 across runs, project filter, done-status filter. `mission-lifecycle.test.ts` extended (3 tests): supersede attaches failed peer ids, rejects when no passing winner exists, rejects when nothing left to supersede. Plus a `mission-events.test.ts` taxonomy update for the three new event types and a `describeRunStatus` extension in two renderer files for the new `aborted` status. Total Phase 6 tests: 11 new + taxonomy update. Suite total: ~807 passing (584 backend + 30 memory-db + 75 renderer + 39 main + 40 shared + 39 mcp).
+
+#### Self-review fixes
+
+After the three review agents (reuse, quality, efficiency) the following landed:
+
+- **Cache `computePhaseBudgetForRun` per project** with watermark-based invalidation — kills the per-`getMissionTimeline` N+1 (1 + 10 DB queries per refresh) for the soft hint. Cache invalidates only when a new peer run closes (efficiency #1 + quality #3.)
+- **Tighten the `MissionPermissionBanner` selector** to return the matching request directly so unrelated permission-store mutations don't re-render the banner; drop the now-redundant `useMemo`; capture `stationId` locally so the click handler doesn't rely on a non-null assertion (efficiency #2 + quality #5.)
+- **Drop the dead validate→summarize patch** from `mission-state-reconciler.ts` — only reachable in principle, never reachable from the only call site since `saveSummary` already advances the phase. Tightened `stableString` signature to `string | null | undefined` so the helper is honest about its inputs (quality #2.)
+- **Wrap `stopRunServices` in `abortRun`** consistently with `cancelMissionPass` and `closeMissionStation` so the abort path is uniformly tolerant of teardown failures (quality #4.)
+- **Replace `window.prompt` for abort reason** with a new inline `AbortMissionPanel` that mirrors the `ManualReviewPanel` shape (collapsed → expanded textarea + Cancel/Confirm). No `window.prompt`/Electron-blocked dialog (quality #1.)
+- **Extract `computePhaseTotalsFromEvents`** as the shared "walk events, accumulate per-phase deltas" helper used by both `phase-budget.ts` and `weekly-digest-generator.ts` (reuse #1.)
+- **Extract `tearDownStationAndServices`** so `abortRun` and `completeRun` share the cancel-pass / stop-services / close-station flow with a single `tolerateFailures` knob (reuse #8.)
+- **Skip the redundant sort** inside `computePhaseTotalsFromEvents` via a `presorted: boolean` option (efficiency #3.)
+
+Skipped (judgment calls):
+- **Extract `getSupersedableValidationKinds` to `@spira/shared`** so client + server share the predicate (reuse #6) — real DRY win, but the renderer derivation runs over the same data the backend has, so today they cannot drift; defer until a third caller appears.
+- **Promote `percentile` to a shared util / rewrite `median` on top of it** (reuse #2) — both helpers are tiny and live in independent modules; defer.
+- **Rename the post-mortem `stableString`** to avoid the same-name-different-semantics collision (reuse #3) — the reconciler version is now strictly typed (`string | null | undefined`) so the collision is much narrower; defer.
+- **Memoise `supersedableKinds` in `MissionDetailsRoom.tsx`** — `run.validations` is small (≤20 typical); compute is trivial; defer.
+- **Sort-key dedup `sortValidationsNewestFirst`** (reuse #5) — three call sites; trivial; defer.
+- **Comment-prefix sweep** (drop "Phase 6.X —" task references) — stylistic; defer to a single sweep across the whole repo.
+
+#### Out-of-scope follow-ups noted by reviewers
+
+- The duplicated 5+ duration formatters across the repo (`AuxDeck.tsx`, `NowPlayingStrip.tsx`, `ProofRunsViewer.tsx`, `ValidationProfilesEditor.tsx`, `post-mortem-generator.ts`) are a pre-existing pattern; consolidating into `packages/shared/src/duration-format.ts` with a `style` parameter is a separate cleanup PR.
+- `phase-budget.ts:PHASES` constant could import `TICKET_RUN_MISSION_PHASES` from `@spira/shared`; minor.
+- Pre-existing typecheck errors in `session-manager.permission-lifecycle.suite.ts` lines 161, 217 still flagged.
+
+#### What's still on hold for Phase 7+
+
+- **Phase 7 — Spira-side application** is the last phase: map WorkSession events into the same typed taxonomy, add a builtin Spira `repo_profile`, run preflight before WorkSession's `validate` phase, and generate WorkSession post-mortems on close.
+- The Phase 5 follow-ups (weekly-digest cron, "trust signal" labels in the prompt, rollback-last-N action, validation-profile auto-promotion) remain queued.

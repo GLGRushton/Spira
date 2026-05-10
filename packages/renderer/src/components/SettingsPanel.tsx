@@ -10,6 +10,7 @@ import { useEffect, useState } from "react";
 import { useMcpStore } from "../stores/mcp-store.js";
 import { useRuntimeConfigStore } from "../stores/runtime-config-store.js";
 import { useSettingsStore } from "../stores/settings-store.js";
+import { LearnedCandidatesEditor } from "./settings/LearnedCandidatesEditor.js";
 import { ProofRulesEditor } from "./settings/ProofRulesEditor.js";
 import { RepoProfilesEditor } from "./settings/RepoProfilesEditor.js";
 import { ValidationProfilesEditor } from "./settings/ValidationProfilesEditor.js";
@@ -291,6 +292,7 @@ export function SettingsPanel() {
     | "repo-profiles"
     | "validation-profiles"
     | "proof-rules"
+    | "learned-candidates"
     | "youtrack"
     | "sql-server"
     | "other";
@@ -304,6 +306,7 @@ export function SettingsPanel() {
     { id: "repo-profiles", label: "Repo profiles", caption: "Per-project metadata" },
     { id: "validation-profiles", label: "Validation profiles", caption: "Build / test / lint catalog" },
     { id: "proof-rules", label: "Proof rules", caption: "Proof level recommendations" },
+    { id: "learned-candidates", label: "Learned candidates", caption: "Auto-promotion audit" },
     { id: "youtrack", label: "YouTrack", caption: "Ticket intake" },
     { id: "sql-server", label: "SQL server", caption: "Read-only MCP login" },
     { id: "other", label: "Other keys", caption: "ElevenLabs, Picovoice, Nexus" },
@@ -557,6 +560,8 @@ export function SettingsPanel() {
         return <RepoProfilesEditor />;
       case "validation-profiles":
         return <ValidationProfilesEditor />;
+      case "learned-candidates":
+        return <LearnedCandidatesEditor />;
       case "other":
         return renderRuntimeConfigSection(
           "Other secure keys",

@@ -33,6 +33,7 @@ import type {
   TicketRunGitStateResult,
   TicketRunMissionEventSummary,
   TicketRunMissionTimelineResult,
+  TicketRunPhaseBudgetSnapshot,
   TicketRunProofRunSummary,
   TicketRunProofSnapshot,
   TicketRunProofSnapshotResult,
@@ -59,7 +60,23 @@ import {
   type WarmRunDependenciesInput,
   warmRunDependencies,
 } from "./dependency-warmer.js";
+import {
+  buildPromotedTags,
+  PROMOTION_FORMULA_VERSION,
+  scoreLearnedCandidates,
+} from "./learned-candidate-promoter.js";
 import { buildLearnedRepoIntelligenceCandidates } from "./mission-intelligence.js";
+import { classifyMissionOutcome, type MissionOutcomeClassification } from "./mission-outcome.js";
+import { reconcileMissionDisplayState } from "./mission-state-reconciler.js";
+import {
+  DEFAULT_BUDGET_MIN_SAMPLES,
+  DEFAULT_BUDGET_SAMPLE_SIZE,
+  computePhaseBudget,
+} from "./phase-budget.js";
+import {
+  DEFAULT_VALIDATION_CANDIDATE_THRESHOLD,
+  deriveValidationProfileCandidates,
+} from "./validation-candidate-learner.js";
 import { buildPostmortemFilename, generateMissionPostmortem } from "./post-mortem-generator.js";
 import { buildMissionWorkflowRepairPrompt, getMissionWorkflowState } from "./mission-workflow-guard.js";
 import {
@@ -168,6 +185,16 @@ export class TicketRunService {
   private readonly proofDiscoveryCache = new Map<string, ResolvedMissionProofProfile | null>();
   /** Set of run ids currently in a dependency-warming pass; prevents re-warm storms. */
   private readonly warmingInFlight = new Set<string>();
+  /**
+   * Per-project phase-budget cache. Keyed on projectKey, holds the last-computed snapshot
+   * plus the latest peer-run `updatedAt` observed at compute time. Invalidates only when
+   * a peer run closes (its `updatedAt` exceeds the cached watermark) — soft hint data
+   * doesn't need stronger consistency than that.
+   */
+  private readonly phaseBudgetCache = new Map<
+    string,
+    { watermarkUpdatedAt: number; snapshot: TicketRunPhaseBudgetSnapshot }
+  >();
   private disposed = false;
 
   constructor(private readonly options: TicketRunServiceOptions) {
@@ -662,21 +689,13 @@ export class TicketRunService {
 
       this.assertRunCanCloseWithLifecycle(run);
 
-      if (this.options.stopRunServices) {
-        await this.options.stopRunServices(run.runId);
-      }
-
-      let stationCleared = false;
-      const stationId = run.stationId;
-      if (stationId && this.options.closeMissionStation) {
-        await this.options.closeMissionStation(stationId);
-        stationCleared = true;
-      }
+      const { stationCleared } = await this.tearDownStationAndServices(run, { tolerateFailures: false });
       const completedRun = this.persistRun(this.getFreshRun(runId), {
         ...(stationCleared ? { stationId: null } : {}),
         status: "done",
         statusMessage: "Mission closed.",
       });
+      this.runStateReconciliation(completedRun);
       this.observeRepoIntelligenceCandidates(completedRun);
       this.recordMissionEvent(completedRun, "system", "run-closed", {
         stationCleared,
@@ -697,6 +716,134 @@ export class TicketRunService {
         snapshot,
       };
     });
+  }
+
+  /**
+   * Phase 6.5 — operator-initiated abort. Closes the run with the `aborted` status,
+   * generates the post-mortem stub (with the abort reason in the open-observations
+   * placeholder), and records a `mission-aborted` event. Permitted from any status
+   * except `done` and `aborted` — if the operator wants out, they get out.
+   */
+  async abortRun(runId: string, reason: string): Promise<CompleteTicketRunResult> {
+    const trimmedReason = reason.trim();
+    if (!trimmedReason) {
+      throw new ConfigError("An abort reason is required.");
+    }
+    return this.withRunLock(runId, async () => {
+      const memoryDb = this.requireMemoryDb();
+      const run = await this.ensureRunSubmodules(this.getFreshRun(runId));
+      if (run.status === "done" || run.status === "aborted") {
+        throw new ConfigError(`Ticket ${run.ticketId} is already closed (${run.status}).`);
+      }
+
+      const { stationCleared } = await this.tearDownStationAndServices(run, {
+        tolerateFailures: true,
+        cancelInFlightPass: true,
+      });
+
+      const phaseAtAbort = run.missionPhase;
+      const abortedRun = this.persistRun(this.getFreshRun(runId), {
+        ...(stationCleared ? { stationId: null } : {}),
+        status: "aborted",
+        statusMessage: `Mission aborted: ${trimmedReason}`,
+      });
+      this.recordMissionEvent(abortedRun, "system", "mission-aborted", {
+        reason: trimmedReason,
+        phaseAtAbort,
+      });
+      this.recordMissionEvent(abortedRun, "system", "run-closed", {
+        stationCleared,
+      });
+      void this.writePostmortemStub(abortedRun).catch((error) => {
+        this.options.logger.warn(
+          { err: error, runId: abortedRun.runId, ticketId: abortedRun.ticketId },
+          "Failed to write mission post-mortem stub for aborted run",
+        );
+      });
+      const snapshot = memoryDb.getTicketRunSnapshot();
+      this.emitSnapshot(snapshot);
+      return {
+        run: abortedRun,
+        snapshot,
+      };
+    });
+  }
+
+  /**
+   * Cancel an in-flight pass (optional), stop run services, and close the mission
+   * station for `run`. `tolerateFailures: false` lets exceptions propagate (the close
+   * path semantics — a teardown failure aborts the close). `tolerateFailures: true`
+   * swallows + logs (the abort path — operator wants out, we get them out).
+   */
+  private async tearDownStationAndServices(
+    run: TicketRunSummary,
+    options: { tolerateFailures: boolean; cancelInFlightPass?: boolean },
+  ): Promise<{ stationCleared: boolean }> {
+    const tolerate = async <T>(label: string, work: () => Promise<T>): Promise<T | undefined> => {
+      if (!options.tolerateFailures) return work();
+      try {
+        return await work();
+      } catch (error) {
+        this.options.logger.warn({ err: error, runId: run.runId }, label);
+        return undefined;
+      }
+    };
+
+    if (options.cancelInFlightPass) {
+      const latestAttempt = this.getLatestAttempt(run);
+      if (latestAttempt?.status === "running" && run.stationId && this.options.cancelMissionPass) {
+        await tolerate("Failed to cancel mission pass during teardown; continuing", () =>
+          this.options.cancelMissionPass!(run.stationId!),
+        );
+      }
+    }
+
+    if (this.options.stopRunServices) {
+      await tolerate("Failed to stop run services during teardown; continuing", () =>
+        this.options.stopRunServices!(run.runId),
+      );
+    }
+
+    let stationCleared = false;
+    const stationId = run.stationId;
+    if (stationId && this.options.closeMissionStation) {
+      const result = await tolerate("Failed to close mission station during teardown; continuing", () =>
+        this.options.closeMissionStation!(stationId),
+      );
+      stationCleared = options.tolerateFailures ? result !== undefined : true;
+    }
+    return { stationCleared };
+  }
+
+  /**
+   * Apply the deterministic display-state reconciler. Best-effort: any failure is logged
+   * but never faults the close path. Each patch applied emits a `mission-state-reconciled`
+   * event so drift is observable from the timeline.
+   */
+  private runStateReconciliation(run: TicketRunSummary): void {
+    try {
+      const result = reconcileMissionDisplayState(run);
+      if (result.patches.length === 0) return;
+      // Persist the reconciled state and emit an event per patch.
+      this.persistRun(run, {
+        statusMessage: result.run.statusMessage,
+        missionPhase: result.run.missionPhase,
+        proof: result.run.proof,
+      });
+      for (const patch of result.patches) {
+        this.recordMissionEvent(result.run, "system", "mission-state-reconciled", {
+          field: patch.field,
+          previousValue: patch.previousValue,
+          nextValue: patch.nextValue,
+          reason: patch.reason,
+        });
+      }
+    } catch (error) {
+      this.options.logger.warn(
+        { err: error, runId: run.runId },
+        "Mission state reconciliation failed; continuing",
+      );
+    }
   }
 
   /**
@@ -780,7 +927,56 @@ export class TicketRunService {
       snapshot: this.requireMemoryDb().getTicketRunSnapshot(),
       events,
       hasMore,
+      phaseBudget: this.computePhaseBudgetForRun(run),
     };
+  }
+
+  /**
+   * Read recent same-project closed runs and their events; compute the per-phase budget
+   * envelope. Returns an empty entries list when there's not enough data yet (renderer
+   * treats absence as "no hint to show"). Memoised per project on a watermark — recompute
+   * only when a new peer run has closed since the previous compute.
+   */
+  private computePhaseBudgetForRun(run: TicketRunSummary): TicketRunPhaseBudgetSnapshot {
+    const memoryDb = this.options.memoryDb;
+    if (!memoryDb || !run.projectKey) {
+      return { projectKey: run.projectKey ?? "", entries: [] };
+    }
+    try {
+      const peerRuns = memoryDb
+        .listTicketRuns()
+        .filter(
+          (candidate) =>
+            candidate.projectKey === run.projectKey &&
+            candidate.status === "done" &&
+            candidate.runId !== run.runId,
+        );
+      if (peerRuns.length < DEFAULT_BUDGET_MIN_SAMPLES) {
+        return { projectKey: run.projectKey, entries: [] };
+      }
+      const watermarkUpdatedAt = peerRuns.reduce(
+        (latest, candidate) => Math.max(latest, candidate.updatedAt ?? candidate.createdAt),
+        0,
+      );
+      const cached = this.phaseBudgetCache.get(run.projectKey);
+      if (cached && cached.watermarkUpdatedAt === watermarkUpdatedAt) {
+        return cached.snapshot;
+      }
+      const sampled = peerRuns
+        .sort((left, right) => (right.updatedAt ?? right.createdAt) - (left.updatedAt ?? left.createdAt))
+        .slice(0, DEFAULT_BUDGET_SAMPLE_SIZE);
+      const events = sampled.flatMap((peer) => memoryDb.listMissionEvents(peer.runId, { limit: 500 }));
+      const snapshot = computePhaseBudget({
+        projectKey: run.projectKey,
+        runs: sampled,
+        events,
+      });
+      this.phaseBudgetCache.set(run.projectKey, { watermarkUpdatedAt, snapshot });
+      return snapshot;
+    } catch (error) {
+      this.options.logger.warn({ err: error, runId: run.runId }, "Phase budget computation failed");
+      return { projectKey: run.projectKey, entries: [] };
+    }
   }
 
   /**
@@ -3464,17 +3660,155 @@ export class TicketRunService {
     if (!memoryDb) {
       return;
     }
-    const entries = buildLearnedRepoIntelligenceCandidates(run).map((candidate) =>
+    // Phase 5.1 — classify the closed mission once and reuse it for both the audit-trail
+    // event and the candidate generator. Null means "not closed cleanly enough to learn
+    // from" and we skip everything below.
+    const outcome = classifyMissionOutcome(run);
+    if (!outcome) return;
+    this.recordMissionEvent(run, "system", "mission-outcome-classified", {
+      outcome: outcome.kind,
+      rationale: outcome.rationale,
+      retriedValidationKinds: outcome.retriedValidationKinds,
+      usedManualReview: outcome.usedManualReview,
+    });
+    const entries = buildLearnedRepoIntelligenceCandidates(run, outcome).map((candidate) =>
       memoryDb.upsertRepoIntelligence(candidate),
     );
-    if (entries.length === 0) {
-      return;
+    if (entries.length > 0) {
+      this.recordMissionEvent(run, "system", "repo-intelligence-candidates-observed", {
+        count: entries.length,
+        entryIds: entries.map((entry) => entry.id),
+        repoRelativePaths: entries.map((entry) => entry.repoRelativePath),
+      });
     }
-    this.recordMissionEvent(run, "system", "repo-intelligence-candidates-observed", {
-      count: entries.length,
-      entryIds: entries.map((entry) => entry.id),
-      repoRelativePaths: entries.map((entry) => entry.repoRelativePath),
+    // Validation candidates and the promotion sweep are independent of whether THIS
+    // run produced new repo-intelligence candidates — a clean-pass with no fresh
+    // candidates can still tip an older one over its confidence threshold. Run them
+    // off the close path via setImmediate so close latency stays bounded.
+    setImmediate(() => {
+      try {
+        this.observeValidationProfileCandidates(run, outcome);
+      } catch (error) {
+        this.options.logger.warn(
+          { err: error, runId: run.runId },
+          "Validation-candidate observation failed",
+        );
+      }
+      if (this.options.autoPromoteLearnedCandidates !== false) {
+        try {
+          this.runLearnedCandidatePromotionSweep(run);
+        } catch (error) {
+          this.options.logger.warn(
+            { err: error, runId: run.runId },
+            "Learned-candidate promotion sweep failed",
+          );
+        }
+      }
     });
+  }
+
+  /**
+   * Phase 5.2 — scan the closed run plus its peers for shell commands that have succeeded
+   * across enough distinct missions to warrant a `validation_profile` candidate. Friction
+   * outcomes only contribute the *current* run; clean-pass outcomes look at recent peers
+   * too. Each surfaced candidate emits a `validation-profile-candidate-observed` event so
+   * the operator-facing audit trail is complete; persistence as an actual profile is opt-in
+   * via the admin pane (Phase 5.4 auto-promotes only above the confidence threshold).
+   */
+  private observeValidationProfileCandidates(run: TicketRunSummary, outcome: MissionOutcomeClassification): void {
+    const memoryDb = this.options.memoryDb;
+    if (!memoryDb || !run.projectKey) return;
+    // Negative-evidence outcomes don't propose new profiles — a fail-final mission's shell
+    // commands are not a reliable signal that the command itself is good.
+    if (outcome.kind === "fail-final") return;
+
+    const peerRuns = memoryDb
+      .listTicketRuns()
+      .filter((candidate) => candidate.projectKey === run.projectKey && candidate.status === "done");
+    const allEvents = peerRuns.flatMap((peer) => memoryDb.listMissionEvents(peer.runId, { limit: 500 }));
+    const existingProfiles = memoryDb.listValidationProfiles({
+      projectKey: run.projectKey,
+      repoRelativePaths: run.worktrees.map((worktree) => worktree.repoRelativePath),
+      limit: 200,
+    });
+
+    const candidates = deriveValidationProfileCandidates({
+      events: allEvents,
+      runs: peerRuns,
+      existingProfiles,
+      threshold: DEFAULT_VALIDATION_CANDIDATE_THRESHOLD,
+    });
+    for (const candidate of candidates) {
+      this.recordMissionEvent(run, "system", "validation-profile-candidate-observed", {
+        candidateId: candidate.candidateId,
+        projectKey: candidate.projectKey,
+        repoRelativePath: candidate.repoRelativePath,
+        kind: candidate.kind,
+        command: candidate.command,
+        workingDirectory: candidate.workingDirectory,
+        successCount: candidate.successCount,
+      });
+    }
+  }
+
+  /**
+   * Phase 5.4 — auto-promote any pending learned candidate whose confidence now clears its
+   * per-type threshold. Promotion is `setRepoIntelligenceApproval(id, true)` plus a tag
+   * update so the contributing-run set is preserved on the entry itself; revocations
+   * (handled elsewhere) refuse to re-promote on the same evidence.
+   */
+  private runLearnedCandidatePromotionSweep(run: TicketRunSummary): void {
+    const memoryDb = this.options.memoryDb;
+    if (!memoryDb || !run.projectKey) return;
+    const peerRuns = memoryDb
+      .listTicketRuns()
+      .filter((candidate) => candidate.projectKey === run.projectKey);
+    const candidates = memoryDb.listRepoIntelligence({
+      projectKey: run.projectKey,
+      includeUnapproved: true,
+      source: "learned",
+      limit: 500,
+    });
+    const decisions = scoreLearnedCandidates({
+      candidates,
+      runs: peerRuns,
+      thresholds: this.options.learnedCandidatePromotionThresholds,
+      now: this.now(),
+    });
+
+    for (const decision of decisions) {
+      if (!decision.promote) continue;
+      const candidate = candidates.find((entry) => entry.id === decision.candidateId);
+      if (!candidate) continue;
+      try {
+        const promoted = memoryDb.upsertRepoIntelligence({
+          id: candidate.id,
+          projectKey: candidate.projectKey,
+          repoRelativePath: candidate.repoRelativePath,
+          type: candidate.type,
+          title: candidate.title,
+          content: candidate.content,
+          tags: buildPromotedTags(candidate, decision.contributingRunIds),
+          source: candidate.source,
+          approved: true,
+          createdAt: candidate.createdAt,
+        });
+        this.recordMissionEvent(run, "system", "learned-candidate-promoted", {
+          candidateId: promoted.id,
+          type: promoted.type,
+          confidence: decision.confidence,
+          threshold: decision.threshold,
+          formulaVersion: PROMOTION_FORMULA_VERSION,
+          contributingRunIds: decision.contributingRunIds,
+          contradictingRunIds: decision.contradictingRunIds,
+        });
+      } catch (error) {
+        this.options.logger.warn(
+          { err: error, candidateId: decision.candidateId },
+          "Failed to auto-promote learned candidate; leaving as pending",
+        );
+      }
+    }
   }
 
   private recordMissionEvent<T extends MissionEventType>(

@@ -4,6 +4,7 @@ import type {
   MissionServiceSnapshot,
   TicketRunGitState,
   TicketRunMissionEventSummary,
+  TicketRunPhaseBudgetSnapshot,
   TicketRunProofProfileSummary,
   TicketRunRepoIntelligenceEntrySummary,
   TicketRunReviewRepoState,
@@ -36,6 +37,8 @@ export interface MissionRunController {
   isLoadingOlderMissionEvents: boolean;
   /** Phase 4.6 — append the next older page of mission events. No-op when none remain. */
   loadOlderMissionEvents: () => Promise<void>;
+  /** Phase 6.4 — soft per-phase duration hints from recent closed runs. Empty when not enough data. */
+  phaseBudget: TicketRunPhaseBudgetSnapshot;
   repoIntelligenceEntries: TicketRunRepoIntelligenceEntrySummary[];
   isRepoIntelligenceLoading: boolean;
   approvingRepoIntelligenceEntryId: string | null;
@@ -57,6 +60,10 @@ export interface MissionRunController {
   setMissionProofManualReview: (justification: string) => Promise<void>;
   /** Phase 2.1 — clear a prior manual-review choice; gate becomes unsatisfied again. */
   clearMissionProofManualReview: () => Promise<void>;
+  /** Phase 6.1 — supersede earlier failed/pending validations of a kind via the latest passing one. */
+  supersedeValidationsByKind: (kind: string) => Promise<void>;
+  /** Phase 6.5 — abort the run with a free-text reason; closes with status="aborted". */
+  abortRun: (reason: string) => Promise<void>;
   isSettingManualReview: boolean;
   retryTicketRunSync: () => Promise<void>;
   startRunWork: () => Promise<void>;
@@ -172,6 +179,11 @@ export function useMissionRunController(run: TicketRunSummary): MissionRunContro
   // tells the UI whether to render a "load older events" affordance.
   const [hasMoreMissionTimeline, setHasMoreMissionTimeline] = useState(false);
   const [isLoadingOlderMissionEvents, setIsLoadingOlderMissionEvents] = useState(false);
+  // Phase 6.4 — per-phase budget envelope from the timeline result; soft hint only.
+  const [phaseBudget, setPhaseBudget] = useState<TicketRunPhaseBudgetSnapshot>({
+    projectKey: run.projectKey ?? "",
+    entries: [],
+  });
   const [repoIntelligenceEntries, setRepoIntelligenceEntries] = useState<TicketRunRepoIntelligenceEntrySummary[]>([]);
   const [isRepoIntelligenceLoading, setIsRepoIntelligenceLoading] = useState(false);
   const [approvingRepoIntelligenceEntryId, setApprovingRepoIntelligenceEntryId] = useState<string | null>(null);
@@ -460,6 +472,7 @@ export function useMissionRunController(run: TicketRunSummary): MissionRunContro
       setRunSnapshot(result.snapshot);
       setMissionTimeline(result.events);
       setHasMoreMissionTimeline(result.hasMore);
+      setPhaseBudget(result.phaseBudget);
     } catch (error) {
       if (missionTimelineRequestIdRef.current !== requestId) {
         return;
@@ -1216,6 +1229,38 @@ export function useMissionRunController(run: TicketRunSummary): MissionRunContro
     }
   }, [refreshMissionProofs, run.runId, setRunSnapshot]);
 
+  const supersedeValidationsByKind = useCallback(
+    async (kind: string) => {
+      setRunError(null);
+      setRunNotice(null);
+      try {
+        const result = await window.electronAPI.supersedeTicketRunValidations(run.runId, kind);
+        setRunSnapshot(result.snapshot);
+        setRunNotice(`Superseded earlier ${kind} validations.`);
+      } catch (error) {
+        console.error("Failed to supersede validations", error);
+        setRunError(error instanceof Error ? error.message : "Failed to supersede validations.");
+      }
+    },
+    [run.runId, setRunSnapshot],
+  );
+
+  const abortRun = useCallback(
+    async (reason: string) => {
+      setRunError(null);
+      setRunNotice(null);
+      try {
+        const result = await window.electronAPI.abortTicketRun(run.runId, reason);
+        setRunSnapshot(result.snapshot);
+        setRunNotice(`${result.run.ticketId} aborted.`);
+      } catch (error) {
+        console.error("Failed to abort mission", error);
+        setRunError(error instanceof Error ? error.message : "Failed to abort mission.");
+      }
+    },
+    [run.runId, setRunSnapshot],
+  );
+
   const completeRun = useCallback(async () => {
     setIsCompletingRun(true);
     setRunNotice(null);
@@ -1348,6 +1393,7 @@ export function useMissionRunController(run: TicketRunSummary): MissionRunContro
     hasMoreMissionTimeline,
     isLoadingOlderMissionEvents,
     loadOlderMissionEvents,
+    phaseBudget,
     repoIntelligenceEntries,
     isRepoIntelligenceLoading,
     approvingRepoIntelligenceEntryId,
@@ -1367,6 +1413,8 @@ export function useMissionRunController(run: TicketRunSummary): MissionRunContro
     runMissionProof,
     setMissionProofManualReview,
     clearMissionProofManualReview,
+    supersedeValidationsByKind,
+    abortRun,
     isSettingManualReview,
     retryTicketRunSync,
     startRunWork,

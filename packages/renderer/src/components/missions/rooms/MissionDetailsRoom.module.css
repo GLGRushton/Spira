@@ -502,6 +502,41 @@
   50% { opacity: 0.55; transform: scale(0.85); }
 }
 
+/* Phase 6.3 — high-visibility banner shown when this run's station is awaiting
+   approval, even when the operator is on a different station. */
+.permissionBanner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 16px;
+  border: 1px solid rgba(212, 191, 240, 0.5);
+  border-radius: var(--radius-sm);
+  background: linear-gradient(180deg, rgba(48, 24, 72, 0.78), rgba(28, 18, 48, 0.58));
+  color: var(--marble-ivory);
+  font-size: 13px;
+}
+
+.permissionBannerCopy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.permissionBannerAction {
+  border: 1px solid rgba(212, 191, 240, 0.65);
+  background: rgba(212, 191, 240, 0.18);
+  color: var(--marble-ivory);
+  padding: 6px 12px;
+  border-radius: var(--radius-xs, 6px);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.permissionBannerAction:hover {
+  background: rgba(212, 191, 240, 0.28);
+}
+
 .nowPlayingCopy {
   display: flex;
   flex-direction: column;

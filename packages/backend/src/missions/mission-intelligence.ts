@@ -16,6 +16,7 @@ import type {
   TicketRunSummary,
 } from "@spira/shared";
 import { getEffectiveValidations } from "@spira/shared";
+import { type MissionOutcomeClassification } from "./mission-outcome.js";
 
 const COPY_CHANGE_KEYWORDS = ["copy", "wording", "label", "labels", "text", "tooltip", "terminology", "rename"];
 const UI_CHANGE_KEYWORDS = ["ui", "screen", "page", "dialog", "button", "menu", "nav", "visual", "layout"];
@@ -95,7 +96,8 @@ const slugifyFragment = (value: string): string =>
     .replace(/-{2,}/g, "-")
     .slice(0, 48);
 
-const hashFragment = (value: string): string => createHash("sha1").update(value).digest("hex").slice(0, 12);
+export const hashFragment = (value: string): string =>
+  createHash("sha1").update(value).digest("hex").slice(0, 12);
 
 const includesAnyKeyword = (text: string, keywords: readonly string[]): boolean =>
   keywords.some((keyword) => text.includes(keyword));
@@ -377,21 +379,11 @@ const summarizeValidationCommands = (run: TicketRunSummary): string =>
     .slice(0, 2)
     .join(" ; ");
 
-const isCleanMissionForLearning = (run: TicketRunSummary): boolean => {
-  const effectiveValidations = getEffectiveValidations(run.validations);
-  return (
-    run.status === "done" &&
-    run.classification !== null &&
-    run.plan !== null &&
-    run.missionSummary !== null &&
-    effectiveValidations.some((validation) => validation.status === "passed") &&
-    !effectiveValidations.some((validation) => validation.status === "failed" || validation.status === "pending") &&
-    (!run.classification.proofRequired || run.proof.status === "passed")
-  );
-};
-
-export const buildLearnedRepoIntelligenceCandidates = (run: TicketRunSummary): UpsertRepoIntelligenceInput[] => {
-  if (!isCleanMissionForLearning(run) || !run.classification || !run.missionSummary) {
+export const buildLearnedRepoIntelligenceCandidates = (
+  run: TicketRunSummary,
+  outcome: MissionOutcomeClassification,
+): UpsertRepoIntelligenceInput[] => {
+  if (!run.classification || !run.plan || !run.missionSummary) {
     return [];
   }
   const classification = run.classification;
@@ -418,20 +410,39 @@ export const buildLearnedRepoIntelligenceCandidates = (run: TicketRunSummary): U
       ? ` Proof evidence: ${missionSummary.proofSummary.trim()}.`
       : "";
 
+  // Pitfall variants for fail-final / fail-with-recovery outcomes — these are negative-
+  // evidence learnings ("if you see X, consider Y") rather than positive examples.
+  const isPitfall = outcome.kind === "fail-final" || outcome.kind === "fail-with-recovery";
+  const candidateType: UpsertRepoIntelligenceInput["type"] = isPitfall ? "pitfall" : "example";
+  const titlePrefix = isPitfall ? "Mission friction observed in" : "Observed mission pattern from";
+  const frictionNote = outcome.retriedValidationKinds.length > 0
+    ? ` Retry observed for: ${outcome.retriedValidationKinds.join(", ")}.`
+    : "";
+  const manualReviewNote = outcome.usedManualReview
+    ? " Proof gate satisfied via manual review."
+    : "";
+  const outcomeNote = ` Outcome: ${outcome.kind}.`;
+
   return repoRelativePaths.map((repoRelativePath) => {
     const repoSlug = slugifyFragment(repoRelativePath) || "root";
     return {
       id: `learned-${run.runId}-${repoSlug}-${hashFragment(repoRelativePath)}`,
       projectKey: run.projectKey,
       repoRelativePath,
-      type: "example",
-      title: `Observed mission pattern from ${run.ticketId}`,
+      type: candidateType,
+      title: `${titlePrefix} ${run.ticketId}`,
       content: `Observed from "${run.ticketSummary}" in ${repoRelativePath}. Completed work: ${missionSummary.completedWork.trim()}. ${
         validationCommands.length > 0
           ? `Passing validation: ${validationCommands}.`
           : "Passing validation was recorded."
-      }${proofSummary}`,
-      tags: ["learned", `run:${run.runId}`, `ticket:${run.ticketId}`, `classification:${classification.kind}`],
+      }${proofSummary}${frictionNote}${manualReviewNote}${outcomeNote}`,
+      tags: [
+        "learned",
+        `run:${run.runId}`,
+        `ticket:${run.ticketId}`,
+        `classification:${classification.kind}`,
+        `outcome:${outcome.kind}`,
+      ],
       source: "learned",
       approved: false,
       createdAt: missionSummary.updatedAt,

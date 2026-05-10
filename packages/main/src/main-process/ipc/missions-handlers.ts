@@ -227,6 +227,24 @@ export const createMissionIpcHandlers = (getBridge: () => IpcBridgeHandle | null
     input?: { runId?: string },
   ) => requireBridge(getBridge()).clearTicketRunProofManualReview(requireRunId(input?.runId)),
 
+  [IPC_CHANNELS.missions.validationsSupersede]: async (
+    _event: IpcMainInvokeEvent,
+    input?: { runId?: string; kind?: string },
+  ) =>
+    requireBridge(getBridge()).supersedeTicketRunValidations(
+      requireRunId(input?.runId),
+      requireField(input?.kind, "Validation kind is required."),
+    ),
+
+  [IPC_CHANNELS.missions.abort]: async (
+    _event: IpcMainInvokeEvent,
+    input?: { runId?: string; reason?: string },
+  ) =>
+    requireBridge(getBridge()).abortTicketRun(
+      requireRunId(input?.runId),
+      requireField(input?.reason, "An abort reason is required."),
+    ),
+
   [IPC_CHANNELS.missions.proofRulesList]: async () => requireBridge(getBridge()).listMissionProofRules(),
 
   [IPC_CHANNELS.missions.proofRulesUpsert]: async (
@@ -280,6 +298,23 @@ export const createMissionIpcHandlers = (getBridge: () => IpcBridgeHandle | null
     requireBridge(getBridge()).deleteMissionValidationProfile(
       requireField(input?.profileId, "Profile id is required."),
     ),
+
+  [IPC_CHANNELS.missions.learnedCandidatesList]: async () =>
+    requireBridge(getBridge()).listMissionLearnedCandidates(),
+
+  [IPC_CHANNELS.missions.learnedCandidatesRevoke]: async (
+    _event: IpcMainInvokeEvent,
+    input?: { input?: { candidateId?: string; reason?: string; archive?: boolean } },
+  ) => {
+    if (!input?.input) {
+      throw new Error("Revoke payload is required.");
+    }
+    return requireBridge(getBridge()).revokeMissionLearnedCandidate({
+      candidateId: requireField(input.input.candidateId, "Candidate id is required."),
+      reason: requireField(input.input.reason, "Revocation reason is required."),
+      archive: input.input.archive,
+    });
+  },
 
   [IPC_CHANNELS.missions.delete]: async (
     _event: IpcMainInvokeEvent,

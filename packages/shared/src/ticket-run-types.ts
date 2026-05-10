@@ -6,6 +6,9 @@ export const TICKET_RUN_STATUSES = [
   "awaiting-review",
   "error",
   "done",
+  // Phase 6.5 — operator-initiated abort. The run is closed; the post-mortem stub is
+  // generated as for a clean close, but the status carries the abort signal forward.
+  "aborted",
 ] as const;
 export type TicketRunStatus = (typeof TICKET_RUN_STATUSES)[number];
 
@@ -527,6 +530,25 @@ export interface TicketRunMissionTimelineResult {
    * use the smallest event id in the current page as the next `beforeId`.
    */
   hasMore: boolean;
+  /**
+   * Phase 6.4 — soft per-phase duration hints derived from recent closed runs of the
+   * same project. Empty `entries` means "not enough data yet"; renderer treats absence
+   * as "no hint to show."
+   */
+  phaseBudget: TicketRunPhaseBudgetSnapshot;
+}
+
+export interface TicketRunPhaseBudgetEntry {
+  phase: TicketRunMissionPhase;
+  sampleCount: number;
+  lowMs: number;
+  medianMs: number;
+  highMs: number;
+}
+
+export interface TicketRunPhaseBudgetSnapshot {
+  projectKey: string;
+  entries: TicketRunPhaseBudgetEntry[];
 }
 
 export interface TicketRunRepoIntelligenceEntrySummary {
@@ -553,6 +575,39 @@ export interface ApproveTicketRunRepoIntelligenceResult {
   run: TicketRunSummary;
   snapshot: TicketRunSnapshot;
   entry: TicketRunRepoIntelligenceEntrySummary;
+}
+
+/**
+ * Phase 5.4 — admin-pane summary of a learned intelligence candidate. Carries the audit-
+ * trail flags (approved / revoked / archived) plus the snapshot of contributing and
+ * blocked-evidence run ids so the operator can read what a promotion was based on.
+ */
+export interface MissionLearnedCandidateRecord {
+  id: string;
+  projectKey: string | null;
+  repoRelativePath: string | null;
+  type: "briefing" | "pitfall" | "example";
+  title: string;
+  content: string;
+  source: "builtin" | "user" | "learned";
+  approved: boolean;
+  revoked: boolean;
+  archived: boolean;
+  promotedRunIds: string[];
+  revokedRunIds: string[];
+  tags: string[];
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface MissionLearnedCandidatesSnapshot {
+  candidates: MissionLearnedCandidateRecord[];
+}
+
+export interface RevokeMissionLearnedCandidateInput {
+  candidateId: string;
+  reason: string;
+  archive?: boolean;
 }
 
 export interface RunTicketRunProofResult {

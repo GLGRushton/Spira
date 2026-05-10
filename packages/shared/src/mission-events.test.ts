@@ -42,6 +42,15 @@ describe("mission event taxonomy", () => {
       // Phase 4.1 — dependency warming.
       "workspace-dependencies-warming-started",
       "workspace-dependencies-warming-finished",
+      // Phase 5 — learning loop.
+      "mission-outcome-classified",
+      "validation-profile-candidate-observed",
+      "learned-candidate-promoted",
+      "learned-candidate-revoked",
+      // Phase 6 — polish.
+      "validations-superseded",
+      "mission-state-reconciled",
+      "mission-aborted",
     ];
     expect([...MISSION_EVENT_TYPES].sort()).toEqual(expected.sort());
   });

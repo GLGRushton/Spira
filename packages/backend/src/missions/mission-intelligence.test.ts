@@ -10,6 +10,7 @@ import {
   computeAdvisoryProofDecision,
   toPersistedProofDecisionInput,
 } from "./mission-intelligence.js";
+import type { MissionOutcomeClassification } from "./mission-outcome.js";
 
 const createRun = (): TicketRunSummary => ({
   runId: "run-1",
@@ -130,11 +131,18 @@ const createRun = (): TicketRunSummary => ({
   proofRuns: [],
 });
 
+const stubOutcome = (): MissionOutcomeClassification => ({
+  kind: "clean-pass",
+  rationale: "test",
+  retriedValidationKinds: [],
+  usedManualReview: false,
+});
+
 describe("mission-intelligence", () => {
   it("uses collision-safe learned repo-intelligence ids", () => {
     const run = createRun();
 
-    const candidates = buildLearnedRepoIntelligenceCandidates(run);
+    const candidates = buildLearnedRepoIntelligenceCandidates(run, stubOutcome());
     const targetIds = candidates
       .filter(
         (candidate) =>
@@ -199,7 +207,7 @@ describe("mission-intelligence", () => {
       },
     ];
 
-    const candidates = buildLearnedRepoIntelligenceCandidates(run);
+    const candidates = buildLearnedRepoIntelligenceCandidates(run, stubOutcome());
 
     expect(candidates).not.toHaveLength(0);
   });

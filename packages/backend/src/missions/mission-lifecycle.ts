@@ -185,6 +185,63 @@ export class MissionLifecycleService {
     return nextRun;
   }
 
+  /**
+   * Phase 6.1 — operator-initiated supersession. The agent's `record_validation` call may
+   * leave failed earlier entries unflagged because it forgot the `supersedesValidationIds`
+   * field. The operator sees a recent passing entry of the same kind and clicks "supersede
+   * earlier failed entries"; this updates the latest passing record to claim the failed
+   * peers, so `getEffectiveValidations` drops them and the workflow gate unsticks.
+   */
+  supersedeValidationsByKind(runId: string, kind: string): TicketRunSummary {
+    const run = this.requireRun(runId);
+    const sameKind = run.validations.filter((entry) => entry.kind === kind);
+    if (sameKind.length === 0) {
+      throw new Error(`No validations of kind "${kind}" recorded on this run.`);
+    }
+    const winner = [...sameKind]
+      .sort((left, right) => right.startedAt - left.startedAt || right.createdAt - left.createdAt)
+      .find((entry) => entry.status === "passed");
+    if (!winner) {
+      throw new Error(`No passing validation of kind "${kind}" recorded yet — nothing to supersede.`);
+    }
+    const alreadySupersededIds = new Set<string>();
+    for (const entry of run.validations) {
+      for (const id of entry.supersedesValidationIds ?? []) alreadySupersededIds.add(id);
+    }
+    const targets = sameKind.filter(
+      (entry) =>
+        entry.validationId !== winner.validationId &&
+        !alreadySupersededIds.has(entry.validationId) &&
+        (entry.status === "failed" || entry.status === "pending"),
+    );
+    if (targets.length === 0) {
+      throw new Error(`No earlier failed/pending validations of kind "${kind}" to supersede.`);
+    }
+    const targetIds = targets.map((entry) => entry.validationId);
+    const now = Date.now();
+    const validations = run.validations.map((entry) =>
+      entry.validationId === winner.validationId
+        ? {
+            ...entry,
+            supersedesValidationIds: [
+              ...new Set([...(entry.supersedesValidationIds ?? []), ...targetIds]),
+            ],
+            updatedAt: now,
+          }
+        : entry,
+    );
+    const nextRun = this.persistRun({
+      ...run,
+      validations,
+    });
+    this.recordMissionEvent(nextRun, "validate", "validations-superseded", {
+      kind,
+      winnerValidationId: winner.validationId,
+      supersededValidationIds: targetIds,
+    });
+    return nextRun;
+  }
+
   setProofStrategy(runId: string, proofStrategy: TicketRunMissionProofStrategy): TicketRunSummary {
     const run = this.requireRun(runId);
     assertMissionWorkflowActionAllowed(run, "save-proof-strategy");

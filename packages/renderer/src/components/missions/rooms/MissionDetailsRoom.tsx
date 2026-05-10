@@ -20,6 +20,8 @@ import {
   mergeMissionEventStreams,
 } from "./mission-timeline-grouping.js";
 import { ManualReviewPanel } from "./ManualReviewPanel.js";
+import { AbortMissionPanel } from "./AbortMissionPanel.js";
+import { MissionPermissionBanner } from "./MissionPermissionBanner.js";
 import { NowPlayingStrip } from "./NowPlayingStrip.js";
 import { ProofRunsViewer } from "./ProofRunsViewer.js";
 
@@ -389,6 +391,7 @@ export function MissionDetailsRoom({ run, controller }: MissionDetailsRoomProps)
               >
                 {controller.isCompletingRun ? "Closing..." : "Close mission"}
               </button>
+              <AbortMissionPanel controller={controller} />
             </div>
             {hasReviewCloseBlockers ? (
               <div className={styles.commandHint}>
@@ -539,13 +542,42 @@ export function MissionDetailsRoom({ run, controller }: MissionDetailsRoomProps)
             {latestAttempt?.summary ? <div className={styles.commandHint}>{latestAttempt.summary}</div> : null}
           </div>
         );
-      case "validate":
-        return run.validations.length > 0 ? (
+      case "validate": {
+        if (run.validations.length === 0) {
+          return <div className={styles.placeholder}>No validation records have been stored yet.</div>;
+        }
+        // Phase 6.1 — compute kinds that have a passing winner AND at least one
+        // earlier failed/pending entry that's still considered effective. Those are
+        // the kinds the operator can supersede in one click.
+        const supersedableKinds = new Set<string>();
+        const byKind = new Map<string, typeof run.validations>();
+        for (const entry of run.validations) {
+          const bucket = byKind.get(entry.kind) ?? [];
+          bucket.push(entry);
+          byKind.set(entry.kind, bucket);
+        }
+        for (const [kind, entries] of byKind) {
+          const sorted = [...entries].sort(
+            (left, right) => right.startedAt - left.startedAt || right.createdAt - left.createdAt,
+          );
+          const winner = sorted.find((entry) => entry.status === "passed");
+          if (!winner) continue;
+          const hasEffectiveOlderFailure = entries.some(
+            (entry) =>
+              entry.validationId !== winner.validationId &&
+              effectiveValidationIds.has(entry.validationId) &&
+              (entry.status === "failed" || entry.status === "pending"),
+          );
+          if (hasEffectiveOlderFailure) supersedableKinds.add(kind);
+        }
+        return (
           <div className={styles.phaseContent}>
             {[...run.validations]
               .sort((left, right) => right.startedAt - left.startedAt)
               .map((validation) => {
                 const validationIsSuperseded = !effectiveValidationIds.has(validation.validationId);
+                const canSupersede =
+                  validation.status === "passed" && supersedableKinds.has(validation.kind);
                 return (
                   <div
                     key={validation.validationId}
@@ -569,14 +601,22 @@ export function MissionDetailsRoom({ run, controller }: MissionDetailsRoomProps)
                         Historical result retained for audit; a later rerun now counts.
                       </div>
                     ) : null}
+                    {canSupersede ? (
+                      <button
+                        type="button"
+                        className={projectStyles.secondaryButton}
+                        onClick={() => void controller.supersedeValidationsByKind(validation.kind)}
+                      >
+                        Supersede earlier {formatEnumLabel(validation.kind)} failures
+                      </button>
+                    ) : null}
                     {renderArtifacts(validation.artifacts)}
                   </div>
                 );
               })}
           </div>
-        ) : (
-          <div className={styles.placeholder}>No validation records have been stored yet.</div>
         );
+      }
       case "proof":
         return (
           <div className={styles.phaseContent}>
@@ -767,7 +807,8 @@ export function MissionDetailsRoom({ run, controller }: MissionDetailsRoomProps)
         {renderCommandArea()}
       </article>
 
-      <NowPlayingStrip runId={run.runId} />
+      <MissionPermissionBanner run={run} />
+      <NowPlayingStrip runId={run.runId} phaseBudget={controller.phaseBudget} currentPhase={run.missionPhase} />
 
       <article className={styles.surface}>
         <div className={styles.sectionTopline}>

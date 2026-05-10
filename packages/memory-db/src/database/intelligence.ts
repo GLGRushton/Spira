@@ -72,6 +72,7 @@ export const createIntelligencePersistence = (context: DatabasePersistenceContex
       repoRelativePaths?: readonly string[];
       tags?: readonly string[];
       includeUnapproved?: boolean;
+      source?: RepoIntelligenceRecord["source"];
       limit?: number;
     } = {},
   ): RepoIntelligenceRecord[] => {
@@ -83,7 +84,20 @@ export const createIntelligencePersistence = (context: DatabasePersistenceContex
     const limit = options.limit ?? 20;
 
     const scopedFilter = buildScopedRecordFilter(normalizedProjectKey, repoPaths);
-    const approvalClause = includeUnapproved ? "" : scopedFilter.whereClause ? "AND approved = 1" : "WHERE approved = 1";
+    const params: Record<string, unknown> = { ...scopedFilter.params };
+    const extraClauses: string[] = [];
+    if (!includeUnapproved) extraClauses.push("approved = 1");
+    if (options.source) {
+      extraClauses.push("source = @source");
+      params.source = options.source;
+    }
+    const whereClause = scopedFilter.whereClause
+      ? extraClauses.length > 0
+        ? `${scopedFilter.whereClause} AND ${extraClauses.join(" AND ")}`
+        : scopedFilter.whereClause
+      : extraClauses.length > 0
+        ? `WHERE ${extraClauses.join(" AND ")}`
+        : "";
     const sql = `SELECT
        id,
        project_key AS projectKey,
@@ -97,18 +111,17 @@ export const createIntelligencePersistence = (context: DatabasePersistenceContex
        created_at AS createdAt,
        updated_at AS updatedAt
      FROM repo_intelligence_entries
-     ${scopedFilter.whereClause}
-     ${approvalClause}
+     ${whereClause}
      ORDER BY approved DESC, updated_at DESC, created_at DESC`;
 
-    const rows = context.db.prepare(sql).all(scopedFilter.params) as unknown as RepoIntelligenceRow[];
+    const rows = context.db.prepare(sql).all(params) as unknown as RepoIntelligenceRow[];
 
     return rows
       .map((row) => mapRepoIntelligenceRow(row))
       .filter(
         (entry) =>
-          // SQL filters by project/repo/approved; this final pass enforces tags and the
-          // matchesScopedRecord semantics for any edge case the SQL clause doesn't cover.
+          // SQL filters by project/repo/approved/source; this final pass enforces tags
+          // and the matchesScopedRecord semantics for any edge case SQL doesn't cover.
           matchesScopedRecord(entry, normalizedProjectKey, repoPathSet) &&
           (tagSet.size === 0 || [...tagSet].every((tag) => entry.tags.includes(tag))),
       )

@@ -49,9 +49,11 @@ import type {
   TicketRunSnapshot,
   TicketRunSubmoduleGitStateResult,
   TicketRunSummary,
+  MissionLearnedCandidatesSnapshot,
   MissionProofRulesSnapshot,
   MissionRepoProfilesSnapshot,
   MissionValidationProfilesSnapshot,
+  RevokeMissionLearnedCandidateInput,
   UpsertMissionProofRuleInput,
   UpsertMissionRepoProfileInput,
   UpsertMissionValidationProfileInput,
@@ -162,6 +164,12 @@ export type ClientMessage =
       profile: UpsertMissionValidationProfileInput;
     }
   | { type: "missions:validation-profiles:delete"; requestId: string; profileId: string }
+  | { type: "missions:learned-candidates:list"; requestId: string }
+  | {
+      type: "missions:learned-candidates:revoke";
+      requestId: string;
+      input: RevokeMissionLearnedCandidateInput;
+    }
   | { type: "missions:ticket-run:proof:run"; requestId: string; runId: string; profileId: string }
   | {
       type: "missions:ticket-run:proof:manual-review:set";
@@ -170,6 +178,18 @@ export type ClientMessage =
       justification: string;
     }
   | { type: "missions:ticket-run:proof:manual-review:clear"; requestId: string; runId: string }
+  | {
+      type: "missions:ticket-run:validations:supersede";
+      requestId: string;
+      runId: string;
+      kind: string;
+    }
+  | {
+      type: "missions:ticket-run:abort";
+      requestId: string;
+      runId: string;
+      reason: string;
+    }
   | {
       type: "missions:ticket-run:proof-artifact:read";
       requestId: string;
@@ -351,6 +371,16 @@ export type ServerMessage =
       result: MissionValidationProfilesSnapshot;
     }
   | {
+      type: "missions:learned-candidates:list:result";
+      requestId: string;
+      result: MissionLearnedCandidatesSnapshot;
+    }
+  | {
+      type: "missions:learned-candidates:revoke:result";
+      requestId: string;
+      result: MissionLearnedCandidatesSnapshot;
+    }
+  | {
       type: "missions:ticket-run:proof:run:result";
       requestId: string;
       result: RunTicketRunProofResult;
@@ -362,6 +392,16 @@ export type ServerMessage =
     }
   | {
       type: "missions:ticket-run:proof:manual-review:clear:result";
+      requestId: string;
+      result: { run: TicketRunSummary; snapshot: TicketRunSnapshot };
+    }
+  | {
+      type: "missions:ticket-run:validations:supersede:result";
+      requestId: string;
+      result: { run: TicketRunSummary; snapshot: TicketRunSnapshot };
+    }
+  | {
+      type: "missions:ticket-run:abort:result";
       requestId: string;
       result: { run: TicketRunSummary; snapshot: TicketRunSnapshot };
     }

@@ -518,4 +518,119 @@ describe("MissionLifecycleService", () => {
       }
     });
   });
+
+  // Phase 6.1 — operator-initiated supersession of failed validations.
+  describe("supersedeValidationsByKind", () => {
+    const seedRunWithRetry = (database: SpiraMemoryDatabase): void => {
+      const service = new MissionLifecycleService(database);
+      database.upsertTicketRun({
+        ...createRun(database),
+        classification: {
+          kind: "frontend",
+          scopeSummary: "x",
+          acceptanceCriteria: [],
+          impactedRepoRelativePaths: ["apps/web"],
+          risks: [],
+          uiChange: false,
+          proofRequired: false,
+          proofArtifactMode: "none",
+          advisoryProofLevel: null,
+          advisoryProofRationale: null,
+          rationale: null,
+          createdAt: 1,
+          updatedAt: 1,
+        },
+        plan: {
+          steps: ["edit"],
+          touchedRepoRelativePaths: ["apps/web"],
+          validationPlan: ["pnpm test"],
+          proofIntent: null,
+          blockers: [],
+          assumptions: [],
+          createdAt: 1,
+          updatedAt: 1,
+        },
+      });
+      service.recordValidation("run-1", {
+        validationId: "v-failed-1",
+        runId: "run-1",
+        kind: "build",
+        command: "pnpm test",
+        cwd: "C:\\Repos",
+        status: "failed",
+        summary: "Initial bad run.",
+        artifacts: [],
+        startedAt: 10,
+        completedAt: 20,
+        createdAt: 10,
+        updatedAt: 20,
+      });
+      service.recordValidation("run-1", {
+        validationId: "v-passed-1",
+        runId: "run-1",
+        kind: "build",
+        command: "pnpm test",
+        cwd: "C:\\Repos",
+        status: "passed",
+        summary: "Recovered.",
+        artifacts: [],
+        startedAt: 30,
+        completedAt: 40,
+        createdAt: 30,
+        updatedAt: 40,
+      });
+    };
+
+    it("attaches the failed peer ids to the latest passing entry's supersedesValidationIds", () => {
+      const { database, tempDir } = createDatabase();
+      try {
+        seedRunWithRetry(database);
+        const service = new MissionLifecycleService(database);
+        const next = service.supersedeValidationsByKind("run-1", "build");
+        const winner = next.validations.find((entry) => entry.validationId === "v-passed-1");
+        expect(winner?.supersedesValidationIds).toContain("v-failed-1");
+        const events = database.listMissionEvents("run-1", 50);
+        expect(events.some((event) => event.eventType === "validations-superseded")).toBe(true);
+      } finally {
+        database.close();
+        rmSync(tempDir, { recursive: true, force: true });
+      }
+    });
+
+    it("rejects when no passing validation of the kind exists", () => {
+      const { database, tempDir } = createDatabase();
+      try {
+        // Seed plan + classification so recordValidation passes the workflow guard,
+        // then drop the failed validation alone (no passing peer).
+        seedRunWithRetry(database);
+        const service = new MissionLifecycleService(database);
+        // Manually demote the passing entry so we end up with only failed entries.
+        const run = database.getTicketRun("run-1");
+        if (!run) throw new Error("expected run-1");
+        database.upsertTicketRun({
+          ...run,
+          validations: run.validations.map((entry) =>
+            entry.validationId === "v-passed-1" ? { ...entry, status: "failed" as const } : entry,
+          ),
+        });
+        expect(() => service.supersedeValidationsByKind("run-1", "build")).toThrow(/No passing validation/);
+      } finally {
+        database.close();
+        rmSync(tempDir, { recursive: true, force: true });
+      }
+    });
+
+    it("rejects when no earlier failed/pending validations remain to supersede", () => {
+      const { database, tempDir } = createDatabase();
+      try {
+        seedRunWithRetry(database);
+        const service = new MissionLifecycleService(database);
+        service.supersedeValidationsByKind("run-1", "build");
+        expect(() => service.supersedeValidationsByKind("run-1", "build")).toThrow(/No earlier/);
+      } finally {
+        database.close();
+        rmSync(tempDir, { recursive: true, force: true });
+      }
+    });
+  });
 });
