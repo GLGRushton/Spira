@@ -43,6 +43,7 @@ type ProjectsPanelMissionDetailProps = {
   cancellingRunId: string | null;
   completingRunId: string | null;
   deletingRunId: string | null;
+  abortingStartupRunId: string | null;
   isSelectedMissionReviewLoading: boolean;
   canDeleteSelectedMission: boolean;
   selectedMissionDeleteBlockers: string | null;
@@ -99,6 +100,7 @@ type ProjectsPanelMissionDetailProps = {
   onContinueRunWork: (() => Promise<void>) | null;
   onCompleteRun: (() => Promise<void>) | null;
   onDeleteRun: (() => Promise<void>) | null;
+  onAbandonMissionStartup: (() => Promise<void>) | null;
   onOpenMissionPullRequest: (() => Promise<void>) | null;
   onCommitDraftChange: (value: string) => void;
   onPersistCommitDraft: (() => Promise<void>) | null;
@@ -141,6 +143,7 @@ export function ProjectsPanelMissionDetail({
   cancellingRunId,
   completingRunId,
   deletingRunId,
+  abortingStartupRunId,
   isSelectedMissionReviewLoading,
   canDeleteSelectedMission,
   selectedMissionDeleteBlockers,
@@ -197,6 +200,7 @@ export function ProjectsPanelMissionDetail({
   onContinueRunWork,
   onCompleteRun,
   onDeleteRun,
+  onAbandonMissionStartup,
   onOpenMissionPullRequest,
   onCommitDraftChange,
   onPersistCommitDraft,
@@ -352,8 +356,70 @@ export function ProjectsPanelMissionDetail({
             >
               {startingTicketId === selectedMissionTicket.id ? "Starting..." : "Retry pickup"}
             </button>
+            {selectedMissionRun.attempts.length === 0 && onAbandonMissionStartup ? (
+              <button
+                type="button"
+                className={styles.secondaryButton}
+                onClick={() => {
+                  if (
+                    window.confirm(
+                      `Abandon mission ${selectedMissionRun.ticketId} startup? Local worktrees will be cleared.`,
+                    )
+                  ) {
+                    void onAbandonMissionStartup();
+                  }
+                }}
+                disabled={abortingStartupRunId === selectedMissionRun.runId}
+              >
+                {abortingStartupRunId === selectedMissionRun.runId ? "Abandoning..." : "Abandon startup"}
+              </button>
+            ) : null}
           </div>
         ) : null}
+
+        {selectedMissionRun?.status === "starting" && selectedMissionTicket
+          ? (() => {
+              const elapsedMs = Date.now() - selectedMissionRun.startedAt;
+              const looksSlow = elapsedMs >= 3 * 60_000;
+              return (
+                <div className={styles.workActions}>
+                  <span className={styles.workMeta}>
+                    {looksSlow
+                      ? "Startup is taking longer than expected — retry or abandon."
+                      : "Preparing managed worktrees..."}
+                  </span>
+                  {looksSlow && onStartTicketRun ? (
+                    <button
+                      type="button"
+                      className={styles.actionButton}
+                      onClick={() => void onStartTicketRun()}
+                      disabled={startingTicketId === selectedMissionTicket.id}
+                    >
+                      {startingTicketId === selectedMissionTicket.id ? "Starting..." : "Retry startup"}
+                    </button>
+                  ) : null}
+                  {onAbandonMissionStartup ? (
+                    <button
+                      type="button"
+                      className={styles.secondaryButton}
+                      onClick={() => {
+                        if (
+                          window.confirm(
+                            `Abandon mission ${selectedMissionRun.ticketId} startup? Local worktrees will be cleared.`,
+                          )
+                        ) {
+                          void onAbandonMissionStartup();
+                        }
+                      }}
+                      disabled={abortingStartupRunId === selectedMissionRun.runId}
+                    >
+                      {abortingStartupRunId === selectedMissionRun.runId ? "Abandoning..." : "Abandon startup"}
+                    </button>
+                  ) : null}
+                </div>
+              );
+            })()
+          : null}
 
         {selectedMissionRun?.status === "blocked" && onRetryTicketRunSync ? (
           <div className={styles.workActions}>

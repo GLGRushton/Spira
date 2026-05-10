@@ -1527,6 +1527,170 @@ describe("TicketRunService", () => {
     });
   });
 
+  it("flips runs stranded in starting to error during interrupted-work recovery", () => {
+    const database = createTestDatabase();
+    database.upsertTicketRun({
+      runId: "run-stuck-startup",
+      ticketId: "SPI-111",
+      ticketSummary: "Recover stuck startup",
+      ticketUrl: "https://example.youtrack.cloud/issue/SPI-111",
+      projectKey: "SPI",
+      status: "starting",
+      statusMessage: "Preparing managed worktrees.",
+      createdAt: 100,
+      startedAt: 100,
+      worktrees: [
+        {
+          repoRelativePath: "service-api",
+          repoAbsolutePath: "C:\\Repos\\service-api",
+          worktreePath: "C:\\Repos\\.spira-worktrees\\spi-111-service-api",
+          branchName: "feat/spi-111-recover-stuck-startup",
+        },
+      ],
+    });
+    const service = new TicketRunService({
+      memoryDb: database,
+      logger: createLogger(),
+      projectRegistry: { getSnapshot: async () => ({ workspaceRoot: null, repos: [], mappings: [] }) },
+      youTrackService: null,
+      now: () => 500,
+    });
+
+    service.recoverInterruptedWork();
+    const snapshot = service.getSnapshot();
+    expect(snapshot.runs[0]).toMatchObject({
+      status: "error",
+      statusMessage: "Spira restarted before mission startup finished. Retry to try again, or abandon to discard.",
+    });
+    const events = database.listMissionEvents("run-stuck-startup", 50);
+    expect(events.some((event) => event.eventType === "mission-startup-recovered-after-restart")).toBe(true);
+  });
+
+  it("times out a hung worktree-add and persists the run as error with the typed event", async () => {
+    const database = createTestDatabase();
+    const workspaceRoot = mkdtempSync(path.join(os.tmpdir(), "spira-startup-timeout-"));
+    tempDirs.push(workspaceRoot);
+    const repoAbsolutePath = path.join(workspaceRoot, "service-api");
+    mkdirSync(repoAbsolutePath, { recursive: true });
+    const transitionTicket = vi.fn().mockResolvedValue(undefined);
+    const gitRunner = vi.fn().mockImplementation(async (_cwd: string, args: readonly string[]) => {
+      const command = args.join(" ");
+      if (command.startsWith("branch --list")) {
+        return { stdout: "", stderr: "" };
+      }
+      if (command.startsWith("worktree add")) {
+        // Never resolves so the timeout fires first.
+        return new Promise(() => {});
+      }
+      if (command.startsWith("worktree remove")) {
+        return { stdout: "", stderr: "" };
+      }
+      if (command.startsWith("worktree prune")) {
+        return { stdout: "", stderr: "" };
+      }
+      if (command.startsWith("branch -D")) {
+        return { stdout: "", stderr: "" };
+      }
+      throw new Error(`Unexpected git command: ${command}`);
+    });
+    const service = new TicketRunService({
+      memoryDb: database,
+      logger: createLogger(),
+      projectRegistry: {
+        getSnapshot: async () => ({
+          workspaceRoot,
+          repos: [
+            {
+              name: "service-api",
+              relativePath: "service-api",
+              absolutePath: repoAbsolutePath,
+              hasSubmodules: false,
+              mappedProjectKeys: ["SPI"],
+            },
+          ],
+          mappings: [
+            {
+              projectKey: "SPI",
+              repoRelativePaths: ["service-api"],
+              missingRepoRelativePaths: [],
+              updatedAt: 100,
+            },
+          ],
+        }),
+      },
+      youTrackService: { transitionTicketToInProgress: transitionTicket },
+      runGitCommand: gitRunner,
+      // 50ms timeout so the race fires inside a normal test budget.
+      startupTimeoutsMs: { worktreeAdd: 50 },
+      now: () => 200,
+    });
+
+    const result = await service.startRun({
+      ticketId: "SPI-112",
+      ticketSummary: "Timeout startup",
+      ticketUrl: "https://example.youtrack.cloud/issue/SPI-112",
+      projectKey: "SPI",
+    });
+    expect(result.run.status).toBe("error");
+    expect(result.run.statusMessage).toMatch(/timed out after 0 minutes for service-api/i);
+
+    const events = database.listMissionEvents(database.listTicketRuns()[0].runId, 50);
+    const timeoutEvent = events.find((event) => event.eventType === "mission-startup-timed-out");
+    expect(timeoutEvent).toBeDefined();
+    expect(timeoutEvent?.metadata).toMatchObject({ step: "worktree-add", repoRelativePath: "service-api" });
+  });
+
+  it("clears managed worktrees and the mission branch when aborting a starting run", async () => {
+    const database = createTestDatabase();
+    const worktreePath = mkdtempSync(path.join(os.tmpdir(), "spira-abort-startup-"));
+    tempDirs.push(worktreePath);
+    database.upsertTicketRun({
+      runId: "run-abort-startup",
+      ticketId: "SPI-113",
+      ticketSummary: "Abort during startup",
+      ticketUrl: "https://example.youtrack.cloud/issue/SPI-113",
+      projectKey: "SPI",
+      status: "starting",
+      statusMessage: "Preparing managed worktrees.",
+      createdAt: 100,
+      startedAt: 100,
+      worktrees: [
+        {
+          repoRelativePath: "service-api",
+          repoAbsolutePath: "C:\\Repos\\service-api",
+          worktreePath,
+          branchName: "feat/spi-113-abort-during-startup",
+        },
+      ],
+    });
+
+    const gitCommands: string[] = [];
+    const gitRunner = vi.fn().mockImplementation(async (_cwd: string, args: readonly string[]) => {
+      const command = args.join(" ");
+      gitCommands.push(command);
+      if (command.startsWith("branch --list")) {
+        // Pretend the branch exists so deleteLocalMissionBranch issues a delete.
+        return { stdout: "feat/spi-113-abort-during-startup\n", stderr: "" };
+      }
+      return { stdout: "", stderr: "" };
+    });
+
+    const service = new TicketRunService({
+      memoryDb: database,
+      logger: createLogger(),
+      projectRegistry: { getSnapshot: async () => ({ workspaceRoot: null, repos: [], mappings: [] }) },
+      youTrackService: null,
+      runGitCommand: gitRunner,
+      now: () => 200,
+    });
+
+    const result = await service.abortRun("run-abort-startup", "Operator abandoned mission startup.");
+    expect(result.run.status).toBe("aborted");
+    expect(result.run.worktrees).toHaveLength(0);
+    expect(gitCommands).toContain(`worktree remove --force ${worktreePath}`);
+    expect(gitCommands).toContain("branch -D feat/spi-113-abort-during-startup");
+  });
+
   it("closes a review-clean run and releases its mission station", async () => {
     const database = createTestDatabase();
     database.upsertTicketRun({

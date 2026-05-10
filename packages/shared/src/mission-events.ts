@@ -30,6 +30,8 @@ export const MISSION_EVENT_TYPES = [
   "attempt-cancelled",
   "attempt-repair-requested",
   "attempt-recovered-after-restart",
+  "mission-startup-recovered-after-restart",
+  "mission-startup-timed-out",
   // Proof execution (ticket-runs.ts + proof runner)
   "proof-started",
   "proof-finished",
@@ -129,6 +131,18 @@ export interface MissionEventMetadataMap {
   };
   "attempt-recovered-after-restart": {
     attemptId: string;
+  };
+  "mission-startup-recovered-after-restart": {
+    /** statusMessage at the moment recovery flipped the row out of "starting". */
+    previousStatusMessage: string | null;
+  };
+  "mission-startup-timed-out": {
+    /** Which step exceeded its timeout: "worktree-add" or "submodule-hydrate". */
+    step: "worktree-add" | "submodule-hydrate";
+    /** Repo (or worktree) the slow op was scoped to. Helps the operator decide where to investigate. */
+    repoRelativePath: string;
+    /** Configured timeout in milliseconds at the time of the failure. */
+    timeoutMs: number;
   };
   // Proof execution
   "proof-started": {

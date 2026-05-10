@@ -5,7 +5,7 @@ import type { AssistantError } from "../../util/errors.js";
 export const SESSION_INIT_TIMEOUT_MS = 20_000;
 export const TURN_FIRST_ACTIVITY_TIMEOUT_MS = 120_000;
 export const TURN_ACTIVITY_TIMEOUT_MS = 120_000;
-export const TURN_HARD_TIMEOUT_MS = 15 * 60_000;
+export const TURN_HARD_TIMEOUT_MS = 45 * 60_000;
 export const TURN_WATCHDOG_POLL_MS = 1_000;
 export const PERMISSION_REQUEST_TIMEOUT_MS = 30 * 60_000;
 export const REVIEW_STALL_TIMEOUT_MS = 5 * 60_000;

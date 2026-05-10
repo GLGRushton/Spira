@@ -1049,9 +1049,7 @@ export const MIGRATIONS: MigrationDefinition[] = [
     // cursor predicate runs as a residual scan over every row in the run. This covering
     // index lets long-running missions page back through their event log without scanning.
     version: 31,
-    statements: [
-      "CREATE INDEX IF NOT EXISTS idx_mission_events_run_id_v31 ON mission_events(run_id, id DESC)",
-    ],
+    statements: ["CREATE INDEX IF NOT EXISTS idx_mission_events_run_id_v31 ON mission_events(run_id, id DESC)"],
   },
   {
     // v32 — Phase 7.1 WorkSession event log. Mirrors mission_events shape (id auto-PK,
@@ -1079,8 +1077,63 @@ export const MIGRATIONS: MigrationDefinition[] = [
     // joins ticket_runs by run_id; without this index the planner falls back to scanning
     // all mission_events rows for the JOIN partner.
     version: 33,
+    statements: ["CREATE INDEX IF NOT EXISTS idx_mission_events_event_type_v33 ON mission_events(event_type, run_id)"],
+  },
+  {
+    // v34 — extend ticket_runs.status CHECK to include 'aborted'. The status was added to
+    // TICKET_RUN_STATUSES (shared) when abortRun() landed, but the schema constraint was
+    // never updated, so any abort would crash with a CHECK violation. Same table-rename
+    // pattern as v29 because SQLite cannot drop a CHECK constraint in place.
+    version: 34,
     statements: [
-      "CREATE INDEX IF NOT EXISTS idx_mission_events_event_type_v33 ON mission_events(event_type, run_id)",
+      "ALTER TABLE ticket_runs RENAME TO ticket_runs_v33",
+      `CREATE TABLE ticket_runs (
+        run_id TEXT PRIMARY KEY,
+        ticket_id TEXT NOT NULL,
+        ticket_summary TEXT NOT NULL,
+        ticket_url TEXT NOT NULL,
+        project_key TEXT NOT NULL,
+        status TEXT NOT NULL CHECK(status IN ('starting', 'ready', 'blocked', 'working', 'awaiting-review', 'error', 'done', 'aborted')),
+        status_message TEXT,
+        station_id TEXT,
+        commit_message_draft TEXT,
+        proof_status TEXT NOT NULL DEFAULT 'not-run' CHECK(proof_status IN ('not-run', 'running', 'passed', 'failed', 'stale', 'manual-review', 'preflight-blocked')),
+        last_proof_run_id TEXT,
+        last_proof_profile_id TEXT,
+        last_proof_at INTEGER,
+        last_proof_summary TEXT,
+        proof_stale_reason TEXT,
+        proof_manual_review_justification TEXT,
+        proof_manual_review_at INTEGER,
+        mission_phase TEXT NOT NULL DEFAULT 'classification' CHECK(mission_phase IN ('classification', 'plan', 'implement', 'validate', 'proof', 'summarize')),
+        mission_phase_updated_at INTEGER NOT NULL DEFAULT 0,
+        classification_json TEXT,
+        plan_json TEXT,
+        summary_json TEXT,
+        previous_pass_context_json TEXT,
+        started_at INTEGER NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      )`,
+      `INSERT INTO ticket_runs (
+        run_id, ticket_id, ticket_summary, ticket_url, project_key, status, status_message,
+        station_id, commit_message_draft, proof_status, last_proof_run_id, last_proof_profile_id,
+        last_proof_at, last_proof_summary, proof_stale_reason,
+        proof_manual_review_justification, proof_manual_review_at,
+        mission_phase, mission_phase_updated_at, classification_json, plan_json, summary_json,
+        previous_pass_context_json, started_at, created_at, updated_at
+      )
+      SELECT
+        run_id, ticket_id, ticket_summary, ticket_url, project_key, status, status_message,
+        station_id, commit_message_draft, proof_status, last_proof_run_id, last_proof_profile_id,
+        last_proof_at, last_proof_summary, proof_stale_reason,
+        proof_manual_review_justification, proof_manual_review_at,
+        mission_phase, mission_phase_updated_at, classification_json, plan_json, summary_json,
+        previous_pass_context_json, started_at, created_at, updated_at
+      FROM ticket_runs_v33`,
+      "DROP TABLE ticket_runs_v33",
+      "CREATE UNIQUE INDEX idx_ticket_runs_ticket_id ON ticket_runs(ticket_id)",
+      "CREATE INDEX idx_ticket_runs_status ON ticket_runs(status, updated_at DESC)",
     ],
   },
 ];

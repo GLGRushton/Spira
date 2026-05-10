@@ -86,6 +86,7 @@ export function ProjectsPanel() {
   const [cancellingRunId, setCancellingRunId] = useState<string | null>(null);
   const [completingRunId, setCompletingRunId] = useState<string | null>(null);
   const [deletingRunId, setDeletingRunId] = useState<string | null>(null);
+  const [abortingStartupRunId, setAbortingStartupRunId] = useState<string | null>(null);
   const [loadingGitRunId, setLoadingGitRunId] = useState<string | null>(null);
   const [loadingSubmoduleKey, setLoadingSubmoduleKey] = useState<string | null>(null);
   const [loadingServicesRunId, setLoadingServicesRunId] = useState<string | null>(null);
@@ -1614,6 +1615,23 @@ export function ProjectsPanel() {
     }
   };
 
+  const abandonMissionStartup = async (runId: string) => {
+    setAbortingStartupRunId(runId);
+    setRunNotice(null);
+    setRunError(null);
+    try {
+      const result = await window.electronAPI.abortTicketRun(runId, "Operator abandoned mission startup.");
+      setRunSnapshot(result.snapshot);
+      setSelectedMission(null);
+      setRunNotice(`${result.run.ticketId} startup abandoned. Local worktrees were cleared.`);
+    } catch (abortError) {
+      console.error("Failed to abandon mission startup", abortError);
+      setRunError(abortError instanceof Error ? abortError.message : "Failed to abandon mission startup.");
+    } finally {
+      setAbortingStartupRunId(null);
+    }
+  };
+
   const deleteRun = async (runId: string) => {
     setDeletingRunId(runId);
     setRunNotice(null);
@@ -1715,6 +1733,7 @@ export function ProjectsPanel() {
             cancellingRunId={cancellingRunId}
             completingRunId={completingRunId}
             deletingRunId={deletingRunId}
+            abortingStartupRunId={abortingStartupRunId}
             isSelectedMissionReviewLoading={isSelectedMissionReviewLoading}
             canDeleteSelectedMission={canDeleteSelectedMission}
             selectedMissionDeleteBlockers={selectedMissionDeleteBlockers}
@@ -1776,6 +1795,7 @@ export function ProjectsPanel() {
             onContinueRunWork={selectedMissionRun ? () => continueRunWork(selectedMissionRun.runId) : null}
             onCompleteRun={selectedMissionRun ? () => completeRun(selectedMissionRun.runId) : null}
             onDeleteRun={selectedMissionRun ? () => deleteRun(selectedMissionRun.runId) : null}
+            onAbandonMissionStartup={selectedMissionRun ? () => abandonMissionStartup(selectedMissionRun.runId) : null}
             onOpenMissionPullRequest={
               selectedMissionRun ? () => openMissionPullRequest(selectedMissionRun.runId) : null
             }

@@ -3,8 +3,6 @@ import { mkdir, open, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import type { RepoIntelligenceRecord, SpiraMemoryDatabase } from "@spira/memory-db";
 import type {
-  MissionEventMetadataMap,
-  MissionEventType,
   ApproveTicketRunRepoIntelligenceResult,
   CancelTicketRunWorkResult,
   CommitTicketRunResult,
@@ -16,6 +14,8 @@ import type {
   DeleteTicketRunResult,
   GenerateTicketRunCommitDraftResult,
   GenerateTicketRunSubmoduleCommitDraftResult,
+  MissionEventMetadataMap,
+  MissionEventType,
   RetryTicketRunSyncResult,
   RunTicketRunProofResult,
   SetTicketRunCommitDraftResult,
@@ -57,37 +57,21 @@ import fetch from "node-fetch";
 import { BoundedMap } from "../util/bounded-map.js";
 import { ConfigError, SpiraError } from "../util/errors.js";
 import { pathExists } from "../util/fs.js";
-import {
-  type DependencyWarmingResult,
-  type WarmRunDependenciesInput,
-  warmRunDependencies,
-} from "./dependency-warmer.js";
-import {
-  buildPromotedTags,
-  PROMOTION_FORMULA_VERSION,
-  scoreLearnedCandidates,
-} from "./learned-candidate-promoter.js";
+import { warmRunDependencies } from "./dependency-warmer.js";
+import { PROMOTION_FORMULA_VERSION, buildPromotedTags, scoreLearnedCandidates } from "./learned-candidate-promoter.js";
 import { buildLearnedRepoIntelligenceCandidates } from "./mission-intelligence.js";
-import { classifyMissionOutcome, type MissionOutcomeClassification } from "./mission-outcome.js";
+import { type MissionOutcomeClassification, classifyMissionOutcome } from "./mission-outcome.js";
 import { reconcileMissionDisplayState } from "./mission-state-reconciler.js";
-import {
-  DEFAULT_BUDGET_MIN_SAMPLES,
-  DEFAULT_BUDGET_SAMPLE_SIZE,
-  computePhaseBudget,
-} from "./phase-budget.js";
-import {
-  DEFAULT_VALIDATION_CANDIDATE_THRESHOLD,
-  deriveValidationProfileCandidates,
-} from "./validation-candidate-learner.js";
+import { buildMissionWorkflowRepairPrompt, getMissionWorkflowState } from "./mission-workflow-guard.js";
+import { DEFAULT_BUDGET_MIN_SAMPLES, DEFAULT_BUDGET_SAMPLE_SIZE, computePhaseBudget } from "./phase-budget.js";
 import { buildPostmortemFilename, generateMissionPostmortem } from "./post-mortem-generator.js";
 import { atomicWritePostmortem } from "./postmortem-writer.js";
-import { buildMissionWorkflowRepairPrompt, getMissionWorkflowState } from "./mission-workflow-guard.js";
+import { runProofPreflight } from "./proof-preflight.js";
 import {
   type ResolvedMissionProofProfile,
   discoverProofProfileForWorktree,
   toMissionProofProfileSummary,
 } from "./proof-registry.js";
-import { runProofPreflight } from "./proof-preflight.js";
 import { type RunMissionProofInput, type RunMissionProofOutput, runMissionProof } from "./proof-runner.js";
 import { buildRepoGuidanceSection } from "./repo-guidance.js";
 import {
@@ -153,6 +137,10 @@ import {
   formatTicketRunWorktreeList,
   resolveTicketRunMissionDirectory,
 } from "./ticket-runs/workspace.js";
+import {
+  DEFAULT_VALIDATION_CANDIDATE_THRESHOLD,
+  deriveValidationProfileCandidates,
+} from "./validation-candidate-learner.js";
 
 export type {
   GenerateCommitDraftInput,
@@ -165,6 +153,60 @@ export type {
   TicketRunServiceOptions,
 } from "./ticket-runs/types.js";
 export { buildTicketRunBranchName, buildTicketRunWorktreePath };
+
+/**
+ * Per-step timeouts for mission startup. Calibrated for big repos so a successful-but-slow
+ * startup never trips them. If real-world startups hit these, raise the constants rather
+ * than adding new state-machine concepts.
+ */
+export const STARTUP_WORKTREE_ADD_TIMEOUT_MS = 10 * 60_000;
+export const STARTUP_SUBMODULE_HYDRATE_TIMEOUT_MS = 15 * 60_000;
+
+type StartupTimeoutStep = "worktree-add" | "submodule-hydrate";
+
+/**
+ * Typed error so the startRun catch block can tell a step-timeout apart from a real git
+ * failure and emit a `mission-startup-timed-out` event with the right metadata.
+ */
+class MissionStartupTimeoutError extends SpiraError {
+  constructor(
+    public readonly step: StartupTimeoutStep,
+    public readonly repoRelativePath: string,
+    public readonly timeoutMs: number,
+  ) {
+    const minutes = Math.round(timeoutMs / 60_000);
+    const action = step === "worktree-add" ? "Worktree creation" : "Submodule hydrate";
+    super(
+      "MISSIONS_STARTUP_TIMEOUT",
+      `${action} timed out after ${minutes} minute${minutes === 1 ? "" : "s"} for ${repoRelativePath}.`,
+    );
+  }
+}
+
+const raceWithStartupTimeout = async <T>(
+  work: Promise<T>,
+  step: StartupTimeoutStep,
+  repoRelativePath: string,
+  timeoutMs: number,
+): Promise<T> => {
+  let timeoutHandle: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      work,
+      new Promise<T>((_resolve, reject) => {
+        timeoutHandle = setTimeout(() => {
+          reject(new MissionStartupTimeoutError(step, repoRelativePath, timeoutMs));
+        }, timeoutMs);
+        // Don't keep the process alive just for this timer.
+        timeoutHandle.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timeoutHandle) {
+      clearTimeout(timeoutHandle);
+    }
+  }
+};
 
 export class TicketRunService {
   private readonly now: () => number;
@@ -442,13 +484,18 @@ export class TicketRunService {
         }
         await mkdir(path.dirname(worktree.worktreePath), { recursive: true });
         const branchExistedBeforeCreate = await this.hasLocalBranch(worktree.repoAbsolutePath, worktree.branchName);
-        await this.runGitCommand(worktree.repoAbsolutePath, [
-          "worktree",
-          "add",
-          ...(branchExistedBeforeCreate
-            ? [worktree.worktreePath, worktree.branchName]
-            : [recoverableRun ? "-B" : "-b", worktree.branchName, worktree.worktreePath]),
-        ]);
+        await raceWithStartupTimeout(
+          this.runGitCommand(worktree.repoAbsolutePath, [
+            "worktree",
+            "add",
+            ...(branchExistedBeforeCreate
+              ? [worktree.worktreePath, worktree.branchName]
+              : [recoverableRun ? "-B" : "-b", worktree.branchName, worktree.worktreePath]),
+          ]),
+          "worktree-add",
+          worktree.repoRelativePath,
+          this.options.startupTimeoutsMs?.worktreeAdd ?? STARTUP_WORKTREE_ADD_TIMEOUT_MS,
+        );
         createdWorktrees.push({
           worktree,
           branchExistedBeforeCreate,
@@ -456,9 +503,11 @@ export class TicketRunService {
       }
 
       for (const worktree of startingWorktrees) {
-        await this.maybeHydrateWorktreeSubmodules(
-          worktree,
-          repoHasSubmodulesByRelativePath.get(worktree.repoRelativePath),
+        await raceWithStartupTimeout(
+          this.maybeHydrateWorktreeSubmodules(worktree, repoHasSubmodulesByRelativePath.get(worktree.repoRelativePath)),
+          "submodule-hydrate",
+          worktree.repoRelativePath,
+          this.options.startupTimeoutsMs?.submoduleHydrate ?? STARTUP_SUBMODULE_HYDRATE_TIMEOUT_MS,
         );
       }
     } catch (error) {
@@ -503,6 +552,12 @@ export class TicketRunService {
       const failedWorktrees = [...recoverableWorktrees, ...retainedWorktrees].sort((left, right) =>
         left.repoRelativePath.localeCompare(right.repoRelativePath),
       );
+      const isStartupTimeout = error instanceof MissionStartupTimeoutError;
+      const failureMessage = isStartupTimeout
+        ? `${error.message} Retry to try again, or abort to discard.`
+        : error instanceof Error
+          ? error.message
+          : "Failed to prepare the managed worktrees.";
       const failedRun = memoryDb.upsertTicketRun({
         runId,
         ticketId,
@@ -510,7 +565,7 @@ export class TicketRunService {
         ticketUrl,
         projectKey,
         status: "error",
-        statusMessage: error instanceof Error ? error.message : "Failed to prepare the managed worktrees.",
+        statusMessage: failureMessage,
         startedAt: createdAt,
         createdAt,
         worktrees: failedWorktrees,
@@ -519,6 +574,19 @@ export class TicketRunService {
         proof: recoverableRun?.proof ?? buildDefaultProofSummary(),
         proofRuns: recoverableRun?.proofRuns ?? [],
       });
+      if (isStartupTimeout) {
+        memoryDb.appendMissionEvent({
+          runId,
+          attemptId: null,
+          stage: "system",
+          eventType: "mission-startup-timed-out",
+          metadata: {
+            step: error.step,
+            repoRelativePath: error.repoRelativePath,
+            timeoutMs: error.timeoutMs,
+          },
+        });
+      }
       const failedSnapshot = memoryDb.getTicketRunSnapshot();
       this.emitSnapshot(failedSnapshot);
       return {
@@ -744,11 +812,49 @@ export class TicketRunService {
         cancelInFlightPass: true,
       });
 
+      // Aborting from startup leaves nothing worth keeping on disk: the mission never
+      // produced any commits or attempt history, and the partial worktrees often block a
+      // later retry of the same ticket. Tolerate failures — the abort itself must succeed
+      // even if a worktree is locked or already gone.
+      const isStartupAbort = run.status === "starting" || (run.status === "error" && run.attempts.length === 0);
+      if (isStartupAbort) {
+        for (const worktree of run.worktrees) {
+          try {
+            await this.removeManagedWorktree(worktree);
+          } catch (cleanupError) {
+            this.options.logger.warn(
+              { err: cleanupError, runId: run.runId, worktreePath: worktree.worktreePath },
+              "Failed to remove a managed worktree during startup abort; continuing",
+            );
+          }
+          try {
+            await this.deleteLocalMissionBranch(worktree.repoAbsolutePath, worktree.branchName);
+          } catch (cleanupError) {
+            this.options.logger.warn(
+              { err: cleanupError, runId: run.runId, branchName: worktree.branchName },
+              "Failed to delete a mission branch during startup abort; continuing",
+            );
+          }
+        }
+        const missionDirectory = resolveTicketRunMissionDirectory(run.worktrees);
+        if (missionDirectory) {
+          try {
+            await rm(missionDirectory, { force: true, recursive: true });
+          } catch (cleanupError) {
+            this.options.logger.warn(
+              { err: cleanupError, runId: run.runId, missionDirectory },
+              "Failed to remove the mission directory during startup abort; continuing",
+            );
+          }
+        }
+      }
+
       const phaseAtAbort = run.missionPhase;
       const abortedRun = this.persistRun(this.getFreshRun(runId), {
         ...(stationCleared ? { stationId: null } : {}),
         status: "aborted",
         statusMessage: `Mission aborted: ${trimmedReason}`,
+        ...(isStartupAbort ? { worktrees: [] } : {}),
       });
       this.recordMissionEvent(abortedRun, "system", "mission-aborted", {
         reason: trimmedReason,
@@ -842,10 +948,7 @@ export class TicketRunService {
         });
       }
     } catch (error) {
-      this.options.logger.warn(
-        { err: error, runId: run.runId },
-        "Mission state reconciliation failed; continuing",
-      );
+      this.options.logger.warn({ err: error, runId: run.runId }, "Mission state reconciliation failed; continuing");
     }
   }
 
@@ -940,9 +1043,7 @@ export class TicketRunService {
         .listTicketRuns()
         .filter(
           (candidate) =>
-            candidate.projectKey === run.projectKey &&
-            candidate.status === "done" &&
-            candidate.runId !== run.runId,
+            candidate.projectKey === run.projectKey && candidate.status === "done" && candidate.runId !== run.runId,
         );
       if (peerRuns.length < DEFAULT_BUDGET_MIN_SAMPLES) {
         return { projectKey: run.projectKey, entries: [] };
@@ -1038,7 +1139,13 @@ export class TicketRunService {
         const probe = slice.subarray(0, Math.min(slice.length, 4096));
         const looksBinary = probe.includes(0);
         if (looksBinary) {
-          return { content: null, truncated: bytesRead < totalBytes, totalBytes, mimeKind: "binary", artifactPath: resolvedArtifact };
+          return {
+            content: null,
+            truncated: bytesRead < totalBytes,
+            totalBytes,
+            mimeKind: "binary",
+            artifactPath: resolvedArtifact,
+          };
         }
         return {
           content: slice.toString("utf8"),
@@ -1872,7 +1979,9 @@ export class TicketRunService {
     if (this.options.discoverMissionProofProfiles) {
       return this.options.discoverMissionProofProfiles(run);
     }
-    const profiles = await Promise.all(run.worktrees.map((worktree) => this.cachedWorktreeProofDiscovery(run, worktree)));
+    const profiles = await Promise.all(
+      run.worktrees.map((worktree) => this.cachedWorktreeProofDiscovery(run, worktree)),
+    );
     return profiles.flatMap((profile) => (profile ? [profile] : []));
   }
 
@@ -2140,10 +2249,15 @@ export class TicketRunService {
   }
 
   private applyInterruptedWorkRecovery(memoryDb: SpiraMemoryDatabase): void {
-    const strandedRuns = memoryDb
-      .listTicketRuns()
-      .filter((run) => run.status === "working" && this.getLatestAttempt(run)?.status === "running");
-    if (strandedRuns.length === 0) {
+    const allRuns = memoryDb.listTicketRuns();
+    const strandedRuns = allRuns.filter(
+      (run) => run.status === "working" && this.getLatestAttempt(run)?.status === "running",
+    );
+    // Runs killed during startRun never reach "ready" / "working", so the working-only sweep
+    // misses them. The "starting" state is process-bound — a fresh Spira boot means no
+    // startRun is in flight, so any run still flagged "starting" is by definition stranded.
+    const strandedStartups = allRuns.filter((run) => run.status === "starting");
+    if (strandedRuns.length === 0 && strandedStartups.length === 0) {
       return;
     }
 
@@ -2173,6 +2287,17 @@ export class TicketRunService {
       });
       this.recordMissionEvent(run, "system", "attempt-recovered-after-restart", {
         attemptId: latestAttempt.attemptId,
+      });
+    }
+
+    for (const run of strandedStartups) {
+      const previousStatusMessage = run.statusMessage ?? null;
+      const recoveredRun = this.persistRun(run, {
+        status: "error",
+        statusMessage: "Spira restarted before mission startup finished. Retry to try again, or abandon to discard.",
+      });
+      this.recordMissionEvent(recoveredRun, "system", "mission-startup-recovered-after-restart", {
+        previousStatusMessage,
       });
     }
 
@@ -3664,19 +3789,13 @@ export class TicketRunService {
       try {
         this.observeValidationProfileCandidates(run, outcome);
       } catch (error) {
-        this.options.logger.warn(
-          { err: error, runId: run.runId },
-          "Validation-candidate observation failed",
-        );
+        this.options.logger.warn({ err: error, runId: run.runId }, "Validation-candidate observation failed");
       }
       if (this.options.autoPromoteLearnedCandidates !== false) {
         try {
           this.runLearnedCandidatePromotionSweep(run);
         } catch (error) {
-          this.options.logger.warn(
-            { err: error, runId: run.runId },
-            "Learned-candidate promotion sweep failed",
-          );
+          this.options.logger.warn({ err: error, runId: run.runId }, "Learned-candidate promotion sweep failed");
         }
       }
     });
@@ -3784,9 +3903,7 @@ export class TicketRunService {
   private runLearnedCandidatePromotionSweep(run: TicketRunSummary): void {
     const memoryDb = this.options.memoryDb;
     if (!memoryDb || !run.projectKey) return;
-    const peerRuns = memoryDb
-      .listTicketRuns()
-      .filter((candidate) => candidate.projectKey === run.projectKey);
+    const peerRuns = memoryDb.listTicketRuns().filter((candidate) => candidate.projectKey === run.projectKey);
     const candidates = memoryDb.listRepoIntelligence({
       projectKey: run.projectKey,
       includeUnapproved: true,

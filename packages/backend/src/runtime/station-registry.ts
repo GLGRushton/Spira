@@ -490,6 +490,7 @@ export class StationRegistry {
 
     return await new Promise<AwaitStationResponseResult>((resolve, reject) => {
       let completedResponse: AwaitStationResponseResult | null = null;
+      let sendCompleted = false;
       let settled = false;
       let sawActiveState = station.state !== "idle";
       const timeout = setUnrefTimeout(() => {
@@ -527,7 +528,7 @@ export class StationRegistry {
       };
 
       const maybeFinish = () => {
-        if (completedResponse && station.state === "idle") {
+        if (completedResponse && station.state === "idle" && sendCompleted) {
           finish(completedResponse);
         }
       };
@@ -563,9 +564,15 @@ export class StationRegistry {
       station.bus.on("state:change", handleStateChange);
       station.bus.on("assistant:error", handleError);
 
-      void this.sendMessage(text, options).catch((error) => {
-        fail(error instanceof Error ? error : new Error(String(error)));
-      });
+      void this.sendMessage(text, options).then(
+        () => {
+          sendCompleted = true;
+          maybeFinish();
+        },
+        (error) => {
+          fail(error instanceof Error ? error : new Error(String(error)));
+        },
+      );
     });
   }
 

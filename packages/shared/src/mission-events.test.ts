@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   MISSION_EVENT_TYPES,
-  isMissionEventType,
-  validateMissionEventType,
   type MissionEventMetadataMap,
   type MissionEventType,
+  isMissionEventType,
+  validateMissionEventType,
 } from "./mission-events.js";
 
 describe("mission event taxonomy", () => {
@@ -24,6 +24,8 @@ describe("mission event taxonomy", () => {
       "attempt-cancelled",
       "attempt-repair-requested",
       "attempt-recovered-after-restart",
+      "mission-startup-recovered-after-restart",
+      "mission-startup-timed-out",
       "proof-started",
       "proof-finished",
       "workspace-prepared",

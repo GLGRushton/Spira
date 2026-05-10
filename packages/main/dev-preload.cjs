@@ -30,6 +30,25 @@ const TICKET_RUN_TIMELINE_GET_CHANNEL = "missions:ticket-run:timeline:get";
 const TICKET_RUN_REPO_INTELLIGENCE_GET_CHANNEL = "missions:ticket-run:repo-intelligence:get";
 const TICKET_RUN_REPO_INTELLIGENCE_APPROVE_CHANNEL = "missions:ticket-run:repo-intelligence:approve";
 const TICKET_RUN_PROOF_RUN_CHANNEL = "missions:ticket-run:proof:run";
+const TICKET_RUN_PROOF_ARTIFACT_READ_CHANNEL = "missions:ticket-run:proof-artifact:read";
+const TICKET_RUN_PROOF_MANUAL_REVIEW_SET_CHANNEL = "missions:ticket-run:proof:manual-review:set";
+const TICKET_RUN_PROOF_MANUAL_REVIEW_CLEAR_CHANNEL = "missions:ticket-run:proof:manual-review:clear";
+const TICKET_RUN_VALIDATIONS_SUPERSEDE_CHANNEL = "missions:ticket-run:validations:supersede";
+const TICKET_RUN_ABORT_CHANNEL = "missions:ticket-run:abort";
+const PROOF_RULES_LIST_CHANNEL = "missions:proof-rules:list";
+const PROOF_RULES_UPSERT_CHANNEL = "missions:proof-rules:upsert";
+const PROOF_RULES_DELETE_CHANNEL = "missions:proof-rules:delete";
+const REPO_PROFILES_LIST_CHANNEL = "missions:repo-profiles:list";
+const REPO_PROFILES_UPSERT_CHANNEL = "missions:repo-profiles:upsert";
+const REPO_PROFILES_DELETE_CHANNEL = "missions:repo-profiles:delete";
+const VALIDATION_PROFILES_LIST_CHANNEL = "missions:validation-profiles:list";
+const VALIDATION_PROFILES_UPSERT_CHANNEL = "missions:validation-profiles:upsert";
+const VALIDATION_PROFILES_DELETE_CHANNEL = "missions:validation-profiles:delete";
+const LEARNED_CANDIDATES_LIST_CHANNEL = "missions:learned-candidates:list";
+const LEARNED_CANDIDATES_REVOKE_CHANNEL = "missions:learned-candidates:revoke";
+const WEEKLY_DIGEST_GENERATE_CHANNEL = "missions:weekly-digest:generate";
+const INTELLIGENCE_AUDIT_LIST_CHANNEL = "missions:intelligence-audit:list";
+const WORKSESSION_EVENTS_LIST_BY_STATION_CHANNEL = "worksession:events:list-by-station";
 const TICKET_RUN_DELETE_CHANNEL = "missions:ticket-run:delete";
 const TICKET_RUN_REVIEW_SNAPSHOT_CHANNEL = "missions:ticket-run:review-snapshot:get";
 const TICKET_RUN_GIT_STATE_CHANNEL = "missions:ticket-run:git-state:get";
@@ -57,8 +76,6 @@ const UPGRADE_RESPONSE_CHANNEL = "upgrade:respond";
 const RENDERER_FATAL_CHANNEL = "renderer:fatal";
 
 const serverMessageListeners = new Set();
-// TODO(multi-session): replay cache is currently keyed only by message type.
-// Before enabling concurrent station streaming, make this cache station-aware.
 const latestServerMessages = new Map();
 const NON_REPLAYABLE_SERVER_MESSAGES = new Set([
   "station:created",
@@ -70,9 +87,37 @@ const NON_REPLAYABLE_SERVER_MESSAGES = new Set([
   "missions:ticket-run:services:updated",
 ]);
 
+const getReplayStationId = (message) => {
+  const topLevelStationId = message && message.stationId;
+  if (typeof topLevelStationId === "string" && topLevelStationId.length > 0) {
+    return topLevelStationId;
+  }
+  if (message && message.type === "permission:request" && message.request && typeof message.request.stationId === "string") {
+    return message.request.stationId;
+  }
+  return undefined;
+};
+
+const getReplayCacheKey = (message) => {
+  const stationId = getReplayStationId(message);
+  return stationId ? `${message.type}:${stationId}` : message.type;
+};
+
+const dropStationReplayMessages = (stationId) => {
+  const stationSuffix = `:${stationId}`;
+  for (const key of latestServerMessages.keys()) {
+    if (key.endsWith(stationSuffix)) {
+      latestServerMessages.delete(key);
+    }
+  }
+};
+
 ipcRenderer.on("spira:from-backend", (_event, message) => {
+  if (message && message.type === "station:closed" && typeof message.stationId === "string") {
+    dropStationReplayMessages(message.stationId);
+  }
   if (!NON_REPLAYABLE_SERVER_MESSAGES.has(message.type)) {
-    latestServerMessages.set(message.type, message);
+    latestServerMessages.set(getReplayCacheKey(message), message);
   }
   for (const listener of serverMessageListeners) {
     listener(message);
@@ -86,8 +131,10 @@ function onServerMessage(type, handler) {
     }
   });
 
-  const cached = latestServerMessages.get(type);
-  if (cached) {
+  for (const cached of latestServerMessages.values()) {
+    if (cached.type !== type) {
+      continue;
+    }
     handler(cached);
   }
 
@@ -227,8 +274,8 @@ const electronAPI = {
   getTicketRunMissionTimeline(runId, options) {
     return ipcRenderer.invoke(TICKET_RUN_TIMELINE_GET_CHANNEL, {
       runId,
-      beforeId: options?.beforeId,
-      limit: options?.limit,
+      beforeId: options && options.beforeId,
+      limit: options && options.limit,
     });
   },
   getTicketRunRepoIntelligence(runId) {
@@ -239,6 +286,68 @@ const electronAPI = {
   },
   runTicketRunProof(runId, profileId) {
     return ipcRenderer.invoke(TICKET_RUN_PROOF_RUN_CHANNEL, { runId, profileId });
+  },
+  readTicketRunProofArtifact(runId, proofRunId, artifactId, options) {
+    return ipcRenderer.invoke(TICKET_RUN_PROOF_ARTIFACT_READ_CHANNEL, {
+      runId,
+      proofRunId,
+      artifactId,
+      ...(options && typeof options.maxBytes === "number" ? { maxBytes: options.maxBytes } : {}),
+    });
+  },
+  setTicketRunProofManualReview(runId, justification) {
+    return ipcRenderer.invoke(TICKET_RUN_PROOF_MANUAL_REVIEW_SET_CHANNEL, { runId, justification });
+  },
+  clearTicketRunProofManualReview(runId) {
+    return ipcRenderer.invoke(TICKET_RUN_PROOF_MANUAL_REVIEW_CLEAR_CHANNEL, { runId });
+  },
+  supersedeTicketRunValidations(runId, kind) {
+    return ipcRenderer.invoke(TICKET_RUN_VALIDATIONS_SUPERSEDE_CHANNEL, { runId, kind });
+  },
+  abortTicketRun(runId, reason) {
+    return ipcRenderer.invoke(TICKET_RUN_ABORT_CHANNEL, { runId, reason });
+  },
+  listMissionProofRules() {
+    return ipcRenderer.invoke(PROOF_RULES_LIST_CHANNEL);
+  },
+  upsertMissionProofRule(rule) {
+    return ipcRenderer.invoke(PROOF_RULES_UPSERT_CHANNEL, { rule });
+  },
+  deleteMissionProofRule(ruleId) {
+    return ipcRenderer.invoke(PROOF_RULES_DELETE_CHANNEL, { ruleId });
+  },
+  listMissionRepoProfiles() {
+    return ipcRenderer.invoke(REPO_PROFILES_LIST_CHANNEL);
+  },
+  upsertMissionRepoProfile(profile) {
+    return ipcRenderer.invoke(REPO_PROFILES_UPSERT_CHANNEL, { profile });
+  },
+  deleteMissionRepoProfile(projectKey) {
+    return ipcRenderer.invoke(REPO_PROFILES_DELETE_CHANNEL, { projectKey });
+  },
+  listMissionValidationProfiles() {
+    return ipcRenderer.invoke(VALIDATION_PROFILES_LIST_CHANNEL);
+  },
+  upsertMissionValidationProfile(profile) {
+    return ipcRenderer.invoke(VALIDATION_PROFILES_UPSERT_CHANNEL, { profile });
+  },
+  deleteMissionValidationProfile(profileId) {
+    return ipcRenderer.invoke(VALIDATION_PROFILES_DELETE_CHANNEL, { profileId });
+  },
+  listMissionLearnedCandidates() {
+    return ipcRenderer.invoke(LEARNED_CANDIDATES_LIST_CHANNEL);
+  },
+  revokeMissionLearnedCandidate(input) {
+    return ipcRenderer.invoke(LEARNED_CANDIDATES_REVOKE_CHANNEL, { input });
+  },
+  generateMissionWeeklyDigest() {
+    return ipcRenderer.invoke(WEEKLY_DIGEST_GENERATE_CHANNEL);
+  },
+  listMissionIntelligenceAudit(limit) {
+    return ipcRenderer.invoke(INTELLIGENCE_AUDIT_LIST_CHANNEL, { limit });
+  },
+  listWorkSessionEventsByStation(stationId, limit) {
+    return ipcRenderer.invoke(WORKSESSION_EVENTS_LIST_BY_STATION_CHANNEL, { stationId, limit });
   },
   deleteTicketRun(runId) {
     return ipcRenderer.invoke(TICKET_RUN_DELETE_CHANNEL, { runId });
