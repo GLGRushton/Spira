@@ -4,6 +4,7 @@ import {
   type MissionValidationProfilesSnapshot,
   type TicketRunMissionValidationKind,
   type UpsertMissionValidationProfileInput,
+  formatDuration,
 } from "@spira/shared";
 import { useEffect, useMemo, useState } from "react";
 import projectStyles from "../projects/ProjectsPanel/ProjectsPanel.module.css";
@@ -11,6 +12,7 @@ import { splitList } from "./admin-form-helpers.js";
 import styles from "./ProofRulesEditor.module.css";
 
 interface DraftProfile {
+  id: string | null;
   projectKey: string;
   repoRelativePath: string;
   label: string;
@@ -24,6 +26,7 @@ interface DraftProfile {
 }
 
 const EMPTY_DRAFT: DraftProfile = {
+  id: null,
   projectKey: "",
   repoRelativePath: "",
   label: "",
@@ -36,10 +39,25 @@ const EMPTY_DRAFT: DraftProfile = {
   prerequisites: "",
 };
 
+const profileToDraft = (profile: MissionValidationProfileRecord): DraftProfile => ({
+  id: profile.id,
+  projectKey: profile.projectKey ?? "",
+  repoRelativePath: profile.repoRelativePath ?? "",
+  label: profile.label,
+  kind: profile.kind,
+  command: profile.command,
+  workingDirectory: profile.workingDirectory,
+  notes: profile.notes ?? "",
+  confidence: profile.confidence.toFixed(2),
+  expectedRuntimeSeconds: profile.expectedRuntimeMs ? (profile.expectedRuntimeMs / 1000).toString() : "",
+  prerequisites: profile.prerequisites.join(", "),
+});
+
 const draftToInput = (draft: DraftProfile): UpsertMissionValidationProfileInput => {
   const confidence = Number.parseFloat(draft.confidence);
   const expectedRuntimeSeconds = Number.parseFloat(draft.expectedRuntimeSeconds);
   return {
+    id: draft.id ?? undefined,
     projectKey: draft.projectKey.trim() || null,
     repoRelativePath: draft.repoRelativePath.trim() || null,
     label: draft.label.trim(),
@@ -53,17 +71,10 @@ const draftToInput = (draft: DraftProfile): UpsertMissionValidationProfileInput 
   };
 };
 
-const formatRuntime = (ms: number | null): string => {
-  if (ms === null) return "—";
-  if (ms < 1_000) return `${ms} ms`;
-  if (ms < 60_000) return `${(ms / 1_000).toFixed(1)} s`;
-  const minutes = Math.floor(ms / 60_000);
-  const seconds = Math.round((ms % 60_000) / 1_000);
-  return seconds === 0 ? `${minutes} min` : `${minutes} min ${seconds} s`;
-};
+const formatRuntime = (ms: number | null): string => formatDuration(ms, "minutes-only");
 
 /**
- * Phase 3.4 — Validation profiles admin pane. Same shape and conventions as the proof
+ * Validation profiles admin pane. Same shape and conventions as the proof
  * rules editor: builtin (id prefix `global-`) profiles are read-only; user profiles can
  * be added and removed. Editing existing user profiles isn't supported here yet — delete
  * + re-add covers the common case and keeps the surface tight.
@@ -199,6 +210,18 @@ export function ValidationProfilesEditor() {
                 <button
                   type="button"
                   className={projectStyles.secondaryButton}
+                  onClick={() => {
+                    setDraft(profileToDraft(profile));
+                    setError(null);
+                    setNotice(null);
+                  }}
+                  disabled={pendingDeleteId === profile.id}
+                >
+                  Edit profile
+                </button>
+                <button
+                  type="button"
+                  className={projectStyles.secondaryButton}
                   onClick={() => void handleDelete(profile.id)}
                   disabled={pendingDeleteId === profile.id}
                 >
@@ -211,15 +234,18 @@ export function ValidationProfilesEditor() {
       </ul>
 
       <form className={styles.form} onSubmit={handleSubmit}>
-        <h4 className={styles.formTitle}>Add a user validation profile</h4>
+        <h4 className={styles.formTitle}>
+          {draft.id ? `Edit ${draft.id}` : "Add a user validation profile"}
+        </h4>
         <div className={styles.formGrid}>
           <label>
-            <span>Project key</span>
+            <span>Project key{draft.id ? " (locked)" : ""}</span>
             <input
               type="text"
               value={draft.projectKey}
               onChange={(event) => setDraft({ ...draft, projectKey: event.target.value })}
               placeholder="(any)"
+              disabled={draft.id !== null}
             />
           </label>
           <label>
@@ -312,8 +338,18 @@ export function ValidationProfilesEditor() {
         </label>
         <div className={styles.formActions}>
           <button type="submit" className={projectStyles.actionButton} disabled={submitDisabled}>
-            {isSaving ? "Saving…" : "Add profile"}
+            {isSaving ? "Saving…" : draft.id ? "Save changes" : "Add profile"}
           </button>
+          {draft.id ? (
+            <button
+              type="button"
+              className={projectStyles.secondaryButton}
+              onClick={() => setDraft(EMPTY_DRAFT)}
+              disabled={isSaving}
+            >
+              Cancel edit
+            </button>
+          ) : null}
         </div>
       </form>
     </section>

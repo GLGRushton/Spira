@@ -1,4 +1,5 @@
 import type { TicketRunProofArtifact, TicketRunProofRunSummary, TicketRunSummary } from "@spira/shared";
+import { formatDuration } from "@spira/shared";
 import { useEffect, useMemo, useState } from "react";
 import projectStyles from "../../projects/ProjectsPanel/ProjectsPanel.module.css";
 import styles from "./MissionDetailsRoom.module.css";
@@ -31,14 +32,9 @@ const formatBytes = (bytes: number): string => {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 };
 
-const formatDuration = (startedAt: number, completedAt: number | null): string => {
+const formatProofDuration = (startedAt: number, completedAt: number | null): string => {
   if (completedAt === null) return "running";
-  const ms = Math.max(0, completedAt - startedAt);
-  if (ms < 1_000) return `${ms}ms`;
-  if (ms < 60_000) return `${(ms / 1_000).toFixed(1)}s`;
-  const minutes = Math.floor(ms / 60_000);
-  const seconds = Math.round((ms % 60_000) / 1_000);
-  return `${minutes}m ${seconds.toString().padStart(2, "0")}s`;
+  return formatDuration(Math.max(0, completedAt - startedAt), "compact");
 };
 
 const groupArtifacts = (artifacts: readonly TicketRunProofArtifact[]): ArtifactGroups => {
@@ -61,7 +57,7 @@ const isInlineViewable = (artifact: TicketRunProofArtifact): boolean =>
   artifact.kind === "log" || artifact.kind === "report";
 
 /**
- * Phase 1.4 — proof viewer. Shows every proof run for the mission with command,
+ * proof viewer. Shows every proof run for the mission with command,
  * exit code, duration, status, and grouped artifact chips. Text artifacts (logs,
  * reports) open inline with the lazy-loaded log viewer (size-capped at ~256 KB).
  */
@@ -146,7 +142,7 @@ export function ProofRunsViewer({ run }: ProofRunsViewerProps) {
                 <strong>{proofRun.profileLabel}</strong>
                 <div className={styles.proofRunMeta}>
                   Started {new Date(proofRun.startedAt).toLocaleString()} ·{" "}
-                  {proofRun.completedAt ? formatDuration(proofRun.startedAt, proofRun.completedAt) : "running"}
+                  {proofRun.completedAt ? formatProofDuration(proofRun.startedAt, proofRun.completedAt) : "running"}
                   {proofRun.exitCode !== null ? ` · exit ${proofRun.exitCode}` : ""}
                 </div>
               </div>

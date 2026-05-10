@@ -922,4 +922,29 @@ describe("setupIpcBridge", () => {
       commitSha: "1234567",
     });
   });
+
+  it("isBackendResponseMessage covers every :result variant declared in protocol.ts", async () => {
+    const fs = await import("node:fs/promises");
+    const path = await import("node:path");
+    const protocolPath = path.resolve(
+      process.cwd(),
+      "..",
+      "shared",
+      "src",
+      "protocol.ts",
+    );
+    const bridgePath = path.resolve(process.cwd(), "src", "ipc-bridge.ts");
+    const protocol = await fs.readFile(protocolPath, "utf8");
+    const bridge = await fs.readFile(bridgePath, "utf8");
+    const protocolMatches = new Set<string>();
+    for (const match of protocol.matchAll(/type: "([a-z][a-z0-9:_-]*?:result)"/g)) {
+      protocolMatches.add(match[1]);
+    }
+    const bridgeMatches = new Set<string>();
+    for (const match of bridge.matchAll(/message\.type === "([a-z][a-z0-9:_-]*?:result)"/g)) {
+      bridgeMatches.add(match[1]);
+    }
+    const missing = [...protocolMatches].filter((entry) => !bridgeMatches.has(entry));
+    expect(missing).toEqual([]);
+  });
 });

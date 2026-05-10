@@ -5,10 +5,12 @@ import type {
   ValidationProfileRecord,
 } from "@spira/memory-db";
 import type { TicketRunSummary } from "@spira/shared";
+import { DEFAULT_PROMOTION_THRESHOLDS } from "./learned-candidate-promoter.js";
+import { parseLearnedTagState } from "./learned-tag-state.js";
 import { buildMissionScopePaths } from "./mission-intelligence.js";
 
 /**
- * Phase 3.5 — repo-aware prompt context.
+ * Repo-aware prompt context.
  *
  * Builds a stable `## Repo guidance` section to inject into mission prompts so the agent
  * starts with the operator-curated knowledge for each impacted repo: the profile (registry,
@@ -64,12 +66,34 @@ const formatProfile = (profile: RepoProfileRecord): string => {
   return lines.join("\n");
 };
 
+/**
+ * Confidence band for an auto-promoted learned entry. Computed at prompt-build time so
+ * the band tracks the current threshold rather than the threshold at promotion time.
+ *  - "high-confidence" when the entry has ≥2× threshold contributing runs
+ *  - "promoted" when the entry was auto-promoted but is below 2× threshold
+ *  - "provisional" when the entry is approved but has no contributing runs (e.g. manually
+ *     approved before the learner caught up)
+ *  - null when the entry is not learned (no banding for hand-curated entries)
+ */
+const computeTrustBand = (entry: RepoIntelligenceRecord): "high-confidence" | "promoted" | "provisional" | null => {
+  if (entry.source !== "learned") return null;
+  const state = parseLearnedTagState(entry);
+  const threshold = DEFAULT_PROMOTION_THRESHOLDS[entry.type];
+  if (state.promotedFormulaVersion !== null && state.promotedRunIds.length > 0) {
+    if (state.promotedRunIds.length >= threshold * 2) return "high-confidence";
+    return "promoted";
+  }
+  return "provisional";
+};
+
 const formatIntelligenceGroup = (entries: readonly RepoIntelligenceRecord[], heading: string): string | null => {
   if (entries.length === 0) return null;
   const lines = [`### ${heading}`];
   for (const entry of entries) {
     const scope = entry.repoRelativePath ?? "any repo";
-    lines.push(`- **${entry.title}** (${scope}): ${entry.content}`);
+    const band = computeTrustBand(entry);
+    const trustNote = band ? ` _[${band}]_` : "";
+    lines.push(`- **${entry.title}** (${scope})${trustNote}: ${entry.content}`);
   }
   return lines.join("\n");
 };

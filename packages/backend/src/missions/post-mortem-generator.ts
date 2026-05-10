@@ -5,6 +5,7 @@ import type {
   TicketRunProofRunSummary,
   TicketRunSummary,
 } from "@spira/shared";
+import { formatDuration, formatIsoTimestamp } from "@spira/shared";
 
 const PHASE_DISPLAY: Record<TicketRunMissionPhase, string> = {
   classification: "Classify",
@@ -24,25 +25,9 @@ const PHASE_ORDER: TicketRunMissionPhase[] = [
   "summarize",
 ];
 
-export const formatTimestamp = (ms: number | null | undefined): string => {
-  if (typeof ms !== "number" || !Number.isFinite(ms)) {
-    return "—";
-  }
-  return new Date(ms).toISOString().replace("T", " ").replace(/\.\d{3}Z$/u, "Z");
-};
+export const formatTimestamp = formatIsoTimestamp;
 
-export const formatDurationMs = (ms: number): string => {
-  if (ms < 1_000) return `${ms} ms`;
-  if (ms < 60_000) return `${(ms / 1_000).toFixed(1)} s`;
-  if (ms < 3_600_000) {
-    const minutes = Math.floor(ms / 60_000);
-    const seconds = Math.floor((ms % 60_000) / 1_000);
-    return seconds === 0 ? `${minutes} min` : `${minutes} min ${seconds} s`;
-  }
-  const hours = Math.floor(ms / 3_600_000);
-  const minutes = Math.floor((ms % 3_600_000) / 60_000);
-  return minutes === 0 ? `${hours} h` : `${hours} h ${minutes} min`;
-};
+export const formatDurationMs = (ms: number): string => formatDuration(ms, "long");
 
 interface PhaseTimingRow {
   phase: TicketRunMissionPhase;
@@ -220,7 +205,7 @@ const stableString = (value: unknown): string => (typeof value === "string" ? va
 
 /**
  * Build the markdown post-mortem stub for a closed mission. Pure function — no I/O.
- * Sections: header, stage timings, validations, proof runs, files changed, open observations.
+ * sections: header, stage timings, validations, proof runs, files changed, open observations.
  */
 export const generateMissionPostmortem = (
   run: TicketRunSummary,
@@ -244,7 +229,7 @@ export const generateMissionPostmortem = (
 
 /**
  * Default file name for the auto-generated post-mortem stub.
- * Format: `{ticketId}-mission-postmortem-{yyyy-mm-dd}.md` (lowercased ticket id).
+ * format: `{ticketId}-mission-postmortem-{yyyy-mm-dd}.md` (lowercased ticket id).
  */
 export const buildPostmortemFilename = (run: TicketRunSummary, closedAt: number): string => {
   const date = new Date(closedAt).toISOString().slice(0, 10);

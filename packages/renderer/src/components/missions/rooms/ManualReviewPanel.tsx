@@ -12,7 +12,7 @@ interface ManualReviewPanelProps {
 const formatTimestamp = (ms: number | null): string | null => (ms === null ? null : new Date(ms).toLocaleString());
 
 /**
- * Phase 2.1 — first-class manual-review-only control.
+ * first-class manual-review-only control.
  *
  * Two states:
  *  - **Active** (`run.proof.status === "manual-review"`): show the recorded justification + a Clear button.

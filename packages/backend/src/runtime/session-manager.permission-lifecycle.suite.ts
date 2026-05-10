@@ -158,7 +158,12 @@ describe("StationSessionManager permission lifecycle", () => {
       stationId: "primary",
       taskText: "Add a feature",
       currentPhase: "implement",
-      classification: { mode: "coding", confidence: 0.9 },
+      classification: {
+        intent: "edit",
+        explicitWorkIntent: true,
+        requiresRepoContext: true,
+        confidence: "heuristic",
+      },
       phaseHistory: [
         {
           phase: "implement",
@@ -214,7 +219,12 @@ describe("StationSessionManager permission lifecycle", () => {
       stationId: "primary",
       taskText: "Add a feature",
       currentPhase: "implement",
-      classification: { mode: "coding", confidence: 0.9 },
+      classification: {
+        intent: "edit",
+        explicitWorkIntent: true,
+        requiresRepoContext: true,
+        confidence: "heuristic",
+      },
       phaseHistory: [
         {
           phase: "implement",

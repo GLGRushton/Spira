@@ -1,10 +1,10 @@
-import { spawn } from "node:child_process";
 import * as net from "node:net";
 import path from "node:path";
 import { pathExists } from "../../util/fs.js";
+import { binaryAvailable } from "../../util/spawn.js";
 
 /**
- * Phase 7.3 — WorkSession preflight.
+ * WorkSession preflight.
  *
  * Cheap parallel checks that should hold *before* the WorkSession kicks off its
  * `validate` phase. Designed to fail fast with concrete remediations instead of
@@ -58,23 +58,7 @@ export interface WorkSessionPreflightInput {
 const DEFAULT_CHECK_TIMEOUT_MS = 5_000;
 
 const defaultBinaryAvailable = (binary: string): Promise<boolean> =>
-  new Promise<boolean>((resolve) => {
-    const child = spawn(binary, ["--version"], {
-      stdio: ["ignore", "ignore", "ignore"],
-      shell: false,
-      windowsHide: true,
-    });
-    const timer = setTimeout(() => {
-      try { child.kill(); } catch { /* already exited */ }
-      resolve(false);
-    }, DEFAULT_CHECK_TIMEOUT_MS);
-    const emitter = child as unknown as NodeJS.EventEmitter;
-    emitter.on("error", () => { clearTimeout(timer); resolve(false); });
-    emitter.on("exit", (code: number | null) => {
-      clearTimeout(timer);
-      resolve(code === 0);
-    });
-  });
+  binaryAvailable(binary, { timeoutMs: DEFAULT_CHECK_TIMEOUT_MS });
 
 const defaultPortInUse = (port: number): Promise<boolean | null> => {
   // Test bindability. If we can bind to localhost:port, it's free. Returns null when

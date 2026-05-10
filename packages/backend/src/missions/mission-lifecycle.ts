@@ -14,6 +14,7 @@ import type {
   TicketRunProofStatus,
   TicketRunSummary,
 } from "@spira/shared";
+import { sortValidationsNewestFirst } from "@spira/shared";
 import type { SpiraEventBus } from "../util/event-bus.js";
 import {
   type MissionRepoGuidanceSnapshot,
@@ -186,7 +187,7 @@ export class MissionLifecycleService {
   }
 
   /**
-   * Phase 6.1 — operator-initiated supersession. The agent's `record_validation` call may
+   * operator-initiated supersession. The agent's `record_validation` call may
    * leave failed earlier entries unflagged because it forgot the `supersedesValidationIds`
    * field. The operator sees a recent passing entry of the same kind and clicks "supersede
    * earlier failed entries"; this updates the latest passing record to claim the failed
@@ -199,7 +200,7 @@ export class MissionLifecycleService {
       throw new Error(`No validations of kind "${kind}" recorded on this run.`);
     }
     const winner = [...sameKind]
-      .sort((left, right) => right.startedAt - left.startedAt || right.createdAt - left.createdAt)
+      .sort(sortValidationsNewestFirst)
       .find((entry) => entry.status === "passed");
     if (!winner) {
       throw new Error(`No passing validation of kind "${kind}" recorded yet — nothing to supersede.`);
@@ -293,7 +294,7 @@ export class MissionLifecycleService {
   }
 
   /**
-   * Phase 2.1 — operator marks the proof gate as satisfied via manual review. The justification
+   * operator marks the proof gate as satisfied via manual review. The justification
    * is required (asserted at the call site) and recorded both on the run and as a mission event.
    * The choice persists across re-opens unless explicitly cleared via {@link clearProofManualReview}.
    *
@@ -332,7 +333,7 @@ export class MissionLifecycleService {
   }
 
   /**
-   * Phase 2.1 — clear a prior manual-review choice; the gate becomes unsatisfied again until
+   * clear a prior manual-review choice; the gate becomes unsatisfied again until
    * the operator re-runs the proof or re-asserts manual review.
    */
   clearProofManualReview(runId: string): TicketRunSummary {

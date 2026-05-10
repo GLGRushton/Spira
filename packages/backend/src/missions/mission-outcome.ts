@@ -1,11 +1,13 @@
 import {
+  type OutcomeKind,
   type TicketRunMissionValidationRecord,
   type TicketRunSummary,
   getEffectiveValidations,
+  outcomeLearningWeight as sharedOutcomeLearningWeight,
 } from "@spira/shared";
 
 /**
- * Phase 5.1 — outcome classifier for closed missions.
+ * Outcome classifier for closed missions.
  *
  * Replaces the binary `isCleanMissionForLearning` gate with a four-way classification so
  * the learning loop can record evidence from every closed mission, weighting each kind
@@ -27,7 +29,7 @@ import {
  * is not `done`, missing classification or summary). Callers treat null as "skip".
  */
 
-export type MissionOutcomeKind = "clean-pass" | "pass-with-friction" | "fail-with-recovery" | "fail-final";
+export type MissionOutcomeKind = OutcomeKind;
 
 export interface MissionOutcomeClassification {
   kind: MissionOutcomeKind;
@@ -44,7 +46,7 @@ export interface MissionOutcomeClassification {
 
 /**
  * Detect validation kinds that had at least one failed entry superseded by a later pass.
- * Returns a sorted, de-duplicated list of kind strings.
+ * returns a sorted, de-duplicated list of kind strings.
  */
 const detectRetriedValidationKinds = (
   validations: readonly TicketRunMissionValidationRecord[],
@@ -132,20 +134,4 @@ export const classifyMissionOutcome = (run: TicketRunSummary): MissionOutcomeCla
   };
 };
 
-/**
- * Per-outcome learning weight, used by the auto-promotion confidence formula. The values
- * mirror the plan's "outcome quality" multiplier — clean-pass counts in full, friction
- * counts at half, recovery counts at quarter, and fail-final flips sign.
- */
-export const outcomeLearningWeight = (kind: MissionOutcomeKind): number => {
-  switch (kind) {
-    case "clean-pass":
-      return 1;
-    case "pass-with-friction":
-      return 0.5;
-    case "fail-with-recovery":
-      return 0.25;
-    case "fail-final":
-      return -2;
-  }
-};
+export const outcomeLearningWeight = sharedOutcomeLearningWeight;

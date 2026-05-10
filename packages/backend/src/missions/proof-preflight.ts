@@ -1,11 +1,11 @@
-import { spawn } from "node:child_process";
 import { statfs } from "node:fs/promises";
 import path from "node:path";
 import { pathExists as pathExistsUtil } from "../util/fs.js";
+import { binaryAvailable } from "../util/spawn.js";
 import type { ResolvedMissionProofProfile } from "./proof-registry.js";
 
 /**
- * Phase 2.2 — Proof preflight controller.
+ * Proof preflight controller.
  *
  * Runs cheap, parallel readiness checks against a resolved proof profile *before* the
  * harness spawns. Failures surface as typed blockers with suggested remediations so the
@@ -60,32 +60,7 @@ export interface RunProofPreflightOptions {
 }
 
 const binaryAvailableDefault = (binary: string, timeoutMs: number): Promise<boolean> =>
-  new Promise((resolve) => {
-    let settled = false;
-    const child = spawn(binary, ["--version"], { stdio: "ignore", windowsHide: true });
-    // The @types/node accessible to this package doesn't expose ChildProcess.on directly
-    // (overlapping versions in pnpm); cast via EventEmitter to access listeners — same
-    // workaround used in proof-runner.ts.
-    const childEvents = child as unknown as NodeJS.EventEmitter;
-    const timer = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      try {
-        child.kill();
-      } catch {
-        /* ignore */
-      }
-      resolve(false);
-    }, timeoutMs);
-    const finish = (ok: boolean) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolve(ok);
-    };
-    childEvents.on("error", () => finish(false));
-    childEvents.on("exit", (code: number | null) => finish(code === 0));
-  });
+  binaryAvailable(binary, { timeoutMs });
 
 const freeDiskBytesDefault = async (target: string): Promise<number> => {
   try {

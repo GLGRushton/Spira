@@ -10,6 +10,16 @@ const getCurrentAttempt = (run: TicketRunSummary) =>
 const isCurrentAttemptValue = (attemptStartedAt: number | null, updatedAt: number | null | undefined): boolean =>
   attemptStartedAt !== null && typeof updatedAt === "number" && updatedAt >= attemptStartedAt;
 
+/**
+ * Newest-first sort comparator for validation records. Ties on `startedAt` break by
+ * `createdAt`. Used by `getEffectiveValidations`, the renderer's validate-phase rendering,
+ * and `mission-lifecycle.ts:supersedeValidationsByKind` so all three pick the same winner.
+ */
+export const sortValidationsNewestFirst = (
+  left: TicketRunMissionValidationRecord,
+  right: TicketRunMissionValidationRecord,
+): number => right.startedAt - left.startedAt || right.createdAt - left.createdAt;
+
 export const getEffectiveValidations = (
   validations: readonly TicketRunMissionValidationRecord[],
 ): TicketRunMissionValidationRecord[] => {
@@ -23,8 +33,41 @@ export const getEffectiveValidations = (
     }
   }
   return [...validations]
-    .sort((left, right) => right.startedAt - left.startedAt || right.createdAt - left.createdAt)
+    .sort(sortValidationsNewestFirst)
     .filter((validation) => !supersededValidationIds.has(validation.validationId));
+};
+
+/**
+ * Compute which validation kinds have a passing winner AND at least one effective older
+ * failure (or pending) of the same kind that the operator could supersede. Both the
+ * renderer (renders the supersede button) and the backend
+ * (`mission-lifecycle.ts:supersedeValidationsByKind`) consult this so the affordance and
+ * the action stay in lockstep.
+ */
+export const getSupersedableValidationKinds = (
+  validations: readonly TicketRunMissionValidationRecord[],
+): Set<string> => {
+  const effectiveIds = new Set(getEffectiveValidations(validations).map((entry) => entry.validationId));
+  const byKind = new Map<string, TicketRunMissionValidationRecord[]>();
+  for (const entry of validations) {
+    const bucket = byKind.get(entry.kind) ?? [];
+    bucket.push(entry);
+    byKind.set(entry.kind, bucket);
+  }
+  const supersedableKinds = new Set<string>();
+  for (const [kind, entries] of byKind) {
+    const sorted = [...entries].sort(sortValidationsNewestFirst);
+    const winner = sorted.find((entry) => entry.status === "passed");
+    if (!winner) continue;
+    const hasEffectiveOlderFailure = entries.some(
+      (entry) =>
+        entry.validationId !== winner.validationId &&
+        effectiveIds.has(entry.validationId) &&
+        (entry.status === "failed" || entry.status === "pending"),
+    );
+    if (hasEffectiveOlderFailure) supersedableKinds.add(kind);
+  }
+  return supersedableKinds;
 };
 
 const getWaitReason = (
@@ -102,7 +145,7 @@ export const getTicketRunMissionWorkflowState = (run: TicketRunSummary): TicketR
   const hasPendingValidation = effectiveValidations.some((validation) => validation.status === "pending");
   const proofRequired = run.classification?.proofRequired === true;
   const proofStrategySaved = !proofRequired || isCurrentAttemptValue(attemptStartedAt, run.proofStrategy?.updatedAt);
-  // Phase 2.1 — `manual-review` satisfies the gate alongside `passed`. The justification is
+  // `manual-review` satisfies the gate alongside `passed`. The justification is
   // recorded with the proof-set-manual-review-only event for audit. `preflight-blocked` and
   // `failed` do NOT satisfy: they're recoverable transient states, not green-light outcomes.
   const proofPassed =

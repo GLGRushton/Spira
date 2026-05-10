@@ -344,7 +344,7 @@ export const mapValidationProfileRow = (row: ValidationProfileRow): ValidationPr
   };
 };
 
-// Phase 3.1 — repo profiles share the source vocabulary with repo_intelligence_entries.
+// repo profiles share the source vocabulary with repo_intelligence_entries.
 function assertRepoProfileSource(value: string): asserts value is RepoIntelligenceEntrySource {
   if (!REPO_INTELLIGENCE_ENTRY_SOURCES.includes(value as RepoIntelligenceEntrySource)) {
     throw new Error(`Unsupported repo profile source: ${value}`);

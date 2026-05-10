@@ -895,7 +895,7 @@ export const MIGRATIONS: MigrationDefinition[] = [
     ],
   },
   {
-    // Phase 2.1 / 2.3 — extend the proof status enums and add manual-review audit columns.
+    // extend the proof status enums and add manual-review audit columns.
     //   - ticket_runs.proof_status gains 'manual-review' (gate satisfied by operator review)
     //     and 'preflight-blocked' (preflight refused to spawn the harness).
     //   - ticket_run_proof_runs.status gains 'preflight-blocked' for the per-run audit row.
@@ -983,7 +983,7 @@ export const MIGRATIONS: MigrationDefinition[] = [
     ],
   },
   {
-    // Phase 3.1 — repo_profiles + Phase 3.4 validation_profiles enrichment.
+    // repo_profiles + Phase 3.4 validation_profiles enrichment.
     //   - New repo_profiles table: per-projectKey "what is this repo" record. Carries display
     //     metadata, default registry / branch / build dir, required env vars + SDKs (JSON
     //     arrays), user-facing copy globs, UI test globs, and free-text notes. JS-side source
@@ -1071,6 +1071,16 @@ export const MIGRATIONS: MigrationDefinition[] = [
       )`,
       "CREATE INDEX idx_work_session_events_session_v32 ON work_session_events(session_id, id DESC)",
       "CREATE INDEX idx_work_session_events_station_v32 ON work_session_events(station_id, occurred_at DESC)",
+    ],
+  },
+  {
+    // v33 — covering index for the cross-mission validation-candidate sweep
+    // (listMissionEventsByProjectKey). The query filters mission_events by event_type and
+    // joins ticket_runs by run_id; without this index the planner falls back to scanning
+    // all mission_events rows for the JOIN partner.
+    version: 33,
+    statements: [
+      "CREATE INDEX IF NOT EXISTS idx_mission_events_event_type_v33 ON mission_events(event_type, run_id)",
     ],
   },
 ];

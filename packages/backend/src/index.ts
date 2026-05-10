@@ -18,6 +18,7 @@ import {
   type UpgradeProposal,
   type UserSettings,
   parseEnv,
+  projectIntelligenceAuditEvent,
 } from "@spira/shared";
 import { ZodError } from "zod";
 import { handleChatRuntimeMessage } from "./backend/chat-runtime-router.js";
@@ -39,6 +40,8 @@ import { LearnedCandidatesService } from "./missions/learned-candidates-service.
 import { MissionServiceRegistry } from "./missions/service-registry.js";
 import { type GenerateCommitDraftInput, TicketRunService } from "./missions/ticket-runs.js";
 import { ProjectRegistry } from "./projects/registry.js";
+import { startWeeklyDigestScheduler } from "./missions/weekly-digest-scheduler.js";
+import { startEventsRetentionScheduler } from "./runtime/events-retention.js";
 import { RuntimeStore } from "./runtime/runtime-store.js";
 import { DEFAULT_STATION_ID, StationRegistry } from "./runtime/station-registry.js";
 import { WsServer } from "./server.js";
@@ -84,6 +87,8 @@ let wakeWordEnabled = true;
 let speechEnabled = true;
 let autoApprovePermissions = false;
 let memoryDb: SpiraMemoryDatabase | null = null;
+let eventsRetentionHandle: { stop: () => void } | null = null;
+let weeklyDigestHandle: { stop: () => void; runNow: () => Promise<string | null> } | null = null;
 let runtimeStore: RuntimeStore | null = null;
 let youTrackService: YouTrackService | null = null;
 let projectRegistry: ProjectRegistry | null = null;
@@ -493,6 +498,10 @@ const shutdown = async (signal: ShutdownReason) => {
   wakeWordEnabled = true;
   speechEnabled = true;
   autoApprovePermissions = false;
+  eventsRetentionHandle?.stop();
+  eventsRetentionHandle = null;
+  weeklyDigestHandle?.stop();
+  weeklyDigestHandle = null;
   memoryDb = null;
   runtimeStore = null;
   youTrackService = null;
@@ -1290,7 +1299,7 @@ const handleClientMessage = async (message: ClientMessage): Promise<void> => {
     return;
   }
 
-  // Phase 3.2 / 3.3 — repo profiles admin handlers.
+  // repo profiles admin handlers.
   const sendRepoProfilesUnavailable = (requestId: string): void =>
     sendAdminServiceUnavailable(requestId, "Repo profiles");
 
@@ -1353,7 +1362,7 @@ const handleClientMessage = async (message: ClientMessage): Promise<void> => {
     return;
   }
 
-  // Phase 3.4 — validation profiles admin handlers.
+  // validation profiles admin handlers.
   const sendValidationProfilesUnavailable = (requestId: string): void =>
     sendAdminServiceUnavailable(requestId, "Validation profiles");
 
@@ -1426,7 +1435,7 @@ const handleClientMessage = async (message: ClientMessage): Promise<void> => {
     return;
   }
 
-  // Phase 5.4 — learned-candidate admin handlers.
+  // learned-candidate admin handlers.
   const sendLearnedCandidatesUnavailable = (requestId: string): void =>
     sendAdminServiceUnavailable(requestId, "Learned candidates");
 
@@ -1464,6 +1473,114 @@ const handleClientMessage = async (message: ClientMessage): Promise<void> => {
           error,
           "MISSIONS_LEARNED_CANDIDATE_REVOKE_FAILED",
           "Failed to revoke learned candidate.",
+          "missions",
+        ),
+      });
+    }
+    return;
+  }
+
+  if (message.type === "missions:intelligence-audit:list") {
+    if (!memoryDb) {
+      sendAdminServiceUnavailable(message.requestId, "Intelligence audit");
+      return;
+    }
+    try {
+      const events = memoryDb.listMissionEventsByEventType({
+        eventTypes: ["learned-candidate-promoted", "learned-candidate-revoked"],
+        limit: message.limit ?? 200,
+      });
+      const summaries = events
+        .map((event) =>
+          projectIntelligenceAuditEvent({
+            id: event.id,
+            runId: event.runId,
+            occurredAt: event.occurredAt,
+            eventType: event.eventType,
+            metadata: event.metadata,
+          }),
+        )
+        .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
+      transport?.send({
+        type: "missions:intelligence-audit:list:result",
+        requestId: message.requestId,
+        events: summaries,
+      });
+    } catch (error) {
+      logger.error({ err: error, requestId: message.requestId }, "Failed to list intelligence audit events");
+      transport?.send({
+        type: "missions:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(
+          error,
+          "MISSIONS_INTELLIGENCE_AUDIT_LIST_FAILED",
+          "Failed to load intelligence audit events.",
+          "missions",
+        ),
+      });
+    }
+    return;
+  }
+
+  if (message.type === "missions:weekly-digest:generate") {
+    if (!weeklyDigestHandle) {
+      sendAdminServiceUnavailable(message.requestId, "Weekly digest");
+      return;
+    }
+    try {
+      const written = await weeklyDigestHandle.runNow();
+      transport?.send({
+        type: "missions:weekly-digest:generate:result",
+        requestId: message.requestId,
+        path: written,
+      });
+    } catch (error) {
+      logger.error({ err: error, requestId: message.requestId }, "Failed to generate weekly digest");
+      transport?.send({
+        type: "missions:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(
+          error,
+          "MISSIONS_WEEKLY_DIGEST_FAILED",
+          "Failed to generate weekly digest.",
+          "missions",
+        ),
+      });
+    }
+    return;
+  }
+
+  if (message.type === "worksession:events:list-by-station") {
+    if (!memoryDb) {
+      sendAdminServiceUnavailable(message.requestId, "WorkSession events");
+      return;
+    }
+    try {
+      const events = memoryDb.listWorkSessionEventsByStation(message.stationId, {
+        limit: message.limit,
+      });
+      transport?.send({
+        type: "worksession:events:list-by-station:result",
+        requestId: message.requestId,
+        events: events.map((event) => ({
+          id: event.id,
+          sessionId: event.sessionId,
+          stationId: event.stationId,
+          phase: event.phase,
+          eventType: event.eventType,
+          metadata: event.metadata,
+          occurredAt: event.occurredAt,
+        })),
+      });
+    } catch (error) {
+      logger.error({ err: error, requestId: message.requestId }, "Failed to list work-session events");
+      transport?.send({
+        type: "missions:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(
+          error,
+          "WORKSESSION_EVENTS_LIST_FAILED",
+          "Failed to list work-session events.",
           "missions",
         ),
       });
@@ -2622,6 +2739,8 @@ const bootstrap = async () => {
   const memoryDbPath = process.env[SPIRA_MEMORY_DB_PATH_ENV];
   if (typeof memoryDbPath === "string" && memoryDbPath.trim()) {
     memoryDb = SpiraMemoryDatabase.open(memoryDbPath.trim());
+    eventsRetentionHandle = startEventsRetentionScheduler(memoryDb, logger);
+    weeklyDigestHandle = startWeeklyDigestScheduler(memoryDb, logger);
     runtimeStore = new RuntimeStore(memoryDb);
     const runtimeRecovery = await RuntimeStore.recoverInterruptedState(memoryDb, env);
     bootExpiredPermissionRequestIds = runtimeRecovery.expiredPermissionRequestIds;

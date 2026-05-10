@@ -1,12 +1,12 @@
 import type { WorkSessionPhase } from "./work-session-types.js";
 
 /**
- * Phase 7.1 — typed taxonomy for the WorkSession event log. Mirrors the mission-events
+ * typed taxonomy for the WorkSession event log. Mirrors the mission-events
  * pattern (closed enum + per-event metadata map + runtime validator) so the renderer can
  * switch on `event.eventType` and get strongly-typed metadata.
  *
  * The events ride a parallel `work_session_events` table (no FK to ticket_runs since
- * WorkSessions live outside the missions lifecycle). The plan deliberately keeps these
+ * workSessions live outside the missions lifecycle). The plan deliberately keeps these
  * separate from MissionEventType so we don't conflate "what is this mission doing" with
  * "what is the primary station's WorkSession doing."
  */
@@ -75,6 +75,8 @@ export interface WorkSessionEventMetadataMap {
     outcome: string;
     /** Reason text for non-clean closes; null for clean. */
     reason: string | null;
+    /** On-disk path of the post-mortem markdown, when one was written. Null on skip / EEXIST. */
+    postmortemPath: string | null;
   };
 }
 
@@ -90,3 +92,18 @@ export const validateWorkSessionEventType = (eventType: string): WorkSessionEven
   }
   return eventType;
 };
+
+/**
+ * Renderer-facing summary of a work-session event row. Mirrors the database record but
+ * keeps `metadata` opaque (`unknown`) so the renderer can selectively narrow per
+ * `eventType` without dragging the memory-db type into shared.
+ */
+export interface WorkSessionEventSummary {
+  id: number;
+  sessionId: string;
+  stationId: string;
+  phase: string;
+  eventType: string;
+  metadata: unknown;
+  occurredAt: number;
+}

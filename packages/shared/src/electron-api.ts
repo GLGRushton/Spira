@@ -7,11 +7,13 @@ import type { ProjectRepoMappingsSnapshot } from "./project-repo-types.js";
 import type {
   ClientMessage,
   ErrorPayload,
+  IntelligenceAuditEvent,
   PermissionRequestPayload,
   ServerMessage,
   StationId,
   UserSettings,
 } from "./protocol.js";
+import type { WorkSessionEventSummary } from "./work-session-events.js";
 import type { RuntimeConfigApplyResult, RuntimeConfigSummary, RuntimeConfigUpdate } from "./runtime-config.js";
 import type { MissionServiceSnapshot } from "./service-profile-types.js";
 import type { SubagentCreateConfig } from "./subagent-types.js";
@@ -128,56 +130,65 @@ export interface ElectronApi {
   getTicketRunRepoIntelligence(runId: string): Promise<TicketRunRepoIntelligenceCandidatesResult>;
   approveTicketRunRepoIntelligence(runId: string, entryId: string): Promise<ApproveTicketRunRepoIntelligenceResult>;
   runTicketRunProof(runId: string, profileId: string): Promise<RunTicketRunProofResult>;
-  /** Phase 2.5 — list every known proof rule (builtin + user) for the admin pane. */
+  /** list every known proof rule (builtin + user) for the admin pane. */
   listMissionProofRules(): Promise<MissionProofRulesSnapshot>;
-  /** Phase 2.5 — create or update a user-authored proof rule; returns the fresh snapshot. */
+  /** create or update a user-authored proof rule; returns the fresh snapshot. */
   upsertMissionProofRule(rule: UpsertMissionProofRuleInput): Promise<MissionProofRulesSnapshot>;
-  /** Phase 2.5 — delete a user proof rule by id; returns the fresh snapshot. */
+  /** delete a user proof rule by id; returns the fresh snapshot. */
   deleteMissionProofRule(ruleId: string): Promise<MissionProofRulesSnapshot>;
-  /** Phase 3.2 — list every known repo profile (one per projectKey). */
+  /** list every known repo profile (one per projectKey). */
   listMissionRepoProfiles(): Promise<MissionRepoProfilesSnapshot>;
-  /** Phase 3.2 — create or update a repo profile; returns the fresh snapshot. */
+  /** create or update a repo profile; returns the fresh snapshot. */
   upsertMissionRepoProfile(profile: UpsertMissionRepoProfileInput): Promise<MissionRepoProfilesSnapshot>;
-  /** Phase 3.2 — delete a repo profile by projectKey; returns the fresh snapshot. */
+  /** delete a repo profile by projectKey; returns the fresh snapshot. */
   deleteMissionRepoProfile(projectKey: string): Promise<MissionRepoProfilesSnapshot>;
-  /** Phase 3.4 — list every validation profile (builtin + user). */
+  /** list every validation profile (builtin + user). */
   listMissionValidationProfiles(): Promise<MissionValidationProfilesSnapshot>;
-  /** Phase 3.4 — create/update a user validation profile; returns the fresh snapshot. */
+  /** create/update a user validation profile; returns the fresh snapshot. */
   upsertMissionValidationProfile(
     profile: UpsertMissionValidationProfileInput,
   ): Promise<MissionValidationProfilesSnapshot>;
-  /** Phase 3.4 — delete a user validation profile by id; returns the fresh snapshot. */
+  /** delete a user validation profile by id; returns the fresh snapshot. */
   deleteMissionValidationProfile(profileId: string): Promise<MissionValidationProfilesSnapshot>;
-  /** Phase 5.4 — list every learned intelligence candidate (pending + promoted + revoked). */
+  /** list every learned intelligence candidate (pending + promoted + revoked). */
   listMissionLearnedCandidates(): Promise<MissionLearnedCandidatesSnapshot>;
-  /** Phase 5.4 — revoke a learned candidate (operator override + audit). */
+  /** revoke a learned candidate (operator override + audit). */
   revokeMissionLearnedCandidate(
     input: RevokeMissionLearnedCandidateInput,
   ): Promise<MissionLearnedCandidatesSnapshot>;
+  /** Generate the weekly mission digest immediately and return the on-disk path (or null on skip). */
+  generateMissionWeeklyDigest(): Promise<string | null>;
+  /** Cross-mission audit feed of learned-candidate-promoted / -revoked events. */
+  listMissionIntelligenceAudit(limit?: number): Promise<IntelligenceAuditEvent[]>;
+  /** Fetch the most recent WorkSession events for a station (newest-first). */
+  listWorkSessionEventsByStation(
+    stationId: string,
+    limit?: number,
+  ): Promise<WorkSessionEventSummary[]>;
   /**
-   * Phase 2.1 — mark the proof gate as satisfied via manual review.
+   * mark the proof gate as satisfied via manual review.
    * Justification is required and persisted on the run + as a mission event.
    */
   setTicketRunProofManualReview(
     runId: string,
     justification: string,
   ): Promise<{ run: TicketRunSummary; snapshot: TicketRunSnapshot }>;
-  /** Phase 2.1 — revert a prior manual-review choice; gate becomes unsatisfied again. */
+  /** revert a prior manual-review choice; gate becomes unsatisfied again. */
   clearTicketRunProofManualReview(
     runId: string,
   ): Promise<{ run: TicketRunSummary; snapshot: TicketRunSnapshot }>;
-  /** Phase 6.1 — supersede earlier failed/pending validations of a kind via the latest passing one. */
+  /** supersede earlier failed/pending validations of a kind via the latest passing one. */
   supersedeTicketRunValidations(
     runId: string,
     kind: string,
   ): Promise<{ run: TicketRunSummary; snapshot: TicketRunSnapshot }>;
-  /** Phase 6.5 — abort a mission with an operator reason. Closes the run with status="aborted". */
+  /** abort a mission with an operator reason. Closes the run with status="aborted". */
   abortTicketRun(
     runId: string,
     reason: string,
   ): Promise<{ run: TicketRunSummary; snapshot: TicketRunSnapshot }>;
   /**
-   * Phase 1.4 — read a proof artifact's text content (lazy-loaded inline log viewer).
+   * read a proof artifact's text content (lazy-loaded inline log viewer).
    * Returns null content for binary or missing artifacts; size-capped to maxBytes (default ~256KB).
    */
   readTicketRunProofArtifact(

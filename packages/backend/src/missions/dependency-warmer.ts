@@ -1,11 +1,11 @@
-import { spawn } from "node:child_process";
 import path from "node:path";
 import type { ValidationProfileRecord } from "@spira/memory-db";
 import type { TicketRunSummary } from "@spira/shared";
 import type { Logger } from "pino";
+import { spawnWithTimeout } from "../util/spawn.js";
 
 /**
- * Phase 4.1 — best-effort dependency warming after worktree setup.
+ * Best-effort dependency warming after worktree setup.
  *
  * Runs registered `restore`-kind validation profiles for the impacted repos in the
  * background while classification/planning are in flight. The first validation pass
@@ -83,52 +83,8 @@ export type SpawnCommand = (
   options: SpawnCommandOptions,
 ) => Promise<SpawnCommandResult>;
 
-const STDERR_TAIL_BYTES = 2_048;
-
 const defaultSpawnCommand: SpawnCommand = (command, args, options) =>
-  new Promise<SpawnCommandResult>((resolve) => {
-    const child = spawn(command, args, {
-      cwd: options.cwd,
-      stdio: ["ignore", "ignore", "pipe"],
-      shell: false,
-      windowsHide: true,
-    });
-
-    let stderrBuffer = "";
-    let timedOut = false;
-    const timer = setTimeout(() => {
-      timedOut = true;
-      try {
-        child.kill();
-      } catch {
-        // Already exited.
-      }
-    }, options.timeoutMs);
-
-    child.stderr?.setEncoding("utf8");
-    child.stderr?.on("data", (chunk: string) => {
-      stderrBuffer += chunk;
-      if (stderrBuffer.length > STDERR_TAIL_BYTES) {
-        stderrBuffer = stderrBuffer.slice(stderrBuffer.length - STDERR_TAIL_BYTES);
-      }
-    });
-
-    const finalize = (exitCode: number | null, signal: NodeJS.Signals | null): void => {
-      clearTimeout(timer);
-      resolve({ exitCode, signal, stderrTail: stderrBuffer.trim(), timedOut });
-    };
-
-    // Cast follows the proof-runner.ts pattern: child_process types don't expose `.on`
-    // on the narrowed ChildProcessByStdio variant, but the runtime always does.
-    const emitter = child as unknown as NodeJS.EventEmitter;
-    emitter.on("error", (error: NodeJS.ErrnoException) => {
-      stderrBuffer = `${stderrBuffer}\n${error.message}`.trim();
-      finalize(null, null);
-    });
-    emitter.on("exit", (code: number | null, signal: NodeJS.Signals | null) => {
-      finalize(code, signal);
-    });
-  });
+  spawnWithTimeout(command, args, { cwd: options.cwd, timeoutMs: options.timeoutMs });
 
 const tokenizeCommand = (command: string): { binary: string; args: string[] } | null => {
   const trimmed = command.trim();

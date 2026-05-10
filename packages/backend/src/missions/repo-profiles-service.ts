@@ -2,7 +2,7 @@ import type { RepoProfileRecord, SpiraMemoryDatabase } from "@spira/memory-db";
 import type { MissionRepoProfileRecord, MissionRepoProfilesSnapshot, UpsertMissionRepoProfileInput } from "@spira/shared";
 
 /**
- * Phase 3.2 / 3.3 — repo profiles admin service.
+ * Repo profiles admin service.
  *
  * Renderer-facing CRUD for the `repo_profiles` table. Mirrors the shape of
  * {@link import("./proof-rules-service").ProofRulesService} so the admin UI patterns stay

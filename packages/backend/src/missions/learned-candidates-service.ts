@@ -2,10 +2,11 @@ import type { RepoIntelligenceRecord, SpiraMemoryDatabase } from "@spira/memory-
 import type { Logger } from "pino";
 import type { SpiraEventBus } from "../util/event-bus.js";
 import { ConfigError } from "../util/errors.js";
-import { buildRevokedTags, TAG_PREFIXES } from "./learned-candidate-promoter.js";
+import { buildRevokedTags } from "./learned-candidate-promoter.js";
+import { TAG_PREFIXES, parseLearnedTagState } from "./learned-tag-state.js";
 
 /**
- * Phase 5.4 — service for the admin-pane operations on learned intelligence candidates:
+ * Service for the admin-pane operations on learned intelligence candidates:
  * list (with status flags), revoke (mark approval=false + record blocked-evidence runs),
  * and archive (revoke + mark with `archived` tag).
  *
@@ -47,15 +48,8 @@ export interface RevokeLearnedCandidateInput {
   archive?: boolean;
 }
 
-const ARCHIVED_TAG = "archived";
-
 const summarize = (record: RepoIntelligenceRecord): LearnedCandidateSummary => {
-  const revokedRunIds = record.tags
-    .filter((tag) => tag.startsWith(TAG_PREFIXES.revokedRun))
-    .map((tag) => tag.slice(TAG_PREFIXES.revokedRun.length));
-  const promotedRunIds = record.tags
-    .filter((tag) => tag.startsWith(TAG_PREFIXES.promotedRun))
-    .map((tag) => tag.slice(TAG_PREFIXES.promotedRun.length));
+  const state = parseLearnedTagState(record);
   return {
     id: record.id,
     projectKey: record.projectKey,
@@ -65,10 +59,10 @@ const summarize = (record: RepoIntelligenceRecord): LearnedCandidateSummary => {
     content: record.content,
     source: record.source,
     approved: record.approved,
-    revoked: record.tags.includes(TAG_PREFIXES.revoked),
-    archived: record.tags.includes(ARCHIVED_TAG),
-    revokedRunIds,
-    promotedRunIds,
+    revoked: state.revoked,
+    archived: state.archived,
+    revokedRunIds: state.revokedRunIds,
+    promotedRunIds: state.promotedRunIds,
     tags: record.tags,
     createdAt: record.createdAt,
     updatedAt: record.updatedAt,
@@ -110,12 +104,10 @@ export class LearnedCandidatesService {
       throw new ConfigError(`No learned candidate with id ${input.candidateId}.`);
     }
 
-    const contributingRunIds = candidate.tags
-      .filter((tag) => tag.startsWith(TAG_PREFIXES.promotedRun))
-      .map((tag) => tag.slice(TAG_PREFIXES.promotedRun.length));
+    const contributingRunIds = parseLearnedTagState(candidate).promotedRunIds;
     const tags = buildRevokedTags(candidate, contributingRunIds);
     const archived = input.archive === true;
-    const finalTags = archived ? [...new Set([...tags, ARCHIVED_TAG])] : tags;
+    const finalTags = archived ? [...new Set([...tags, TAG_PREFIXES.archived])] : tags;
 
     memoryDb.upsertRepoIntelligence({
       id: candidate.id,

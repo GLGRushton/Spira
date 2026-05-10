@@ -48,6 +48,9 @@ const VALIDATION_PROFILES_UPSERT_CHANNEL = "missions:validation-profiles:upsert"
 const VALIDATION_PROFILES_DELETE_CHANNEL = "missions:validation-profiles:delete";
 const LEARNED_CANDIDATES_LIST_CHANNEL = "missions:learned-candidates:list";
 const LEARNED_CANDIDATES_REVOKE_CHANNEL = "missions:learned-candidates:revoke";
+const WEEKLY_DIGEST_GENERATE_CHANNEL = "missions:weekly-digest:generate";
+const INTELLIGENCE_AUDIT_LIST_CHANNEL = "missions:intelligence-audit:list";
+const WORKSESSION_EVENTS_LIST_BY_STATION_CHANNEL = "worksession:events:list-by-station";
 const TICKET_RUN_DELETE_CHANNEL = "missions:ticket-run:delete";
 const TICKET_RUN_REVIEW_SNAPSHOT_CHANNEL = "missions:ticket-run:review-snapshot:get";
 const TICKET_RUN_GIT_STATE_CHANNEL = "missions:ticket-run:git-state:get";
@@ -342,6 +345,15 @@ const electronAPI: ElectronApi = {
   },
   revokeMissionLearnedCandidate(input) {
     return ipcRenderer.invoke(LEARNED_CANDIDATES_REVOKE_CHANNEL, { input });
+  },
+  generateMissionWeeklyDigest() {
+    return ipcRenderer.invoke(WEEKLY_DIGEST_GENERATE_CHANNEL);
+  },
+  listMissionIntelligenceAudit(limit) {
+    return ipcRenderer.invoke(INTELLIGENCE_AUDIT_LIST_CHANNEL, { limit });
+  },
+  listWorkSessionEventsByStation(stationId, limit) {
+    return ipcRenderer.invoke(WORKSESSION_EVENTS_LIST_BY_STATION_CHANNEL, { stationId, limit });
   },
   deleteTicketRun(runId) {
     return ipcRenderer.invoke(TICKET_RUN_DELETE_CHANNEL, { runId });

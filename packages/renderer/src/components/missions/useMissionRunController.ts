@@ -32,12 +32,12 @@ export interface MissionRunController {
   isProofLoading: boolean;
   missionTimeline: TicketRunMissionEventSummary[];
   isMissionTimelineLoading: boolean;
-  /** Phase 4.6 — true when the backend reported additional older events beyond the current page. */
+  /** true when the backend reported additional older events beyond the current page. */
   hasMoreMissionTimeline: boolean;
   isLoadingOlderMissionEvents: boolean;
-  /** Phase 4.6 — append the next older page of mission events. No-op when none remain. */
+  /** append the next older page of mission events. No-op when none remain. */
   loadOlderMissionEvents: () => Promise<void>;
-  /** Phase 6.4 — soft per-phase duration hints from recent closed runs. Empty when not enough data. */
+  /** soft per-phase duration hints from recent closed runs. Empty when not enough data. */
   phaseBudget: TicketRunPhaseBudgetSnapshot;
   repoIntelligenceEntries: TicketRunRepoIntelligenceEntrySummary[];
   isRepoIntelligenceLoading: boolean;
@@ -56,13 +56,13 @@ export interface MissionRunController {
   refreshRepoIntelligence: () => Promise<void>;
   approveRepoIntelligence: (entryId: string) => Promise<void>;
   runMissionProof: (profileId: string) => Promise<void>;
-  /** Phase 2.1 — mark proof gate as satisfied via manual review with a justification. */
+  /** mark proof gate as satisfied via manual review with a justification. */
   setMissionProofManualReview: (justification: string) => Promise<void>;
-  /** Phase 2.1 — clear a prior manual-review choice; gate becomes unsatisfied again. */
+  /** clear a prior manual-review choice; gate becomes unsatisfied again. */
   clearMissionProofManualReview: () => Promise<void>;
-  /** Phase 6.1 — supersede earlier failed/pending validations of a kind via the latest passing one. */
+  /** supersede earlier failed/pending validations of a kind via the latest passing one. */
   supersedeValidationsByKind: (kind: string) => Promise<void>;
-  /** Phase 6.5 — abort the run with a free-text reason; closes with status="aborted". */
+  /** abort the run with a free-text reason; closes with status="aborted". */
   abortRun: (reason: string) => Promise<void>;
   isSettingManualReview: boolean;
   retryTicketRunSync: () => Promise<void>;
@@ -175,11 +175,11 @@ export function useMissionRunController(run: TicketRunSummary): MissionRunContro
   const [isProofLoading, setIsProofLoading] = useState(false);
   const [missionTimeline, setMissionTimeline] = useState<TicketRunMissionEventSummary[]>([]);
   const [isMissionTimelineLoading, setIsMissionTimelineLoading] = useState(false);
-  // Phase 4.6 — pagination cursor state for the mission timeline. `hasMoreMissionTimeline`
+  // pagination cursor state for the mission timeline. `hasMoreMissionTimeline`
   // tells the UI whether to render a "load older events" affordance.
   const [hasMoreMissionTimeline, setHasMoreMissionTimeline] = useState(false);
   const [isLoadingOlderMissionEvents, setIsLoadingOlderMissionEvents] = useState(false);
-  // Phase 6.4 — per-phase budget envelope from the timeline result; soft hint only.
+  // per-phase budget envelope from the timeline result; soft hint only.
   const [phaseBudget, setPhaseBudget] = useState<TicketRunPhaseBudgetSnapshot>({
     projectKey: run.projectKey ?? "",
     entries: [],

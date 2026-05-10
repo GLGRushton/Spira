@@ -408,7 +408,7 @@ describe("MissionLifecycleService", () => {
     }
   });
 
-  // Phase 2.1 — manual-review-only as a first-class satisfied gate state.
+  // manual-review-only as a first-class satisfied gate state.
   describe("setProofManualReviewOnly", () => {
     const setupRunReadyForProof = (database: SpiraMemoryDatabase): void => {
       // Build a run that has classification + plan + proof strategy stored so the workflow guard
@@ -519,7 +519,7 @@ describe("MissionLifecycleService", () => {
     });
   });
 
-  // Phase 6.1 — operator-initiated supersession of failed validations.
+  // operator-initiated supersession of failed validations.
   describe("supersedeValidationsByKind", () => {
     const seedRunWithRetry = (database: SpiraMemoryDatabase): void => {
       const service = new MissionLifecycleService(database);

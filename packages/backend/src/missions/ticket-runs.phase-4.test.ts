@@ -30,7 +30,7 @@ afterEach(() => {
   }
 });
 
-describe("Phase 4.5 — prompt order optimised for prompt caching", () => {
+describe("prompt order optimised for prompt caching", () => {
   it("emits the repo-guidance section before the ticket-specific lines on initial prompt", async () => {
     const database = createTestDatabase();
     database.upsertRepoProfile({
@@ -98,7 +98,7 @@ describe("Phase 4.5 — prompt order optimised for prompt caching", () => {
   });
 });
 
-describe("Phase 4.6 — paginated mission timeline", () => {
+describe("paginated mission timeline", () => {
   it("reports hasMore=false when fewer events than the limit exist", async () => {
     const database = createTestDatabase();
     database.upsertTicketRun({
@@ -197,7 +197,7 @@ describe("Phase 4.6 — paginated mission timeline", () => {
   });
 });
 
-describe("Phase 4.4 — proof discovery cache", () => {
+describe("proof discovery cache", () => {
   it("walks the filesystem once per worktree path and reuses the cached result on follow-up calls", async () => {
     const database = createTestDatabase();
     const worktreeRoot = mkdtempSync(path.join(os.tmpdir(), "spira-phase4-worktree-"));
@@ -256,7 +256,7 @@ describe("Phase 4.4 — proof discovery cache", () => {
   });
 });
 
-describe("Phase 4.2 — usable-worktree cache", () => {
+describe("usable-worktree cache", () => {
   it("only runs `rev-parse --git-dir` once per worktree path across repeated startRun resumes", async () => {
     const database = createTestDatabase();
     const worktreePath = mkdtempSync(path.join(os.tmpdir(), "spira-phase4-validate-"));

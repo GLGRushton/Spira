@@ -9,6 +9,12 @@ export type {
 export type { ChatMessage, ToolCallStatus } from "./chat-types.js";
 export type { Env, McpServersFile } from "./config-schema.js";
 export type { ModelProviderId } from "./model-provider.js";
+export type { OutcomeKind } from "./outcome.js";
+export { outcomeLearningWeight } from "./outcome.js";
+export type { DurationStyle } from "./duration-format.js";
+export { formatDuration, formatIsoTimestamp } from "./duration-format.js";
+export type { IntelligenceAuditEventInput } from "./intelligence-audit.js";
+export { projectIntelligenceAuditEvent } from "./intelligence-audit.js";
 export type {
   ProjectRepoMappingSummary,
   ProjectRepoMappingsSnapshot,
@@ -137,6 +143,7 @@ export type {
 export type {
   ClientMessage,
   ErrorPayload,
+  IntelligenceAuditEvent,
   PermissionRequestPayload,
   ServerMessage,
   StationId,
@@ -243,6 +250,7 @@ export { isMissionEventType, MISSION_EVENT_TYPES, validateMissionEventType } fro
 export type {
   WorkSessionEvent,
   WorkSessionEventMetadataMap,
+  WorkSessionEventSummary,
   WorkSessionEventType,
 } from "./work-session-events.js";
 export {
@@ -292,7 +300,9 @@ export {
 export {
   describeTicketRunMissionNextAction,
   getEffectiveValidations,
+  getSupersedableValidationKinds,
   getTicketRunMissionWorkflowState,
+  sortValidationsNewestFirst,
 } from "./ticket-run-workflow.js";
 export {
   createMissionView,

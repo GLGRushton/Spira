@@ -434,7 +434,7 @@ export interface ValidationProfileRecord {
   notes: string | null;
   confidence: number;
   expectedRuntimeMs: number | null;
-  /** Phase 3.4 — rolling-average observed runtime; populated by Phase 5's learning loop. */
+  /** rolling-average observed runtime; populated by Phase 5's learning loop. */
   lastObservedRuntimeMs: number | null;
   prerequisites: string[];
   source: "builtin" | "user";
@@ -453,14 +453,14 @@ export interface UpsertValidationProfileInput {
   notes?: string | null;
   confidence?: number;
   expectedRuntimeMs?: number | null;
-  /** Phase 3.4 — optional. Editor leaves it untouched on upsert; learner overwrites it. */
+  /** optional. Editor leaves it untouched on upsert; learner overwrites it. */
   lastObservedRuntimeMs?: number | null;
   prerequisites?: readonly string[];
   source: "builtin" | "user";
   createdAt?: number;
 }
 
-/** Phase 3.1 — DB record for a per-project repo profile. */
+/** DB record for a per-project repo profile. */
 export interface RepoProfileRecord {
   projectKey: string;
   displayName: string;
@@ -634,9 +634,9 @@ export interface UpsertTicketRunProofInput {
   lastProofAt?: number | null;
   lastProofSummary?: string | null;
   staleReason?: string | null;
-  /** Phase 2.1 — operator's free-text justification when status === "manual-review". */
+  /** operator's free-text justification when status === "manual-review". */
   manualReviewJustification?: string | null;
-  /** Phase 2.1 — when the manual-review status was set. */
+  /** when the manual-review status was set. */
   manualReviewAt?: number | null;
 }
 

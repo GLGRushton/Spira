@@ -290,6 +290,18 @@ const ClientMessageSchema = z.discriminatedUnion("type", [
       archive: z.boolean().optional(),
     }),
   }),
+  messageSchema("missions:weekly-digest:generate", {
+    requestId: z.string(),
+  }),
+  messageSchema("missions:intelligence-audit:list", {
+    requestId: z.string(),
+    limit: z.number().int().positive().optional(),
+  }),
+  messageSchema("worksession:events:list-by-station", {
+    requestId: z.string(),
+    stationId: z.string().min(1),
+    limit: z.number().int().positive().optional(),
+  }),
   messageSchema("missions:ticket-run:proof:run", {
     requestId: z.string(),
     runId: z.string(),

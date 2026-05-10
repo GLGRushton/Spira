@@ -5,6 +5,8 @@ import {
   type TicketRunProofArtifact,
   type TicketRunSummary,
   getEffectiveValidations,
+  getSupersedableValidationKinds,
+  sortValidationsNewestFirst,
 } from "@spira/shared";
 import { useEffect, useMemo, useState } from "react";
 import { useNavigationStore } from "../../../stores/navigation-store.js";
@@ -22,6 +24,7 @@ import {
 import { ManualReviewPanel } from "./ManualReviewPanel.js";
 import { AbortMissionPanel } from "./AbortMissionPanel.js";
 import { MissionPermissionBanner } from "./MissionPermissionBanner.js";
+import { RepoProfileOnboardingBanner } from "./RepoProfileOnboardingBanner.js";
 import { NowPlayingStrip } from "./NowPlayingStrip.js";
 import { ProofRunsViewer } from "./ProofRunsViewer.js";
 
@@ -237,13 +240,27 @@ export function MissionDetailsRoom({ run, controller }: MissionDetailsRoomProps)
   const liveEvents = useMissionRunsStore((store) => store.liveEventsByRun[run.runId] ?? EMPTY_LIVE_EVENTS);
   const [expandedCompletedPhases, setExpandedCompletedPhases] = useState<Set<TicketRunMissionPhase>>(() => new Set());
   const [showWorktrees, setShowWorktrees] = useState(false);
+  // Stateless event-type filter for the timeline chips. Empty set = "show all".
+  const [eventTypeFilter, setEventTypeFilter] = useState<Set<string>>(() => new Set());
 
-  // Phase 1.3 — merge cold-fetched timeline with live event buffer (Phase 1.1) and group by phase.
-  // The grouping helper preserves chronological order within each phase and handles dedup by event id.
-  const timelineGroups = useMemo(
-    () => groupMissionTimelineEvents(mergeMissionEventStreams(controller.missionTimeline, liveEvents)),
+  // Merge cold + live event streams once; derive the chip vocabulary from the merged set
+  // and the grouped buckets from the filtered set. Two memos: one for the merge (stable
+  // input keys), one for the filter+group (recomputes on chip toggle).
+  const mergedTimeline = useMemo(
+    () => mergeMissionEventStreams(controller.missionTimeline, liveEvents),
     [controller.missionTimeline, liveEvents],
   );
+  const distinctEventTypes = useMemo(
+    () => [...new Set(mergedTimeline.map((event) => event.eventType))].sort(),
+    [mergedTimeline],
+  );
+  const timelineGroups = useMemo(() => {
+    const filtered =
+      eventTypeFilter.size === 0
+        ? mergedTimeline
+        : mergedTimeline.filter((event) => eventTypeFilter.has(event.eventType));
+    return groupMissionTimelineEvents(filtered);
+  }, [mergedTimeline, eventTypeFilter]);
 
   const latestAttempt = run.attempts[run.attempts.length - 1] ?? null;
   const latestProofRun = [...run.proofRuns].sort((left, right) => right.startedAt - left.startedAt)[0] ?? null;
@@ -549,34 +566,11 @@ export function MissionDetailsRoom({ run, controller }: MissionDetailsRoomProps)
         if (run.validations.length === 0) {
           return <div className={styles.placeholder}>No validation records have been stored yet.</div>;
         }
-        // Phase 6.1 — compute kinds that have a passing winner AND at least one
-        // earlier failed/pending entry that's still considered effective. Those are
-        // the kinds the operator can supersede in one click.
-        const supersedableKinds = new Set<string>();
-        const byKind = new Map<string, typeof run.validations>();
-        for (const entry of run.validations) {
-          const bucket = byKind.get(entry.kind) ?? [];
-          bucket.push(entry);
-          byKind.set(entry.kind, bucket);
-        }
-        for (const [kind, entries] of byKind) {
-          const sorted = [...entries].sort(
-            (left, right) => right.startedAt - left.startedAt || right.createdAt - left.createdAt,
-          );
-          const winner = sorted.find((entry) => entry.status === "passed");
-          if (!winner) continue;
-          const hasEffectiveOlderFailure = entries.some(
-            (entry) =>
-              entry.validationId !== winner.validationId &&
-              effectiveValidationIds.has(entry.validationId) &&
-              (entry.status === "failed" || entry.status === "pending"),
-          );
-          if (hasEffectiveOlderFailure) supersedableKinds.add(kind);
-        }
+        const supersedableKinds = getSupersedableValidationKinds(run.validations);
         return (
           <div className={styles.phaseContent}>
             {[...run.validations]
-              .sort((left, right) => right.startedAt - left.startedAt)
+              .sort(sortValidationsNewestFirst)
               .map((validation) => {
                 const validationIsSuperseded = !effectiveValidationIds.has(validation.validationId);
                 const canSupersede =
@@ -811,6 +805,7 @@ export function MissionDetailsRoom({ run, controller }: MissionDetailsRoomProps)
       </article>
 
       <MissionPermissionBanner run={run} />
+      <RepoProfileOnboardingBanner run={run} />
       <NowPlayingStrip runId={run.runId} phaseBudget={controller.phaseBudget} currentPhase={run.missionPhase} />
 
       <article className={styles.surface}>
@@ -908,6 +903,40 @@ export function MissionDetailsRoom({ run, controller }: MissionDetailsRoomProps)
             {controller.isMissionTimelineLoading ? "Refreshing..." : "Refresh timeline"}
           </button>
         </div>
+
+        {distinctEventTypes.length > 0 ? (
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
+            <button
+              type="button"
+              className={projectStyles.secondaryButton}
+              style={{ padding: "2px 8px", fontSize: 11, opacity: eventTypeFilter.size === 0 ? 1 : 0.6 }}
+              onClick={() => setEventTypeFilter(new Set())}
+            >
+              All
+            </button>
+            {distinctEventTypes.map((eventType) => {
+              const active = eventTypeFilter.has(eventType);
+              return (
+                <button
+                  key={eventType}
+                  type="button"
+                  className={projectStyles.secondaryButton}
+                  style={{ padding: "2px 8px", fontSize: 11, opacity: active ? 1 : 0.6 }}
+                  onClick={() =>
+                    setEventTypeFilter((current) => {
+                      const next = new Set(current);
+                      if (next.has(eventType)) next.delete(eventType);
+                      else next.add(eventType);
+                      return next;
+                    })
+                  }
+                >
+                  {eventType}
+                </button>
+              );
+            })}
+          </div>
+        ) : null}
 
         <div className={styles.timelineGroupList}>
           {timelineGroups.length > 0 ? (

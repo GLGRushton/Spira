@@ -128,6 +128,9 @@ type MissionsRequestMessage =
   | Extract<ClientMessage, { type: "missions:validation-profiles:upsert" }>
   | Extract<ClientMessage, { type: "missions:validation-profiles:delete" }>
   | Extract<ClientMessage, { type: "missions:learned-candidates:list" }>
+  | Extract<ClientMessage, { type: "missions:weekly-digest:generate" }>
+  | Extract<ClientMessage, { type: "missions:intelligence-audit:list" }>
+  | Extract<ClientMessage, { type: "worksession:events:list-by-station" }>
   | Extract<ClientMessage, { type: "missions:learned-candidates:revoke" }>
   | Extract<ClientMessage, { type: "missions:ticket-run:proof:run" }>
   | Extract<ClientMessage, { type: "missions:ticket-run:proof:manual-review:set" }>
@@ -176,6 +179,9 @@ type MissionsResponseMessage =
   | Extract<ServerMessage, { type: "missions:validation-profiles:upsert:result" }>
   | Extract<ServerMessage, { type: "missions:validation-profiles:delete:result" }>
   | Extract<ServerMessage, { type: "missions:learned-candidates:list:result" }>
+  | Extract<ServerMessage, { type: "missions:weekly-digest:generate:result" }>
+  | Extract<ServerMessage, { type: "missions:intelligence-audit:list:result" }>
+  | Extract<ServerMessage, { type: "worksession:events:list-by-station:result" }>
   | Extract<ServerMessage, { type: "missions:learned-candidates:revoke:result" }>
   | Extract<ServerMessage, { type: "missions:ticket-run:proof:run:result" }>
   | Extract<ServerMessage, { type: "missions:ticket-run:proof:manual-review:set:result" }>
@@ -272,6 +278,14 @@ export interface IpcBridgeHandle {
   revokeMissionLearnedCandidate(
     input: RevokeMissionLearnedCandidateInput,
   ): Promise<MissionLearnedCandidatesSnapshot>;
+  generateMissionWeeklyDigest(): Promise<string | null>;
+  listMissionIntelligenceAudit(
+    limit?: number,
+  ): Promise<import("@spira/shared").IntelligenceAuditEvent[]>;
+  listWorkSessionEventsByStation(
+    stationId: string,
+    limit?: number,
+  ): Promise<import("@spira/shared").WorkSessionEventSummary[]>;
   setTicketRunProofManualReview(
     runId: string,
     justification: string,
@@ -340,7 +354,8 @@ export interface IpcBridgeHandle {
 
 const isBackendResponseMessage = (message: ServerMessage): message is BackendResponseMessage =>
   typeof (message as { requestId?: unknown }).requestId === "string" &&
-  (message.type === "conversation:recent:result" ||
+  (message.type === "station:list:result" ||
+    message.type === "conversation:recent:result" ||
     message.type === "conversation:list:result" ||
     message.type === "conversation:get:result" ||
     message.type === "conversation:search:result" ||
@@ -380,6 +395,9 @@ const isBackendResponseMessage = (message: ServerMessage): message is BackendRes
     message.type === "missions:validation-profiles:delete:result" ||
     message.type === "missions:learned-candidates:list:result" ||
     message.type === "missions:learned-candidates:revoke:result" ||
+    message.type === "missions:weekly-digest:generate:result" ||
+    message.type === "missions:intelligence-audit:list:result" ||
+    message.type === "worksession:events:list-by-station:result" ||
     message.type === "missions:ticket-run:validations:supersede:result" ||
     message.type === "missions:ticket-run:abort:result" ||
     message.type === "missions:ticket-run:delete:result" ||
@@ -980,6 +998,29 @@ export function setupIpcBridge(
         "missions:learned-candidates:revoke:result",
         MISSION_REVIEW_REQUEST_TIMEOUT_MS,
       ).then((response) => response.result),
+    generateMissionWeeklyDigest: () =>
+      requestBackend(
+        { type: "missions:weekly-digest:generate", requestId: randomUUID() },
+        "missions:weekly-digest:generate:result",
+        MISSION_REVIEW_REQUEST_TIMEOUT_MS,
+      ).then((response) => response.path),
+    listMissionIntelligenceAudit: (limit) =>
+      requestBackend(
+        { type: "missions:intelligence-audit:list", requestId: randomUUID(), limit },
+        "missions:intelligence-audit:list:result",
+        MISSION_REVIEW_REQUEST_TIMEOUT_MS,
+      ).then((response) => response.events),
+    listWorkSessionEventsByStation: (stationId, limit) =>
+      requestBackend(
+        {
+          type: "worksession:events:list-by-station",
+          requestId: randomUUID(),
+          stationId,
+          limit,
+        },
+        "worksession:events:list-by-station:result",
+        MISSION_REVIEW_REQUEST_TIMEOUT_MS,
+      ).then((response) => response.events),
     setTicketRunProofManualReview: (runId, justification) =>
       requestBackend(
         {

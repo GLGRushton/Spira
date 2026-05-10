@@ -316,6 +316,23 @@ export const createMissionIpcHandlers = (getBridge: () => IpcBridgeHandle | null
     });
   },
 
+  [IPC_CHANNELS.missions.weeklyDigestGenerate]: async (): Promise<string | null> =>
+    requireBridge(getBridge()).generateMissionWeeklyDigest(),
+
+  [IPC_CHANNELS.missions.intelligenceAuditList]: async (
+    _event: IpcMainInvokeEvent,
+    input?: { limit?: number },
+  ) => requireBridge(getBridge()).listMissionIntelligenceAudit(input?.limit),
+
+  [IPC_CHANNELS.missions.workSessionEventsListByStation]: async (
+    _event: IpcMainInvokeEvent,
+    input?: { stationId?: string; limit?: number },
+  ) =>
+    requireBridge(getBridge()).listWorkSessionEventsByStation(
+      requireField(input?.stationId, "stationId is required."),
+      input?.limit,
+    ),
+
   [IPC_CHANNELS.missions.delete]: async (
     _event: IpcMainInvokeEvent,
     input?: { runId?: string },

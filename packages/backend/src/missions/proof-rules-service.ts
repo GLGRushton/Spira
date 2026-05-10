@@ -4,7 +4,7 @@ import type { MissionProofRuleRecord, MissionProofRulesSnapshot, UpsertMissionPr
 import { isBuiltinRecordId } from "./builtin-id.js";
 
 /**
- * Phase 2.5 — proof rules admin service.
+ * Proof rules admin service.
  *
  * Renderer-facing CRUD for the `proof_rules` table. Builtin rules (id prefix `global-`)
  * are returned for read but cannot be deleted; user rules can be freely added, updated,

@@ -1,9 +1,10 @@
 import type { RepoIntelligenceRecord } from "@spira/memory-db";
 import type { TicketRunSummary } from "@spira/shared";
+import { TAG_PREFIXES } from "./learned-tag-state.js";
 import { classifyMissionOutcome, outcomeLearningWeight } from "./mission-outcome.js";
 
 /**
- * Phase 5.4 — confidence-based auto-promotion of learned intelligence candidates.
+ * Confidence-based auto-promotion of learned intelligence candidates.
  *
  * Pure module: takes the corpus of learned candidates + the closed runs that contributed
  * to them, computes a confidence score per candidate, and decides which to promote
@@ -58,9 +59,9 @@ export interface ScoreLearnedCandidatesInput {
   now?: number;
 }
 
-const PROMOTED_RUN_TAG_PREFIX = "promoted-run:";
-const REVOKED_RUN_TAG_PREFIX = "revoked-run:";
-const REVOKED_TAG = "revoked";
+const PROMOTED_RUN_TAG_PREFIX = TAG_PREFIXES.promotedRun;
+const REVOKED_RUN_TAG_PREFIX = TAG_PREFIXES.revokedRun;
+const REVOKED_TAG = TAG_PREFIXES.revoked;
 
 /**
  * Tags carry the revocation history per candidate, since the revocation contract is
@@ -203,7 +204,7 @@ export const buildPromotedTags = (
 /**
  * Build the tag set for a revoked entry — adds the `revoked` marker plus a `revoked-run:`
  * tag per contributing run id, so re-promotion requires *new* runs beyond this snapshot.
- * Strips any previous `promoted-run:` tags so the audit trail of the active promotion is
+ * strips any previous `promoted-run:` tags so the audit trail of the active promotion is
  * superseded (the mission-event log retains the historical record).
  */
 export const buildRevokedTags = (
@@ -216,8 +217,6 @@ export const buildRevokedTags = (
   return [...fresh].sort();
 };
 
-export const TAG_PREFIXES = {
-  promotedRun: PROMOTED_RUN_TAG_PREFIX,
-  revokedRun: REVOKED_RUN_TAG_PREFIX,
-  revoked: REVOKED_TAG,
-} as const;
+// TAG_PREFIXES is re-exported from learned-tag-state.ts; this re-export keeps the legacy
+// import path working for downstream consumers.
+export { TAG_PREFIXES } from "./learned-tag-state.js";

@@ -65,7 +65,7 @@ const draftToInput = (draft: DraftRule): UpsertMissionProofRuleInput => ({
 const formatBoolean = (value: boolean | null): string => (value === null ? "—" : value ? "yes" : "no");
 
 /**
- * Phase 2.5 — Proof rules admin pane.
+ * Proof rules admin pane.
  *
  * Lists every known proof rule (builtin + user) with delete affordances for user rules.
  * A small inline form below the list lets the operator add new user rules. Builtin rules

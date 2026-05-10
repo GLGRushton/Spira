@@ -3,7 +3,7 @@ import { type DatabasePersistenceContext, assertDatabaseWritable } from "./conte
 import { serializeJson } from "./helpers.js";
 
 /**
- * Phase 7.1 — work_session_events table read/write helpers.
+ * work_session_events table read/write helpers.
  *
  * Mirrors mission_events shape (id auto-PK, JSON metadata blob, integer occurredAt) but
  * is keyed on (sessionId, stationId) instead of runId since WorkSessions live outside
@@ -202,10 +202,23 @@ export const createWorkSessionEventsRepository = (context: DatabasePersistenceCo
     return rows.map((row) => mapRow(row));
   };
 
+  /**
+   * Delete work_session_events older than the supplied cutoff. Returns the row count.
+   * Caller schedules; the module never deletes on its own.
+   */
+  const deleteWorkSessionEventsOlderThan = (cutoffMs: number): number => {
+    assertDatabaseWritable(context);
+    const result = context.db
+      .prepare("DELETE FROM work_session_events WHERE occurred_at < @cutoffMs")
+      .run({ cutoffMs });
+    return Number(result.changes);
+  };
+
   return {
     appendWorkSessionEvent,
     appendWorkSessionEvents,
     listWorkSessionEvents,
     listWorkSessionEventsByStation,
+    deleteWorkSessionEventsOlderThan,
   };
 };

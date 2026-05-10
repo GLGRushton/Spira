@@ -16,6 +16,10 @@ interface NavigationStore {
   activeView: SpiraUiView;
   missionRooms: Record<string, MissionUiRoom>;
   missionFlashByRun: Record<string, MissionFlashMessage | undefined>;
+  /** Project key that should pre-fill the RepoProfilesEditor on next visit; consumer clears after reading. */
+  pendingRepoProfileProjectKey: string | null;
+  /** Project keys the operator has dismissed the onboarding banner for; not persisted across reloads. */
+  dismissedRepoProfileProjectKeys: Set<string>;
   setView: (view: SpiraUiView) => void;
   navigate: (view: SpiraUiRootView) => void;
   backToShip: () => void;
@@ -27,12 +31,17 @@ interface NavigationStore {
   setMissionFlash: (runId: string, flash: MissionFlashMessage) => void;
   clearMissionFlash: (runId: string) => void;
   pruneMissionRooms: (activeRunIds: string[]) => void;
+  openRepoProfileOnboarding: (projectKey: string) => void;
+  consumeRepoProfilePrefill: () => string | null;
+  dismissRepoProfileOnboarding: (projectKey: string) => void;
 }
 
 export const useNavigationStore = create<NavigationStore>((set) => ({
   activeView: "ship",
   missionRooms: {},
   missionFlashByRun: {},
+  pendingRepoProfileProjectKey: null,
+  dismissedRepoProfileProjectKeys: new Set<string>(),
   setView: (activeView) => {
     set({ activeView });
   },
@@ -99,6 +108,24 @@ export const useNavigationStore = create<NavigationStore>((set) => ({
           Object.entries(state.missionFlashByRun).filter(([runId]) => activeRunIdSet.has(runId)),
         ),
       };
+    });
+  },
+  openRepoProfileOnboarding: (projectKey) => {
+    set({ activeView: "settings", pendingRepoProfileProjectKey: projectKey });
+  },
+  consumeRepoProfilePrefill: () => {
+    let pending: string | null = null;
+    set((state) => {
+      pending = state.pendingRepoProfileProjectKey;
+      return state.pendingRepoProfileProjectKey === null ? state : { pendingRepoProfileProjectKey: null };
+    });
+    return pending;
+  },
+  dismissRepoProfileOnboarding: (projectKey) => {
+    set((state) => {
+      const next = new Set(state.dismissedRepoProfileProjectKeys);
+      next.add(projectKey);
+      return { dismissedRepoProfileProjectKeys: next };
     });
   },
 }));

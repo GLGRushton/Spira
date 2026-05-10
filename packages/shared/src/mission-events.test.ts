@@ -39,15 +39,16 @@ describe("mission event taxonomy", () => {
       "proof-manual-review-cleared",
       "proof-preflight-started",
       "proof-preflight-finished",
-      // Phase 4.1 — dependency warming.
+      // dependency warming.
       "workspace-dependencies-warming-started",
       "workspace-dependencies-warming-finished",
-      // Phase 5 — learning loop.
+      // learning loop.
       "mission-outcome-classified",
       "validation-profile-candidate-observed",
+      "validation-profile-auto-promoted",
       "learned-candidate-promoted",
       "learned-candidate-revoked",
-      // Phase 6 — polish.
+      // polish.
       "validations-superseded",
       "mission-state-reconciled",
       "mission-aborted",

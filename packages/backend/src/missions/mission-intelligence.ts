@@ -17,6 +17,7 @@ import type {
   TicketRunSummary,
 } from "@spira/shared";
 import { getEffectiveValidations } from "@spira/shared";
+import { TAG_PREFIXES } from "./learned-tag-state.js";
 import { type MissionOutcomeClassification } from "./mission-outcome.js";
 
 const COPY_CHANGE_KEYWORDS = ["copy", "wording", "label", "labels", "text", "tooltip", "terminology", "rename"];
@@ -28,8 +29,8 @@ export interface MissionRepoGuidanceSnapshot {
 }
 
 /**
- * Phase 2.4 — diff-shape signal that can downgrade or upgrade the recommended proof level.
- * The caller computes this from the active worktrees' git status; it's optional so callers
+ * Diff-shape signal that can downgrade or upgrade the recommended proof level.
+ * the caller computes this from the active worktrees' git status; it's optional so callers
  * that don't have diff state available (e.g. pre-implement decisions) keep working.
  */
 export interface AdvisoryProofDiffSignal {
@@ -55,7 +56,7 @@ export interface AdvisoryProofDiffSignal {
 }
 
 /**
- * Phase 2.4 — historical proof outcomes for the same `(projectKey, repoRelativePath, kind)`
+ * Historical proof outcomes for the same `(projectKey, repoRelativePath, kind)`
  * triple. The recommendation engine can use this to demote levels that have been failing
  * recently in operationally consistent ways (e.g. preflight blockers that haven't been
  * resolved between runs).
@@ -74,9 +75,9 @@ export interface AdvisoryProofDecisionInput {
   classification: TicketRunMissionClassification | null;
   availableProofs: readonly TicketRunProofProfileSummary[];
   proofRules: readonly ProofRuleRecord[];
-  /** Phase 2.4 — optional diff-shape signal. Absent for pre-implement decisions. */
+  /** optional diff-shape signal. Absent for pre-implement decisions. */
   diffSignal?: AdvisoryProofDiffSignal;
-  /** Phase 2.4 — optional historical outcomes for this repo + ticket pattern. */
+  /** optional historical outcomes for this repo + ticket pattern. */
   historicalOutcomes?: AdvisoryProofHistoricalSignal;
 }
 
@@ -192,13 +193,13 @@ const inferPreliminaryProofLevel = (run: TicketRunSummary): TicketRunMissionProo
 };
 
 /**
- * Phase 2.4 — proportionality overrides applied after the rule-scored recommendation.
- * Returns either an override level + rationale + evidence, or null if no override applies.
+ * Proportionality overrides applied after the rule-scored recommendation.
+ * returns either an override level + rationale + evidence, or null if no override applies.
  *
  * Diff signal trumps a higher level when:
  *   - tests-only diff      → "none"  (the change literally cannot regress UI)
  *   - copy-only ≤10 lines  → "light" (rendered text changed, no logic — visual diff is enough)
- * Diff signal upgrades when:
+ * diff signal upgrades when:
  *   - touchesUiSurface     → at least "targeted-screenshot" (a registered visual surface moved)
  *
  * Historical signal is currently advisory only — surfaces in evidence but doesn't change
@@ -302,7 +303,7 @@ export const computeAdvisoryProofDecision = (input: AdvisoryProofDecisionInput):
         ? "targeted-screenshot"
         : "full-ui-proof");
 
-  // Phase 2.4 — apply diff/history overrides after the rule-scored base recommendation.
+  // apply diff/history overrides after the rule-scored base recommendation.
   const proportionality = applyProportionalityOverrides(baseLevel, diffSignal, historicalOutcomes);
   const recommendedLevel = proportionality?.level ?? baseLevel;
 
@@ -438,11 +439,11 @@ export const buildLearnedRepoIntelligenceCandidates = (
           : "Passing validation was recorded."
       }${proofSummary}${frictionNote}${manualReviewNote}${outcomeNote}`,
       tags: [
-        "learned",
-        `run:${run.runId}`,
-        `ticket:${run.ticketId}`,
-        `classification:${classification.kind}`,
-        `outcome:${outcome.kind}`,
+        TAG_PREFIXES.learned,
+        `${TAG_PREFIXES.sourceRun}${run.runId}`,
+        `${TAG_PREFIXES.sourceTicket}${run.ticketId}`,
+        `${TAG_PREFIXES.classification}${classification.kind}`,
+        `${TAG_PREFIXES.outcome}${outcome.kind}`,
       ],
       source: "learned",
       approved: false,
@@ -452,15 +453,15 @@ export const buildLearnedRepoIntelligenceCandidates = (
 };
 
 /**
- * Phase 7.2 — builtin Spira repo profile. Adopting Spira's own repo into the same
+ * Builtin Spira repo profile. Adopting Spira's own repo into the same
  * profile model as third-party target repos means the renderer's repo-guidance section
  * can prepend Spira-specific defaults (registry, required SDKs, UI test globs) on
- * Spira-side WorkSessions. The seed only fires when the projectKey is missing or
+ * spira-side WorkSessions. The seed only fires when the projectKey is missing or
  * already a builtin row, so user edits via the admin pane are preserved.
  */
 export const BUILTIN_REPO_PROFILES: Array<Omit<UpsertRepoProfileInput, "source">> = [
   {
-    projectKey: "Spira",
+    projectKey: "SPI",
     displayName: "Spira workspace",
     description:
       "Spira's own monorepo. The mission/work-session frameworks live in packages/backend; the renderer surfaces are in packages/renderer.",
@@ -475,7 +476,7 @@ export const BUILTIN_REPO_PROFILES: Array<Omit<UpsertRepoProfileInput, "source">
       "packages/renderer/src/**/*.module.css",
     ],
     uiTestGlobs: ["packages/renderer/src/**/*.test.tsx"],
-    notes: "Repo profile seeded by Phase 7.2; edit through Settings → Repo profiles to override.",
+    notes: "Built-in profile for Spira's own monorepo (project key SPI); edit through Settings → Repo profiles to override.",
   },
 ];
 
@@ -589,7 +590,7 @@ export const BUILTIN_PROOF_RULES: Array<Omit<UpsertProofRuleInput, "createdAt">>
     recommendedLevel: "none",
     rationale: "Backend-only work should not request automated UI proof.",
   },
-  // Phase 2.4 — extra builtin rules to nudge proportionality before diff signal arrives.
+  // extra builtin rules to nudge proportionality before diff signal arrives.
   {
     id: "global-frontend-copy-manual-review",
     classificationKind: "frontend",

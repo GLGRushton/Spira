@@ -496,6 +496,9 @@ export const createMissionPersistence = (context: DatabasePersistenceContext) =>
       );
     }
 
+    const attemptId = normalizeTitle(input.attemptId);
+    const metadataJson = serializeJson(input.metadata ?? null);
+    const occurredAt = input.occurredAt ?? Date.now();
     const result = context.db
       .prepare(
         `INSERT INTO mission_events (
@@ -516,31 +519,24 @@ export const createMissionPersistence = (context: DatabasePersistenceContext) =>
       )
       .run({
         runId,
-        attemptId: normalizeTitle(input.attemptId),
+        attemptId,
         stage,
         eventType,
-        metadataJson: serializeJson(input.metadata ?? null),
-        occurredAt: input.occurredAt ?? Date.now(),
+        metadataJson,
+        occurredAt,
       });
 
-    const row = context.db
-      .prepare(
-        `SELECT
-           id,
-           run_id AS runId,
-           attempt_id AS attemptId,
-           stage,
-           event_type AS eventType,
-           metadata_json AS metadataJson,
-           occurred_at AS occurredAt
-         FROM mission_events
-         WHERE id = @id`,
-      )
-      .get({ id: result.lastInsertRowid }) as MissionEventRow | undefined;
-
-    if (!row) {
-      throw new Error(`Failed to load mission event for ${runId}.`);
-    }
+    // Construct the record from the just-inserted inputs + lastInsertRowid; better-sqlite3
+    // gives us the auto-incremented id directly so the post-insert SELECT is wasted I/O.
+    const row: MissionEventRow = {
+      id: Number(result.lastInsertRowid),
+      runId,
+      attemptId,
+      stage,
+      eventType,
+      metadataJson,
+      occurredAt,
+    };
 
     return mapMissionEventRow(row);
   };
@@ -1260,14 +1256,160 @@ export const createMissionPersistence = (context: DatabasePersistenceContext) =>
     runs: listTicketRuns(),
   });
 
+  /**
+   * Cross-mission event lookup scoped to a single (projectKey, runStatus) pair. Used by
+   * the validation-candidate sweep to pull every event of the requested type from every
+   * peer run in one query instead of one-per-run. `perRunLimit` is enforced in SQL via
+   * `ROW_NUMBER() OVER (PARTITION BY run_id)` so very long missions never load more rows
+   * than necessary.
+   *
+   * `eventTypes` is required and small (typically one element) to keep the IN clause
+   * bounded.
+   */
+  const listMissionEventsByProjectKey = (input: {
+    projectKey: string;
+    runStatus: string;
+    eventTypes: readonly string[];
+    perRunLimit?: number;
+  }): MissionEventRecord[] => {
+    if (input.eventTypes.length === 0) return [];
+    const placeholders = input.eventTypes.map((_, index) => `@type${index}`).join(", ");
+    const perRunLimit = Math.max(1, Math.min(5_000, input.perRunLimit ?? 500));
+    const sql = `
+      WITH ranked AS (
+        SELECT
+          e.id,
+          e.run_id AS runId,
+          e.attempt_id AS attemptId,
+          e.stage,
+          e.event_type AS eventType,
+          e.metadata_json AS metadataJson,
+          e.occurred_at AS occurredAt,
+          ROW_NUMBER() OVER (PARTITION BY e.run_id ORDER BY e.occurred_at DESC, e.id DESC) AS rn
+        FROM mission_events e
+        INNER JOIN ticket_runs r ON r.run_id = e.run_id
+        WHERE r.project_key = @projectKey
+          AND r.status = @runStatus
+          AND e.event_type IN (${placeholders})
+      )
+      SELECT id, runId, attemptId, stage, eventType, metadataJson, occurredAt
+      FROM ranked
+      WHERE rn <= @perRunLimit
+      ORDER BY runId ASC, occurredAt ASC, id ASC
+    `;
+    const params: Record<string, unknown> = {
+      projectKey: input.projectKey,
+      runStatus: input.runStatus,
+      perRunLimit,
+    };
+    input.eventTypes.forEach((value, index) => {
+      params[`type${index}`] = value;
+    });
+    const rows = context.db.prepare(sql).all(params) as unknown as MissionEventRow[];
+    return rows.map((row) => mapMissionEventRow(row));
+  };
+
+  /**
+   * Cross-mission events for runs whose `updated_at` falls inside [windowStartMs, windowEndMs]
+   * with the given status. Used by the weekly-digest generator so a window of closed runs +
+   * their events comes back in two queries instead of N+1.
+   */
+  const listMissionEventsForRunWindow = (input: {
+    runStatus: string;
+    windowStartMs: number;
+    windowEndMs: number;
+    perRunLimit?: number;
+  }): MissionEventRecord[] => {
+    const perRunLimit = Math.max(1, Math.min(5_000, input.perRunLimit ?? 500));
+    const sql = `
+      WITH ranked AS (
+        SELECT
+          e.id,
+          e.run_id AS runId,
+          e.attempt_id AS attemptId,
+          e.stage,
+          e.event_type AS eventType,
+          e.metadata_json AS metadataJson,
+          e.occurred_at AS occurredAt,
+          ROW_NUMBER() OVER (PARTITION BY e.run_id ORDER BY e.occurred_at DESC, e.id DESC) AS rn
+        FROM mission_events e
+        INNER JOIN ticket_runs r ON r.run_id = e.run_id
+        WHERE r.status = @runStatus
+          AND r.updated_at >= @windowStartMs
+          AND r.updated_at <= @windowEndMs
+      )
+      SELECT id, runId, attemptId, stage, eventType, metadataJson, occurredAt
+      FROM ranked
+      WHERE rn <= @perRunLimit
+      ORDER BY runId ASC, occurredAt ASC, id ASC
+    `;
+    const rows = context.db.prepare(sql).all({
+      runStatus: input.runStatus,
+      windowStartMs: input.windowStartMs,
+      windowEndMs: input.windowEndMs,
+      perRunLimit,
+    }) as unknown as MissionEventRow[];
+    return rows.map((row) => mapMissionEventRow(row));
+  };
+
+  /**
+   * Cross-project lookup of mission events filtered only by `eventType`. Used by the
+   * intelligence audit surface to roll up promotion/revocation events into a single feed.
+   */
+  const listMissionEventsByEventType = (input: {
+    eventTypes: readonly string[];
+    limit?: number;
+  }): MissionEventRecord[] => {
+    if (input.eventTypes.length === 0) return [];
+    const placeholders = input.eventTypes.map((_, index) => `@type${index}`).join(", ");
+    const limit = Math.max(1, Math.min(2_000, input.limit ?? 200));
+    const sql = `
+      SELECT
+        id,
+        run_id AS runId,
+        attempt_id AS attemptId,
+        stage,
+        event_type AS eventType,
+        metadata_json AS metadataJson,
+        occurred_at AS occurredAt
+      FROM mission_events
+      WHERE event_type IN (${placeholders})
+      ORDER BY occurred_at DESC, id DESC
+      LIMIT @limit
+    `;
+    const params: Record<string, unknown> = { limit };
+    input.eventTypes.forEach((value, index) => {
+      params[`type${index}`] = value;
+    });
+    const rows = context.db.prepare(sql).all(params) as unknown as MissionEventRow[];
+    return rows.map((row) => mapMissionEventRow(row));
+  };
+
+  /**
+   * Delete mission_events older than the supplied cutoff (`occurred_at < cutoffMs`).
+   * Returns the number of rows removed. Callers schedule this; the module never deletes
+   * on its own.
+   */
+  const deleteMissionEventsOlderThan = (cutoffMs: number): number => {
+    assertDatabaseWritable(context);
+    const result = context.db
+      .prepare("DELETE FROM mission_events WHERE occurred_at < @cutoffMs")
+      .run({ cutoffMs });
+    return Number(result.changes);
+  };
+
   return {
     appendMissionEvent,
     listMissionEvents,
+    listMissionEventsByProjectKey,
+    listMissionEventsByEventType,
+    listMissionEventsForRunWindow,
     listTicketRuns,
     getTicketRun,
     getTicketRunByTicketId,
     deleteTicketRun,
     upsertTicketRun,
     getTicketRunSnapshot,
+    deleteMissionEventsOlderThan,
   };
 };

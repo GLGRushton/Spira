@@ -1,8 +1,9 @@
 import type { MissionEventRecord } from "@spira/memory-db";
 import type { TicketRunMissionPhase, TicketRunSummary } from "@spira/shared";
+import { percentile } from "../util/stats.js";
 
 /**
- * Phase 6.4 — per-(projectKey, phase) duration hints.
+ * per-(projectKey, phase) duration hints.
  *
  * Pure computer that takes recent closed runs plus their `mission_events` and produces
  * a "typical duration" envelope per phase. The envelope is the rolling median + the
@@ -39,17 +40,6 @@ export interface PhaseBudgetSnapshot {
 }
 
 const PHASES: TicketRunMissionPhase[] = ["classification", "plan", "implement", "validate", "proof", "summarize"];
-
-const percentile = (sortedValues: readonly number[], fraction: number): number => {
-  if (sortedValues.length === 0) return 0;
-  if (sortedValues.length === 1) return sortedValues[0]!;
-  const rank = (sortedValues.length - 1) * fraction;
-  const lowerIndex = Math.floor(rank);
-  const upperIndex = Math.ceil(rank);
-  if (lowerIndex === upperIndex) return sortedValues[lowerIndex]!;
-  const weight = rank - lowerIndex;
-  return Math.round(sortedValues[lowerIndex]! * (1 - weight) + sortedValues[upperIndex]! * weight);
-};
 
 /**
  * Compute per-phase totals from a single run's mission events. The duration of phase

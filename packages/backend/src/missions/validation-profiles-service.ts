@@ -8,7 +8,7 @@ import type {
 import { isBuiltinRecordId } from "./builtin-id.js";
 
 /**
- * Phase 3.4 — validation profiles admin service.
+ * Validation profiles admin service.
  *
  * Same shape as ProofRulesService / RepoProfilesService. Builtin validation profiles
  * (id prefix `global-`) are read-only here; their definitions ship in BUILTIN_VALIDATION_PROFILES.

@@ -3,6 +3,7 @@ import type {
   TicketRunMissionPhase,
   TicketRunPhaseBudgetSnapshot,
 } from "@spira/shared";
+import { formatDuration } from "@spira/shared";
 import { useEffect, useState } from "react";
 import { useMissionRunsStore } from "../../../stores/mission-runs-store.js";
 import styles from "./MissionDetailsRoom.module.css";
@@ -18,7 +19,7 @@ const EMPTY_LIVE_EVENTS: readonly TicketRunMissionEventSummary[] = [];
 
 interface NowPlayingStripProps {
   runId: string;
-  /** Phase 6.4 — optional per-phase budget envelope; renders a "typical X-Y" hint when present. */
+  /** optional per-phase budget envelope; renders a "typical X-Y" hint when present. */
   phaseBudget?: TicketRunPhaseBudgetSnapshot;
   /** Current mission phase used to look up the matching budget entry. */
   currentPhase?: TicketRunMissionPhase;
@@ -58,22 +59,7 @@ const formatRelative = (deltaMs: number): string => {
   return `${Math.floor(deltaMs / 3_600_000)}h ago`;
 };
 
-const formatElapsed = (deltaMs: number): string => {
-  if (deltaMs < 1_000) {
-    return "starting";
-  }
-  if (deltaMs < 60_000) {
-    return `${Math.floor(deltaMs / 1_000)}s elapsed`;
-  }
-  if (deltaMs < 3_600_000) {
-    const minutes = Math.floor(deltaMs / 60_000);
-    const seconds = Math.floor((deltaMs % 60_000) / 1_000);
-    return `${minutes}m ${seconds.toString().padStart(2, "0")}s elapsed`;
-  }
-  const hours = Math.floor(deltaMs / 3_600_000);
-  const minutes = Math.floor((deltaMs % 3_600_000) / 60_000);
-  return `${hours}h ${minutes.toString().padStart(2, "0")}m elapsed`;
-};
+const formatElapsed = (deltaMs: number): string => formatDuration(deltaMs, "elapsed");
 
 const summariseMetadata = (event: TicketRunMissionEventSummary, key: string): string | null => {
   const value = event.metadata?.[key];
@@ -203,8 +189,8 @@ const findOpenAwaitingPermission = (
 };
 
 /**
- * Phase 1.2 — A single-row strip that surfaces what the agent is doing right now.
- * Drives off the live event buffer pushed via Phase 1.1; ticks once a second so the
+ * A single-row strip that surfaces what the agent is doing right now.
+ * drives off the live event buffer pushed via Phase 1.1; ticks once a second so the
  * "X elapsed" label stays current without re-rendering anything else.
  */
 export function NowPlayingStrip({ runId, phaseBudget, currentPhase }: NowPlayingStripProps) {
@@ -239,7 +225,7 @@ export function NowPlayingStrip({ runId, phaseBudget, currentPhase }: NowPlaying
     metaLabel = state.pulsing ? formatElapsed(delta) : formatRelative(delta);
   }
 
-  // Phase 6.4 — append a typical-window hint when we have a budget for the current phase.
+  // append a typical-window hint when we have a budget for the current phase.
   const budgetEntry = currentPhase
     ? phaseBudget?.entries.find((entry) => entry.phase === currentPhase)
     : undefined;

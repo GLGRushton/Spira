@@ -1,9 +1,10 @@
 import type { MissionEventRecord, ValidationProfileRecord } from "@spira/memory-db";
 import type { TicketRunMissionValidationKind, TicketRunSummary } from "@spira/shared";
+import { median } from "../util/stats.js";
 import { hashFragment } from "./mission-intelligence.js";
 
 /**
- * Phase 5.2 — derive `validation_profile` candidates from the per-attempt shell command
+ * derive `validation_profile` candidates from the per-attempt shell command
  * stream. Once any spawned command has been observed succeeding ≥ N times for a
  * `(projectKey, repoRelativePath, kind)` triple, we propose it as a registered profile.
  *
@@ -64,13 +65,6 @@ interface ObservedCommand {
 const buildCandidateKey = (projectKey: string | null, repoRelativePath: string | null, command: string, cwd: string): string =>
   `learned:${projectKey ?? "*"}:${repoRelativePath ?? "*"}:${cwd}:${command}`;
 
-const median = (values: readonly number[]): number | null => {
-  if (values.length === 0) return null;
-  const sorted = [...values].sort((left, right) => left - right);
-  const middle = Math.floor(sorted.length / 2);
-  return sorted.length % 2 === 0 ? Math.round((sorted[middle - 1]! + sorted[middle]!) / 2) : sorted[middle]!;
-};
-
 export interface DeriveValidationCandidatesInput {
   /** All mission events that may carry attempt-shell-command observations. */
   events: readonly MissionEventRecord[];
@@ -84,7 +78,7 @@ export interface DeriveValidationCandidatesInput {
 
 /**
  * Aggregate cross-run shell-command observations into validation_profile candidates.
- * Only commands whose inferred kind is non-null and whose distinct-run success count
+ * only commands whose inferred kind is non-null and whose distinct-run success count
  * meets the threshold are returned. Existing profiles are filtered out.
  */
 export const deriveValidationProfileCandidates = (input: DeriveValidationCandidatesInput): ValidationProfileCandidate[] => {

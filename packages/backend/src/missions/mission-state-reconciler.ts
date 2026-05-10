@@ -1,7 +1,7 @@
 import type { TicketRunSummary } from "@spira/shared";
 
 /**
- * Phase 6.2 — display-state reconciliation.
+ * Display-state reconciliation.
  *
  * Pure function that detects and corrects internally-contradictory state on a closed
  * or near-closed mission run. The model is "deterministic patch": we observe specific

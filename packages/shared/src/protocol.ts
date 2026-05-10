@@ -74,6 +74,36 @@ export interface ErrorPayload {
   stationId?: StationId;
 }
 
+/**
+ * Renderer-facing summary of a learned-candidate-promoted / learned-candidate-revoked
+ * Mission event. Flattens the metadata blob to the fields the audit feed actually shows
+ * So the renderer doesn't need a per-eventType narrow.
+ */
+export interface IntelligenceAuditEvent {
+  id: number;
+  runId: string;
+  occurredAt: number;
+  eventType: "learned-candidate-promoted" | "learned-candidate-revoked";
+  candidateId: string;
+  candidateType: string | null;
+  /** Numeric confidence (promoted) or null (revoked). */
+  confidence: number | null;
+  /** Threshold in force at promotion time, or null. */
+  threshold: number | null;
+  /** Formula version applied at promotion, or null. */
+  formulaVersion: number | null;
+  /** Run ids contributing positive evidence (promoted) or null. */
+  contributingRunIds: string[] | null;
+  /** Run ids contributing negative evidence (promoted) or null. */
+  contradictingRunIds: string[] | null;
+  /** Operator-supplied reason or "auto" (revoked); null on promotion. */
+  reason: string | null;
+  /** Run ids on the revocation blocklist (revoked); null on promotion. */
+  blockedContributingRunIds: string[] | null;
+  /** True when the entry was archived rather than just demoted. */
+  archived: boolean;
+}
+
 export interface PermissionRequestPayload {
   requestId: string;
   stationId?: StationId;
@@ -144,9 +174,9 @@ export type ClientMessage =
       type: "missions:ticket-run:timeline:get";
       requestId: string;
       runId: string;
-      /** Phase 4.6 — optional page boundary; events with id < beforeId are returned. Newest-first order. */
+      /** optional page boundary; events with id < beforeId are returned. Newest-first order. */
       beforeId?: number;
-      /** Phase 4.6 — optional page size; defaults to backend default. */
+      /** optional page size; defaults to backend default. */
       limit?: number;
     }
   | { type: "missions:ticket-run:repo-intelligence:get"; requestId: string; runId: string }
@@ -169,6 +199,18 @@ export type ClientMessage =
       type: "missions:learned-candidates:revoke";
       requestId: string;
       input: RevokeMissionLearnedCandidateInput;
+    }
+  | { type: "missions:weekly-digest:generate"; requestId: string }
+  | {
+      type: "missions:intelligence-audit:list";
+      requestId: string;
+      limit?: number;
+    }
+  | {
+      type: "worksession:events:list-by-station";
+      requestId: string;
+      stationId: string;
+      limit?: number;
     }
   | { type: "missions:ticket-run:proof:run"; requestId: string; runId: string; profileId: string }
   | {
@@ -510,6 +552,22 @@ export type ServerMessage =
       type: "missions:ticket-run:service:stop:result";
       requestId: string;
       services: MissionServiceSnapshot;
+    }
+  | {
+      type: "missions:weekly-digest:generate:result";
+      requestId: string;
+      /** Path of the written digest, or null when the window had no closed runs / no workspace. */
+      path: string | null;
+    }
+  | {
+      type: "worksession:events:list-by-station:result";
+      requestId: string;
+      events: import("./work-session-events.js").WorkSessionEventSummary[];
+    }
+  | {
+      type: "missions:intelligence-audit:list:result";
+      requestId: string;
+      events: IntelligenceAuditEvent[];
     }
   | { type: "missions:runs:updated"; snapshot: TicketRunSnapshot }
   | { type: "missions:run:updated"; runId: string; run: TicketRunSummary }

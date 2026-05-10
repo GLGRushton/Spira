@@ -1408,7 +1408,7 @@ describe("SpiraMemoryDatabase", () => {
     expect(database.getTicketRunSnapshot().runs).toEqual([]);
   });
 
-  // Phase 0.4 — taxonomy guard at the DB write site.
+  // taxonomy guard at the DB write site.
   it("rejects mission events whose type is not in the taxonomy", () => {
     const database = createTestDatabase();
     database.upsertTicketRun({
@@ -1447,7 +1447,7 @@ describe("SpiraMemoryDatabase", () => {
     ).not.toThrow();
   });
 
-  // Phase 0.2 — the SQL WHERE clause must scope by project_key while preserving the
+  // the SQL WHERE clause must scope by project_key while preserving the
   // "repo-agnostic entries are returned for any project" semantics from matchesScopedRecord.
   it("scopes intelligence reads by project at the SQL level", () => {
     const database = createTestDatabase();

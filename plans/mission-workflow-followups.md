@@ -1,7 +1,7 @@
 # Mission workflow follow-ups
 
 **Parent plan:** [mission-workflow-overhaul.md](./mission-workflow-overhaul.md) — phases 0–7 shipped 2026-05-09 / 2026-05-10.
-**Status:** drafted 2026-05-10. Consolidates every follow-up that was deferred across phases 0–7.
+**Status:** all five batches (E, A, C, B, D) shipped 2026-05-10. See per-batch headings below for shipped notes.
 
 ## Goal
 
@@ -16,7 +16,7 @@ The seven-phase overhaul shipped end-to-end in two days. Each phase deferred a s
 
 ---
 
-## Batch A — Shared utilities (cross-phase dedup)
+## Batch A — Shared utilities (cross-phase dedup) **— shipped 2026-05-10**
 
 **Goal:** consolidate the duplicated patterns that landed across phases 2, 4, 5, 6, 7. Source of most of the "skipped reuse" findings in the per-phase reviews.
 
@@ -123,7 +123,7 @@ The sort key `(left, right) => right.startedAt - left.startedAt || right.created
 
 ---
 
-## Batch B — Promised UX surfaces (deferred per-phase)
+## Batch B — Promised UX surfaces (deferred per-phase) **— shipped 2026-05-10**
 
 **Goal:** ship the operator-facing affordances each phase explicitly deferred.
 
@@ -177,7 +177,7 @@ Phase 7.1 wrote the events but didn't surface them in the renderer.
 
 ---
 
-## Batch C — Performance follow-ups (deferred per-phase)
+## Batch C — Performance follow-ups (deferred per-phase) **— shipped 2026-05-10**
 
 **Goal:** the efficiency reviews flagged a handful of "real but not blocking" issues. Knock them out together.
 
@@ -215,7 +215,7 @@ Both `mission_events` and `work_session_events` have no retention. Long-running 
 
 ---
 
-## Batch D — Observability + audit completeness
+## Batch D — Observability + audit completeness **— shipped 2026-05-10**
 
 **Goal:** finish the audit-trail surfaces that landed partially in Phase 5 and 7.
 
@@ -239,7 +239,7 @@ Phase 7 quality reviewer #2: `writeWorkSessionPostmortem` returns the path on su
 
 ---
 
-## Batch E — Pre-existing fix-ups
+## Batch E — Pre-existing fix-ups **— shipped 2026-05-10**
 
 **Goal:** clean the long-standing bugs that the per-phase reviews surfaced as "not introduced by this work" but are in the same neighbourhood.
 

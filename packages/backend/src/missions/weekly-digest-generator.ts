@@ -5,7 +5,7 @@ import { computePhaseTotalsFromEvents } from "./phase-budget.js";
 import { formatDurationMs } from "./post-mortem-generator.js";
 
 /**
- * Phase 5.3 — cross-mission weekly digest.
+ * Cross-mission weekly digest.
  *
  * Pure markdown generator that takes a slice of closed runs + their mission events and
  * produces a roll-up: top-N longest phases, top-N most common preflight blockers, top-N

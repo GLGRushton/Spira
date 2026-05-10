@@ -6,7 +6,7 @@ export const TICKET_RUN_STATUSES = [
   "awaiting-review",
   "error",
   "done",
-  // Phase 6.5 — operator-initiated abort. The run is closed; the post-mortem stub is
+  // operator-initiated abort. The run is closed; the post-mortem stub is
   // generated as for a clean close, but the status carries the abort signal forward.
   "aborted",
 ] as const;
@@ -24,10 +24,10 @@ export const TICKET_RUN_PROOF_STATUSES = [
   "passed",
   "failed",
   "stale",
-  // Phase 2.1 — gate satisfied by the operator's manual review (no automated proof artifact required).
+  // gate satisfied by the operator's manual review (no automated proof artifact required).
   // Carries a justification recorded with the proof-set-manual-review-only mission event.
   "manual-review",
-  // Phase 2.3 — proof preflight identified blockers before the harness ran.
+  // proof preflight identified blockers before the harness ran.
   // Recoverable: operator fixes the blockers and reruns, or chooses manual-review.
   "preflight-blocked",
 ] as const;
@@ -66,7 +66,7 @@ export const TICKET_RUN_MISSION_VALIDATION_KINDS = [
   "unit-test",
   "lint",
   "typecheck",
-  // Phase 3.4 — additional kinds so validation profiles can describe a fuller catalog of
+  // additional kinds so validation profiles can describe a fuller catalog of
   // what "validation" looks like for a repo (dependency restore, formatter check,
   // smoke-only e2e). The rule scoring and recording paths treat all kinds equivalently;
   // the value is in giving the operator + the agent better vocabulary.
@@ -185,9 +185,9 @@ export interface TicketRunProofSummary {
   lastProofAt: number | null;
   lastProofSummary: string | null;
   staleReason: string | null;
-  /** Phase 2.1 — operator's free-text justification when the gate is satisfied via manual review. */
+  /** operator's free-text justification when the gate is satisfied via manual review. */
   manualReviewJustification: string | null;
-  /** Phase 2.1 — when the manual-review status was set, for audit display. */
+  /** when the manual-review status was set, for audit display. */
   manualReviewAt: number | null;
 }
 
@@ -395,8 +395,8 @@ export interface TicketRunMissionEventSummary {
 }
 
 /**
- * Phase 3.4 — renderer-friendly validation profile snapshot. Mirrors the DB-side
- * ValidationProfileRecord (which lives in @spira/memory-db) but with renderer-friendly
+ * Renderer-friendly validation profile snapshot. Mirrors the DB-side
+ * validationProfileRecord (which lives in @spira/memory-db) but with renderer-friendly
  * types and the rolling-runtime field exposed.
  */
 export interface MissionValidationProfileRecord {
@@ -438,7 +438,7 @@ export interface UpsertMissionValidationProfileInput {
 }
 
 /**
- * Phase 3.1 — first-class per-project repo profile. One record per `projectKey`. Carries
+ * First-class per-project repo profile. One record per `projectKey`. Carries
  * the metadata that's most expensive for a fresh mission to re-derive (registry, default
  * branch, required SDKs, where user-facing copy lives, etc.) so prompt context and the
  * onboarding wizard can both surface it.
@@ -487,8 +487,8 @@ export interface UpsertMissionRepoProfileInput {
 }
 
 /**
- * Phase 2.5 — proof rule snapshot returned to the renderer admin pane.
- * Mirrors the DB-side ProofRuleRecord but with renderer-friendly types.
+ * Proof rule snapshot returned to the renderer admin pane.
+ * mirrors the DB-side ProofRuleRecord but with renderer-friendly types.
  */
 export interface MissionProofRuleRecord {
   id: string;
@@ -526,12 +526,12 @@ export interface TicketRunMissionTimelineResult {
   snapshot: TicketRunSnapshot;
   events: TicketRunMissionEventSummary[];
   /**
-   * Phase 4.6 — true when an additional older page is available. The renderer can
+   * true when an additional older page is available. The renderer can
    * use the smallest event id in the current page as the next `beforeId`.
    */
   hasMore: boolean;
   /**
-   * Phase 6.4 — soft per-phase duration hints derived from recent closed runs of the
+   * soft per-phase duration hints derived from recent closed runs of the
    * same project. Empty `entries` means "not enough data yet"; renderer treats absence
    * as "no hint to show."
    */
@@ -578,7 +578,7 @@ export interface ApproveTicketRunRepoIntelligenceResult {
 }
 
 /**
- * Phase 5.4 — admin-pane summary of a learned intelligence candidate. Carries the audit-
+ * Admin-pane summary of a learned intelligence candidate. Carries the audit-
  * trail flags (approved / revoked / archived) plus the snapshot of contributing and
  * blocked-evidence run ids so the operator can read what a promotion was based on.
  */

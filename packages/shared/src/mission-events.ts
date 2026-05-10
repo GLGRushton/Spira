@@ -55,6 +55,7 @@ export const MISSION_EVENT_TYPES = [
   // Learning loop (Phase 5)
   "mission-outcome-classified",
   "validation-profile-candidate-observed",
+  "validation-profile-auto-promoted",
   "learned-candidate-promoted",
   "learned-candidate-revoked",
   // Polish (Phase 6)
@@ -264,6 +265,21 @@ export interface MissionEventMetadataMap {
     /** Run ids that contributed negative evidence at the moment of promotion. */
     contradictingRunIds: readonly string[];
   };
+  "validation-profile-auto-promoted": {
+    /** Stable id of the candidate that was promoted (matches the observed event). */
+    candidateId: string;
+    /** Resolved validation_profiles row id after upsert. */
+    profileId: string;
+    projectKey: string | null;
+    repoRelativePath: string | null;
+    kind: string;
+    command: string;
+    workingDirectory: string;
+    successCount: number;
+    threshold: number;
+    /** Schema version of the promotion formula used. */
+    formulaVersion: number;
+  };
   "learned-candidate-revoked": {
     candidateId: string;
     type: string;
@@ -311,7 +327,7 @@ export type MissionEvent = {
 
 /**
  * Build an AppendMissionEventInput-shaped payload from a typed event.
- * Throws if the event type is unknown (defensive — TS catches this at compile
+ * throws if the event type is unknown (defensive — TS catches this at compile
  * time, but at runtime the validator gives an actionable message).
  */
 export const validateMissionEventType = (eventType: string): MissionEventType => {

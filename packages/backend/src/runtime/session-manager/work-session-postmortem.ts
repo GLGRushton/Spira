@@ -1,5 +1,3 @@
-import { mkdir, writeFile } from "node:fs/promises";
-import path from "node:path";
 import type { SpiraMemoryDatabase } from "@spira/memory-db";
 import type { WorkSessionSnapshot } from "@spira/shared";
 import {
@@ -8,13 +6,14 @@ import {
   formatTimestamp,
   sanitizeFilenameFragment,
 } from "../../missions/post-mortem-generator.js";
+import { atomicWritePostmortem } from "../../missions/postmortem-writer.js";
 import type { WorkSessionOutcomeClassification } from "./work-session-outcome.js";
 
 /**
- * Phase 7.4 — WorkSession post-mortem stub generator + writer.
+ * WorkSession post-mortem stub generator + writer.
  *
  * Pure stub generator that mirrors the mission post-mortem shape, scoped to a
- * WorkSession's data: phase timing table, validation outcomes, fix iterations, and
+ * workSession's data: phase timing table, validation outcomes, fix iterations, and
  * the outcome classification. Filed as `reports/spira-worksession-{date}-{sessionId}.md`
  * relative to the configured workspaceRoot. Best-effort: skipped when no workspace is
  * configured (writes nothing). Atomic create (`flag: "wx"`) so a handwritten
@@ -141,19 +140,9 @@ export const writeWorkSessionPostmortem = async (
 ): Promise<string | null> => {
   if (!memoryDb) return null;
   const workspaceRoot = memoryDb.getProjectWorkspaceRoot();
-  if (!workspaceRoot) return null;
   const closedAt = snapshot.completedAt ?? snapshot.updatedAt ?? Date.now();
   const filename = buildWorkSessionPostmortemFilename(snapshot, closedAt);
-  const reportsDir = path.join(workspaceRoot, "reports");
-  const targetPath = path.join(reportsDir, filename);
-  await mkdir(reportsDir, { recursive: true });
   const markdown = generateWorkSessionPostmortem(snapshot, outcome);
-  try {
-    await writeFile(targetPath, markdown, { flag: "wx" });
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code === "EEXIST") return null; // never clobber a handwritten stub
-    throw error;
-  }
-  return targetPath;
+  const result = await atomicWritePostmortem({ workspaceRoot, filename, markdown });
+  return result.status === "written" ? result.path : null;
 };

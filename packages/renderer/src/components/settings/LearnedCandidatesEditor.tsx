@@ -21,6 +21,8 @@ const describeStatus = (record: MissionLearnedCandidateRecord): "promoted" | "pe
   return "pending";
 };
 
+const DEFAULT_BULK_ROLLBACK_COUNT = 5;
+
 export function LearnedCandidatesEditor() {
   const [snapshot, setSnapshot] = useState<MissionLearnedCandidatesSnapshot>({ candidates: [] });
   const [isLoading, setIsLoading] = useState(false);
@@ -28,6 +30,11 @@ export function LearnedCandidatesEditor() {
   const [notice, setNotice] = useState<string | null>(null);
   const [pendingRevokeId, setPendingRevokeId] = useState<string | null>(null);
   const [revokeReasons, setRevokeReasons] = useState<Record<string, string>>({});
+  const [bulkRollbackOpen, setBulkRollbackOpen] = useState(false);
+  const [bulkRollbackCount, setBulkRollbackCount] = useState(DEFAULT_BULK_ROLLBACK_COUNT);
+  const [bulkRollbackSelected, setBulkRollbackSelected] = useState<Set<string>>(new Set());
+  const [bulkRollbackPending, setBulkRollbackPending] = useState(false);
+  const [digestPending, setDigestPending] = useState(false);
 
   const loadCandidates = async () => {
     setIsLoading(true);
@@ -51,6 +58,56 @@ export function LearnedCandidatesEditor() {
       [...snapshot.candidates].sort((left, right) => right.updatedAt - left.updatedAt),
     [snapshot.candidates],
   );
+
+  const recentlyPromoted = useMemo(
+    () =>
+      [...snapshot.candidates]
+        .filter((entry) => entry.approved && !entry.revoked && entry.promotedRunIds.length > 0)
+        .sort((left, right) => right.updatedAt - left.updatedAt)
+        .slice(0, bulkRollbackCount),
+    [snapshot.candidates, bulkRollbackCount],
+  );
+
+  const handleBulkRollback = async () => {
+    if (bulkRollbackSelected.size === 0) return;
+    setBulkRollbackPending(true);
+    setError(null);
+    setNotice(null);
+    const today = new Date().toISOString().split("T")[0];
+    const reason = `Bulk rollback ${today}`;
+    let next = snapshot;
+    try {
+      for (const candidateId of bulkRollbackSelected) {
+        next = await window.electronAPI.revokeMissionLearnedCandidate({
+          candidateId,
+          reason,
+          archive: false,
+        });
+      }
+      setSnapshot(next);
+      setNotice(`Bulk-rolled-back ${bulkRollbackSelected.size} promoted entr${bulkRollbackSelected.size === 1 ? "y" : "ies"}.`);
+      setBulkRollbackSelected(new Set());
+      setBulkRollbackOpen(false);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Bulk rollback failed.");
+    } finally {
+      setBulkRollbackPending(false);
+    }
+  };
+
+  const handleGenerateDigest = async () => {
+    setDigestPending(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const path = await window.electronAPI.generateMissionWeeklyDigest();
+      setNotice(path ? `Digest written to ${path}` : "No closed runs in the digest window — nothing to report.");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Failed to generate weekly digest.");
+    } finally {
+      setDigestPending(false);
+    }
+  };
 
   const handleRevoke = async (candidate: MissionLearnedCandidateRecord, archive: boolean) => {
     const reason = revokeReasons[candidate.id]?.trim() ?? "";
@@ -92,15 +149,90 @@ export function LearnedCandidatesEditor() {
             when the candidate is wrong rather than just stale.
           </p>
         </div>
-        <button
-          type="button"
-          className={projectStyles.secondaryButton}
-          onClick={() => void loadCandidates()}
-          disabled={isLoading}
-        >
-          {isLoading ? "Refreshing…" : "Refresh"}
-        </button>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <button
+            type="button"
+            className={projectStyles.secondaryButton}
+            onClick={() => void loadCandidates()}
+            disabled={isLoading}
+          >
+            {isLoading ? "Refreshing…" : "Refresh"}
+          </button>
+          <button
+            type="button"
+            className={projectStyles.secondaryButton}
+            onClick={() => setBulkRollbackOpen((current) => !current)}
+            disabled={isLoading}
+          >
+            {bulkRollbackOpen ? "Close bulk rollback" : "Rollback last N promotions"}
+          </button>
+          <button
+            type="button"
+            className={projectStyles.secondaryButton}
+            onClick={() => void handleGenerateDigest()}
+            disabled={digestPending}
+          >
+            {digestPending ? "Generating…" : "Generate weekly digest now"}
+          </button>
+        </div>
       </header>
+
+      {bulkRollbackOpen ? (
+        <div className={styles.ruleRow} style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <label htmlFor="bulk-rollback-count">Most recent</label>
+            <input
+              id="bulk-rollback-count"
+              type="number"
+              min={1}
+              max={50}
+              value={bulkRollbackCount}
+              onChange={(event) => {
+                const next = Number.parseInt(event.target.value, 10);
+                if (Number.isFinite(next) && next >= 1) setBulkRollbackCount(Math.min(50, next));
+              }}
+              style={{ width: 64 }}
+            />
+            <span>auto-promotions, tick to revoke each:</span>
+          </div>
+          {recentlyPromoted.length === 0 ? (
+            <p>No auto-promoted entries to roll back.</p>
+          ) : (
+            <ul className={styles.ruleList}>
+              {recentlyPromoted.map((candidate) => (
+                <li key={candidate.id} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <input
+                    type="checkbox"
+                    id={`bulk-${candidate.id}`}
+                    checked={bulkRollbackSelected.has(candidate.id)}
+                    onChange={(event) =>
+                      setBulkRollbackSelected((current) => {
+                        const next = new Set(current);
+                        if (event.target.checked) next.add(candidate.id);
+                        else next.delete(candidate.id);
+                        return next;
+                      })
+                    }
+                  />
+                  <label htmlFor={`bulk-${candidate.id}`}>
+                    <strong>{candidate.title}</strong> ({candidate.type}, {candidate.promotedRunIds.length} runs)
+                  </label>
+                </li>
+              ))}
+            </ul>
+          )}
+          <button
+            type="button"
+            className={projectStyles.secondaryButton}
+            onClick={() => void handleBulkRollback()}
+            disabled={bulkRollbackPending || bulkRollbackSelected.size === 0}
+          >
+            {bulkRollbackPending
+              ? "Rolling back…"
+              : `Confirm rollback of ${bulkRollbackSelected.size} entries`}
+          </button>
+        </div>
+      ) : null}
 
       {error ? <div className={projectStyles.error}>{error}</div> : null}
       {notice ? <div className={projectStyles.notice}>{notice}</div> : null}

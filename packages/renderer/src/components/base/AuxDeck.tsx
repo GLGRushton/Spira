@@ -1,4 +1,5 @@
 import type { AssistantState } from "@spira/shared";
+import { formatDuration } from "@spira/shared";
 import { AnimatePresence, motion } from "framer-motion";
 import { useEffect, useMemo, useState } from "react";
 import { useRoomStore } from "../../stores/room-store.js";
@@ -15,10 +16,7 @@ interface AuxDeckProps {
   assistantState: AssistantState;
 }
 
-const formatElapsed = (milliseconds: number): string => {
-  const seconds = Math.max(0, Math.floor(milliseconds / 1000));
-  return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
-};
+const formatElapsed = (milliseconds: number): string => formatDuration(milliseconds, "aux-deck");
 
 export function AuxDeck({ assistantState }: AuxDeckProps) {
   const activeStationId = useStationStore((store) => store.activeStationId);

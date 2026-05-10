@@ -120,7 +120,7 @@ export interface TicketRunServiceOptions {
   generateCommitDraft?: (input: GenerateCommitDraftInput) => Promise<string>;
   discoverMissionProofProfiles?: (run: TicketRunSummary) => Promise<ResolvedMissionProofProfile[]>;
   runMissionProof?: (input: RunMissionProofInput) => Promise<RunMissionProofOutput>;
-  /** Phase 2.3 — preflight delegate; defaults to {@link runProofPreflight} from proof-preflight.ts. */
+  /** preflight delegate; defaults to {@link runProofPreflight} from proof-preflight.ts. */
   runProofPreflight?: (profile: ResolvedMissionProofProfile) => Promise<ProofPreflightResult>;
   /**
    * Dependency-warming delegate. Defaults to {@link warmRunDependencies}; tests stub it
@@ -128,16 +128,26 @@ export interface TicketRunServiceOptions {
    */
   warmRunDependencies?: (input: WarmRunDependenciesInput) => Promise<DependencyWarmingResult[]>;
   /**
-   * Phase 5.4 — global kill-switch for auto-promotion of learned candidates. Defaults
+   * global kill-switch for auto-promotion of learned candidates. Defaults
    * to true. Settings UI exposes this so an operator can pause auto-promotion without
    * losing the audit trail or candidate corpus.
    */
   autoPromoteLearnedCandidates?: boolean;
   /**
-   * Phase 5.4 — per-type override for the promotion confidence thresholds. Settings
+   * per-type override for the promotion confidence thresholds. Settings
    * UI exposes this for advanced operators; tests use it to drive deterministic flips.
    */
   learnedCandidatePromotionThresholds?: Partial<Record<"briefing" | "example" | "pitfall", number>>;
+  /**
+   * Kill-switch for auto-promotion of validation_profile candidates surfaced via the
+   * shell-command observation loop. Defaults to true.
+   */
+  autoPromoteValidationProfiles?: boolean;
+  /**
+   * Distinct-mission success-count threshold above which a candidate auto-promotes to a
+   * registered validation profile. Defaults to 5.
+   */
+  validationProfileAutoPromotionThreshold?: number;
   resolveMissionGitIdentity?: () => Promise<MissionGitIdentity>;
   getMissionGitToken?: () => string | null;
 }

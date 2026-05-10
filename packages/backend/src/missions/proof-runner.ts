@@ -1,4 +1,3 @@
-import { spawn } from "node:child_process";
 import { createWriteStream } from "node:fs";
 import { mkdir, readdir, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -6,6 +5,7 @@ import { pathToFileURL } from "node:url";
 import type { TicketRunProofArtifact, TicketRunProofRunStatus, TicketRunSummary } from "@spira/shared";
 import type { Logger } from "pino";
 import { pathExists } from "../util/fs.js";
+import { spawnWithTimeout } from "../util/spawn.js";
 import type { ResolvedMissionProofProfile } from "./proof-registry.js";
 
 const DEFAULT_PROOF_TIMEOUT_MS = 20 * 60_000;
@@ -155,39 +155,24 @@ export async function runMissionProof(input: RunMissionProofInput): Promise<RunM
   );
 
   let timedOut = false;
-  const exitCode = await new Promise<number | null>((resolve, reject) => {
-    const child = spawn(input.profile.command, args, {
+  let exitCode: number | null = null;
+  try {
+    const outcome = await spawnWithTimeout(input.profile.command, args, {
       cwd: input.profile.workingDirectory,
       env: process.env,
-      stdio: ["ignore", "pipe", "pipe"],
-      windowsHide: true,
+      timeoutMs: input.timeoutMs ?? DEFAULT_PROOF_TIMEOUT_MS,
+      onStdout: (chunk) => stdoutStream.write(chunk),
+      onStderr: (chunk) => stderrStream.write(chunk),
+      rejectOnError: true,
     });
-    const childEvents = child as unknown as NodeJS.EventEmitter;
-    const timeout = setTimeout(() => {
-      timedOut = true;
-      child.kill();
-    }, input.timeoutMs ?? DEFAULT_PROOF_TIMEOUT_MS);
-
-    child.stdout.on("data", (chunk) => {
-      stdoutStream.write(chunk);
-    });
-    child.stderr.on("data", (chunk) => {
-      stderrStream.write(chunk);
-    });
-    childEvents.on("error", (error: Error) => {
-      clearTimeout(timeout);
-      reject(error);
-    });
-    childEvents.on("close", (code: number | null) => {
-      clearTimeout(timeout);
-      resolve(code);
-    });
-  }).finally(async () => {
+    timedOut = outcome.timedOut;
+    exitCode = outcome.exitCode;
+  } finally {
     await Promise.all([
       new Promise<void>((resolve) => stdoutStream.end(resolve)),
       new Promise<void>((resolve) => stderrStream.end(resolve)),
     ]);
-  });
+  }
 
   const completedAt = now();
   const artifactPaths = [

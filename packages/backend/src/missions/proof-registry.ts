@@ -21,9 +21,9 @@ const usesProceduralAzureAdBypass = (content: string): boolean =>
 const normalizeRelativePath = (value: string): string => value.replace(/\//gu, "\\");
 
 /**
- * Phase 4.4 — exported so {@link TicketRunService} can build a per-worktree cache
+ * exported so {@link TicketRunService} can build a per-worktree cache
  * (keyed on the worktree's HEAD SHA) without re-walking the filesystem per call.
- * Returns null when the worktree doesn't host the LegApp Admin recipe.
+ * returns null when the worktree doesn't host the LegApp Admin recipe.
  */
 export const discoverProofProfileForWorktree = async (
   run: TicketRunSummary,

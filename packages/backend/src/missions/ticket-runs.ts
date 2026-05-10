@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { access, mkdir, open, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, open, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import type { RepoIntelligenceRecord, SpiraMemoryDatabase } from "@spira/memory-db";
 import type {
@@ -54,7 +54,9 @@ import type {
 } from "@spira/shared";
 import { getEffectiveValidations, normalizeProjectKey } from "@spira/shared";
 import fetch from "node-fetch";
+import { BoundedMap } from "../util/bounded-map.js";
 import { ConfigError, SpiraError } from "../util/errors.js";
+import { pathExists } from "../util/fs.js";
 import {
   type DependencyWarmingResult,
   type WarmRunDependenciesInput,
@@ -78,6 +80,7 @@ import {
   deriveValidationProfileCandidates,
 } from "./validation-candidate-learner.js";
 import { buildPostmortemFilename, generateMissionPostmortem } from "./post-mortem-generator.js";
+import { atomicWritePostmortem } from "./postmortem-writer.js";
 import { buildMissionWorkflowRepairPrompt, getMissionWorkflowState } from "./mission-workflow-guard.js";
 import {
   type ResolvedMissionProofProfile,
@@ -176,13 +179,13 @@ export class TicketRunService {
    * fast-path: the path-existence check still runs first so externally-deleted worktrees
    * do not hit a stale cache.
    */
-  private readonly usableWorktreeCache = new Map<string, true>();
+  private readonly usableWorktreeCache = new BoundedMap<string, true>(256);
   /**
    * Resolved proof profile per worktree path. Invalidated only by removeManagedWorktree;
    * the discovery itself depends on file presence + content checks that effectively never
    * change inside a single mission.
    */
-  private readonly proofDiscoveryCache = new Map<string, ResolvedMissionProofProfile | null>();
+  private readonly proofDiscoveryCache = new BoundedMap<string, ResolvedMissionProofProfile | null>(256);
   /** Set of run ids currently in a dependency-warming pass; prevents re-warm storms. */
   private readonly warmingInFlight = new Set<string>();
   /**
@@ -191,10 +194,10 @@ export class TicketRunService {
    * a peer run closes (its `updatedAt` exceeds the cached watermark) — soft hint data
    * doesn't need stronger consistency than that.
    */
-  private readonly phaseBudgetCache = new Map<
+  private readonly phaseBudgetCache = new BoundedMap<
     string,
     { watermarkUpdatedAt: number; snapshot: TicketRunPhaseBudgetSnapshot }
-  >();
+  >(64);
   private disposed = false;
 
   constructor(private readonly options: TicketRunServiceOptions) {
@@ -434,7 +437,7 @@ export class TicketRunService {
     }> = [];
     try {
       for (const worktree of worktreesToCreate) {
-        if (await this.pathExists(worktree.worktreePath)) {
+        if (await pathExists(worktree.worktreePath)) {
           await this.removeManagedWorktree(worktree);
         }
         await mkdir(path.dirname(worktree.worktreePath), { recursive: true });
@@ -700,7 +703,7 @@ export class TicketRunService {
       this.recordMissionEvent(completedRun, "system", "run-closed", {
         stationCleared,
       });
-      // Phase 1.5 — fire-and-forget auto post-mortem stub. Failures are logged but do not
+      // fire-and-forget auto post-mortem stub. Failures are logged but do not
       // fault the close path; the underlying mission_events data is still in the DB and
       // a future run can regenerate the stub.
       void this.writePostmortemStub(completedRun).catch((error) => {
@@ -719,7 +722,7 @@ export class TicketRunService {
   }
 
   /**
-   * Phase 6.5 — operator-initiated abort. Closes the run with the `aborted` status,
+   * operator-initiated abort. Closes the run with the `aborted` status,
    * generates the post-mortem stub (with the abort reason in the open-observations
    * placeholder), and records a `mission-aborted` event. Permitted from any status
    * except `done` and `aborted` — if the operator wants out, they get out.
@@ -847,7 +850,7 @@ export class TicketRunService {
   }
 
   /**
-   * Phase 1.5 — generate a markdown post-mortem stub at `<workspaceRoot>/reports/{ticketId}-...md`.
+   * generate a markdown post-mortem stub at `<workspaceRoot>/reports/{ticketId}-...md`.
    * Best-effort: if no workspace root is configured, the file is skipped (the data is still in the
    * DB). The file uses {@link generateMissionPostmortem} for the body.
    */
@@ -867,10 +870,6 @@ export class TicketRunService {
     const events = memoryDb.listMissionEvents(run.runId, 500);
     const closedAt = run.updatedAt ?? this.now();
     const filename = buildPostmortemFilename(run, closedAt);
-    const reportsDir = path.join(workspaceRoot, "reports");
-    const targetPath = path.join(reportsDir, filename);
-
-    await mkdir(reportsDir, { recursive: true });
     const markdown = generateMissionPostmortem(
       run,
       events.map((event) => ({
@@ -883,23 +882,17 @@ export class TicketRunService {
         occurredAt: event.occurredAt,
       })),
     );
-    try {
-      // Atomic exclusive create — never clobbers an existing post-mortem (handwritten ones
-      // for the same ticket should always win, and concurrent close paths can't race).
-      await writeFile(targetPath, markdown, { encoding: "utf8", flag: "wx" });
+    const result = await atomicWritePostmortem({ workspaceRoot, filename, markdown });
+    if (result.status === "written") {
       this.options.logger.info(
-        { runId: run.runId, ticketId: run.ticketId, targetPath },
+        { runId: run.runId, ticketId: run.ticketId, targetPath: result.path },
         "Wrote auto-generated mission post-mortem stub.",
       );
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "EEXIST") {
-        this.options.logger.info(
-          { runId: run.runId, ticketId: run.ticketId, targetPath },
-          "Mission post-mortem already exists; leaving the existing file untouched.",
-        );
-        return;
-      }
-      throw error;
+    } else if (result.status === "exists") {
+      this.options.logger.info(
+        { runId: run.runId, ticketId: run.ticketId, targetPath: result.path },
+        "Mission post-mortem already exists; leaving the existing file untouched.",
+      );
     }
   }
 
@@ -980,7 +973,7 @@ export class TicketRunService {
   }
 
   /**
-   * Phase 1.4 — read a proof artifact's contents (for the inline log viewer).
+   * read a proof artifact's contents (for the inline log viewer).
    *
    * Validates that:
    *  - the run, proof run, and artifact all exist
@@ -1126,7 +1119,7 @@ export class TicketRunService {
       }
 
       const proofRunId = this.runIdFactory();
-      // Phase 2.3 — preflight before spawning the harness. A blocked preflight short-circuits
+      // preflight before spawning the harness. A blocked preflight short-circuits
       // the run with a typed `preflight-blocked` outcome so the operator sees concrete remediations
       // instead of waiting on a 20-minute timeout for a harness that was never going to succeed.
       this.recordMissionEvent(run, "proof", "proof-preflight-started", {
@@ -1872,16 +1865,7 @@ export class TicketRunService {
   }
 
   private async worktreeHasGitmodules(worktreePath: string): Promise<boolean> {
-    try {
-      await access(path.join(worktreePath, ".gitmodules"));
-      return true;
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (code === "ENOENT" || code === "ENOTDIR") {
-        return false;
-      }
-      throw error;
-    }
+    return pathExists(path.join(worktreePath, ".gitmodules"));
   }
 
   private async discoverMissionProofProfiles(run: TicketRunSummary): Promise<ResolvedMissionProofProfile[]> {
@@ -1908,7 +1892,7 @@ export class TicketRunService {
   }
 
   /**
-   * Phase 2.3 — preflight delegate. Tests inject a stub that returns ok=true so they can
+   * preflight delegate. Tests inject a stub that returns ok=true so they can
    * exercise the runProof flow without a real `dotnet` install or worktree-on-disk.
    */
   private async executeProofPreflight(profile: ResolvedMissionProofProfile) {
@@ -2196,7 +2180,7 @@ export class TicketRunService {
   }
 
   /**
-   * Phase 4.5 — prompt order is optimised for provider prompt caching.
+   * prompt order is optimised for provider prompt caching.
    *
    * Stable-per-mission sections (repo guidance, workspace layout, the workflow contract
    * boilerplate) come FIRST so the provider can hash and cache the longest possible prefix
@@ -2243,7 +2227,7 @@ export class TicketRunService {
   }
 
   /**
-   * Phase 3.5 — best-effort repo-guidance section. Returns null if no memoryDb is wired
+   * best-effort repo-guidance section. Returns null if no memoryDb is wired
    * (test stubs) or if there's nothing useful to inject. Failures are logged but never
    * fault prompt construction — guidance is a hint, not a hard requirement.
    */
@@ -2279,15 +2263,6 @@ export class TicketRunService {
     return worktree;
   }
 
-  private async pathExists(targetPath: string): Promise<boolean> {
-    try {
-      await access(targetPath);
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
   private async hasLocalBranch(repoAbsolutePath: string, branchName: string): Promise<boolean> {
     try {
       const result = await this.runGitCommand(repoAbsolutePath, [
@@ -2306,7 +2281,7 @@ export class TicketRunService {
     worktree: Pick<TicketRunSummary["worktrees"][number], "worktreePath">,
   ): Promise<boolean> {
     // pathExists first so that an externally-deleted worktree never hits a stale cache.
-    if (!(await this.pathExists(worktree.worktreePath))) {
+    if (!(await pathExists(worktree.worktreePath))) {
       this.usableWorktreeCache.delete(worktree.worktreePath);
       return false;
     }
@@ -2362,7 +2337,7 @@ export class TicketRunService {
     // Phase 4.2/4.4 — invalidate caches keyed on this worktree path. Idempotent.
     this.usableWorktreeCache.delete(worktree.worktreePath);
     this.proofDiscoveryCache.delete(worktree.worktreePath);
-    if (!(await this.pathExists(worktree.worktreePath))) {
+    if (!(await pathExists(worktree.worktreePath))) {
       try {
         await this.runGitCommand(worktree.repoAbsolutePath, ["worktree", "prune"]);
       } catch {
@@ -2381,7 +2356,7 @@ export class TicketRunService {
       } catch {
         // Best effort prune after a forced directory cleanup.
       }
-      if (await this.pathExists(worktree.worktreePath)) {
+      if (await pathExists(worktree.worktreePath)) {
         throw error;
       }
     }
@@ -2396,7 +2371,7 @@ export class TicketRunService {
   }
 
   private async readBranchUpstream(repoAbsolutePath: string, branchName: string): Promise<string | null> {
-    if (!(await this.pathExists(repoAbsolutePath))) {
+    if (!(await pathExists(repoAbsolutePath))) {
       return null;
     }
     if (!(await this.hasLocalBranch(repoAbsolutePath, branchName))) {
@@ -2436,7 +2411,7 @@ export class TicketRunService {
       run.submodules.map(async (submodule): Promise<TicketRunDeleteBlocker | null> => {
         let submoduleRepoPath: string | null = null;
         for (const parentRef of submodule.parentRefs) {
-          if (await this.pathExists(parentRef.submoduleWorktreePath)) {
+          if (await pathExists(parentRef.submoduleWorktreePath)) {
             submoduleRepoPath = parentRef.submoduleWorktreePath;
             break;
           }
@@ -3531,7 +3506,7 @@ export class TicketRunService {
       worktreeCount: updatedRun.worktrees.length,
     });
     this.emitRunUpdate(updatedRun.runId);
-    // Phase 4.1 — fire-and-forget dependency warming. Failures are recorded in mission_events
+    // fire-and-forget dependency warming. Failures are recorded in mission_events
     // (warming-finished with status: "failed") but never fault the syncRunState path; the
     // first validation pays the cold cost in that case.
     void this.warmRunDependenciesInBackground(updatedRun);
@@ -3539,7 +3514,7 @@ export class TicketRunService {
   }
 
   /**
-   * Phase 4.1 — kick off `restore`-kind validation profile commands in parallel after the
+   * kick off `restore`-kind validation profile commands in parallel after the
    * worktree is ready. Skipped silently when no projectKey, no validation profiles, or
    * disabled by the option flag. The renderer surfaces progress via the warming-started /
    * warming-finished mission events that this method emits per task.
@@ -3660,7 +3635,7 @@ export class TicketRunService {
     if (!memoryDb) {
       return;
     }
-    // Phase 5.1 — classify the closed mission once and reuse it for both the audit-trail
+    // classify the closed mission once and reuse it for both the audit-trail
     // event and the candidate generator. Null means "not closed cleanly enough to learn
     // from" and we skip everything below.
     const outcome = classifyMissionOutcome(run);
@@ -3708,7 +3683,7 @@ export class TicketRunService {
   }
 
   /**
-   * Phase 5.2 — scan the closed run plus its peers for shell commands that have succeeded
+   * scan the closed run plus its peers for shell commands that have succeeded
    * across enough distinct missions to warrant a `validation_profile` candidate. Friction
    * outcomes only contribute the *current* run; clean-pass outcomes look at recent peers
    * too. Each surfaced candidate emits a `validation-profile-candidate-observed` event so
@@ -3725,7 +3700,15 @@ export class TicketRunService {
     const peerRuns = memoryDb
       .listTicketRuns()
       .filter((candidate) => candidate.projectKey === run.projectKey && candidate.status === "done");
-    const allEvents = peerRuns.flatMap((peer) => memoryDb.listMissionEvents(peer.runId, { limit: 500 }));
+    // Single SQL JOIN replaces the per-peer N+1 listMissionEvents loop. The shared util
+    // returns up to perRunLimit shell-command events per peer run, so very long missions
+    // surface their tail without dragging the whole table into memory.
+    const allEvents = memoryDb.listMissionEventsByProjectKey({
+      projectKey: run.projectKey,
+      runStatus: "done",
+      eventTypes: ["attempt-shell-command"],
+      perRunLimit: 500,
+    });
     const existingProfiles = memoryDb.listValidationProfiles({
       projectKey: run.projectKey,
       repoRelativePaths: run.worktrees.map((worktree) => worktree.repoRelativePath),
@@ -3738,6 +3721,7 @@ export class TicketRunService {
       existingProfiles,
       threshold: DEFAULT_VALIDATION_CANDIDATE_THRESHOLD,
     });
+    const autoPromotionThreshold = this.options.validationProfileAutoPromotionThreshold ?? 5;
     for (const candidate of candidates) {
       this.recordMissionEvent(run, "system", "validation-profile-candidate-observed", {
         candidateId: candidate.candidateId,
@@ -3748,11 +3732,51 @@ export class TicketRunService {
         workingDirectory: candidate.workingDirectory,
         successCount: candidate.successCount,
       });
+      if (
+        this.options.autoPromoteValidationProfiles !== false &&
+        candidate.successCount >= autoPromotionThreshold &&
+        candidate.projectKey
+      ) {
+        try {
+          const promoted = memoryDb.upsertValidationProfile({
+            id: candidate.candidateId,
+            projectKey: candidate.projectKey,
+            repoRelativePath: candidate.repoRelativePath,
+            label: `Auto: ${candidate.kind} (${candidate.command})`,
+            kind: candidate.kind,
+            command: candidate.command,
+            workingDirectory: candidate.workingDirectory,
+            confidence: 0.7,
+            expectedRuntimeMs: candidate.observedRuntimeMs,
+            lastObservedRuntimeMs: candidate.observedRuntimeMs,
+            // Schema lacks a "learned" source enum; "user" matches the operator-curated
+            // bucket so the editor still allows hand-edits without a migration.
+            source: "user",
+          });
+          this.recordMissionEvent(run, "system", "validation-profile-auto-promoted", {
+            candidateId: candidate.candidateId,
+            profileId: promoted.id,
+            projectKey: candidate.projectKey,
+            repoRelativePath: candidate.repoRelativePath,
+            kind: candidate.kind,
+            command: candidate.command,
+            workingDirectory: candidate.workingDirectory,
+            successCount: candidate.successCount,
+            threshold: autoPromotionThreshold,
+            formulaVersion: PROMOTION_FORMULA_VERSION,
+          });
+        } catch (error) {
+          this.options.logger.warn(
+            { err: error, candidateId: candidate.candidateId },
+            "Validation-profile auto-promotion failed",
+          );
+        }
+      }
     }
   }
 
   /**
-   * Phase 5.4 — auto-promote any pending learned candidate whose confidence now clears its
+   * auto-promote any pending learned candidate whose confidence now clears its
    * per-type threshold. Promotion is `setRepoIntelligenceApproval(id, true)` plus a tag
    * update so the contributing-run set is preserved on the entry itself; revocations
    * (handled elsewhere) refuse to re-promote on the same evidence.

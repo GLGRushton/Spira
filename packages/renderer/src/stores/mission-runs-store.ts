@@ -6,8 +6,8 @@ const EMPTY_RUN_SNAPSHOT: TicketRunSnapshot = {
 };
 
 /**
- * Phase 1.1 — live mission event buffer per run. Bounded so the store stays small;
- * the controller's existing on-demand timeline fetch is the cold path for full history.
+ * Live mission event buffer per run. Bounded so the store stays small;
+ * The controller's existing on-demand timeline fetch is the cold path for full history.
  */
 const LIVE_EVENT_BUFFER_LIMIT = 20;
 
@@ -24,13 +24,13 @@ interface MissionRunsStore {
   liveEventsByRun: Record<string, TicketRunMissionEventSummary[]>;
   setSnapshot: (snapshot: TicketRunSnapshot) => void;
   /**
-   * Phase 0.3 — apply a per-run delta to the existing snapshot.
+   * apply a per-run delta to the existing snapshot.
    * Replaces the run with the matching ID; appends if missing. Either way,
    * keeps every other run in place so the renderer doesn't re-render the world.
    */
   setRun: (run: TicketRunSummary) => void;
   /**
-   * Phase 1.1 — buffer a live mission event into the per-run rolling list.
+   * buffer a live mission event into the per-run rolling list.
    */
   pushLiveEvent: (event: TicketRunMissionEventSummary) => void;
   refresh: () => Promise<void>;

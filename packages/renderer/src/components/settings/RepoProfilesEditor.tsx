@@ -4,6 +4,7 @@ import type {
   UpsertMissionRepoProfileInput,
 } from "@spira/shared";
 import { useEffect, useMemo, useState } from "react";
+import { useNavigationStore } from "../../stores/navigation-store.js";
 import projectStyles from "../projects/ProjectsPanel/ProjectsPanel.module.css";
 import { splitList } from "./admin-form-helpers.js";
 import styles from "./ProofRulesEditor.module.css";
@@ -69,7 +70,7 @@ const profileToDraft = (profile: MissionRepoProfileRecord): DraftProfile => ({
 });
 
 /**
- * Phase 3.2 / 3.3 — Repo profiles admin pane.
+ * Repo profiles admin pane.
  *
  * One row per `projectKey`. The editor doubles as the onboarding wizard from §3.2 — a fresh
  * "Add profile" form with `projectKey` empty captures everything an operator might want to
@@ -102,6 +103,16 @@ export function RepoProfilesEditor() {
   useEffect(() => {
     void loadProfiles();
   }, []);
+
+  // Honour the onboarding banner's pre-fill request: if MissionDetailsRoom navigated us
+  // here with a projectKey hint, drop it into the draft so the operator can fill the rest.
+  const consumeRepoProfilePrefill = useNavigationStore((store) => store.consumeRepoProfilePrefill);
+  useEffect(() => {
+    const prefill = consumeRepoProfilePrefill();
+    if (prefill) {
+      setDraft({ ...EMPTY_DRAFT, projectKey: prefill });
+    }
+  }, [consumeRepoProfilePrefill]);
 
   const sortedProfiles = useMemo(
     () =>
@@ -163,6 +174,59 @@ export function RepoProfilesEditor() {
     }
   };
 
+  const handleExport = () => {
+    const payload = {
+      kind: "spira-repo-profiles",
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      profiles: snapshot.profiles.filter((profile) => profile.source !== "builtin"),
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `spira-repo-profiles-${new Date().toISOString().split("T")[0]}.json`;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleImport = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    setError(null);
+    setNotice(null);
+    try {
+      const text = await file.text();
+      const parsed = JSON.parse(text) as { profiles?: Array<MissionRepoProfileRecord> };
+      const incoming = Array.isArray(parsed.profiles) ? parsed.profiles : [];
+      if (incoming.length === 0) {
+        throw new Error("Import file contained no profiles.");
+      }
+      let next = snapshot;
+      for (const profile of incoming) {
+        next = await window.electronAPI.upsertMissionRepoProfile({
+          projectKey: profile.projectKey,
+          displayName: profile.displayName,
+          description: profile.description,
+          defaultBranch: profile.defaultBranch,
+          defaultBuildWorkingDirectory: profile.defaultBuildWorkingDirectory,
+          defaultRegistry: profile.defaultRegistry,
+          registryHints: profile.registryHints,
+          requiredEnvVars: profile.requiredEnvVars,
+          requiredSdks: profile.requiredSdks,
+          userFacingCopyGlobs: profile.userFacingCopyGlobs,
+          uiTestGlobs: profile.uiTestGlobs,
+          notes: profile.notes,
+        });
+      }
+      setSnapshot(next);
+      setNotice(`Imported ${incoming.length} profile${incoming.length === 1 ? "" : "s"}.`);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Failed to import repo profiles.");
+    }
+  };
+
   const submitDisabled = isSaving || draft.projectKey.trim().length === 0 || draft.displayName.trim().length === 0;
 
   return (
@@ -176,14 +240,33 @@ export function RepoProfilesEditor() {
             re-used across every mission for the project.
           </p>
         </div>
-        <button
-          type="button"
-          className={projectStyles.secondaryButton}
-          onClick={() => void loadProfiles()}
-          disabled={isLoading}
-        >
-          {isLoading ? "Refreshing…" : "Refresh"}
-        </button>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <button
+            type="button"
+            className={projectStyles.secondaryButton}
+            onClick={() => void loadProfiles()}
+            disabled={isLoading}
+          >
+            {isLoading ? "Refreshing…" : "Refresh"}
+          </button>
+          <button
+            type="button"
+            className={projectStyles.secondaryButton}
+            onClick={handleExport}
+            disabled={snapshot.profiles.length === 0}
+          >
+            Export user profiles (JSON)
+          </button>
+          <label className={projectStyles.secondaryButton} style={{ cursor: "pointer" }}>
+            Import JSON
+            <input
+              type="file"
+              accept="application/json"
+              style={{ display: "none" }}
+              onChange={(event) => void handleImport(event)}
+            />
+          </label>
+        </div>
       </header>
 
       {error ? <div className={projectStyles.error}>{error}</div> : null}

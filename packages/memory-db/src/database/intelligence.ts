@@ -562,7 +562,7 @@ export const createIntelligencePersistence = (context: DatabasePersistenceContex
   };
 
   /**
-   * Phase 2.5 — delete a single proof rule by id. Returns true if a row was removed.
+   * delete a single proof rule by id. Returns true if a row was removed.
    * Caller is responsible for any policy checks (e.g. "don't delete builtins") — this is
    * intentionally permissive so the editor UI can also recover from accidentally-orphaned
    * records.
@@ -662,7 +662,7 @@ export const createIntelligencePersistence = (context: DatabasePersistenceContex
   };
 
   /**
-   * Phase 3.4 — delete a validation profile by id. Returns true if a row was removed.
+   * delete a validation profile by id. Returns true if a row was removed.
    */
   const deleteValidationProfile = (profileId: string): boolean => {
     assertDatabaseWritable(context);
@@ -673,7 +673,7 @@ export const createIntelligencePersistence = (context: DatabasePersistenceContex
   };
 
   /**
-   * Phase 4.1 — record an observed runtime against a validation profile (e.g. from
+   * record an observed runtime against a validation profile (e.g. from
    * dependency warming). Updates only `last_observed_runtime_ms` and `updated_at`; the
    * existing rolling-average semantics (Phase 5 work) can layer on top later. Returns
    * true if a row was updated.
@@ -689,7 +689,7 @@ export const createIntelligencePersistence = (context: DatabasePersistenceContex
     return result.changes > 0;
   };
 
-  // ─── Phase 3.1 — repo_profiles CRUD ────────────────────────────────────────────────
+  // ─── repo_profiles CRUD ────────────────────────────────────────────────
   // Per-projectKey "what is this repo" record. Singleton per projectKey (PK), so we use
   // upsert + delete + list/get rather than a scoped-list pattern.
 
@@ -829,18 +829,38 @@ export const createIntelligencePersistence = (context: DatabasePersistenceContex
   };
 
   /**
-   * Phase 7.2 — bulk-upsert builtin repo profiles. Skips overwriting an existing user
+   * bulk-upsert builtin repo profiles. Skips overwriting an existing user
    * profile for the same projectKey: the seed only fires when the row is missing or its
    * source is already "builtin" (so a re-seed across upgrades doesn't trample operator edits).
+   *
+   * Uses a single SELECT IN(...) to pre-fetch every projectKey we're about to consider,
+   * so the per-item N+1 collapses to one query before the transaction starts.
    */
   const seedBuiltinRepoProfiles = (
     profiles: readonly Omit<UpsertRepoProfileInput, "source">[],
   ): RepoProfileRecord[] => {
     assertDatabaseWritable(context);
+    if (profiles.length === 0) return [];
+    const projectKeys = profiles
+      .map((profile) => profile.projectKey.trim())
+      .filter((key) => key.length > 0);
+    const placeholders = projectKeys.map((_, index) => `@key${index}`).join(", ");
+    const params: Record<string, string> = {};
+    projectKeys.forEach((key, index) => {
+      params[`key${index}`] = key;
+    });
+    const existingRows = projectKeys.length === 0
+      ? []
+      : (context.db
+          .prepare(`${REPO_PROFILE_SELECT} WHERE project_key IN (${placeholders})`)
+          .all(params) as unknown as RepoProfileRow[]);
+    const existingByKey = new Map(
+      existingRows.map((row) => [row.projectKey, mapRepoProfileRow(row)] as const),
+    );
     const seed = context.db.transaction((items: readonly Omit<UpsertRepoProfileInput, "source">[]) => {
       const results: RepoProfileRecord[] = [];
       for (const item of items) {
-        const existing = getRepoProfile(item.projectKey);
+        const existing = existingByKey.get(item.projectKey.trim());
         if (existing && existing.source !== "builtin") {
           results.push(existing);
           continue;

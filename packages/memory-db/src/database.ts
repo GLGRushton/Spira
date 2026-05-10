@@ -416,7 +416,7 @@ export class SpiraMemoryDatabase {
     return this.intelligence.upsertProofDecision(input);
   }
 
-  // Phase 3.1 — repo profiles CRUD.
+  // repo profiles CRUD.
   getRepoProfile(projectKey: string): RepoProfileRecord | null {
     return this.intelligence.getRepoProfile(projectKey);
   }
@@ -448,6 +448,45 @@ export class SpiraMemoryDatabase {
     optionsOrLimit: number | { beforeId?: number | null; limit?: number } = 50,
   ): MissionEventRecord[] {
     return this.missions.listMissionEvents(runId, optionsOrLimit);
+  }
+
+  listMissionEventsByProjectKey(input: {
+    projectKey: string;
+    runStatus: string;
+    eventTypes: readonly string[];
+    perRunLimit?: number;
+  }): MissionEventRecord[] {
+    return this.missions.listMissionEventsByProjectKey(input);
+  }
+
+  /** Cross-project event lookup filtered only by event_type. Used by the audit feed. */
+  listMissionEventsByEventType(input: {
+    eventTypes: readonly string[];
+    limit?: number;
+  }): MissionEventRecord[] {
+    return this.missions.listMissionEventsByEventType(input);
+  }
+
+  /** Window-scoped cross-mission events for the weekly digest. Single SQL replaces N+1. */
+  listMissionEventsForRunWindow(input: {
+    runStatus: string;
+    windowStartMs: number;
+    windowEndMs: number;
+    perRunLimit?: number;
+  }): MissionEventRecord[] {
+    return this.missions.listMissionEventsForRunWindow(input);
+  }
+
+  /**
+   * Delete mission_events with occurred_at < cutoffMs. Returns rows removed.
+   * Wire to a daily job in the backend; the DB module never deletes on its own.
+   */
+  deleteMissionEventsOlderThan(cutoffMs: number): number {
+    return this.missions.deleteMissionEventsOlderThan(cutoffMs);
+  }
+
+  deleteWorkSessionEventsOlderThan(cutoffMs: number): number {
+    return this.workSessionEvents.deleteWorkSessionEventsOlderThan(cutoffMs);
   }
 
   appendWorkSessionEvent(input: AppendWorkSessionEventInput): WorkSessionEventRecord {

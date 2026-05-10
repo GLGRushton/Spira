@@ -17,7 +17,7 @@ const buildRun = (overrides: Partial<TicketRunSummary> = {}): TicketRunSummary =
   ticketId: "SPI-1",
   ticketSummary: "Warm me",
   ticketUrl: "https://example.test/SPI-1",
-  projectKey: "Spira",
+  projectKey: "SPI",
   status: "starting",
   statusMessage: null,
   commitMessageDraft: null,
@@ -63,7 +63,7 @@ const buildRun = (overrides: Partial<TicketRunSummary> = {}): TicketRunSummary =
 
 const buildRestoreProfile = (overrides: Partial<ValidationProfileRecord> = {}): ValidationProfileRecord => ({
   id: "global-spira-clientapp-restore",
-  projectKey: "Spira",
+  projectKey: "SPI",
   repoRelativePath: "ClientApp",
   label: "Spira ClientApp restore",
   kind: "restore",

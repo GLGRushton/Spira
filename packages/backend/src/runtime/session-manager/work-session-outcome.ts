@@ -1,4 +1,4 @@
-import type { WorkSessionSnapshot } from "@spira/shared";
+import type { OutcomeKind, WorkSessionSnapshot } from "@spira/shared";
 
 /**
  * Outcome classifier for WorkSession closes. Mirrors the mission outcome classifier
@@ -17,7 +17,7 @@ import type { WorkSessionSnapshot } from "@spira/shared";
  *                           `stalledReason` is currently in effect.
  */
 
-export type WorkSessionOutcomeKind = "clean-pass" | "pass-with-friction" | "fail-with-recovery" | "fail-final";
+export type WorkSessionOutcomeKind = OutcomeKind;
 
 export interface WorkSessionOutcomeClassification {
   kind: WorkSessionOutcomeKind;

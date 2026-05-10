@@ -476,22 +476,29 @@ export class StationSessionManager {
       const outcome = classifyWorkSessionOutcome(closingSnapshot, { everStalled });
       const reachedReadyForReview =
         outcome.kind === "clean-pass" || outcome.kind === "pass-with-friction";
-      writeWorkSessionClosed(
-        this.memoryDb,
-        closingSnapshot,
-        { completed: reachedReadyForReview, outcome: outcome.kind, reason: outcome.reason },
-        (error) =>
+      // Write the post-mortem first, then carry its on-disk path into the close event so a
+      // future viewer can locate the report without re-deriving the filename. Async write
+      // is small markdown; the chain extends close latency by a single fs.write.
+      void writeWorkSessionPostmortem(this.memoryDb, closingSnapshot, outcome)
+        .catch((error) => {
           logger.warn(
             { err: error, sessionId: closingSnapshot.sessionId },
-            "Failed to write WorkSession close telemetry; continuing",
-          ),
-      );
-      void writeWorkSessionPostmortem(this.memoryDb, closingSnapshot, outcome).catch((error) =>
-        logger.warn(
-          { err: error, sessionId: closingSnapshot.sessionId },
-          "Failed to write WorkSession post-mortem; continuing",
-        ),
-      );
+            "Failed to write WorkSession post-mortem; continuing",
+          );
+          return null;
+        })
+        .then((postmortemPath) => {
+          writeWorkSessionClosed(
+            this.memoryDb,
+            closingSnapshot,
+            { completed: reachedReadyForReview, outcome: outcome.kind, reason: outcome.reason, postmortemPath },
+            (error) =>
+              logger.warn(
+                { err: error, sessionId: closingSnapshot.sessionId },
+                "Failed to write WorkSession close telemetry; continuing",
+              ),
+          );
+        });
     } catch (error) {
       logger.warn(
         { err: error, sessionId: closingSnapshot.sessionId },
@@ -1932,7 +1939,7 @@ export class StationSessionManager {
   }
 
   /**
-   * Phase 1.1 — forward live attempt activity into mission_events when the
+   * forward live attempt activity into mission_events when the
    * station is bound to a mission run. Looks up the latest live attempt and
    * appends a typed event. No-op when the station is not mission-bound or the
    * memoryDb / run / attempt is missing.
@@ -2328,7 +2335,7 @@ export class StationSessionManager {
           startEvent.data.toolName,
           startEvent.data.arguments ?? {},
         );
-        // Phase 1.1 — emit a "now playing" mission event for shell-like tools so long-running
+        // emit a "now playing" mission event for shell-like tools so long-running
         // commands give the operator a visible signal before they complete. Other tools wait
         // for completion to keep volume sane.
         if (StationSessionManager.SHELL_LIKE_TOOL_NAMES.has(startEvent.data.toolName)) {
@@ -2397,7 +2404,7 @@ export class StationSessionManager {
           occurredAt,
         });
         this.bus.emit("assistant:tool-result", completeEvent.data.toolCallId, completeEvent.data.result ?? null);
-        // Phase 1.1 — record completion as a mission timeline event so post-mortem and
+        // record completion as a mission timeline event so post-mortem and
         // "now playing" surfaces have a canonical record of what the agent just did.
         {
           const latestAttempt = this.getLatestMissionAttempt();
@@ -2855,7 +2862,7 @@ export class StationSessionManager {
         this.noteTurnActivity();
         this.bus.emit("assistant:permission-request", permissionPayload);
         this.runtimeStore.persistPermissionRequest(permissionPayload);
-        // Phase 1.1 — surface permission gating in the mission timeline so a long pause
+        // surface permission gating in the mission timeline so a long pause
         // for approval is visible in "now playing" rather than looking like a stall.
         {
           const latestAttempt = this.getLatestMissionAttempt();
@@ -2875,7 +2882,7 @@ export class StationSessionManager {
         this.applyWorkSessionApprovalOutcome(status);
         this.syncRuntimeState();
         this.bus.emit("assistant:permission-complete", requestId, status);
-        // Phase 1.1 — close the loop on the awaiting-permission event so the timeline
+        // close the loop on the awaiting-permission event so the timeline
         // shows the resolution and the post-mortem can compute "time spent on approval".
         {
           const latestAttempt = this.getLatestMissionAttempt();

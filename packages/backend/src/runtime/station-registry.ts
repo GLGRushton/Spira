@@ -859,7 +859,7 @@ export class StationRegistry {
       register("subagent:lock-released", (event) => {
         this.options.transport.send({ type: "subagent:lock-released", event, stationId: station.stationId });
       }),
-      // Phase 1.1 — relay mission attempt events recorded by SessionManager up to the renderer.
+      // relay mission attempt events recorded by SessionManager up to the renderer.
       // The renderer prepends each event to its per-run timeline buffer (Phase 1.2 / 1.3).
       register("missions:run-event-recorded", (event) => {
         this.options.transport.send({ type: "missions:run-event:recorded", event });

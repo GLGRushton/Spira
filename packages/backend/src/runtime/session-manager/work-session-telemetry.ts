@@ -2,7 +2,7 @@ import type { SpiraMemoryDatabase } from "@spira/memory-db";
 import type { WorkSessionPhase, WorkSessionSnapshot, WorkSessionEventType } from "@spira/shared";
 
 /**
- * Phase 7.1 — diff two consecutive WorkSession snapshots and emit typed events for the
+ * Diff two consecutive WorkSession snapshots and emit typed events for the
  * transitions. Pure function on inputs; returns the events the caller should write.
  *
  * Detection rules:
@@ -148,7 +148,7 @@ export const writeWorkSessionTelemetry = (
 export const writeWorkSessionClosed = (
   memoryDb: SpiraMemoryDatabase | null,
   snapshot: WorkSessionSnapshot,
-  outcome: { completed: boolean; outcome: string; reason: string | null },
+  outcome: { completed: boolean; outcome: string; reason: string | null; postmortemPath: string | null },
   onError?: (error: unknown) => void,
 ): void => {
   if (!memoryDb) return;
@@ -162,6 +162,7 @@ export const writeWorkSessionClosed = (
         completed: outcome.completed,
         outcome: outcome.outcome,
         reason: outcome.reason,
+        postmortemPath: outcome.postmortemPath,
       },
       occurredAt: snapshot.completedAt ?? Date.now(),
     });
