@@ -282,6 +282,7 @@ export const createMissionPersistence = (context: DatabasePersistenceContext) =>
             classification_json AS classificationJson,
             plan_json AS planJson,
             summary_json AS summaryJson,
+            previous_pass_context_json AS previousPassContextJson,
             proof_status AS proofStatus,
             last_proof_run_id AS lastProofRunId,
             last_proof_profile_id AS lastProofProfileId,
@@ -1310,6 +1311,49 @@ export const createMissionPersistence = (context: DatabasePersistenceContext) =>
   };
 
   /**
+   * For a given repo_intelligence_entries id, return one (runId, ticketId, occurredAt)
+   * tuple per distinct mission whose prompt-builder injected that entry. Filter pushdown:
+   * SQLite's `json_each` traverses the metadata's `repoIntelligenceEntryIds` array so we
+   * never load events that don't reference the target id. Combined with the v33 covering
+   * index on `(event_type, run_id)`, this is O(matching rows) instead of O(table scan).
+   */
+  const listRepoIntelligenceUsage = (entryId: string): Array<{
+    runId: string;
+    ticketId: string;
+    occurredAt: number;
+  }> => {
+    if (!entryId) return [];
+    const sql = `
+      SELECT
+        e.run_id AS runId,
+        e.occurred_at AS occurredAt,
+        r.ticket_id AS ticketId
+      FROM mission_events e
+      INNER JOIN ticket_runs r ON r.run_id = e.run_id
+      WHERE e.event_type = 'repo-guidance-injected'
+        AND EXISTS (
+          SELECT 1 FROM json_each(json_extract(e.metadata_json, '$.repoIntelligenceEntryIds'))
+          WHERE value = @entryId
+        )
+      ORDER BY e.occurred_at DESC, e.id DESC
+    `;
+    const rows = context.db.prepare(sql).all({ entryId }) as Array<{
+      runId: string;
+      occurredAt: number;
+      ticketId: string;
+    }>;
+    const usage: Array<{ runId: string; ticketId: string; occurredAt: number }> = [];
+    const seenRunIds = new Set<string>();
+    for (const row of rows) {
+      // Dedup by runId so the badge counts distinct missions, not attempts.
+      if (seenRunIds.has(row.runId)) continue;
+      seenRunIds.add(row.runId);
+      usage.push({ runId: row.runId, ticketId: row.ticketId, occurredAt: row.occurredAt });
+    }
+    return usage;
+  };
+
+  /**
    * Cross-mission events for runs whose `updated_at` falls inside [windowStartMs, windowEndMs]
    * with the given status. Used by the weekly-digest generator so a window of closed runs +
    * their events comes back in two queries instead of N+1.
@@ -1404,6 +1448,7 @@ export const createMissionPersistence = (context: DatabasePersistenceContext) =>
     listMissionEventsByProjectKey,
     listMissionEventsByEventType,
     listMissionEventsForRunWindow,
+    listRepoIntelligenceUsage,
     listTicketRuns,
     getTicketRun,
     getTicketRunByTicketId,

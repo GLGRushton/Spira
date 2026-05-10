@@ -179,6 +179,13 @@ class ClaudeAgentProviderSession implements ProviderSession {
   private disconnected = false;
   private readonly hostMessages: ProviderHostContinuityMessage[] = [];
   private hasInitiatedSdkSession: boolean;
+  /**
+   * Tracks the last model the SDK reported for an assistant turn. We compare against
+   * `currentModel` to detect the post-compaction "stuck on Haiku" SDK bug — after a
+   * compact_boundary event the SDK can silently keep using the compactor model
+   * instead of the configured one. When we detect drift we re-pin via setModel.
+   */
+  private lastReportedModel: string | null = null;
 
   constructor(
     public readonly sessionId: string,
@@ -305,6 +312,16 @@ class ClaudeAgentProviderSession implements ProviderSession {
     switch (message.type) {
       case "assistant": {
         const assistant = message;
+        // SDK bug workaround: track the per-turn model the SDK reports and re-pin if it
+        // drifted away from `currentModel`. This catches cases where compact_boundary
+        // either wasn't fired or fired before our setModel could land.
+        const reportedModel = (assistant.message as { model?: string } | undefined)?.model ?? null;
+        if (reportedModel) {
+          this.lastReportedModel = reportedModel;
+          if (this.currentModel && reportedModel !== this.currentModel) {
+            this.repinModelIfDrifted("assistant-drift", reportedModel);
+          }
+        }
         const text = collectAssistantText(assistant);
         const toolUses = collectAssistantToolUses(assistant);
         const messageId = assistant.uuid;
@@ -423,6 +440,26 @@ class ClaudeAgentProviderSession implements ProviderSession {
             },
             "Claude Agent session initialized",
           );
+        } else if (message.subtype === "compact_boundary") {
+          // SDK bug workaround: after auto-compaction the SDK can silently keep using
+          // the compactor model (Haiku) for subsequent turns instead of the configured
+          // main model. Re-pin the model immediately so the resumed turn lands on Opus
+          // again. The setModel call only takes effect while a query is active, so we
+          // also defensively re-check on the next assistant message (see below).
+          const meta = (message as { compact_metadata?: { trigger?: string; pre_tokens?: number; post_tokens?: number } })
+            .compact_metadata;
+          this.logger.info(
+            {
+              providerId: "claude-agent",
+              sessionId: this.sessionId,
+              configuredModel: this.currentModel,
+              trigger: meta?.trigger ?? null,
+              preTokens: meta?.pre_tokens ?? null,
+              postTokens: meta?.post_tokens ?? null,
+            },
+            "Claude Agent session compacted; re-pinning configured model",
+          );
+          this.repinModelIfDrifted("compact_boundary");
         }
         return;
       }
@@ -459,6 +496,45 @@ class ClaudeAgentProviderSession implements ProviderSession {
     this.currentModel = trimmed;
     this.publishHostContinuity();
     return this.activeQuery ? this.activeQuery.setModel(trimmed) : Promise.resolve();
+  }
+
+  /**
+   * Re-pins the configured model on the active SDK query when we detect drift.
+   * Used to work around the Claude Agent SDK bug where a compact_boundary event
+   * leaves the session running on the compactor model (Haiku) for subsequent
+   * turns instead of returning to the configured main model.
+   *
+   * Best-effort; if there's no active query or the SDK rejects the call, we log
+   * and move on — the next turn will retry via the same drift detection.
+   */
+  private repinModelIfDrifted(reason: "compact_boundary" | "assistant-drift", reportedModel?: string): void {
+    if (!this.currentModel) {
+      return;
+    }
+    if (!this.activeQuery) {
+      return;
+    }
+    this.logger.warn(
+      {
+        providerId: "claude-agent",
+        sessionId: this.sessionId,
+        reason,
+        configuredModel: this.currentModel,
+        reportedModel: reportedModel ?? this.lastReportedModel,
+      },
+      "Re-pinning Claude Agent model after detected drift",
+    );
+    void this.activeQuery.setModel(this.currentModel).catch((error) => {
+      this.logger.warn(
+        {
+          providerId: "claude-agent",
+          sessionId: this.sessionId,
+          reason,
+          err: error,
+        },
+        "Failed to re-pin Claude Agent model; the next turn will retry",
+      );
+    });
   }
 
   async abort(): Promise<void> {

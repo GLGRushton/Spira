@@ -23,6 +23,8 @@ import {
 } from "./mission-timeline-grouping.js";
 import { ManualReviewPanel } from "./ManualReviewPanel.js";
 import { AbortMissionPanel } from "./AbortMissionPanel.js";
+import { MissionCloseLearningPanel } from "./MissionCloseLearningPanel.js";
+import { MissionGuidanceAppliedPanel } from "./MissionGuidanceAppliedPanel.js";
 import { MissionPermissionBanner } from "./MissionPermissionBanner.js";
 import { RepoProfileOnboardingBanner } from "./RepoProfileOnboardingBanner.js";
 import { NowPlayingStrip } from "./NowPlayingStrip.js";
@@ -806,6 +808,8 @@ export function MissionDetailsRoom({ run, controller }: MissionDetailsRoomProps)
 
       <MissionPermissionBanner run={run} />
       <RepoProfileOnboardingBanner run={run} />
+      <MissionCloseLearningPanel run={run} />
+      <MissionGuidanceAppliedPanel run={run} controller={controller} />
       <NowPlayingStrip runId={run.runId} phaseBudget={controller.phaseBudget} currentPhase={run.missionPhase} />
 
       <article className={styles.surface}>

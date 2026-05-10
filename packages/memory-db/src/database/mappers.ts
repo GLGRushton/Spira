@@ -32,6 +32,9 @@ import {
   assertRuntimeHostResourceStatus,
   assertRuntimePermissionRequestStatus,
   assertSubagentSource,
+  assertRepoProfileTrustLearnerMode,
+  assertValidationProfileScope,
+  assertValidationProfileSource,
   assertTicketRunAttemptStatus,
   assertTicketRunCleanupState,
   assertTicketRunMissionClassificationKind,
@@ -321,11 +324,13 @@ export const mapRepoIntelligenceRow = (row: RepoIntelligenceRow): RepoIntelligen
 
 export const mapValidationProfileRow = (row: ValidationProfileRow): ValidationProfileRecord => {
   assertValidationProfileKind(row.kind);
-  assertMcpServerSource(row.source);
+  assertValidationProfileSource(row.source);
+  assertValidationProfileScope(row.scope);
   return {
     id: String(row.id),
     projectKey: row.projectKey === null ? null : String(row.projectKey),
     repoRelativePath: row.repoRelativePath === null ? null : String(row.repoRelativePath),
+    scope: row.scope,
     label: String(row.label),
     kind: row.kind,
     command: String(row.command),
@@ -353,8 +358,12 @@ function assertRepoProfileSource(value: string): asserts value is RepoIntelligen
 
 export const mapRepoProfileRow = (row: RepoProfileRow): RepoProfileRecord => {
   assertRepoProfileSource(row.source);
+  const trustMode = row.trustLearnerMode ?? "manual-review";
+  assertRepoProfileTrustLearnerMode(trustMode);
   return {
     projectKey: String(row.projectKey),
+    // Schema is NOT NULL DEFAULT ''; the row type matches. Direct String() round-trip.
+    repoRelativePath: String(row.repoRelativePath),
     displayName: String(row.displayName),
     description: row.description === null ? null : String(row.description),
     defaultBranch: row.defaultBranch === null ? null : String(row.defaultBranch),
@@ -368,6 +377,7 @@ export const mapRepoProfileRow = (row: RepoProfileRow): RepoProfileRecord => {
     uiTestGlobs: parseStringArray(row.uiTestGlobsJson),
     notes: row.notes === null ? null : String(row.notes),
     source: row.source,
+    trustLearnerMode: trustMode,
     createdAt: Number(row.createdAt),
     updatedAt: Number(row.updatedAt),
   };

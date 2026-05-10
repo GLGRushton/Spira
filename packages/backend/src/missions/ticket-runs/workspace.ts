@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { TicketRunSummary } from "@spira/shared";
+import type { TicketRunPreviousPassContext, TicketRunSummary } from "@spira/shared";
 import { MAX_BRANCH_NAME_LENGTH, MAX_SLUG_LENGTH, WORKTREE_DIRECTORY_NAME } from "./constants.js";
 
 const slugify = (value: string, maxLength: number): string => {
@@ -80,3 +80,59 @@ export const describeTicketRunWorkspace = (worktrees: ReadonlyArray<TicketRunSum
 
 export const formatTicketRunWorktreeList = (worktrees: ReadonlyArray<TicketRunSummary["worktrees"][number]>): string =>
   worktrees.map((worktree) => `- ${worktree.repoRelativePath}: ${worktree.worktreePath}`).join("\n");
+
+/**
+ * Compact, prompt-friendly snapshot of the last completed pass. Surfaces the artifact paths,
+ * touched files, validation/proof commands, and proof artifact paths that the next pass
+ * would otherwise have to re-discover via grep/glob — eliminating the most common cause of
+ * runaway implement-phase exploration on follow-up passes.
+ *
+ * Returns null when no prior pass context is available.
+ */
+export const formatPreviousPassContextSection = (
+  context: TicketRunPreviousPassContext | null,
+): string | null => {
+  if (!context) {
+    return null;
+  }
+
+  const lines: string[] = [`Prior pass #${context.sequence} context (do not re-discover this — use it):`];
+
+  const summary = context.missionSummary;
+  if (summary) {
+    if (summary.completedWork) {
+      lines.push(`- Completed work: ${summary.completedWork}`);
+    }
+    if (summary.changedRepoRelativePaths.length > 0) {
+      lines.push(`- Files changed: ${summary.changedRepoRelativePaths.join(", ")}`);
+    }
+    if (summary.validationSummary) {
+      lines.push(`- Validation summary: ${summary.validationSummary}`);
+    }
+    if (summary.proofSummary) {
+      lines.push(`- Proof summary: ${summary.proofSummary}`);
+    }
+    if (summary.followUps.length > 0) {
+      lines.push(`- Follow-ups noted: ${summary.followUps.join("; ")}`);
+    }
+    if (summary.openQuestions.length > 0) {
+      lines.push(`- Open questions: ${summary.openQuestions.join("; ")}`);
+    }
+  }
+
+  if (context.proofStrategy) {
+    lines.push(`- Proof command: ${context.proofStrategy.command}`);
+  }
+
+  const artifactPaths = new Set<string>();
+  for (const validation of context.validations) {
+    for (const artifact of validation.artifacts) {
+      artifactPaths.add(artifact.path);
+    }
+  }
+  if (artifactPaths.size > 0) {
+    lines.push(`- Prior artifact paths: ${[...artifactPaths].join(", ")}`);
+  }
+
+  return lines.length > 1 ? lines.join("\n") : null;
+};

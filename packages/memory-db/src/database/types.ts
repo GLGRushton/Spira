@@ -423,10 +423,21 @@ export interface UpsertRepoIntelligenceInput {
   createdAt?: number;
 }
 
+/**
+ * Scope semantics for a validation profile:
+ *  - `global`: applies to every project (legacy NULL projectKey).
+ *  - `project`: applies only to the named project (legacy non-NULL projectKey).
+ *  - `shared-repo`: applies to any project whose `project_repo_mappings` includes this
+ *    `repoRelativePath`. Lets one `dotnet test` row cover LA / BILLS / LH for the shared
+ *    legapp_legapp-services repo without three duplicates.
+ */
+export type ValidationProfileScope = "global" | "project" | "shared-repo";
+
 export interface ValidationProfileRecord {
   id: string;
   projectKey: string | null;
   repoRelativePath: string | null;
+  scope: ValidationProfileScope;
   label: string;
   kind: ValidationProfileKind;
   command: string;
@@ -437,7 +448,7 @@ export interface ValidationProfileRecord {
   /** rolling-average observed runtime; populated by Phase 5's learning loop. */
   lastObservedRuntimeMs: number | null;
   prerequisites: string[];
-  source: "builtin" | "user";
+  source: "builtin" | "user" | "learned";
   createdAt: number;
   updatedAt: number;
 }
@@ -446,6 +457,8 @@ export interface UpsertValidationProfileInput {
   id: string;
   projectKey?: string | null;
   repoRelativePath?: string | null;
+  /** Defaults: `global` when projectKey is null, `project` otherwise. */
+  scope?: ValidationProfileScope;
   label: string;
   kind: ValidationProfileKind;
   command: string;
@@ -456,13 +469,33 @@ export interface UpsertValidationProfileInput {
   /** optional. Editor leaves it untouched on upsert; learner overwrites it. */
   lastObservedRuntimeMs?: number | null;
   prerequisites?: readonly string[];
-  source: "builtin" | "user";
+  source: "builtin" | "user" | "learned";
   createdAt?: number;
 }
 
-/** DB record for a per-project repo profile. */
+/**
+ * Sentinel value for the project-wide `repo_profiles` row (the default row that applies
+ * to every repo in a project unless a more specific row exists). Stored as the literal
+ * empty string in `repo_relative_path` so it round-trips through the schema without
+ * special-casing NULLs.
+ */
+export const PROJECT_WIDE_REPO_PATH = "" as const;
+
+/**
+ * Operator preference for how this project's close-screen learning panel behaves:
+ *  - `manual-review`: surface the panel; wait for one-click accept on sub-threshold candidates.
+ *  - `auto-accept-below-threshold`: skip the panel; silently promote everything the
+ *    learner would have surfaced for manual review.
+ *  - `paused`: halt all close-path observers entirely (no candidates accumulated, no
+ *    promotions fired). Useful during a project refactor where observations would be noise.
+ */
+export type RepoProfileTrustLearnerMode = "manual-review" | "auto-accept-below-threshold" | "paused";
+
+/** DB record for a per-project repo profile. Empty `repoRelativePath` is the project-wide default. */
 export interface RepoProfileRecord {
   projectKey: string;
+  /** Empty string ('') for the project-wide default; non-empty for per-repo overrides. */
+  repoRelativePath: string;
   displayName: string;
   description: string | null;
   defaultBranch: string | null;
@@ -475,12 +508,15 @@ export interface RepoProfileRecord {
   uiTestGlobs: string[];
   notes: string | null;
   source: "builtin" | "user" | "learned";
+  trustLearnerMode: RepoProfileTrustLearnerMode;
   createdAt: number;
   updatedAt: number;
 }
 
 export interface UpsertRepoProfileInput {
   projectKey: string;
+  /** Defaults to '' (project-wide) when omitted. */
+  repoRelativePath?: string;
   displayName: string;
   description?: string | null;
   defaultBranch?: string | null;
@@ -493,6 +529,7 @@ export interface UpsertRepoProfileInput {
   uiTestGlobs?: readonly string[];
   notes?: string | null;
   source?: "builtin" | "user" | "learned";
+  trustLearnerMode?: RepoProfileTrustLearnerMode;
   createdAt?: number;
 }
 

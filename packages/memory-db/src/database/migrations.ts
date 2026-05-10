@@ -1136,4 +1136,69 @@ export const MIGRATIONS: MigrationDefinition[] = [
       "CREATE INDEX idx_ticket_runs_status ON ticket_runs(status, updated_at DESC)",
     ],
   },
+  {
+    // v35 — re-key repo_profiles on (project_key, repo_relative_path) so multi-repo projects
+    // can carry per-repo overrides on top of a project-wide default. Existing rows migrate
+    // with repo_relative_path = '' (the project-wide fallback). Also adds
+    // validation_profiles.scope so a single profile row can express "applies to any project
+    // that includes this repo" (shared-repo case across LA / BILLS / LH).
+    version: 35,
+    statements: [
+      "ALTER TABLE repo_profiles RENAME TO repo_profiles_v34",
+      `CREATE TABLE repo_profiles (
+        project_key TEXT NOT NULL,
+        repo_relative_path TEXT NOT NULL DEFAULT '',
+        display_name TEXT NOT NULL,
+        description TEXT,
+        default_branch TEXT,
+        default_build_working_directory TEXT,
+        default_registry TEXT,
+        registry_hints_json TEXT NOT NULL DEFAULT '[]',
+        required_env_vars_json TEXT NOT NULL DEFAULT '[]',
+        required_sdks_json TEXT NOT NULL DEFAULT '[]',
+        user_facing_copy_globs_json TEXT NOT NULL DEFAULT '[]',
+        ui_test_globs_json TEXT NOT NULL DEFAULT '[]',
+        notes TEXT,
+        source TEXT NOT NULL CHECK(source IN ('builtin', 'user', 'learned')),
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (project_key, repo_relative_path)
+      )`,
+      `INSERT INTO repo_profiles (
+        project_key, repo_relative_path, display_name, description,
+        default_branch, default_build_working_directory, default_registry,
+        registry_hints_json, required_env_vars_json, required_sdks_json,
+        user_facing_copy_globs_json, ui_test_globs_json, notes, source,
+        created_at, updated_at
+      )
+      SELECT
+        project_key, '' AS repo_relative_path, display_name, description,
+        default_branch, default_build_working_directory, default_registry,
+        registry_hints_json, required_env_vars_json, required_sdks_json,
+        user_facing_copy_globs_json, ui_test_globs_json, notes, source,
+        created_at, updated_at
+      FROM repo_profiles_v34`,
+      "DROP TABLE repo_profiles_v34",
+      "CREATE INDEX idx_repo_profiles_project_v35 ON repo_profiles(project_key)",
+      // Re-create the v30 updated_at index that was dropped with the old table. The
+      // RepoProfilesService.list() path orders by updated_at DESC.
+      "CREATE INDEX idx_repo_profiles_updated_v35 ON repo_profiles(updated_at DESC)",
+      // J.3 — validation_profiles.scope. NULL legacy project_key → 'global', non-NULL → 'project'.
+      // Default exists only as a backfill safety net for the migration; every JS write path
+      // through upsertValidationProfile sets `scope` explicitly so the default never fires.
+      "ALTER TABLE validation_profiles ADD COLUMN scope TEXT NOT NULL DEFAULT 'project' CHECK(scope IN ('global', 'project', 'shared-repo'))",
+      "UPDATE validation_profiles SET scope = 'global' WHERE project_key IS NULL",
+    ],
+  },
+  {
+    // v36 — Batch M: per-project automation preference for the close-screen learning panel.
+    // `manual-review` (default) surfaces the panel and waits for one-click accepts on
+    // sub-threshold candidates. `auto-accept-below-threshold` skips the panel and silently
+    // promotes everything the threshold path would have flagged for review. `paused` halts
+    // all close-path observers entirely so the corpus doesn't accumulate during refactors.
+    version: 36,
+    statements: [
+      "ALTER TABLE repo_profiles ADD COLUMN trust_learner_mode TEXT NOT NULL DEFAULT 'manual-review' CHECK(trust_learner_mode IN ('manual-review', 'auto-accept-below-threshold', 'paused'))",
+    ],
+  },
 ];

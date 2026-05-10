@@ -57,6 +57,7 @@ const sampleRun = (): TicketRunSummary => ({
 
 const stubProfile = (overrides: Partial<RepoProfileRecord> = {}): RepoProfileRecord => ({
   projectKey: "alpha",
+  repoRelativePath: "",
   displayName: "Alpha",
   description: "An alpha project",
   defaultBranch: "main",
@@ -69,6 +70,7 @@ const stubProfile = (overrides: Partial<RepoProfileRecord> = {}): RepoProfileRec
   uiTestGlobs: [],
   notes: null,
   source: "user",
+  trustLearnerMode: "manual-review",
   createdAt: 1,
   updatedAt: 1,
   ...overrides,
@@ -97,6 +99,7 @@ const stubValidation = (
   id: "v-1",
   projectKey: "alpha",
   repoRelativePath: "apps/web",
+  scope: "project",
   label: "ClientApp build",
   kind: "build",
   command: "npm run build",
@@ -117,7 +120,7 @@ const stubMemoryDb = (): SpiraMemoryDatabase => ({}) as unknown as SpiraMemoryDa
 describe("buildRepoGuidanceSection (Phase 3.5)", () => {
   it("returns null when no profile, no intelligence, and no validations exist", () => {
     const section = buildRepoGuidanceSection(stubMemoryDb(), sampleRun(), {
-      fetchProfile: () => null,
+      fetchProjectProfiles: () => [],
       fetchIntelligence: () => [],
       fetchValidations: () => [],
     });
@@ -127,7 +130,7 @@ describe("buildRepoGuidanceSection (Phase 3.5)", () => {
   it("returns null when projectKey is empty", () => {
     const run = { ...sampleRun(), projectKey: "" };
     const section = buildRepoGuidanceSection(stubMemoryDb(), run, {
-      fetchProfile: () => stubProfile(),
+      fetchProjectProfiles: () => [stubProfile()],
       fetchIntelligence: () => [stubIntelligence()],
       fetchValidations: () => [stubValidation()],
     });
@@ -136,7 +139,7 @@ describe("buildRepoGuidanceSection (Phase 3.5)", () => {
 
   it("renders profile + briefings + pitfalls + validations in a stable section", () => {
     const section = buildRepoGuidanceSection(stubMemoryDb(), sampleRun(), {
-      fetchProfile: () => stubProfile(),
+      fetchProjectProfiles: () => [stubProfile()],
       fetchIntelligence: () => [
         stubIntelligence({ id: "b-1", type: "briefing", title: "Where copy lives" }),
         stubIntelligence({ id: "p-1", type: "pitfall", title: "Registry trap" }),
@@ -144,7 +147,7 @@ describe("buildRepoGuidanceSection (Phase 3.5)", () => {
       fetchValidations: () => [stubValidation()],
     });
     expect(section).not.toBeNull();
-    const text = section as string;
+    const text = section?.markdown ?? "";
     expect(text).toContain("## Repo guidance");
     expect(text).toContain("### Project alpha (Alpha)");
     expect(text).toContain("### Briefings");
@@ -166,11 +169,11 @@ describe("buildRepoGuidanceSection (Phase 3.5)", () => {
       stubValidation({ id: `v-${index}`, command: `cmd-${index}` }),
     );
     const section = buildRepoGuidanceSection(stubMemoryDb(), sampleRun(), {
-      fetchProfile: () => null,
+      fetchProjectProfiles: () => [],
       fetchIntelligence: () => [...briefings, ...pitfalls],
       fetchValidations: () => validations,
     });
-    const text = section as string;
+    const text = section?.markdown ?? "";
     // Briefing 0/1/2 should appear; Briefing 3 should not.
     expect(text).toContain("Briefing 0");
     expect(text).toContain("Briefing 2");
@@ -184,27 +187,27 @@ describe("buildRepoGuidanceSection (Phase 3.5)", () => {
 
   it("excludes unapproved intelligence entries even when they exist", () => {
     const section = buildRepoGuidanceSection(stubMemoryDb(), sampleRun(), {
-      fetchProfile: () => null,
+      fetchProjectProfiles: () => [],
       fetchIntelligence: () => [
         stubIntelligence({ id: "approved", title: "Approved", approved: true }),
         stubIntelligence({ id: "candidate", title: "Candidate", approved: false }),
       ],
       fetchValidations: () => [],
     });
-    const text = section as string;
+    const text = section?.markdown ?? "";
     expect(text).toContain("Approved");
     expect(text).not.toContain("Candidate");
   });
 
   it("uses lastObservedRuntimeMs over expectedRuntimeMs for the runtime hint", () => {
     const section = buildRepoGuidanceSection(stubMemoryDb(), sampleRun(), {
-      fetchProfile: () => null,
+      fetchProjectProfiles: () => [],
       fetchIntelligence: () => [],
       fetchValidations: () => [
         stubValidation({ expectedRuntimeMs: 90_000, lastObservedRuntimeMs: 30_000 }),
       ],
     });
-    const text = section as string;
+    const text = section?.markdown ?? "";
     expect(text).toContain("~30s");
     expect(text).not.toContain("~90s");
   });

@@ -11,6 +11,20 @@ export type { Env, McpServersFile } from "./config-schema.js";
 export type { ModelProviderId } from "./model-provider.js";
 export type { OutcomeKind } from "./outcome.js";
 export { outcomeLearningWeight } from "./outcome.js";
+export type {
+  LearningItemKind,
+  MissionLearningSummary,
+  PromotedLearningItem,
+  PromoteLearningCandidateKind,
+  ProposedLearningItem,
+  RepoProfileDraft,
+  ValidationProfileDraft,
+} from "./mission-learning.js";
+export {
+  LEARNING_ACCEPTANCE_TAG_PREFIX,
+  LEARNING_AUTOMATIC_ACCEPT_TAG,
+  LEARNING_MANUAL_ACCEPT_TAG,
+} from "./mission-learning.js";
 export type { DurationStyle } from "./duration-format.js";
 export { formatDuration, formatIsoTimestamp } from "./duration-format.js";
 export type { IntelligenceAuditEventInput } from "./intelligence-audit.js";
@@ -70,8 +84,10 @@ export type {
   MissionLearnedCandidateRecord,
   MissionLearnedCandidatesSnapshot,
   MissionRepoProfileRecord,
+  MissionRepoProfileTrustLearnerMode,
   MissionRepoProfilesSnapshot,
   MissionValidationProfileRecord,
+  MissionValidationProfileScope,
   MissionValidationProfilesSnapshot,
   RevokeMissionLearnedCandidateInput,
   UpsertMissionProofRuleInput,
@@ -144,6 +160,7 @@ export type {
   ClientMessage,
   ErrorPayload,
   IntelligenceAuditEvent,
+  RepoIntelligenceUsageRecord,
   PermissionRequestPayload,
   ServerMessage,
   StationId,

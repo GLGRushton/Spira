@@ -324,6 +324,47 @@ export const createMissionIpcHandlers = (getBridge: () => IpcBridgeHandle | null
     input?: { limit?: number },
   ) => requireBridge(getBridge()).listMissionIntelligenceAudit(input?.limit),
 
+  [IPC_CHANNELS.missions.learningSummaryGet]: async (
+    _event: IpcMainInvokeEvent,
+    input?: { runId?: string },
+  ) => requireBridge(getBridge()).getMissionLearningSummary(requireRunId(input?.runId)),
+
+  [IPC_CHANNELS.missions.learningPromoteCandidate]: async (
+    _event: IpcMainInvokeEvent,
+    input?: {
+      runId?: string;
+      candidateId?: string;
+      kind?: import("@spira/shared").PromoteLearningCandidateKind;
+    },
+  ) => {
+    const kind = input?.kind;
+    if (!kind) {
+      throw new Error("Candidate kind is required.");
+    }
+    return requireBridge(getBridge()).promoteMissionLearningCandidate({
+      runId: requireRunId(input?.runId),
+      candidateId: requireField(input?.candidateId, "Candidate id is required."),
+      kind,
+    });
+  },
+
+  [IPC_CHANNELS.missions.learningSkipCandidate]: async (
+    _event: IpcMainInvokeEvent,
+    input?: { runId?: string; candidateId?: string },
+  ) =>
+    requireBridge(getBridge()).skipMissionLearningCandidate({
+      runId: requireRunId(input?.runId),
+      candidateId: requireField(input?.candidateId, "Candidate id is required."),
+    }),
+
+  [IPC_CHANNELS.missions.repoIntelligenceUsageGet]: async (
+    _event: IpcMainInvokeEvent,
+    input?: { entryId?: string },
+  ) =>
+    requireBridge(getBridge()).getRepoIntelligenceUsage(
+      requireField(input?.entryId, "Entry id is required."),
+    ),
+
   [IPC_CHANNELS.missions.workSessionEventsListByStation]: async (
     _event: IpcMainInvokeEvent,
     input?: { stationId?: string; limit?: number },

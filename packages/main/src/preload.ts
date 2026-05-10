@@ -50,6 +50,10 @@ const LEARNED_CANDIDATES_LIST_CHANNEL = "missions:learned-candidates:list";
 const LEARNED_CANDIDATES_REVOKE_CHANNEL = "missions:learned-candidates:revoke";
 const WEEKLY_DIGEST_GENERATE_CHANNEL = "missions:weekly-digest:generate";
 const INTELLIGENCE_AUDIT_LIST_CHANNEL = "missions:intelligence-audit:list";
+const LEARNING_SUMMARY_GET_CHANNEL = "missions:ticket-run:learning-summary:get";
+const LEARNING_PROMOTE_CANDIDATE_CHANNEL = "missions:learning:promote-candidate";
+const LEARNING_SKIP_CANDIDATE_CHANNEL = "missions:learning:skip-candidate";
+const REPO_INTELLIGENCE_USAGE_GET_CHANNEL = "missions:repo-intelligence:usage:get";
 const WORKSESSION_EVENTS_LIST_BY_STATION_CHANNEL = "worksession:events:list-by-station";
 const TICKET_RUN_DELETE_CHANNEL = "missions:ticket-run:delete";
 const TICKET_RUN_REVIEW_SNAPSHOT_CHANNEL = "missions:ticket-run:review-snapshot:get";
@@ -351,6 +355,18 @@ const electronAPI: ElectronApi = {
   },
   listMissionIntelligenceAudit(limit) {
     return ipcRenderer.invoke(INTELLIGENCE_AUDIT_LIST_CHANNEL, { limit });
+  },
+  getMissionLearningSummary(runId) {
+    return ipcRenderer.invoke(LEARNING_SUMMARY_GET_CHANNEL, { runId });
+  },
+  promoteMissionLearningCandidate(input) {
+    return ipcRenderer.invoke(LEARNING_PROMOTE_CANDIDATE_CHANNEL, input);
+  },
+  skipMissionLearningCandidate(input) {
+    return ipcRenderer.invoke(LEARNING_SKIP_CANDIDATE_CHANNEL, input);
+  },
+  getRepoIntelligenceUsage(entryId) {
+    return ipcRenderer.invoke(REPO_INTELLIGENCE_USAGE_GET_CHANNEL, { entryId });
   },
   listWorkSessionEventsByStation(stationId, limit) {
     return ipcRenderer.invoke(WORKSESSION_EVENTS_LIST_BY_STATION_CHANNEL, { stationId, limit });

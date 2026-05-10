@@ -170,6 +170,7 @@ export interface ValidationProfileRow {
   id: string;
   projectKey: string | null;
   repoRelativePath: string | null;
+  scope: string;
   label: string;
   kind: string;
   command: string;
@@ -186,6 +187,8 @@ export interface ValidationProfileRow {
 
 export interface RepoProfileRow {
   projectKey: string;
+  /** Empty string ('') for the project-wide default; non-empty for per-repo overrides. */
+  repoRelativePath: string;
   displayName: string;
   description: string | null;
   defaultBranch: string | null;
@@ -198,6 +201,7 @@ export interface RepoProfileRow {
   uiTestGlobsJson: string;
   notes: string | null;
   source: string;
+  trustLearnerMode: string;
   createdAt: number;
   updatedAt: number;
 }

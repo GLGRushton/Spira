@@ -1,4 +1,8 @@
-import { type IntelligenceAuditEvent, formatIsoTimestamp } from "@spira/shared";
+import {
+  type IntelligenceAuditEvent,
+  type RepoIntelligenceUsageRecord,
+  formatIsoTimestamp,
+} from "@spira/shared";
 import { useEffect, useState } from "react";
 import projectStyles from "../projects/ProjectsPanel/ProjectsPanel.module.css";
 import styles from "./ProofRulesEditor.module.css";
@@ -11,6 +15,38 @@ export function IntelligenceAuditEditor() {
   const [events, setEvents] = useState<IntelligenceAuditEvent[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Lazy-loaded usage rollups keyed by candidateId. Loaded on first expand to keep the
+  // initial render cheap.
+  const [usageById, setUsageById] = useState<Record<string, RepoIntelligenceUsageRecord[]>>({});
+  const [usageLoadingId, setUsageLoadingId] = useState<string | null>(null);
+  const [expandedUsageIds, setExpandedUsageIds] = useState<Set<string>>(new Set());
+
+  // Cache key namespaces by candidateType so two id-shaped candidates of different kinds
+  // never share a usage list. Today the audit feed only carries learned-candidate-* events
+  // (repo-intelligence), but the namespace future-proofs against validation-profile rows
+  // that might join the feed later.
+  const usageCacheKey = (event: IntelligenceAuditEvent): string =>
+    `${event.candidateType ?? "unknown"}:${event.candidateId}`;
+
+  const toggleUsage = async (event: IntelligenceAuditEvent) => {
+    const key = usageCacheKey(event);
+    setExpandedUsageIds((current) => {
+      const next = new Set(current);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+    if (usageById[key] !== undefined) return;
+    setUsageLoadingId(key);
+    try {
+      const usage = await window.electronAPI.getRepoIntelligenceUsage(event.candidateId);
+      setUsageById((current) => ({ ...current, [key]: usage }));
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Failed to load usage data.");
+    } finally {
+      setUsageLoadingId(null);
+    }
+  };
 
   const load = async () => {
     setIsLoading(true);
@@ -91,6 +127,44 @@ export function IntelligenceAuditEditor() {
               ) : null}
             </div>
             {event.reason ? <div className={styles.ruleBody}>Reason: {event.reason}</div> : null}
+            {(() => {
+              const key = usageCacheKey(event);
+              const cachedUsage = usageById[key];
+              const isExpanded = expandedUsageIds.has(key);
+              const isLoadingUsage = usageLoadingId === key;
+              return (
+                <>
+                  <div className={styles.ruleActions}>
+                    <button
+                      type="button"
+                      className={projectStyles.secondaryButton}
+                      onClick={() => void toggleUsage(event)}
+                      disabled={isLoadingUsage}
+                    >
+                      {isExpanded
+                        ? "Hide usage"
+                        : isLoadingUsage
+                          ? "Loading…"
+                          : `Used by ${cachedUsage ? cachedUsage.length : "N"} missions`}
+                    </button>
+                  </div>
+                  {isExpanded && cachedUsage ? (
+                    <ul className={styles.ruleList}>
+                      {cachedUsage.length === 0 ? (
+                        <li className={styles.empty}>No mission has consulted this entry yet.</li>
+                      ) : (
+                        cachedUsage.map((usage) => (
+                          <li key={usage.runId} className={styles.ruleRow}>
+                            <span className={styles.ruleId}>{usage.ticketId}</span>
+                            <span>· {formatIsoTimestamp(usage.occurredAt)}</span>
+                          </li>
+                        ))
+                      )}
+                    </ul>
+                  ) : null}
+                </>
+              );
+            })()}
           </li>
         ))}
       </ul>

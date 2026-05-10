@@ -37,6 +37,11 @@ import { ProofRulesService } from "./missions/proof-rules-service.js";
 import { RepoProfilesService } from "./missions/repo-profiles-service.js";
 import { ValidationProfilesService } from "./missions/validation-profiles-service.js";
 import { LearnedCandidatesService } from "./missions/learned-candidates-service.js";
+import {
+  assembleMissionLearningSummary,
+  buildMissionLearningSummaryFromDb,
+} from "./missions/mission-learning-summary.js";
+import { promoteLearningCandidate } from "./missions/mission-learning-promote.js";
 import { MissionServiceRegistry } from "./missions/service-registry.js";
 import { type GenerateCommitDraftInput, TicketRunService } from "./missions/ticket-runs.js";
 import { ProjectRegistry } from "./projects/registry.js";
@@ -1473,6 +1478,175 @@ const handleClientMessage = async (message: ClientMessage): Promise<void> => {
           error,
           "MISSIONS_LEARNED_CANDIDATE_REVOKE_FAILED",
           "Failed to revoke learned candidate.",
+          "missions",
+        ),
+      });
+    }
+    return;
+  }
+
+  if (message.type === "missions:ticket-run:learning-summary:get") {
+    if (!ticketRunService || !memoryDb) {
+      sendAdminServiceUnavailable(message.requestId, "Mission learning summary");
+      return;
+    }
+    try {
+      const run = ticketRunService.getRun(message.runId);
+      const summary = buildMissionLearningSummaryFromDb(memoryDb, run);
+      transport?.send({
+        type: "missions:ticket-run:learning-summary:get:result",
+        requestId: message.requestId,
+        summary,
+      });
+    } catch (error) {
+      logger.error({ err: error, requestId: message.requestId }, "Failed to build learning summary");
+      transport?.send({
+        type: "missions:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(
+          error,
+          "MISSIONS_LEARNING_SUMMARY_FAILED",
+          "Failed to build mission learning summary.",
+          "missions",
+        ),
+      });
+    }
+    return;
+  }
+
+  if (message.type === "missions:learning:promote-candidate") {
+    if (!ticketRunService || !memoryDb) {
+      sendAdminServiceUnavailable(message.requestId, "Learning promote");
+      return;
+    }
+    try {
+      const run = ticketRunService.getRun(message.runId);
+      // Load events once and re-use across both the pre-validation summary and the
+      // post-promotion rebuild. Profile-state probes are still re-run because promotion
+      // changes whether the project has a profile / validation row.
+      const events = memoryDb.listMissionEvents(run.runId, 500);
+      const projectKey = run.projectKey?.trim();
+      const projectHasRepoProfile = projectKey
+        ? memoryDb.listRepoProfiles({ projectKey, limit: 1 }).length > 0
+        : false;
+      const projectHasValidationProfiles = projectKey
+        ? memoryDb.listValidationProfiles({ projectKey, limit: 1 }).length > 0
+        : false;
+      const summary = assembleMissionLearningSummary({
+        run,
+        events,
+        projectHasRepoProfile,
+        projectHasValidationProfiles,
+      });
+      promoteLearningCandidate({
+        memoryDb,
+        run,
+        summary,
+        events,
+        candidateId: message.candidateId,
+        kind: message.kind,
+      });
+      // Re-probe project state (the just-promoted entry flipped the answer).
+      const projectHasRepoProfileAfter = projectKey
+        ? memoryDb.listRepoProfiles({ projectKey, limit: 1 }).length > 0
+        : false;
+      const projectHasValidationProfilesAfter = projectKey
+        ? memoryDb.listValidationProfiles({ projectKey, limit: 1 }).length > 0
+        : false;
+      const refreshed = assembleMissionLearningSummary({
+        run,
+        events,
+        projectHasRepoProfile: projectHasRepoProfileAfter,
+        projectHasValidationProfiles: projectHasValidationProfilesAfter,
+      });
+      transport?.send({
+        type: "missions:learning:promote-candidate:result",
+        requestId: message.requestId,
+        summary: refreshed,
+      });
+    } catch (error) {
+      logger.error({ err: error, requestId: message.requestId }, "Failed to promote learning candidate");
+      transport?.send({
+        type: "missions:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(
+          error,
+          "MISSIONS_LEARNING_PROMOTE_FAILED",
+          "Failed to promote learning candidate.",
+          "missions",
+        ),
+      });
+    }
+    return;
+  }
+
+  if (message.type === "missions:learning:skip-candidate") {
+    if (!ticketRunService || !memoryDb) {
+      sendAdminServiceUnavailable(message.requestId, "Learning skip");
+      return;
+    }
+    try {
+      const run = ticketRunService.getRun(message.runId);
+      // Record an audit-trail row so engagement metrics (and the audit feed) can show that
+      // the operator saw the candidate and intentionally didn't promote. Best-effort.
+      try {
+        memoryDb.appendMissionEvent({
+          runId: run.runId,
+          stage: "system",
+          eventType: "learned-candidate-skipped",
+          metadata: { candidateId: message.candidateId },
+          occurredAt: Date.now(),
+        });
+      } catch (writeError) {
+        logger.warn(
+          { err: writeError, runId: run.runId, candidateId: message.candidateId },
+          "Failed to record learned-candidate-skipped event; continuing",
+        );
+      }
+      const summary = buildMissionLearningSummaryFromDb(memoryDb, run);
+      transport?.send({
+        type: "missions:learning:skip-candidate:result",
+        requestId: message.requestId,
+        summary,
+      });
+    } catch (error) {
+      logger.error({ err: error, requestId: message.requestId }, "Failed to skip learning candidate");
+      transport?.send({
+        type: "missions:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(
+          error,
+          "MISSIONS_LEARNING_SKIP_FAILED",
+          "Failed to skip learning candidate.",
+          "missions",
+        ),
+      });
+    }
+    return;
+  }
+
+  if (message.type === "missions:repo-intelligence:usage:get") {
+    if (!memoryDb) {
+      sendAdminServiceUnavailable(message.requestId, "Repo intelligence usage");
+      return;
+    }
+    try {
+      const usage = memoryDb.listRepoIntelligenceUsage(message.entryId);
+      transport?.send({
+        type: "missions:repo-intelligence:usage:get:result",
+        requestId: message.requestId,
+        entryId: message.entryId,
+        usage,
+      });
+    } catch (error) {
+      logger.error({ err: error, requestId: message.requestId }, "Failed to list repo-intelligence usage");
+      transport?.send({
+        type: "missions:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(
+          error,
+          "MISSIONS_INTELLIGENCE_USAGE_FAILED",
+          "Failed to load repo-intelligence usage.",
           "missions",
         ),
       });

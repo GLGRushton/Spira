@@ -18,6 +18,7 @@ import type { MissionRepoProfileRecord, MissionRepoProfilesSnapshot, UpsertMissi
 
 const mapProfile = (record: RepoProfileRecord): MissionRepoProfileRecord => ({
   projectKey: record.projectKey,
+  repoRelativePath: record.repoRelativePath,
   displayName: record.displayName,
   description: record.description,
   defaultBranch: record.defaultBranch,
@@ -30,6 +31,7 @@ const mapProfile = (record: RepoProfileRecord): MissionRepoProfileRecord => ({
   uiTestGlobs: [...record.uiTestGlobs],
   notes: record.notes,
   source: record.source,
+  trustLearnerMode: record.trustLearnerMode,
   createdAt: record.createdAt,
   updatedAt: record.updatedAt,
 });
@@ -41,8 +43,8 @@ export class RepoProfilesService {
     return { profiles: this.memoryDb.listRepoProfiles({ limit: 500 }).map(mapProfile) };
   }
 
-  get(projectKey: string): MissionRepoProfileRecord | null {
-    const record = this.memoryDb.getRepoProfile(projectKey);
+  get(projectKey: string, repoRelativePath: string = ""): MissionRepoProfileRecord | null {
+    const record = this.memoryDb.getRepoProfile(projectKey, repoRelativePath);
     return record ? mapProfile(record) : null;
   }
 
@@ -51,6 +53,7 @@ export class RepoProfilesService {
     // sources can still be set explicitly by callers (e.g. the seeder, the Phase 5 learner).
     this.memoryDb.upsertRepoProfile({
       projectKey: input.projectKey,
+      repoRelativePath: input.repoRelativePath ?? "",
       displayName: input.displayName,
       description: input.description ?? null,
       defaultBranch: input.defaultBranch ?? null,
@@ -63,12 +66,13 @@ export class RepoProfilesService {
       uiTestGlobs: input.uiTestGlobs ?? [],
       notes: input.notes ?? null,
       source: input.source ?? "user",
+      trustLearnerMode: input.trustLearnerMode,
     });
     return this.list();
   }
 
-  delete(projectKey: string): MissionRepoProfilesSnapshot {
-    this.memoryDb.deleteRepoProfile(projectKey);
+  delete(projectKey: string, repoRelativePath: string = ""): MissionRepoProfilesSnapshot {
+    this.memoryDb.deleteRepoProfile(projectKey, repoRelativePath);
     return this.list();
   }
 }

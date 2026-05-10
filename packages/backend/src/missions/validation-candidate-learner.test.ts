@@ -156,6 +156,7 @@ describe("deriveValidationProfileCandidates (Phase 5.2)", () => {
       id: "existing",
       projectKey: "SPI",
       repoRelativePath: "ClientApp",
+      scope: "project",
       label: "Existing restore",
       kind: "restore",
       command: "npm ci",

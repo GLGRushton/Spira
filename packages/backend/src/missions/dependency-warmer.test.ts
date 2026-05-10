@@ -65,6 +65,7 @@ const buildRestoreProfile = (overrides: Partial<ValidationProfileRecord> = {}): 
   id: "global-spira-clientapp-restore",
   projectKey: "SPI",
   repoRelativePath: "ClientApp",
+  scope: "project",
   label: "Spira ClientApp restore",
   kind: "restore",
   command: "npm ci",

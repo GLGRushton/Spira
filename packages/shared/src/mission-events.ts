@@ -64,6 +64,9 @@ export const MISSION_EVENT_TYPES = [
   "validations-superseded",
   "mission-state-reconciled",
   "mission-aborted",
+  // Visible-learning (Batch J–M)
+  "repo-guidance-injected",
+  "learned-candidate-skipped",
 ] as const;
 
 export type MissionEventType = (typeof MISSION_EVENT_TYPES)[number];
@@ -293,6 +296,12 @@ export interface MissionEventMetadataMap {
     threshold: number;
     /** Schema version of the promotion formula used. */
     formulaVersion: number;
+    /**
+     * Why this candidate auto-promoted: `threshold-met` for the standard count-based path
+     * (default 5), `trust-mode-auto` when the project's `trustLearnerMode` lowered the
+     * threshold to 1 because the operator opted into silent acceptance.
+     */
+    promotionReason?: "threshold-met" | "trust-mode-auto";
   };
   "learned-candidate-revoked": {
     candidateId: string;
@@ -328,6 +337,26 @@ export interface MissionEventMetadataMap {
     reason: string;
     /** Mission phase the run was in at the moment of abort. */
     phaseAtAbort: string;
+  };
+  /**
+   * Provenance for the `## Repo guidance` section the prompt builder injected for an
+   * attempt. Renderer's "Guidance applied" panel reads this to show which learned entries
+   * shaped the mission, instead of the operator having to guess.
+   */
+  "repo-guidance-injected": {
+    repoIntelligenceEntryIds: readonly string[];
+    validationProfileIds: readonly string[];
+    repoProfileKeys: readonly { projectKey: string; repoRelativePath: string }[];
+    /** Length of the rendered markdown section in characters. */
+    sectionLength: number;
+  };
+  /**
+   * Operator clicked "Skip for now" on a sub-threshold candidate in the close-screen
+   * learning panel. Records that the entry was seen + intentionally not promoted; the
+   * candidate stays pending in the LearnedCandidatesEditor.
+   */
+  "learned-candidate-skipped": {
+    candidateId: string;
   };
 }
 

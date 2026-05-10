@@ -130,6 +130,10 @@ type MissionsRequestMessage =
   | Extract<ClientMessage, { type: "missions:learned-candidates:list" }>
   | Extract<ClientMessage, { type: "missions:weekly-digest:generate" }>
   | Extract<ClientMessage, { type: "missions:intelligence-audit:list" }>
+  | Extract<ClientMessage, { type: "missions:ticket-run:learning-summary:get" }>
+  | Extract<ClientMessage, { type: "missions:learning:promote-candidate" }>
+  | Extract<ClientMessage, { type: "missions:learning:skip-candidate" }>
+  | Extract<ClientMessage, { type: "missions:repo-intelligence:usage:get" }>
   | Extract<ClientMessage, { type: "worksession:events:list-by-station" }>
   | Extract<ClientMessage, { type: "missions:learned-candidates:revoke" }>
   | Extract<ClientMessage, { type: "missions:ticket-run:proof:run" }>
@@ -181,6 +185,10 @@ type MissionsResponseMessage =
   | Extract<ServerMessage, { type: "missions:learned-candidates:list:result" }>
   | Extract<ServerMessage, { type: "missions:weekly-digest:generate:result" }>
   | Extract<ServerMessage, { type: "missions:intelligence-audit:list:result" }>
+  | Extract<ServerMessage, { type: "missions:ticket-run:learning-summary:get:result" }>
+  | Extract<ServerMessage, { type: "missions:learning:promote-candidate:result" }>
+  | Extract<ServerMessage, { type: "missions:learning:skip-candidate:result" }>
+  | Extract<ServerMessage, { type: "missions:repo-intelligence:usage:get:result" }>
   | Extract<ServerMessage, { type: "worksession:events:list-by-station:result" }>
   | Extract<ServerMessage, { type: "missions:learned-candidates:revoke:result" }>
   | Extract<ServerMessage, { type: "missions:ticket-run:proof:run:result" }>
@@ -282,6 +290,21 @@ export interface IpcBridgeHandle {
   listMissionIntelligenceAudit(
     limit?: number,
   ): Promise<import("@spira/shared").IntelligenceAuditEvent[]>;
+  getMissionLearningSummary(
+    runId: string,
+  ): Promise<import("@spira/shared").MissionLearningSummary>;
+  promoteMissionLearningCandidate(input: {
+    runId: string;
+    candidateId: string;
+    kind: import("@spira/shared").PromoteLearningCandidateKind;
+  }): Promise<import("@spira/shared").MissionLearningSummary>;
+  skipMissionLearningCandidate(input: {
+    runId: string;
+    candidateId: string;
+  }): Promise<import("@spira/shared").MissionLearningSummary>;
+  getRepoIntelligenceUsage(
+    entryId: string,
+  ): Promise<import("@spira/shared").RepoIntelligenceUsageRecord[]>;
   listWorkSessionEventsByStation(
     stationId: string,
     limit?: number,
@@ -397,6 +420,10 @@ const isBackendResponseMessage = (message: ServerMessage): message is BackendRes
     message.type === "missions:learned-candidates:revoke:result" ||
     message.type === "missions:weekly-digest:generate:result" ||
     message.type === "missions:intelligence-audit:list:result" ||
+    message.type === "missions:ticket-run:learning-summary:get:result" ||
+    message.type === "missions:learning:promote-candidate:result" ||
+    message.type === "missions:learning:skip-candidate:result" ||
+    message.type === "missions:repo-intelligence:usage:get:result" ||
     message.type === "worksession:events:list-by-station:result" ||
     message.type === "missions:ticket-run:validations:supersede:result" ||
     message.type === "missions:ticket-run:abort:result" ||
@@ -1010,6 +1037,41 @@ export function setupIpcBridge(
         "missions:intelligence-audit:list:result",
         MISSION_REVIEW_REQUEST_TIMEOUT_MS,
       ).then((response) => response.events),
+    getMissionLearningSummary: (runId) =>
+      requestBackend(
+        { type: "missions:ticket-run:learning-summary:get", requestId: randomUUID(), runId },
+        "missions:ticket-run:learning-summary:get:result",
+        MISSION_REVIEW_REQUEST_TIMEOUT_MS,
+      ).then((response) => response.summary),
+    promoteMissionLearningCandidate: (input) =>
+      requestBackend(
+        {
+          type: "missions:learning:promote-candidate",
+          requestId: randomUUID(),
+          runId: input.runId,
+          candidateId: input.candidateId,
+          kind: input.kind,
+        },
+        "missions:learning:promote-candidate:result",
+        MISSION_REVIEW_REQUEST_TIMEOUT_MS,
+      ).then((response) => response.summary),
+    skipMissionLearningCandidate: (input) =>
+      requestBackend(
+        {
+          type: "missions:learning:skip-candidate",
+          requestId: randomUUID(),
+          runId: input.runId,
+          candidateId: input.candidateId,
+        },
+        "missions:learning:skip-candidate:result",
+        MISSION_REVIEW_REQUEST_TIMEOUT_MS,
+      ).then((response) => response.summary),
+    getRepoIntelligenceUsage: (entryId) =>
+      requestBackend(
+        { type: "missions:repo-intelligence:usage:get", requestId: randomUUID(), entryId },
+        "missions:repo-intelligence:usage:get:result",
+        MISSION_REVIEW_REQUEST_TIMEOUT_MS,
+      ).then((response) => response.usage),
     listWorkSessionEventsByStation: (stationId, limit) =>
       requestBackend(
         {

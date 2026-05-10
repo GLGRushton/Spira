@@ -1222,6 +1222,11 @@ describe("TicketRunService", () => {
         },
       ],
     });
+    expect(database.getTicketRun("run-1")?.previousPassContext).toMatchObject({
+      sequence: 1,
+      summary: "Lifecycle repaired and ready for review.",
+      missionSummary: expect.objectContaining({ completedWork: "Lifecycle repaired and code reviewed." }),
+    });
     await expect(service.getMissionTimeline("run-1")).resolves.toMatchObject({
       run: {
         runId: "run-1",
@@ -1411,6 +1416,239 @@ describe("TicketRunService", () => {
       validations: [],
       proofStrategy: null,
       missionSummary: null,
+    });
+  });
+
+  it("surfaces the prior pass's artifact paths and proof command in the continuation prompt", async () => {
+    const database = createTestDatabase();
+    database.upsertTicketRun({
+      runId: "run-prev-pass",
+      ticketId: "SPI-200",
+      ticketSummary: "Follow-up pass with rich prior context",
+      ticketUrl: "https://example.youtrack.cloud/issue/SPI-200",
+      projectKey: "SPI",
+      status: "awaiting-review",
+      missionPhase: "summarize",
+      missionPhaseUpdatedAt: 175,
+      createdAt: 100,
+      startedAt: 100,
+      worktrees: [
+        {
+          repoRelativePath: "service-api",
+          repoAbsolutePath: "C:\\Repos\\service-api",
+          worktreePath: "C:\\Repos\\.spira-worktrees\\spi-200-service-api",
+          branchName: "feat/spi-200-follow-up",
+        },
+      ],
+      attempts: [
+        {
+          attemptId: "attempt-1",
+          subagentRunId: "subagent-1",
+          sequence: 1,
+          status: "completed",
+          summary: "Initial pass landed.",
+          followupNeeded: true,
+          startedAt: 100,
+          createdAt: 100,
+          updatedAt: 150,
+          completedAt: 150,
+        },
+      ],
+      previousPassContext: {
+        attemptId: "attempt-1",
+        sequence: 1,
+        completedAt: 150,
+        summary: "Initial pass landed.",
+        classification: null,
+        plan: null,
+        validations: [
+          {
+            validationId: "val-1",
+            runId: "run-prev-pass",
+            kind: "build",
+            command: "dotnet test --filter X",
+            cwd: "C:\\Repos\\service-api",
+            status: "passed",
+            summary: "Tests passed.",
+            artifacts: [
+              {
+                artifactId: "art-1",
+                kind: "screenshot",
+                label: "Screenshot",
+                path: "service-api/.proof-artifacts/spi-200/spi-200-screenshot.png",
+                fileUrl: "file:///C:/Repos/service-api/.proof-artifacts/spi-200/spi-200-screenshot.png",
+              },
+              {
+                artifactId: "art-2",
+                kind: "trace",
+                label: "Trace",
+                path: "service-api/.proof-artifacts/spi-200/spi-200-trace.zip",
+                fileUrl: "file:///C:/Repos/service-api/.proof-artifacts/spi-200/spi-200-trace.zip",
+              },
+            ],
+            startedAt: 150,
+            completedAt: 160,
+            createdAt: 150,
+            updatedAt: 160,
+          },
+        ],
+        proofStrategy: {
+          runId: "run-prev-pass",
+          adapterId: "playwright-dotnet-nunit",
+          repoRelativePath: "service-api",
+          scenarioPath: "Tests\\MissionProof.spec.ts",
+          scenarioName: "Mission proof",
+          command: "dotnet test --filter Spi200ProofTest -c Release --no-build",
+          artifactMode: "screenshot",
+          rationale: "Show the UI change.",
+          metadata: null,
+          createdAt: 170,
+          updatedAt: 170,
+        },
+        missionSummary: {
+          completedWork: "Wired the SPI-200 banner toggle.",
+          changedRepoRelativePaths: [
+            "service-api/src/banner.component.ts",
+            "service-api/src/banner.component.html",
+          ],
+          validationSummary: "dotnet test passed.",
+          proofSummary: "Screenshot captured under .proof-artifacts/spi-200/.",
+          openQuestions: [],
+          followUps: ["Open PR after review."],
+          createdAt: 180,
+          updatedAt: 180,
+        },
+        proof: {
+          status: "passed",
+          lastProofRunId: null,
+          lastProofProfileId: null,
+          lastProofAt: null,
+          lastProofSummary: null,
+          staleReason: null,
+          manualReviewJustification: null,
+          manualReviewAt: null,
+        },
+      },
+    });
+
+    const launchMissionPass = vi.fn().mockResolvedValue({
+      stationId: "mission:run-prev-pass",
+      reusedLiveAttempt: true,
+      completion: Promise.resolve({ status: "completed", summary: "Follow-up pass landed." }),
+    });
+    const service = new TicketRunService({
+      memoryDb: database,
+      logger: createLogger(),
+      projectRegistry: { getSnapshot: async () => ({ workspaceRoot: null, repos: [], mappings: [] }) },
+      youTrackService: null,
+      launchMissionPass,
+      attemptIdFactory: () => "attempt-2",
+      now: () => 200,
+    });
+
+    await service.continueWork("run-prev-pass", "The mock returned no rows. Fix the stub.");
+
+    expect(launchMissionPass).toHaveBeenCalledTimes(1);
+    const promptArg = launchMissionPass.mock.calls[0]?.[0]?.prompt as string;
+    expect(promptArg).toContain("Prior pass #1 context");
+    expect(promptArg).toContain("Wired the SPI-200 banner toggle.");
+    expect(promptArg).toContain("service-api/src/banner.component.ts");
+    expect(promptArg).toContain("dotnet test --filter Spi200ProofTest");
+    expect(promptArg).toContain(".proof-artifacts/spi-200/spi-200-screenshot.png");
+    expect(promptArg).toContain(".proof-artifacts/spi-200/spi-200-trace.zip");
+  });
+
+  it("retains previousPassContext on a follow-up pass instead of clearing it on round-trip", async () => {
+    const database = createTestDatabase();
+    database.upsertTicketRun({
+      runId: "run-retention",
+      ticketId: "SPI-201",
+      ticketSummary: "Retention test",
+      ticketUrl: "https://example.youtrack.cloud/issue/SPI-201",
+      projectKey: "SPI",
+      status: "awaiting-review",
+      missionPhase: "summarize",
+      missionPhaseUpdatedAt: 175,
+      createdAt: 100,
+      startedAt: 100,
+      worktrees: [
+        {
+          repoRelativePath: "service-api",
+          repoAbsolutePath: "C:\\Repos\\service-api",
+          worktreePath: "C:\\Repos\\.spira-worktrees\\spi-201-service-api",
+          branchName: "feat/spi-201-retention",
+        },
+      ],
+      attempts: [
+        {
+          attemptId: "attempt-1",
+          subagentRunId: "subagent-1",
+          sequence: 1,
+          status: "completed",
+          summary: "Initial pass landed.",
+          followupNeeded: true,
+          startedAt: 100,
+          createdAt: 100,
+          updatedAt: 150,
+          completedAt: 150,
+        },
+      ],
+      previousPassContext: {
+        attemptId: "attempt-1",
+        sequence: 1,
+        completedAt: 150,
+        summary: "Initial pass landed.",
+        classification: null,
+        plan: null,
+        validations: [],
+        proofStrategy: null,
+        missionSummary: {
+          completedWork: "Did the work.",
+          changedRepoRelativePaths: ["service-api/src/x.ts"],
+          validationSummary: null,
+          proofSummary: null,
+          openQuestions: [],
+          followUps: [],
+          createdAt: 180,
+          updatedAt: 180,
+        },
+        proof: {
+          status: "not-run",
+          lastProofRunId: null,
+          lastProofProfileId: null,
+          lastProofAt: null,
+          lastProofSummary: null,
+          staleReason: null,
+          manualReviewJustification: null,
+          manualReviewAt: null,
+        },
+      },
+    });
+
+    expect(database.getTicketRun("run-retention")?.previousPassContext).not.toBeNull();
+
+    const service = new TicketRunService({
+      memoryDb: database,
+      logger: createLogger(),
+      projectRegistry: { getSnapshot: async () => ({ workspaceRoot: null, repos: [], mappings: [] }) },
+      youTrackService: null,
+      launchMissionPass: vi.fn().mockResolvedValue({
+        stationId: "mission:run-retention",
+        reusedLiveAttempt: true,
+        completion: Promise.resolve({ status: "completed", summary: "Follow-up pass landed." }),
+      }),
+      attemptIdFactory: () => "attempt-2",
+      now: () => 200,
+    });
+
+    await service.continueWork("run-retention", "Carry on.");
+
+    // After beginAttempt persists the new attempt, the prior pass context must still be there
+    // (otherwise every follow-up pass re-discovers the work the prior pass already did).
+    expect(database.getTicketRun("run-retention")?.previousPassContext).toMatchObject({
+      attemptId: "attempt-1",
+      sequence: 1,
+      missionSummary: expect.objectContaining({ completedWork: "Did the work." }),
     });
   });
 

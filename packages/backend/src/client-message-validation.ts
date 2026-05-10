@@ -297,6 +297,30 @@ const ClientMessageSchema = z.discriminatedUnion("type", [
     requestId: z.string(),
     limit: z.number().int().positive().optional(),
   }),
+  messageSchema("missions:ticket-run:learning-summary:get", {
+    requestId: z.string(),
+    runId: z.string().min(1),
+  }),
+  messageSchema("missions:learning:promote-candidate", {
+    requestId: z.string(),
+    runId: z.string().min(1),
+    kind: z.enum([
+      "validation-profile-proposed",
+      "validation-profile-bootstrap",
+      "repo-intelligence",
+      "repo-profile-bootstrap",
+    ]),
+    candidateId: z.string().min(1),
+  }),
+  messageSchema("missions:learning:skip-candidate", {
+    requestId: z.string(),
+    runId: z.string().min(1),
+    candidateId: z.string().min(1),
+  }),
+  messageSchema("missions:repo-intelligence:usage:get", {
+    requestId: z.string(),
+    entryId: z.string().min(1),
+  }),
   messageSchema("worksession:events:list-by-station", {
     requestId: z.string(),
     stationId: z.string().min(1),

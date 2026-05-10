@@ -11,6 +11,8 @@ import {
   assertTicketRunMissionProofLevel,
   assertTicketRunMissionProofPreflightStatus,
   assertValidationProfileKind,
+  assertValidationProfileScope,
+  assertValidationProfileSource,
   normalizeStringArray,
   normalizeTitle,
   serializeJson,
@@ -238,28 +240,28 @@ export const createIntelligencePersistence = (context: DatabasePersistenceContex
     });
   };
 
+  const VALIDATION_PROFILE_SELECT = `SELECT
+       id,
+       project_key AS projectKey,
+       repo_relative_path AS repoRelativePath,
+       scope,
+       label,
+       kind,
+       command,
+       working_directory AS workingDirectory,
+       notes,
+       confidence,
+       expected_runtime_ms AS expectedRuntimeMs,
+       last_observed_runtime_ms AS lastObservedRuntimeMs,
+       prerequisites_json AS prerequisitesJson,
+       source,
+       created_at AS createdAt,
+       updated_at AS updatedAt
+     FROM validation_profiles`;
+
   const getValidationProfile = (profileId: string): ValidationProfileRecord | null => {
     const row = context.db
-      .prepare(
-        `SELECT
-           id,
-           project_key AS projectKey,
-           repo_relative_path AS repoRelativePath,
-           label,
-           kind,
-           command,
-           working_directory AS workingDirectory,
-           notes,
-           confidence,
-           expected_runtime_ms AS expectedRuntimeMs,
-           last_observed_runtime_ms AS lastObservedRuntimeMs,
-           prerequisites_json AS prerequisitesJson,
-           source,
-           created_at AS createdAt,
-           updated_at AS updatedAt
-         FROM validation_profiles
-         WHERE id = @profileId`,
-      )
+      .prepare(`${VALIDATION_PROFILE_SELECT} WHERE id = @profileId`)
       .get({ profileId }) as ValidationProfileRow | undefined;
 
     return row ? mapValidationProfileRow(row) : null;
@@ -278,23 +280,7 @@ export const createIntelligencePersistence = (context: DatabasePersistenceContex
     const limit = options.limit ?? 20;
 
     const scopedFilter = buildScopedRecordFilter(normalizedProjectKey, repoPaths);
-    const sql = `SELECT
-       id,
-       project_key AS projectKey,
-       repo_relative_path AS repoRelativePath,
-       label,
-       kind,
-       command,
-       working_directory AS workingDirectory,
-       notes,
-       confidence,
-       expected_runtime_ms AS expectedRuntimeMs,
-       last_observed_runtime_ms AS lastObservedRuntimeMs,
-       prerequisites_json AS prerequisitesJson,
-       source,
-       created_at AS createdAt,
-       updated_at AS updatedAt
-     FROM validation_profiles
+    const sql = `${VALIDATION_PROFILE_SELECT}
      ${scopedFilter.whereClause}
      ORDER BY updated_at DESC, created_at DESC`;
 
@@ -310,10 +296,14 @@ export const createIntelligencePersistence = (context: DatabasePersistenceContex
     assertDatabaseWritable(context);
     const now = input.createdAt ?? Date.now();
     const existing = getValidationProfile(input.id);
+    const projectKey = normalizeTitle(input.projectKey);
+    // Default scope: `global` when projectKey is null (legacy NULL behaviour), `project` otherwise.
+    const scope = input.scope ?? (projectKey === null ? "global" : "project");
     const payload = {
       id: input.id.trim(),
-      projectKey: normalizeTitle(input.projectKey),
+      projectKey,
       repoRelativePath: normalizeTitle(input.repoRelativePath),
+      scope,
       label: input.label.trim(),
       kind: input.kind,
       command: input.command.trim(),
@@ -335,9 +325,8 @@ export const createIntelligencePersistence = (context: DatabasePersistenceContex
     };
 
     assertValidationProfileKind(payload.kind);
-    if (payload.source !== "builtin" && payload.source !== "user") {
-      throw new Error(`Unsupported validation profile source: ${payload.source}`);
-    }
+    assertValidationProfileSource(payload.source);
+    assertValidationProfileScope(payload.scope);
     if (!payload.id || !payload.label || !payload.command || !payload.workingDirectory) {
       throw new Error("Validation profiles require non-empty id, label, command, and workingDirectory.");
     }
@@ -348,6 +337,7 @@ export const createIntelligencePersistence = (context: DatabasePersistenceContex
            id,
            project_key,
            repo_relative_path,
+           scope,
            label,
            kind,
            command,
@@ -364,6 +354,7 @@ export const createIntelligencePersistence = (context: DatabasePersistenceContex
            @id,
            @projectKey,
            @repoRelativePath,
+           @scope,
            @label,
            @kind,
            @command,
@@ -380,6 +371,7 @@ export const createIntelligencePersistence = (context: DatabasePersistenceContex
          ON CONFLICT(id) DO UPDATE SET
            project_key = excluded.project_key,
            repo_relative_path = excluded.repo_relative_path,
+           scope = excluded.scope,
            label = excluded.label,
            kind = excluded.kind,
            command = excluded.command,
@@ -690,11 +682,12 @@ export const createIntelligencePersistence = (context: DatabasePersistenceContex
   };
 
   // ─── repo_profiles CRUD ────────────────────────────────────────────────
-  // Per-projectKey "what is this repo" record. Singleton per projectKey (PK), so we use
-  // upsert + delete + list/get rather than a scoped-list pattern.
+  // Keyed on (projectKey, repoRelativePath). Empty repoRelativePath ('') is the
+  // project-wide default. Per-repo overrides layer on top.
 
   const REPO_PROFILE_SELECT = `SELECT
        project_key AS projectKey,
+       repo_relative_path AS repoRelativePath,
        display_name AS displayName,
        description,
        default_branch AS defaultBranch,
@@ -707,30 +700,46 @@ export const createIntelligencePersistence = (context: DatabasePersistenceContex
        ui_test_globs_json AS uiTestGlobsJson,
        notes,
        source,
+       trust_learner_mode AS trustLearnerMode,
        created_at AS createdAt,
        updated_at AS updatedAt
      FROM repo_profiles`;
 
-  const getRepoProfile = (projectKey: string): RepoProfileRecord | null => {
-    const trimmed = projectKey.trim();
-    if (!trimmed) return null;
+  /**
+   * Fetch the row for an exact `(projectKey, repoRelativePath)` pair. Pass an empty string
+   * (the default) to fetch the project-wide row. For the "all rows that apply to this run"
+   * semantics, use `listRepoProfiles({ projectKey })` and filter in the caller.
+   */
+  const getRepoProfile = (
+    projectKey: string,
+    repoRelativePath: string = "",
+  ): RepoProfileRecord | null => {
+    const trimmedKey = projectKey.trim();
+    if (!trimmedKey) return null;
+    const trimmedPath = (repoRelativePath ?? "").trim();
     const row = context.db
-      .prepare(`${REPO_PROFILE_SELECT} WHERE project_key = @projectKey`)
-      .get({ projectKey: trimmed }) as RepoProfileRow | undefined;
+      .prepare(
+        `${REPO_PROFILE_SELECT} WHERE project_key = @projectKey AND repo_relative_path = @repoRelativePath`,
+      )
+      .get({ projectKey: trimmedKey, repoRelativePath: trimmedPath }) as RepoProfileRow | undefined;
     return row ? mapRepoProfileRow(row) : null;
   };
 
-  const listRepoProfiles = (options: { limit?: number } = {}): RepoProfileRecord[] => {
+  const listRepoProfiles = (options: { limit?: number; projectKey?: string } = {}): RepoProfileRecord[] => {
     const limit = options.limit ?? 100;
-    const rows = context.db
-      .prepare(`${REPO_PROFILE_SELECT} ORDER BY updated_at DESC, project_key ASC LIMIT @limit`)
-      .all({ limit }) as unknown as RepoProfileRow[];
+    const projectKey = options.projectKey?.trim();
+    const sql = projectKey
+      ? `${REPO_PROFILE_SELECT} WHERE project_key = @projectKey ORDER BY repo_relative_path ASC LIMIT @limit`
+      : `${REPO_PROFILE_SELECT} ORDER BY updated_at DESC, project_key ASC, repo_relative_path ASC LIMIT @limit`;
+    const params = projectKey ? { projectKey, limit } : { limit };
+    const rows = context.db.prepare(sql).all(params) as unknown as RepoProfileRow[];
     return rows.map((row) => mapRepoProfileRow(row));
   };
 
   const upsertRepoProfile = (input: UpsertRepoProfileInput): RepoProfileRecord => {
     assertDatabaseWritable(context);
     const projectKey = input.projectKey.trim();
+    const repoRelativePath = (input.repoRelativePath ?? "").trim();
     const displayName = input.displayName.trim();
     if (!projectKey || !displayName) {
       throw new Error("Repo profiles require non-empty projectKey and displayName.");
@@ -740,9 +749,12 @@ export const createIntelligencePersistence = (context: DatabasePersistenceContex
       throw new Error(`Unsupported repo profile source: ${source}`);
     }
     const now = input.createdAt ?? Date.now();
-    const existing = getRepoProfile(projectKey);
+    const existing = getRepoProfile(projectKey, repoRelativePath);
+    // Trust mode preserves the existing value when omitted on edit; defaults to manual-review for new rows.
+    const trustLearnerMode = input.trustLearnerMode ?? existing?.trustLearnerMode ?? "manual-review";
     const payload = {
       projectKey,
+      repoRelativePath,
       displayName,
       description: normalizeTitle(input.description),
       defaultBranch: normalizeTitle(input.defaultBranch),
@@ -755,6 +767,7 @@ export const createIntelligencePersistence = (context: DatabasePersistenceContex
       uiTestGlobsJson: serializeJson(normalizeStringArray(input.uiTestGlobs)) ?? "[]",
       notes: normalizeTitle(input.notes),
       source,
+      trustLearnerMode,
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
     };
@@ -763,6 +776,7 @@ export const createIntelligencePersistence = (context: DatabasePersistenceContex
       .prepare(
         `INSERT INTO repo_profiles (
            project_key,
+           repo_relative_path,
            display_name,
            description,
            default_branch,
@@ -775,10 +789,12 @@ export const createIntelligencePersistence = (context: DatabasePersistenceContex
            ui_test_globs_json,
            notes,
            source,
+           trust_learner_mode,
            created_at,
            updated_at
          ) VALUES (
            @projectKey,
+           @repoRelativePath,
            @displayName,
            @description,
            @defaultBranch,
@@ -791,10 +807,11 @@ export const createIntelligencePersistence = (context: DatabasePersistenceContex
            @uiTestGlobsJson,
            @notes,
            @source,
+           @trustLearnerMode,
            @createdAt,
            @updatedAt
          )
-         ON CONFLICT(project_key) DO UPDATE SET
+         ON CONFLICT(project_key, repo_relative_path) DO UPDATE SET
            display_name = excluded.display_name,
            description = excluded.description,
            default_branch = excluded.default_branch,
@@ -807,24 +824,28 @@ export const createIntelligencePersistence = (context: DatabasePersistenceContex
            ui_test_globs_json = excluded.ui_test_globs_json,
            notes = excluded.notes,
            source = excluded.source,
+           trust_learner_mode = excluded.trust_learner_mode,
            updated_at = excluded.updated_at`,
       )
       .run(payload);
 
-    const saved = getRepoProfile(projectKey);
+    const saved = getRepoProfile(projectKey, repoRelativePath);
     if (!saved) {
-      throw new Error(`Failed to load repo profile ${projectKey}.`);
+      throw new Error(`Failed to load repo profile ${projectKey}/${repoRelativePath || "(default)"}.`);
     }
     return saved;
   };
 
-  const deleteRepoProfile = (projectKey: string): boolean => {
+  const deleteRepoProfile = (projectKey: string, repoRelativePath: string = ""): boolean => {
     assertDatabaseWritable(context);
-    const trimmed = projectKey.trim();
-    if (!trimmed) return false;
+    const trimmedKey = projectKey.trim();
+    if (!trimmedKey) return false;
+    const trimmedPath = (repoRelativePath ?? "").trim();
     const result = context.db
-      .prepare("DELETE FROM repo_profiles WHERE project_key = @projectKey")
-      .run({ projectKey: trimmed });
+      .prepare(
+        "DELETE FROM repo_profiles WHERE project_key = @projectKey AND repo_relative_path = @repoRelativePath",
+      )
+      .run({ projectKey: trimmedKey, repoRelativePath: trimmedPath });
     return result.changes > 0;
   };
 
@@ -841,26 +862,57 @@ export const createIntelligencePersistence = (context: DatabasePersistenceContex
   ): RepoProfileRecord[] => {
     assertDatabaseWritable(context);
     if (profiles.length === 0) return [];
-    const projectKeys = profiles
-      .map((profile) => profile.projectKey.trim())
-      .filter((key) => key.length > 0);
-    const placeholders = projectKeys.map((_, index) => `@key${index}`).join(", ");
+    const seedKeys = profiles.map((profile) => ({
+      projectKey: profile.projectKey.trim(),
+      repoRelativePath: (profile.repoRelativePath ?? "").trim(),
+    }));
+    const distinctProjectKeys = [...new Set(seedKeys.map((entry) => entry.projectKey))].filter(
+      (key) => key.length > 0,
+    );
+    const placeholders = distinctProjectKeys.map((_, index) => `@key${index}`).join(", ");
     const params: Record<string, string> = {};
-    projectKeys.forEach((key, index) => {
+    distinctProjectKeys.forEach((key, index) => {
       params[`key${index}`] = key;
     });
-    const existingRows = projectKeys.length === 0
+    const existingRows = distinctProjectKeys.length === 0
       ? []
       : (context.db
           .prepare(`${REPO_PROFILE_SELECT} WHERE project_key IN (${placeholders})`)
           .all(params) as unknown as RepoProfileRow[]);
+    const compositeKey = (projectKey: string, repoRelativePath: string): string =>
+      `${projectKey}\u0000${repoRelativePath}`;
     const existingByKey = new Map(
-      existingRows.map((row) => [row.projectKey, mapRepoProfileRow(row)] as const),
+      existingRows.map((row) => {
+        const record = mapRepoProfileRow(row);
+        return [compositeKey(record.projectKey, record.repoRelativePath), record] as const;
+      }),
+    );
+    const seedKeySet = new Set(
+      seedKeys.map((entry) => compositeKey(entry.projectKey, entry.repoRelativePath)),
     );
     const seed = context.db.transaction((items: readonly Omit<UpsertRepoProfileInput, "source">[]) => {
+      // Drop builtin rows that are no longer in the seed list. Without this, renames like
+      // E.4's "Spira" → "SPI" leave orphans that double-count in any join on projectKey.
+      // User-edited rows (source !== "builtin") are untouched. Compares on the composite
+      // (projectKey, repoRelativePath) key so per-repo rows aren't accidentally dropped.
+      const builtinRows = context.db
+        .prepare(
+          `SELECT project_key AS projectKey, repo_relative_path AS repoRelativePath
+           FROM repo_profiles WHERE source = 'builtin'`,
+        )
+        .all() as Array<{ projectKey: string; repoRelativePath: string }>;
+      const dropStatement = context.db.prepare(
+        "DELETE FROM repo_profiles WHERE source = 'builtin' AND project_key = @projectKey AND repo_relative_path = @repoRelativePath",
+      );
+      for (const row of builtinRows) {
+        if (!seedKeySet.has(compositeKey(row.projectKey, row.repoRelativePath))) {
+          dropStatement.run(row);
+        }
+      }
       const results: RepoProfileRecord[] = [];
       for (const item of items) {
-        const existing = existingByKey.get(item.projectKey.trim());
+        const key = compositeKey(item.projectKey.trim(), (item.repoRelativePath ?? "").trim());
+        const existing = existingByKey.get(key);
         if (existing && existing.source !== "builtin") {
           results.push(existing);
           continue;

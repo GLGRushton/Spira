@@ -1,5 +1,6 @@
 import type {
   MissionRepoProfileRecord,
+  MissionRepoProfileTrustLearnerMode,
   MissionRepoProfilesSnapshot,
   UpsertMissionRepoProfileInput,
 } from "@spira/shared";
@@ -22,6 +23,7 @@ interface DraftProfile {
   userFacingCopyGlobs: string;
   uiTestGlobs: string;
   notes: string;
+  trustLearnerMode: MissionRepoProfileTrustLearnerMode;
 }
 
 const EMPTY_DRAFT: DraftProfile = {
@@ -37,6 +39,7 @@ const EMPTY_DRAFT: DraftProfile = {
   userFacingCopyGlobs: "",
   uiTestGlobs: "",
   notes: "",
+  trustLearnerMode: "manual-review",
 };
 
 const draftToInput = (draft: DraftProfile): UpsertMissionRepoProfileInput => ({
@@ -52,6 +55,7 @@ const draftToInput = (draft: DraftProfile): UpsertMissionRepoProfileInput => ({
   userFacingCopyGlobs: splitList(draft.userFacingCopyGlobs),
   uiTestGlobs: splitList(draft.uiTestGlobs),
   notes: draft.notes.trim() || null,
+  trustLearnerMode: draft.trustLearnerMode,
 });
 
 const profileToDraft = (profile: MissionRepoProfileRecord): DraftProfile => ({
@@ -67,6 +71,7 @@ const profileToDraft = (profile: MissionRepoProfileRecord): DraftProfile => ({
   userFacingCopyGlobs: profile.userFacingCopyGlobs.join("\n"),
   uiTestGlobs: profile.uiTestGlobs.join("\n"),
   notes: profile.notes ?? "",
+  trustLearnerMode: profile.trustLearnerMode,
 });
 
 /**
@@ -433,6 +438,29 @@ export function RepoProfilesEditor() {
             value={draft.notes}
             onChange={(event) => setDraft({ ...draft, notes: event.target.value })}
           />
+        </label>
+        <label className={styles.fullWidth}>
+          <span>
+            Trust the learner mode
+            <small style={{ marginLeft: 8, opacity: 0.7 }}>
+              (applies project-wide; per-repo overrides ignore this field)
+            </small>
+          </span>
+          <select
+            value={draft.trustLearnerMode}
+            onChange={(event) =>
+              setDraft({
+                ...draft,
+                trustLearnerMode: event.target.value as MissionRepoProfileTrustLearnerMode,
+              })
+            }
+          >
+            <option value="manual-review">Manual review (default) — surface every observation for your nod</option>
+            <option value="auto-accept-below-threshold">
+              Auto-accept below threshold — silently promote everything (no panel)
+            </option>
+            <option value="paused">Paused — halt all learning observation for this project</option>
+          </select>
         </label>
         <div className={styles.formActions}>
           {editingProjectKey ? (

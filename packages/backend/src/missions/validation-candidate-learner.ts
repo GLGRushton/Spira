@@ -17,6 +17,14 @@ import { hashFragment } from "./mission-intelligence.js";
 /** Default success-count threshold before a candidate is surfaced. */
 export const DEFAULT_VALIDATION_CANDIDATE_THRESHOLD = 3;
 
+/**
+ * Default success-count threshold above which a surfaced candidate auto-promotes to a
+ * registered validation profile (`validation-profile-auto-promoted` mission event). The
+ * close-screen learning panel uses the same value to compute "X of N confirming missions"
+ * progress copy for sub-threshold proposals.
+ */
+export const DEFAULT_VALIDATION_AUTO_PROMOTION_THRESHOLD = 5;
+
 const KIND_HEURISTICS: Array<{ kind: TicketRunMissionValidationKind; matcher: RegExp }> = [
   { kind: "restore", matcher: /^(npm ci|pnpm install|yarn install|dotnet restore)\b/iu },
   { kind: "format", matcher: /\b(prettier|biome|black|gofmt|dotnet format|format[:-]check)\b/iu },

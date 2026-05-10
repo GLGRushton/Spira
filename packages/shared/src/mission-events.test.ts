@@ -54,6 +54,9 @@ describe("mission event taxonomy", () => {
       "validations-superseded",
       "mission-state-reconciled",
       "mission-aborted",
+      // visible-learning.
+      "repo-guidance-injected",
+      "learned-candidate-skipped",
     ];
     expect([...MISSION_EVENT_TYPES].sort()).toEqual(expected.sort());
   });

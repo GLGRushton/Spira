@@ -417,11 +417,11 @@ export class SpiraMemoryDatabase {
   }
 
   // repo profiles CRUD.
-  getRepoProfile(projectKey: string): RepoProfileRecord | null {
-    return this.intelligence.getRepoProfile(projectKey);
+  getRepoProfile(projectKey: string, repoRelativePath: string = ""): RepoProfileRecord | null {
+    return this.intelligence.getRepoProfile(projectKey, repoRelativePath);
   }
 
-  listRepoProfiles(options: { limit?: number } = {}): RepoProfileRecord[] {
+  listRepoProfiles(options: { limit?: number; projectKey?: string } = {}): RepoProfileRecord[] {
     return this.intelligence.listRepoProfiles(options);
   }
 
@@ -429,8 +429,8 @@ export class SpiraMemoryDatabase {
     return this.intelligence.upsertRepoProfile(input);
   }
 
-  deleteRepoProfile(projectKey: string): boolean {
-    return this.intelligence.deleteRepoProfile(projectKey);
+  deleteRepoProfile(projectKey: string, repoRelativePath: string = ""): boolean {
+    return this.intelligence.deleteRepoProfile(projectKey, repoRelativePath);
   }
 
   seedBuiltinRepoProfiles(
@@ -475,6 +475,15 @@ export class SpiraMemoryDatabase {
     perRunLimit?: number;
   }): MissionEventRecord[] {
     return this.missions.listMissionEventsForRunWindow(input);
+  }
+
+  /** For a repo_intelligence_entries id, return every mission whose prompt referenced it. */
+  listRepoIntelligenceUsage(entryId: string): Array<{
+    runId: string;
+    ticketId: string;
+    occurredAt: number;
+  }> {
+    return this.missions.listRepoIntelligenceUsage(entryId);
   }
 
   /**

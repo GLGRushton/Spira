@@ -18,6 +18,7 @@ const mapProfile = (record: ValidationProfileRecord): MissionValidationProfileRe
   id: record.id,
   projectKey: record.projectKey,
   repoRelativePath: record.repoRelativePath,
+  scope: record.scope,
   label: record.label,
   kind: record.kind,
   command: record.command,

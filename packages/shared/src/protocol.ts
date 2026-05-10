@@ -75,6 +75,17 @@ export interface ErrorPayload {
 }
 
 /**
+ * One mission that consulted a specific learned intelligence entry. Returned by the
+ * IntelligenceAuditEditor's "used by N missions" expansion so the operator can trace
+ * which missions actually depended on a learned entry.
+ */
+export interface RepoIntelligenceUsageRecord {
+  runId: string;
+  ticketId: string;
+  occurredAt: number;
+}
+
+/**
  * Renderer-facing summary of a learned-candidate-promoted / learned-candidate-revoked
  * Mission event. Flattens the metadata blob to the fields the audit feed actually shows
  * So the renderer doesn't need a per-eventType narrow.
@@ -205,6 +216,25 @@ export type ClientMessage =
       type: "missions:intelligence-audit:list";
       requestId: string;
       limit?: number;
+    }
+  | { type: "missions:ticket-run:learning-summary:get"; requestId: string; runId: string }
+  | {
+      type: "missions:learning:promote-candidate";
+      requestId: string;
+      runId: string;
+      kind: import("./mission-learning.js").PromoteLearningCandidateKind;
+      candidateId: string;
+    }
+  | {
+      type: "missions:learning:skip-candidate";
+      requestId: string;
+      runId: string;
+      candidateId: string;
+    }
+  | {
+      type: "missions:repo-intelligence:usage:get";
+      requestId: string;
+      entryId: string;
     }
   | {
       type: "worksession:events:list-by-station";
@@ -568,6 +598,27 @@ export type ServerMessage =
       type: "missions:intelligence-audit:list:result";
       requestId: string;
       events: IntelligenceAuditEvent[];
+    }
+  | {
+      type: "missions:ticket-run:learning-summary:get:result";
+      requestId: string;
+      summary: import("./mission-learning.js").MissionLearningSummary;
+    }
+  | {
+      type: "missions:learning:promote-candidate:result";
+      requestId: string;
+      summary: import("./mission-learning.js").MissionLearningSummary;
+    }
+  | {
+      type: "missions:learning:skip-candidate:result";
+      requestId: string;
+      summary: import("./mission-learning.js").MissionLearningSummary;
+    }
+  | {
+      type: "missions:repo-intelligence:usage:get:result";
+      requestId: string;
+      entryId: string;
+      usage: RepoIntelligenceUsageRecord[];
     }
   | { type: "missions:runs:updated"; snapshot: TicketRunSnapshot }
   | { type: "missions:run:updated"; runId: string; run: TicketRunSummary }

@@ -9,10 +9,15 @@ import type {
   ErrorPayload,
   IntelligenceAuditEvent,
   PermissionRequestPayload,
+  RepoIntelligenceUsageRecord,
   ServerMessage,
   StationId,
   UserSettings,
 } from "./protocol.js";
+import type {
+  MissionLearningSummary,
+  PromoteLearningCandidateKind,
+} from "./mission-learning.js";
 import type { WorkSessionEventSummary } from "./work-session-events.js";
 import type { RuntimeConfigApplyResult, RuntimeConfigSummary, RuntimeConfigUpdate } from "./runtime-config.js";
 import type { MissionServiceSnapshot } from "./service-profile-types.js";
@@ -160,6 +165,21 @@ export interface ElectronApi {
   generateMissionWeeklyDigest(): Promise<string | null>;
   /** Cross-mission audit feed of learned-candidate-promoted / -revoked events. */
   listMissionIntelligenceAudit(limit?: number): Promise<IntelligenceAuditEvent[]>;
+  /** Per-mission close-screen learning summary: auto-promoted + proposed + bootstrap drafts. */
+  getMissionLearningSummary(runId: string): Promise<MissionLearningSummary>;
+  /** One-click manual promote for a sub-threshold candidate or bootstrap draft. */
+  promoteMissionLearningCandidate(input: {
+    runId: string;
+    candidateId: string;
+    kind: PromoteLearningCandidateKind;
+  }): Promise<MissionLearningSummary>;
+  /** Operator chose "Skip for now" — entry stays pending in the candidates editor. */
+  skipMissionLearningCandidate(input: {
+    runId: string;
+    candidateId: string;
+  }): Promise<MissionLearningSummary>;
+  /** "Used by N missions" rollup for the IntelligenceAuditEditor expansion. */
+  getRepoIntelligenceUsage(entryId: string): Promise<RepoIntelligenceUsageRecord[]>;
   /** Fetch the most recent WorkSession events for a station (newest-first). */
   listWorkSessionEventsByStation(
     stationId: string,

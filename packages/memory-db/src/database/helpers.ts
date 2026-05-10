@@ -187,6 +187,30 @@ export function assertSubagentSource(source: string): asserts source is Subagent
   }
 }
 
+export function assertValidationProfileSource(
+  source: string,
+): asserts source is "builtin" | "user" | "learned" {
+  if (source !== "builtin" && source !== "user" && source !== "learned") {
+    throw new Error(`Unsupported validation profile source: ${source}`);
+  }
+}
+
+export function assertValidationProfileScope(
+  scope: string,
+): asserts scope is "global" | "project" | "shared-repo" {
+  if (scope !== "global" && scope !== "project" && scope !== "shared-repo") {
+    throw new Error(`Unsupported validation profile scope: ${scope}`);
+  }
+}
+
+export function assertRepoProfileTrustLearnerMode(
+  mode: string,
+): asserts mode is "manual-review" | "auto-accept-below-threshold" | "paused" {
+  if (mode !== "manual-review" && mode !== "auto-accept-below-threshold" && mode !== "paused") {
+    throw new Error(`Unsupported repo profile trust-learner mode: ${mode}`);
+  }
+}
+
 export function assertTicketRunStatus(status: string): asserts status is TicketRunStatus {
   if (!TICKET_RUN_STATUSES.includes(status as TicketRunStatus)) {
     throw new Error(`Unsupported ticket run status: ${status}`);

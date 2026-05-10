@@ -399,10 +399,19 @@ export interface TicketRunMissionEventSummary {
  * validationProfileRecord (which lives in @spira/memory-db) but with renderer-friendly
  * types and the rolling-runtime field exposed.
  */
+/**
+ * Scope semantics for a validation profile (mirror of the DB enum):
+ *  - `global`: applies to every project (legacy NULL projectKey).
+ *  - `project`: applies only to the named project.
+ *  - `shared-repo`: applies to any project whose mappings include this `repoRelativePath`.
+ */
+export type MissionValidationProfileScope = "global" | "project" | "shared-repo";
+
 export interface MissionValidationProfileRecord {
   id: string;
   projectKey: string | null;
   repoRelativePath: string | null;
+  scope: MissionValidationProfileScope;
   label: string;
   kind: TicketRunMissionValidationKind;
   command: string;
@@ -413,7 +422,7 @@ export interface MissionValidationProfileRecord {
   /** Rolling-average observed runtime; populated by Phase 5's learning loop. */
   lastObservedRuntimeMs: number | null;
   prerequisites: string[];
-  source: "builtin" | "user";
+  source: "builtin" | "user" | "learned";
   createdAt: number;
   updatedAt: number;
 }
@@ -427,6 +436,7 @@ export interface UpsertMissionValidationProfileInput {
   id?: string;
   projectKey?: string | null;
   repoRelativePath?: string | null;
+  scope?: MissionValidationProfileScope;
   label: string;
   kind: TicketRunMissionValidationKind;
   command: string;
@@ -448,8 +458,20 @@ export interface UpsertMissionValidationProfileInput {
  *  - `user`: captured by the operator via the admin pane / onboarding wizard.
  *  - `learned`: written by the Phase 5 learning loop (not yet active).
  */
+/**
+ * Operator preference for how this project's close-screen learning panel behaves. See
+ * `RepoProfileTrustLearnerMode` in @spira/memory-db for the full prose. Renderer values
+ * mirror that union so the admin panel can toggle the field.
+ */
+export type MissionRepoProfileTrustLearnerMode =
+  | "manual-review"
+  | "auto-accept-below-threshold"
+  | "paused";
+
 export interface MissionRepoProfileRecord {
   projectKey: string;
+  /** Empty string ('') for the project-wide default; non-empty for per-repo overrides. */
+  repoRelativePath: string;
   displayName: string;
   description: string | null;
   defaultBranch: string | null;
@@ -462,6 +484,7 @@ export interface MissionRepoProfileRecord {
   uiTestGlobs: string[];
   notes: string | null;
   source: "builtin" | "user" | "learned";
+  trustLearnerMode: MissionRepoProfileTrustLearnerMode;
   createdAt: number;
   updatedAt: number;
 }
@@ -472,6 +495,8 @@ export interface MissionRepoProfilesSnapshot {
 
 export interface UpsertMissionRepoProfileInput {
   projectKey: string;
+  /** Defaults to '' (project-wide) when omitted. */
+  repoRelativePath?: string;
   displayName: string;
   description?: string | null;
   defaultBranch?: string | null;
@@ -484,6 +509,7 @@ export interface UpsertMissionRepoProfileInput {
   uiTestGlobs?: readonly string[];
   notes?: string | null;
   source?: "builtin" | "user" | "learned";
+  trustLearnerMode?: MissionRepoProfileTrustLearnerMode;
 }
 
 /**

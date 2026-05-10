@@ -27,8 +27,8 @@ const MAX_PITFALLS_PER_SECTION = 3;
 const MAX_VALIDATIONS_PER_SECTION = 6;
 
 export interface BuildRepoGuidanceSectionOptions {
-  /** Override for tests; defaults to memoryDb-backed fetch. */
-  fetchProfile?: (projectKey: string) => RepoProfileRecord | null;
+  /** Override for tests; defaults to memoryDb-backed fetch of every row for the project. */
+  fetchProjectProfiles?: (projectKey: string) => readonly RepoProfileRecord[];
   fetchIntelligence?: (
     projectKey: string,
     repoPaths: readonly string[],
@@ -112,20 +112,46 @@ const formatValidations = (validations: readonly ValidationProfileRecord[]): str
 };
 
 /**
+ * Provenance of a single rendered Repo guidance section. Recorded as a mission event so
+ * the renderer can show "what guidance shaped this mission" without re-deriving.
+ */
+export interface RepoGuidanceProvenance {
+  repoIntelligenceEntryIds: string[];
+  validationProfileIds: string[];
+  repoProfileKeys: { projectKey: string; repoRelativePath: string }[];
+  sectionLength: number;
+}
+
+export interface BuildRepoGuidanceResult {
+  markdown: string;
+  provenance: RepoGuidanceProvenance;
+}
+
+/**
  * Compose the `## Repo guidance` section for a mission prompt. Returns null when nothing is
  * worth saying for this run (no profile, no approved entries, no validations).
+ *
+ * Repo profiles are now keyed on `(projectKey, repoRelativePath)`. We fetch all rows for
+ * the project, render the project-wide row (`repoRelativePath = ''`) first, then per-repo
+ * rows whose `repoRelativePath` matches a worktree the run touches.
  */
 export const buildRepoGuidanceSection = (
   memoryDb: SpiraMemoryDatabase,
   run: TicketRunSummary,
   options: BuildRepoGuidanceSectionOptions = {},
-): string | null => {
+): BuildRepoGuidanceResult | null => {
   const projectKey = run.projectKey?.trim();
   if (!projectKey) return null;
 
   const repoPaths = buildMissionScopePaths(run);
+  const repoPathSet = new Set(repoPaths);
 
-  const fetchProfile = options.fetchProfile ?? ((key: string) => memoryDb.getRepoProfile(key));
+  // Fetch every profile row for this project (project-wide + every per-repo override) and
+  // filter to the impacted set. The injected list = project-wide row first, then any per-repo
+  // override that matches a worktree the run touches.
+  const fetchProjectProfiles =
+    options.fetchProjectProfiles ??
+    ((key: string) => memoryDb.listRepoProfiles({ projectKey: key, limit: 100 }));
   const fetchIntelligence =
     options.fetchIntelligence ??
     ((key: string, paths: readonly string[]) =>
@@ -135,7 +161,11 @@ export const buildRepoGuidanceSection = (
     ((key: string, paths: readonly string[]) =>
       memoryDb.listValidationProfiles({ projectKey: key, repoRelativePaths: paths, limit: 50 }));
 
-  const profile = fetchProfile(projectKey);
+  const allProjectProfiles = fetchProjectProfiles(projectKey);
+  const projectWideProfile = allProjectProfiles.find((entry) => entry.repoRelativePath === "") ?? null;
+  const perRepoProfiles = allProjectProfiles.filter(
+    (entry) => entry.repoRelativePath !== "" && repoPathSet.has(entry.repoRelativePath),
+  );
   const intelligence = fetchIntelligence(projectKey, repoPaths);
   const validations = fetchValidations(projectKey, repoPaths);
 
@@ -147,7 +177,14 @@ export const buildRepoGuidanceSection = (
     .slice(0, MAX_PITFALLS_PER_SECTION);
   const trimmedValidations = validations.slice(0, MAX_VALIDATIONS_PER_SECTION);
 
-  if (!profile && briefings.length === 0 && pitfalls.length === 0 && trimmedValidations.length === 0) {
+  const profilesToRender = [...(projectWideProfile ? [projectWideProfile] : []), ...perRepoProfiles];
+
+  if (
+    profilesToRender.length === 0 &&
+    briefings.length === 0 &&
+    pitfalls.length === 0 &&
+    trimmedValidations.length === 0
+  ) {
     return null;
   }
 
@@ -155,7 +192,7 @@ export const buildRepoGuidanceSection = (
   sections.push(
     "Operator-curated knowledge for the impacted repos. Treat as defaults: deviate when the change at hand demands it, but don't re-derive from scratch.",
   );
-  if (profile) sections.push(formatProfile(profile));
+  for (const profile of profilesToRender) sections.push(formatProfile(profile));
   const briefingsBlock = formatIntelligenceGroup(briefings, "Briefings");
   if (briefingsBlock) sections.push(briefingsBlock);
   const pitfallsBlock = formatIntelligenceGroup(pitfalls, "Pitfalls");
@@ -163,5 +200,18 @@ export const buildRepoGuidanceSection = (
   const validationsBlock = formatValidations(trimmedValidations);
   if (validationsBlock) sections.push(validationsBlock);
 
-  return sections.join("\n\n");
+  const markdown = sections.join("\n\n");
+
+  return {
+    markdown,
+    provenance: {
+      repoIntelligenceEntryIds: [...briefings.map((entry) => entry.id), ...pitfalls.map((entry) => entry.id)],
+      validationProfileIds: trimmedValidations.map((entry) => entry.id),
+      repoProfileKeys: profilesToRender.map((profile) => ({
+        projectKey: profile.projectKey,
+        repoRelativePath: profile.repoRelativePath,
+      })),
+      sectionLength: markdown.length,
+    },
+  };
 };

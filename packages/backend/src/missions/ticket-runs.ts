@@ -134,10 +134,12 @@ import {
   buildTicketRunBranchName,
   buildTicketRunWorktreePath,
   describeTicketRunWorkspace,
+  formatPreviousPassContextSection,
   formatTicketRunWorktreeList,
   resolveTicketRunMissionDirectory,
 } from "./ticket-runs/workspace.js";
 import {
+  DEFAULT_VALIDATION_AUTO_PROMOTION_THRESHOLD,
   DEFAULT_VALIDATION_CANDIDATE_THRESHOLD,
   deriveValidationProfileCandidates,
 } from "./validation-candidate-learner.js";
@@ -2335,6 +2337,7 @@ export class TicketRunService {
     const latestAttempt = this.getLatestAttempt(run);
     const workspace = describeTicketRunWorkspace(run.worktrees);
     const guidance = this.tryBuildRepoGuidance(run);
+    const priorPass = formatPreviousPassContextSection(run.previousPassContext);
     return [
       // ── Stable per-mission prefix (cacheable) ───────────────────────────────────
       ...(guidance ? [guidance] : []),
@@ -2345,6 +2348,7 @@ export class TicketRunService {
       // ── Per-attempt suffix (not cacheable) ──────────────────────────────────────
       `Continue work on ticket ${run.ticketId}: ${run.ticketSummary}.`,
       latestAttempt?.summary ? `Last pass summary: ${latestAttempt.summary}` : "No prior pass summary is available.",
+      ...(priorPass ? [priorPass] : []),
       prompt
         ? `User follow-up: ${prompt}`
         : "Tighten the solution, resolve remaining issues, and leave a crisp handoff summary.",
@@ -2360,7 +2364,24 @@ export class TicketRunService {
     const memoryDb = this.options.memoryDb;
     if (!memoryDb) return null;
     try {
-      return buildRepoGuidanceSection(memoryDb, run);
+      const result = buildRepoGuidanceSection(memoryDb, run);
+      if (!result) return null;
+      // Record provenance so the renderer's "Guidance applied" panel can show which
+      // learned entries shaped this attempt's prompt. Best-effort; never faults.
+      try {
+        this.recordMissionEvent(run, "system", "repo-guidance-injected", {
+          repoIntelligenceEntryIds: result.provenance.repoIntelligenceEntryIds,
+          validationProfileIds: result.provenance.validationProfileIds,
+          repoProfileKeys: result.provenance.repoProfileKeys,
+          sectionLength: result.provenance.sectionLength,
+        });
+      } catch (provenanceError) {
+        this.options.logger.warn(
+          { err: provenanceError, runId: run.runId },
+          "Failed to record repo-guidance-injected event; continuing",
+        );
+      }
+      return result.markdown;
     } catch (error) {
       this.options.logger.warn(
         { err: error, runId: run.runId, ticketId: run.ticketId },
@@ -3760,6 +3781,12 @@ export class TicketRunService {
     if (!memoryDb) {
       return;
     }
+    // M.1/M.2: respect the project's trust-learner mode. `paused` skips the whole observe
+    // path so the corpus doesn't accumulate during a refactor.
+    const trustMode = this.lookupProjectTrustLearnerMode(run);
+    if (trustMode === "paused") {
+      return;
+    }
     // classify the closed mission once and reuse it for both the audit-trail
     // event and the candidate generator. Null means "not closed cleanly enough to learn
     // from" and we skip everything below.
@@ -3780,6 +3807,51 @@ export class TicketRunService {
         entryIds: entries.map((entry) => entry.id),
         repoRelativePaths: entries.map((entry) => entry.repoRelativePath),
       });
+      if (trustMode === "auto-accept-below-threshold") {
+        // Operator opted into silent acceptance: flip approval on every freshly-observed
+        // candidate AND any older pending entries that pre-date the toggle. The
+        // threshold-based promotion sweep below still runs but auto-accept means it
+        // rarely has anything to do.
+        for (const entry of entries) {
+          try {
+            memoryDb.setRepoIntelligenceApproval(entry.id, true);
+          } catch (approveError) {
+            this.options.logger.warn(
+              { err: approveError, runId: run.runId, entryId: entry.id },
+              "Auto-accept-below-threshold approval failed; entry remains pending",
+            );
+          }
+        }
+      }
+    }
+    if (trustMode === "auto-accept-below-threshold" && run.projectKey) {
+      // Backlog catch-up: pending learned entries observed before the operator flipped the
+      // toggle should also flip to approved. Bounded to 500 entries per close to keep the
+      // sweep cheap — anything older than that is a corner case worth a manual sweep.
+      try {
+        const pending = memoryDb.listRepoIntelligence({
+          projectKey: run.projectKey,
+          includeUnapproved: true,
+          source: "learned",
+          limit: 500,
+        });
+        for (const entry of pending) {
+          if (entry.approved) continue;
+          try {
+            memoryDb.setRepoIntelligenceApproval(entry.id, true);
+          } catch (approveError) {
+            this.options.logger.warn(
+              { err: approveError, runId: run.runId, entryId: entry.id },
+              "Auto-accept backlog approval failed; entry remains pending",
+            );
+          }
+        }
+      } catch (listError) {
+        this.options.logger.warn(
+          { err: listError, runId: run.runId },
+          "Auto-accept backlog sweep failed; pending entries unaffected",
+        );
+      }
     }
     // Validation candidates and the promotion sweep are independent of whether THIS
     // run produced new repo-intelligence candidates — a clean-pass with no fresh
@@ -3787,7 +3859,7 @@ export class TicketRunService {
     // off the close path via setImmediate so close latency stays bounded.
     setImmediate(() => {
       try {
-        this.observeValidationProfileCandidates(run, outcome);
+        this.observeValidationProfileCandidates(run, outcome, trustMode);
       } catch (error) {
         this.options.logger.warn({ err: error, runId: run.runId }, "Validation-candidate observation failed");
       }
@@ -3809,7 +3881,27 @@ export class TicketRunService {
    * the operator-facing audit trail is complete; persistence as an actual profile is opt-in
    * via the admin pane (Phase 5.4 auto-promotes only above the confidence threshold).
    */
-  private observeValidationProfileCandidates(run: TicketRunSummary, outcome: MissionOutcomeClassification): void {
+  /**
+   * Resolve the project-wide `trust_learner_mode` for a run's project, defaulting to
+   * `manual-review` when no profile exists or memory db isn't wired. The mode is read
+   * once per close-path observer chain.
+   */
+  private lookupProjectTrustLearnerMode(run: TicketRunSummary): "manual-review" | "auto-accept-below-threshold" | "paused" {
+    const memoryDb = this.options.memoryDb;
+    if (!memoryDb || !run.projectKey) return "manual-review";
+    try {
+      const profile = memoryDb.getRepoProfile(run.projectKey, "");
+      return profile?.trustLearnerMode ?? "manual-review";
+    } catch {
+      return "manual-review";
+    }
+  }
+
+  private observeValidationProfileCandidates(
+    run: TicketRunSummary,
+    outcome: MissionOutcomeClassification,
+    trustMode: "manual-review" | "auto-accept-below-threshold" | "paused" = "manual-review",
+  ): void {
     const memoryDb = this.options.memoryDb;
     if (!memoryDb || !run.projectKey) return;
     // Negative-evidence outcomes don't propose new profiles — a fail-final mission's shell
@@ -3840,7 +3932,12 @@ export class TicketRunService {
       existingProfiles,
       threshold: DEFAULT_VALIDATION_CANDIDATE_THRESHOLD,
     });
-    const autoPromotionThreshold = this.options.validationProfileAutoPromotionThreshold ?? 5;
+    // M.1: when the project trusts the learner, promote any successful observation
+    // immediately (threshold = 1) instead of waiting for the default 5-mission threshold.
+    const autoPromotionThreshold =
+      trustMode === "auto-accept-below-threshold"
+        ? 1
+        : this.options.validationProfileAutoPromotionThreshold ?? DEFAULT_VALIDATION_AUTO_PROMOTION_THRESHOLD;
     for (const candidate of candidates) {
       this.recordMissionEvent(run, "system", "validation-profile-candidate-observed", {
         candidateId: candidate.candidateId,
@@ -3883,6 +3980,8 @@ export class TicketRunService {
             successCount: candidate.successCount,
             threshold: autoPromotionThreshold,
             formulaVersion: PROMOTION_FORMULA_VERSION,
+            promotionReason:
+              trustMode === "auto-accept-below-threshold" ? "trust-mode-auto" : "threshold-met",
           });
         } catch (error) {
           this.options.logger.warn(
