@@ -1,0 +1,146 @@
+.full {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0;
+  padding-top: 4px;
+}
+
+.fullTrack {
+  position: absolute;
+  top: 14px;
+  left: 12.5%;
+  right: 12.5%;
+  height: 2px;
+  background: var(--border-default);
+  pointer-events: none;
+}
+
+.fullTrackFill {
+  position: absolute;
+  top: 14px;
+  left: 12.5%;
+  height: 2px;
+  background: linear-gradient(90deg, var(--gold-deep) 0%, var(--gold-bright) 100%);
+  box-shadow: 0 0 12px rgba(245, 218, 156, 0.32);
+  transition: width 0.32s ease;
+  pointer-events: none;
+}
+
+.fullTrackFillBlocked {
+  background: linear-gradient(90deg, var(--gold-deep) 0%, var(--gold-warm) 100%);
+  box-shadow: 0 0 12px rgba(224, 196, 137, 0.28);
+}
+
+.node {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.glyph {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-family: var(--font-display);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0;
+  background: var(--hull-deep);
+  border: 1.5px solid var(--border-default);
+  color: var(--text-muted);
+  transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.glyphDone {
+  background: var(--gold-deep);
+  border-color: var(--gold-deep);
+  color: var(--hull-deep);
+}
+
+.glyphCurrent {
+  background: var(--gold-bright);
+  border-color: var(--gold-bright);
+  color: var(--hull-deep);
+  box-shadow: 0 0 14px rgba(245, 218, 156, 0.42);
+}
+
+.glyphCurrentBlocked {
+  background: var(--gold-warm);
+  border-color: var(--gold-warm);
+  color: var(--hull-deep);
+  box-shadow: 0 0 14px rgba(224, 196, 137, 0.36);
+}
+
+.label {
+  font-family: var(--font-display);
+  font-size: 9px;
+  font-weight: 500;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.labelDone {
+  color: var(--text-secondary);
+}
+
+.labelCurrent {
+  color: var(--gold-bright);
+}
+
+.labelCurrentBlocked {
+  color: var(--gold-warm);
+}
+
+/* Micro variant — connector dots, no labels */
+
+.micro {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.microDot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--hull-edge);
+  border: 1px solid var(--border-default);
+}
+
+.microDotDone {
+  background: var(--gold-deep);
+  border-color: var(--gold-deep);
+}
+
+.microDotCurrent {
+  background: var(--gold-bright);
+  border-color: var(--gold-bright);
+  box-shadow: 0 0 6px rgba(245, 218, 156, 0.55);
+}
+
+.microDotCurrentBlocked {
+  background: var(--gold-warm);
+  border-color: var(--gold-warm);
+}
+
+.microBar {
+  width: 16px;
+  height: 2px;
+  background: var(--border-default);
+}
+
+.microBarDone {
+  background: var(--gold-deep);
+}
+
+.microBarCurrentBlocked {
+  background: var(--gold-warm);
+}

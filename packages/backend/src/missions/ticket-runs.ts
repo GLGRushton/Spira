@@ -95,6 +95,7 @@ import {
   parseGitHubRepositoryUrl,
   parseRepositoryCoordinates,
 } from "./ticket-runs/github.js";
+import { buildPullRequestBody, categorizeChangedFiles } from "./ticket-runs/pull-request-template.js";
 import {
   buildDefaultProofSummary,
   buildFallbackCommitBullets,
@@ -2324,6 +2325,7 @@ export class TicketRunService {
       "The working directory is already set to the mission workspace. Move between repo directories as needed.",
       "Inspect the codebase, implement the ticket, and leave the worktree in a reviewable state.",
       "Use the existing station context as your scratchpad; do not restart from first principles unless the evidence demands it.",
+      "If the ticket references screenshots or other attached evidence, call youtrack_list_attachments and then youtrack_view_attachment to inspect them.",
       "If you stop with open questions or partial work, say so plainly in your final summary.",
       // ── Per-attempt suffix (not cacheable) ──────────────────────────────────────
       `Work on ticket ${run.ticketId}: ${run.ticketSummary}.`,
@@ -2343,6 +2345,7 @@ export class TicketRunService {
       `Repositories in scope:\n${formatTicketRunWorktreeList(run.worktrees)}`,
       "Stay inside the mission workspace and preserve the existing repo layout.",
       "Continue inside the same mission station and preserve context from the prior pass.",
+      "If the ticket references screenshots or other attached evidence you have not yet seen, call youtrack_list_attachments and then youtrack_view_attachment to inspect them.",
       // ── Per-attempt suffix (not cacheable) ──────────────────────────────────────
       `Continue work on ticket ${run.ticketId}: ${run.ticketSummary}.`,
       latestAttempt?.summary ? `Last pass summary: ${latestAttempt.summary}` : "No prior pass summary is available.",
@@ -3252,6 +3255,35 @@ export class TicketRunService {
     }
   }
 
+  private async getCommitMessagesOnBranch(worktreePath: string, baseRef: string): Promise<string[]> {
+    const separator = "<<<SPIRA_COMMIT_SEPARATOR>>>";
+    try {
+      const { stdout } = await this.runGitCommand(worktreePath, [
+        "log",
+        `${baseRef}..HEAD`,
+        `--pretty=format:%B${separator}`,
+      ]);
+      return stdout
+        .split(separator)
+        .map((message) => message.trim())
+        .filter((message) => message.length > 0);
+    } catch {
+      return [];
+    }
+  }
+
+  private async getChangedFilesOnBranch(worktreePath: string, baseRef: string): Promise<string[]> {
+    try {
+      const { stdout } = await this.runGitCommand(worktreePath, ["diff", "--name-only", `${baseRef}...HEAD`]);
+      return stdout
+        .split(/\r?\n/u)
+        .map((path) => path.trim())
+        .filter((path) => path.length > 0);
+    } catch {
+      return [];
+    }
+  }
+
   private async createGitHubPullRequest(
     run: TicketRunSummary,
     gitState: TicketRunGitState | TicketRunSubmoduleGitState,
@@ -3267,12 +3299,20 @@ export class TicketRunService {
     }
 
     const token = this.getMissionGitToken();
-    const commitMessage = (
+    const latestCommitMessage = (
       await this.runGitCommand(gitState.worktreePath, ["log", "-1", "--pretty=%s%n%n%b", "HEAD"])
     ).stdout.trim();
-    const [titleLine, ...bodyLines] = commitMessage.split(/\r?\n/u);
+    const [titleLine] = latestCommitMessage.split(/\r?\n/u);
     const title = titleLine?.trim() || `feat(${run.ticketId}): ${run.ticketSummary}`;
-    const body = bodyLines.join("\n").trim();
+    const baseRef = `origin/${origin.defaultBranch}`;
+    const [commitMessages, changedFiles] = await Promise.all([
+      this.getCommitMessagesOnBranch(gitState.worktreePath, baseRef),
+      this.getChangedFilesOnBranch(gitState.worktreePath, baseRef),
+    ]);
+    const body = buildPullRequestBody({
+      commitMessages: commitMessages.length > 0 ? commitMessages : [latestCommitMessage],
+      categories: categorizeChangedFiles(changedFiles),
+    });
 
     const requestHeaders = {
       Accept: "application/vnd.github+json",

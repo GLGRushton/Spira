@@ -317,6 +317,7 @@ export type ClientMessage =
   | { type: "missions:ticket-run:services:get"; requestId: string; runId: string }
   | { type: "missions:ticket-run:service:start"; requestId: string; runId: string; profileId: string }
   | { type: "missions:ticket-run:service:stop"; requestId: string; runId: string; serviceId: string }
+  | { type: "missions:ticket-run:service:dismiss"; requestId: string; runId: string; serviceId: string }
   | { type: "tts:speak"; text: string }
   | { type: "tts:stop" }
   | { type: "voice:toggle" }
@@ -580,6 +581,11 @@ export type ServerMessage =
     }
   | {
       type: "missions:ticket-run:service:stop:result";
+      requestId: string;
+      services: MissionServiceSnapshot;
+    }
+  | {
+      type: "missions:ticket-run:service:dismiss:result";
       requestId: string;
       services: MissionServiceSnapshot;
     }

@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Mission Rooms · Redesign Variations</title>
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; background: #0b0d12; color: #e5e7eb; font-family: "Inter", system-ui, sans-serif; }
+  * { box-sizing: border-box; }
+  @keyframes blink { 0%, 49% { opacity: 1; } 50%, 100% { opacity: 0; } }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+<script src="rooms/data.js"></script>
+<script type="text/babel" src="redesigns/canvas.jsx"></script>
+<script type="text/babel" src="rooms/chrome.jsx"></script>
+<script type="text/babel" src="rooms/changes.jsx"></script>
+<script type="text/babel" src="rooms/actions.jsx"></script>
+<script type="text/babel" src="rooms/processes.jsx"></script>
+
+<script type="text/babel">
+  const { DesignCanvas, DCSection, DCArtboard } = window.RDC;
+  const W = 1280, H = 860;
+
+  function Board({ id, label, children }) {
+    return (
+      <DCArtboard id={id} label={label} width={W} height={H}>
+        <div data-screen-label={label} style={{ width: W, height: H, background: window.LN.bg }}>
+          {children}
+        </div>
+      </DCArtboard>
+    );
+  }
+
+  function App() {
+    return (
+      <DesignCanvas>
+        <DCSection
+          id="changes"
+          title="The Changes room"
+          accent="#5e6ad2"
+          subtitle="Three takes on the diff-and-files surface. v1 borrows the GitHub split-pane review. v2 leans into the repo-as-card mental model. v3 collapses everything into a PR-style summary with a preview."
+        >
+          <Board id="ch-v1" label="V1 · Split diff (file tree + viewer)"><window.ChangesRoom.V1 /></Board>
+          <Board id="ch-v2" label="V2 · Stacked groups (accordion + inline hunks)"><window.ChangesRoom.V2 /></Board>
+          <Board id="ch-v3" label="V3 · PR summary (stat strip + flat table)"><window.ChangesRoom.V3 /></Board>
+        </DCSection>
+
+        <DCSection
+          id="actions"
+          title="The Actions room"
+          accent="#d99850"
+          subtitle="Three takes on the commit / push / PR workflow. v1 gives each repo its own pipeline card. v2 focuses on one repo at a time. v3 treats the whole mission as a single checklist with explicit “next step” affordances."
+        >
+          <Board id="ac-v1" label="V1 · Pipeline cards (per-repo rail)"><window.ActionsRoom.V1 /></Board>
+          <Board id="ac-v2" label="V2 · Two-pane focus (list + draft)"><window.ActionsRoom.V2 /></Board>
+          <Board id="ac-v3" label="V3 · Workflow checklist (one mission, ordered)"><window.ActionsRoom.V3 /></Board>
+        </DCSection>
+
+        <DCSection
+          id="processes"
+          title="The Processes room"
+          accent="#4cb782"
+          subtitle="Three takes on launch profiles + live services. v1 is a status-cockpit. v2 a two-pane log explorer. v3 a single dense table with an expandable log drawer for the selected row."
+        >
+          <Board id="pr-v1" label="V1 · Live dashboard (cards + sparklines)"><window.ProcessesRoom.V1 /></Board>
+          <Board id="pr-v2" label="V2 · Two-pane log explorer"><window.ProcessesRoom.V2 /></Board>
+          <Board id="pr-v3" label="V3 · Table-first with drawer"><window.ProcessesRoom.V3 /></Board>
+        </DCSection>
+      </DesignCanvas>
+    );
+  }
+
+  ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>

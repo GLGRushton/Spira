@@ -453,6 +453,11 @@ const ClientMessageSchema = z.discriminatedUnion("type", [
     runId: z.string(),
     serviceId: z.string(),
   }),
+  messageSchema("missions:ticket-run:service:dismiss", {
+    requestId: z.string(),
+    runId: z.string(),
+    serviceId: z.string(),
+  }),
   messageSchema("tts:speak", { text: z.string() }),
   messageSchema("tts:stop"),
   messageSchema("voice:toggle"),

@@ -160,7 +160,8 @@ type MissionsRequestMessage =
   | Extract<ClientMessage, { type: "missions:ticket-run:submodule:pull-request:create" }>
   | Extract<ClientMessage, { type: "missions:ticket-run:services:get" }>
   | Extract<ClientMessage, { type: "missions:ticket-run:service:start" }>
-  | Extract<ClientMessage, { type: "missions:ticket-run:service:stop" }>;
+  | Extract<ClientMessage, { type: "missions:ticket-run:service:stop" }>
+  | Extract<ClientMessage, { type: "missions:ticket-run:service:dismiss" }>;
 type MissionsResponseMessage =
   | Extract<ServerMessage, { type: "missions:runs:result" }>
   | Extract<ServerMessage, { type: "missions:ticket-run:start:result" }>
@@ -216,6 +217,7 @@ type MissionsResponseMessage =
   | Extract<ServerMessage, { type: "missions:ticket-run:services:get:result" }>
   | Extract<ServerMessage, { type: "missions:ticket-run:service:start:result" }>
   | Extract<ServerMessage, { type: "missions:ticket-run:service:stop:result" }>
+  | Extract<ServerMessage, { type: "missions:ticket-run:service:dismiss:result" }>
   | Extract<ServerMessage, { type: "missions:request-error" }>;
 type BackendRequestMessage =
   | ConversationRequestMessage
@@ -373,6 +375,7 @@ export interface IpcBridgeHandle {
   getTicketRunServices(runId: string): Promise<MissionServiceSnapshot>;
   startTicketRunService(runId: string, profileId: string): Promise<MissionServiceSnapshot>;
   stopTicketRunService(runId: string, serviceId: string): Promise<MissionServiceSnapshot>;
+  dismissTicketRunService(runId: string, serviceId: string): Promise<MissionServiceSnapshot>;
 }
 
 const isBackendResponseMessage = (message: ServerMessage): message is BackendResponseMessage =>
@@ -446,6 +449,7 @@ const isBackendResponseMessage = (message: ServerMessage): message is BackendRes
     message.type === "missions:ticket-run:services:get:result" ||
     message.type === "missions:ticket-run:service:start:result" ||
     message.type === "missions:ticket-run:service:stop:result" ||
+    message.type === "missions:ticket-run:service:dismiss:result" ||
     message.type === "missions:request-error");
 
 export function setupIpcBridge(
@@ -1337,6 +1341,17 @@ export function setupIpcBridge(
           serviceId,
         },
         "missions:ticket-run:service:stop:result",
+        MISSION_SERVICE_REQUEST_TIMEOUT_MS,
+      ).then((response) => response.services),
+    dismissTicketRunService: (runId, serviceId) =>
+      requestBackend(
+        {
+          type: "missions:ticket-run:service:dismiss",
+          requestId: randomUUID(),
+          runId,
+          serviceId,
+        },
+        "missions:ticket-run:service:dismiss:result",
         MISSION_SERVICE_REQUEST_TIMEOUT_MS,
       ).then((response) => response.services),
   };

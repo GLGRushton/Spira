@@ -30,11 +30,13 @@ import {
   TICKET_RUN_PROOF_RUN_STATUSES,
   TICKET_RUN_PROOF_STATUSES,
 } from "@spira/shared";
+import { isRichMcpToolResult } from "../mcp/client-pool.js";
 import type { McpToolAggregator } from "../mcp/tool-aggregator.js";
 import type { MissionContextSnapshot, MissionProofResultInput } from "../missions/mission-lifecycle.js";
 import type { MissionWorkflowState } from "../missions/mission-workflow-guard.js";
 import type { ProviderToolDefinition, ProviderToolResultObject } from "../provider/types.js";
 import { createLogger } from "../util/logger.js";
+import type { YouTrackService } from "../youtrack/service.js";
 import { createHostTools } from "./host-tools.js";
 import type { RuntimeStore } from "./runtime-store.js";
 import type { StationSessionStorage } from "./station-session-storage.js";
@@ -95,6 +97,7 @@ export interface ToolBridgeOptions {
     execute: () => Promise<ProviderToolResultObject>,
   ) => Promise<ProviderToolResultObject>;
   filterHostTool?: (tool: ProviderToolDefinition) => boolean;
+  youTrackService?: Pick<YouTrackService, "isConfigured" | "listAttachments" | "fetchAttachment"> | null;
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null;
@@ -353,10 +356,27 @@ export const filterMissionScopedMcpTools = (
   return [...tools];
 };
 
-const toSuccessResult = (result: unknown): ProviderToolResultObject => ({
-  textResultForLlm: typeof result === "string" ? result : JSON.stringify(result ?? null),
-  resultType: "success",
-});
+const toSuccessResult = (result: unknown): ProviderToolResultObject => {
+  if (isRichMcpToolResult(result)) {
+    const caption = result.text.length > 0 ? result.text : "[Image attachment]";
+    return {
+      resultType: "success",
+      textResultForLlm: caption,
+      content: [
+        { type: "text", text: caption },
+        ...result.images.map((image) => ({
+          type: "image" as const,
+          mimeType: image.mimeType,
+          base64: image.base64,
+        })),
+      ],
+    };
+  }
+  return {
+    textResultForLlm: typeof result === "string" ? result : JSON.stringify(result ?? null),
+    resultType: "success",
+  };
+};
 
 const toFailureResult = (toolName: string, error: unknown): ProviderToolResultObject => {
   const message = error instanceof Error ? error.message : `Tool ${toolName} failed`;
@@ -696,7 +716,17 @@ export const buildListMissionServicesTool = (
   missionRunId?: string,
 ) =>
   defineTool("spira_list_mission_services", {
-    description: "List launchable and active mission services for a mission run by run_id.",
+    description:
+      [
+        "Returns the full mission services snapshot for a run: the launchable launch profiles plus every tracked process,",
+        "regardless of state (running, starting, stopping, stopped, errored).",
+        "Use this to: see what services are live, triage a service that crashed, read stdout/stderr from a recent failure,",
+        "or check whether something is still running before launching a new one.",
+        "Each process entry carries: serviceId, profileName, state, pid, startedAt, stoppedAt, exitCode, errorMessage,",
+        "recentLogLines (up to ~80 most recent stdout+stderr lines, each with source/line/timestamp), childProcesses,",
+        "and metrics (current CPU percent + memory bytes, plus a short history series).",
+        "If a user reports a service problem, call this first to read the actual log lines instead of guessing.",
+      ].join(" "),
     parameters: {
       type: "object",
       properties: {

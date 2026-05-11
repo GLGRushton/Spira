@@ -2677,6 +2677,46 @@ const handleClientMessage = async (message: ClientMessage): Promise<void> => {
     return;
   }
 
+  if (message.type === "missions:ticket-run:service:dismiss") {
+    if (!missionServiceRegistry) {
+      transport?.send({
+        type: "missions:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(
+          new Error("Mission service registry is unavailable."),
+          "MISSIONS_SERVICES_UNAVAILABLE",
+          "Mission services are unavailable.",
+          "missions",
+        ),
+      });
+      return;
+    }
+
+    try {
+      transport?.send({
+        type: "missions:ticket-run:service:dismiss:result",
+        requestId: message.requestId,
+        services: missionServiceRegistry.dismissService(message.runId, message.serviceId),
+      });
+    } catch (error) {
+      logger.error(
+        { err: error, requestId: message.requestId, runId: message.runId, serviceId: message.serviceId },
+        "Failed to dismiss mission service",
+      );
+      transport?.send({
+        type: "missions:request-error",
+        requestId: message.requestId,
+        ...toErrorPayload(
+          error,
+          "MISSIONS_SERVICE_DISMISS_FAILED",
+          "Failed to dismiss this mission service.",
+          "missions",
+        ),
+      });
+    }
+    return;
+  }
+
   if (message.type === "mcp:add-server") {
     try {
       await mcpRegistry?.addServer(message.config);
@@ -3128,6 +3168,7 @@ const bootstrap = async () => {
     transport,
     memoryDb,
     subagentRegistry,
+    youTrackService,
     listMissionServices: async (runId) => {
       if (!missionServiceRegistry) {
         throw new RuntimeConfigError("Mission services are unavailable.");

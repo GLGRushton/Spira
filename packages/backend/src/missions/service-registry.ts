@@ -194,6 +194,12 @@ export class MissionServiceRegistry {
     return this.buildSnapshot(runId);
   }
 
+  dismissService(runId: string, serviceId: string): MissionServiceSnapshot {
+    this.options.ticketRunService.getRun(runId);
+    this.pool.dismiss(runId, serviceId);
+    return this.buildSnapshot(runId);
+  }
+
   async stopRunServices(runId: string): Promise<void> {
     await this.pool.stopRun(runId);
     this.pool.clearRun(runId);

@@ -23,6 +23,7 @@ import type { SubagentRegistry } from "../../subagent/registry.js";
 import type { SubagentRunRegistry } from "../../subagent/run-registry.js";
 import type { SubagentRunner } from "../../subagent/subagent-runner.js";
 import { appRootDir } from "../../util/app-paths.js";
+import type { YouTrackService } from "../../youtrack/service.js";
 import { AssistantError } from "../../util/errors.js";
 import { createLogger } from "../../util/logger.js";
 import { buildRuntimeCapabilityRegistry, getProviderToolManifest } from "../capability-registry.js";
@@ -65,6 +66,7 @@ export interface ToolRefreshHelperContext {
   saveMissionSummary?: ToolBridgeOptions["saveMissionSummary"];
   subagentRegistry: SubagentRegistry | null;
   subagentRunRegistry: SubagentRunRegistry;
+  youTrackService?: Pick<YouTrackService, "isConfigured" | "listAttachments" | "fetchAttachment"> | null;
   requestUpgradeProposal?: ToolBridgeOptions["requestUpgradeProposal"];
   applyHotCapabilityUpgrade?: ToolBridgeOptions["applyHotCapabilityUpgrade"];
   requestSessionEscalation: () => Promise<ProviderSessionEscalationResult>;
@@ -163,6 +165,7 @@ export const getToolBridgeOptionsHelper = (context: ToolRefreshHelperContext): T
     runtimeStore: context.runtimeStore,
     runtimeSessionId: context.getRuntimeSessionId(),
     stationId: context.stationId,
+    ...(context.youTrackService ? { youTrackService: context.youTrackService } : {}),
     ...(context.allowUpgradeTools
       ? {
           requestUpgradeProposal: context.requestUpgradeProposal,

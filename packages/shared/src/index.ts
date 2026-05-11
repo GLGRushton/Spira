@@ -137,6 +137,8 @@ export type {
   MissionServiceLauncher,
   MissionServiceLogLine,
   MissionServiceLogSource,
+  MissionServiceMetrics,
+  MissionServiceMetricsSample,
   MissionServiceProcessState,
   MissionServiceProcessSummary,
   MissionServiceProfileKind,

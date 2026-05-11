@@ -23,6 +23,17 @@ export interface MissionServiceChildProcessSummary {
   commandLine: string | null;
 }
 
+export interface MissionServiceMetricsSample {
+  timestamp: number;
+  cpuPercent: number;
+  memoryBytes: number;
+}
+
+export interface MissionServiceMetrics {
+  current: MissionServiceMetricsSample | null;
+  history: MissionServiceMetricsSample[];
+}
+
 export interface MissionServiceProfileSummary {
   profileId: string;
   profileName: string;
@@ -62,6 +73,7 @@ export interface MissionServiceProcessSummary {
   errorMessage: string | null;
   recentLogLines: MissionServiceLogLine[];
   childProcesses: MissionServiceChildProcessSummary[];
+  metrics: MissionServiceMetrics;
 }
 
 export interface MissionServiceSnapshot {

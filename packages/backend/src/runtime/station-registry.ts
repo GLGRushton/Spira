@@ -21,6 +21,7 @@ import type { McpToolAggregator } from "../mcp/tool-aggregator.js";
 import { SubagentLockManager } from "../subagent/lock-manager.js";
 import type { SubagentRegistry } from "../subagent/registry.js";
 import { SpiraError } from "../util/errors.js";
+import type { YouTrackService } from "../youtrack/service.js";
 import { type EventMap, SpiraEventBus } from "../util/event-bus.js";
 import { setUnrefTimeout } from "../util/timers.js";
 import { buildContinuityPreamble, buildConversationMemoryContent } from "./continuity.js";
@@ -98,6 +99,7 @@ interface StationRegistryOptions {
   setMissionProofStrategy?: ToolBridgeOptions["setMissionProofStrategy"];
   recordMissionProofResult?: ToolBridgeOptions["recordMissionProofResult"];
   saveMissionSummary?: ToolBridgeOptions["saveMissionSummary"];
+  youTrackService?: Pick<YouTrackService, "isConfigured" | "listAttachments" | "fetchAttachment"> | null;
   requestUpgradeProposal?: (proposal: UpgradeProposal) => Promise<void> | void;
   applyHotCapabilityUpgrade?: () => Promise<void> | void;
   isAutoApprovePermissionsEnabled?: () => boolean;
@@ -129,6 +131,7 @@ interface StationRegistryOptions {
       setMissionProofStrategy?: ToolBridgeOptions["setMissionProofStrategy"];
       recordMissionProofResult?: ToolBridgeOptions["recordMissionProofResult"];
       saveMissionSummary?: ToolBridgeOptions["saveMissionSummary"];
+      youTrackService?: Pick<YouTrackService, "isConfigured" | "listAttachments" | "fetchAttachment"> | null;
       isAutoApprovePermissionsEnabled?: () => boolean;
     },
   ) => StationSessionManager;
@@ -239,6 +242,7 @@ export class StationRegistry {
           setMissionProofStrategy: this.options.setMissionProofStrategy,
           recordMissionProofResult: this.options.recordMissionProofResult,
           saveMissionSummary: this.options.saveMissionSummary,
+          youTrackService: this.options.youTrackService,
           isAutoApprovePermissionsEnabled: this.options.isAutoApprovePermissionsEnabled,
         })
       : new StationSessionManager(
@@ -272,6 +276,7 @@ export class StationRegistry {
             setMissionProofStrategy: this.options.setMissionProofStrategy,
             recordMissionProofResult: this.options.recordMissionProofResult,
             saveMissionSummary: this.options.saveMissionSummary,
+            youTrackService: this.options.youTrackService,
             isAutoApprovePermissionsEnabled: this.options.isAutoApprovePermissionsEnabled,
           },
         );

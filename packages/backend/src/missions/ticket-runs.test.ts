@@ -3451,7 +3451,7 @@ describe("TicketRunService", () => {
     ]);
   });
 
-  it("does not block parent repo workflow for alignment-only managed submodule state", async () => {
+  it("does not block mission close or workflow for alignment-only managed submodule state", async () => {
     const database = createTestDatabase();
     const branchName = "feat/spi-204-ignore-alignment-only-submodules";
     const canonicalUrl = "github.com/example/legapp-common";
@@ -3570,7 +3570,8 @@ describe("TicketRunService", () => {
 
     const result = await service.getReviewSnapshot("run-1");
 
-    expect(result.reviewSnapshot.canClose).toBe(false);
+    expect(result.reviewSnapshot.canClose).toBe(true);
+    expect(result.reviewSnapshot.visibleSubmoduleUrls).toEqual([]);
     expect(result.reviewSnapshot.repoEntries).toEqual(
       expect.arrayContaining([
         expect.objectContaining({

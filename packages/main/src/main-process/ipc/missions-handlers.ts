@@ -119,6 +119,15 @@ export const createMissionIpcHandlers = (getBridge: () => IpcBridgeHandle | null
       requireField(input?.serviceId, "Service id is required."),
     ),
 
+  [IPC_CHANNELS.missions.serviceDismiss]: async (
+    _event: IpcMainInvokeEvent,
+    input?: { runId?: string; serviceId?: string },
+  ): Promise<MissionServiceSnapshot> =>
+    requireBridge(getBridge()).dismissTicketRunService(
+      requireRunId(input?.runId),
+      requireField(input?.serviceId, "Service id is required."),
+    ),
+
   [IPC_CHANNELS.missions.start]: async (
     _event: IpcMainInvokeEvent,
     input?: { ticket?: { ticketId?: string; ticketSummary?: string; ticketUrl?: string; projectKey?: string } },

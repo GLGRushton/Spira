@@ -1,0 +1,29 @@
+.sparkline {
+  display: block;
+}
+
+.baseline {
+  stroke: rgba(168, 133, 74, 0.18);
+  stroke-width: 1;
+}
+
+.line {
+  fill: none;
+  stroke-width: 1.5;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.default .line {
+  stroke: var(--crystal-glow);
+  filter: drop-shadow(0 0 4px rgba(146, 227, 218, 0.42));
+}
+
+.warm .line {
+  stroke: var(--gold-bright);
+  filter: drop-shadow(0 0 4px rgba(245, 218, 156, 0.42));
+}
+
+.muted .line {
+  stroke: var(--text-muted);
+}

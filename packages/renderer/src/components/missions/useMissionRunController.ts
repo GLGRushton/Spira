@@ -81,6 +81,7 @@ export interface MissionRunController {
   refreshMissionServices: () => Promise<void>;
   startMissionService: (profile: MissionServiceProfileSummary) => Promise<void>;
   stopMissionService: (service: MissionServiceProcessSummary) => Promise<void>;
+  dismissMissionService: (service: MissionServiceProcessSummary) => Promise<void>;
   gitStatesByRepo: Record<string, TicketRunGitState | null>;
   gitErrorsByRepo: Record<string, string | null>;
   submoduleGitStatesByUrl: Record<string, TicketRunSubmoduleGitState | null>;
@@ -1365,6 +1366,22 @@ export function useMissionRunController(run: TicketRunSummary): MissionRunContro
     [run.runId],
   );
 
+  const dismissMissionService = useCallback(
+    async (service: MissionServiceProcessSummary) => {
+      setServiceNotice(null);
+      setServiceError(null);
+
+      try {
+        const nextServices = await window.electronAPI.dismissTicketRunService(run.runId, service.serviceId);
+        setServices(nextServices);
+      } catch (error) {
+        console.error("Failed to dismiss mission service", error);
+        setServiceError(error instanceof Error ? error.message : "Failed to dismiss the mission service.");
+      }
+    },
+    [run.runId],
+  );
+
   const toggleDiffPath = useCallback((repoRelativePath: string, filePath: string) => {
     const key = `${repoRelativePath}:${filePath}`;
     setExpandedDiffPaths((current) => ({ ...current, [key]: !(current[key] ?? false) }));
@@ -1432,6 +1449,7 @@ export function useMissionRunController(run: TicketRunSummary): MissionRunContro
     refreshMissionServices,
     startMissionService,
     stopMissionService,
+    dismissMissionService,
     gitStatesByRepo,
     gitErrorsByRepo,
     submoduleGitStatesByUrl,

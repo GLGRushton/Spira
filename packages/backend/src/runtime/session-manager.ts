@@ -194,6 +194,7 @@ interface SessionManagerOptions {
   setMissionProofStrategy?: ToolBridgeOptions["setMissionProofStrategy"];
   recordMissionProofResult?: ToolBridgeOptions["recordMissionProofResult"];
   saveMissionSummary?: ToolBridgeOptions["saveMissionSummary"];
+  youTrackService?: ToolBridgeOptions["youTrackService"];
   isAutoApprovePermissionsEnabled?: () => boolean;
 }
 
@@ -269,6 +270,7 @@ export class StationSessionManager {
   private readonly setMissionProofStrategy: ToolBridgeOptions["setMissionProofStrategy"];
   private readonly recordMissionProofResult: ToolBridgeOptions["recordMissionProofResult"];
   private readonly saveMissionSummary: ToolBridgeOptions["saveMissionSummary"];
+  private readonly youTrackService: ToolBridgeOptions["youTrackService"];
   private readonly isAutoApprovePermissionsEnabled: () => boolean;
   private activeWorkSession: WorkSessionSnapshot | null = null;
   private hostContinuityState: ProviderHostContinuityState | null = null;
@@ -317,6 +319,7 @@ export class StationSessionManager {
     this.setMissionProofStrategy = options.setMissionProofStrategy;
     this.recordMissionProofResult = options.recordMissionProofResult;
     this.saveMissionSummary = options.saveMissionSummary;
+    this.youTrackService = options.youTrackService ?? null;
     this.isAutoApprovePermissionsEnabled = options.isAutoApprovePermissionsEnabled ?? (() => false);
     const persistedRuntimeSession = this.runtimeStore.getRuntimeSession(this.getRuntimeSessionId() ?? "");
     this.activeWorkSession = this.workSessionStorage.load();
@@ -3137,6 +3140,7 @@ export class StationSessionManager {
       setMissionProofStrategy: this.setMissionProofStrategy,
       recordMissionProofResult: this.recordMissionProofResult,
       saveMissionSummary: this.saveMissionSummary,
+      youTrackService: this.youTrackService,
       subagentRegistry: this.subagentRegistry,
       subagentRunRegistry: this.subagentRunRegistry,
       requestUpgradeProposal: this.requestUpgradeProposal,
@@ -3251,6 +3255,7 @@ export class StationSessionManager {
       setMissionProofStrategy: this.setMissionProofStrategy,
       recordMissionProofResult: this.recordMissionProofResult,
       saveMissionSummary: this.saveMissionSummary,
+      youTrackService: this.youTrackService,
       subagentRegistry: this.subagentRegistry,
       subagentRunRegistry: this.subagentRunRegistry,
       requestUpgradeProposal: this.requestUpgradeProposal,

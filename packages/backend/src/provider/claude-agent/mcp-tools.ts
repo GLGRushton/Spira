@@ -1,6 +1,6 @@
 import { type SdkMcpToolDefinition, createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
 import { type ZodRawShape, type ZodTypeAny, z } from "zod";
-import type { ProviderToolDefinition } from "../types.js";
+import type { ProviderToolDefinition, ProviderToolResultObject } from "../types.js";
 
 type JsonSchemaNode = {
   type?: string | string[];
@@ -99,15 +99,30 @@ export const jsonSchemaParametersToZodShape = (parameters: JsonSchemaNode): ZodR
 };
 
 const formatToolHandlerResult = (
-  textResultForLlm: string,
-  isError: boolean,
+  result: ProviderToolResultObject,
 ): {
-  content: Array<{ type: "text"; text: string }>;
+  content: Array<{ type: "text"; text: string } | { type: "image"; data: string; mimeType: string }>;
   isError?: boolean;
-} => ({
-  content: [{ type: "text", text: textResultForLlm }],
-  ...(isError ? { isError: true } : {}),
-});
+} => {
+  const isError = result.resultType === "failure";
+  const blocks: Array<{ type: "text"; text: string } | { type: "image"; data: string; mimeType: string }> = [];
+  if (result.content && result.content.length > 0) {
+    for (const block of result.content) {
+      if (block.type === "text") {
+        blocks.push({ type: "text", text: block.text });
+      } else {
+        blocks.push({ type: "image", data: block.base64, mimeType: block.mimeType });
+      }
+    }
+  }
+  if (blocks.length === 0) {
+    blocks.push({ type: "text", text: result.textResultForLlm });
+  }
+  return {
+    content: blocks,
+    ...(isError ? { isError: true } : {}),
+  };
+};
 
 export type SpiraMcpTool = SdkMcpToolDefinition<ZodRawShape>;
 
@@ -119,7 +134,7 @@ export const buildSpiraSdkMcpServer = (
     const shape = jsonSchemaParametersToZodShape(definition.parameters as JsonSchemaNode);
     return tool(definition.name, definition.description, shape, async (args) => {
       const result = await definition.handler(args as Record<string, unknown>);
-      return formatToolHandlerResult(result.textResultForLlm, result.resultType === "failure");
+      return formatToolHandlerResult(result);
     });
   });
   return createSdkMcpServer({

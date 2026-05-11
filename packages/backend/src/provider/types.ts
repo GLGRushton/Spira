@@ -41,10 +41,15 @@ export type ProviderSessionEscalationResult = {
   toDeployment?: string | null;
 };
 
+export type ProviderToolResultContent =
+  | { type: "text"; text: string }
+  | { type: "image"; mimeType: string; base64: string };
+
 export type ProviderToolResultObject = {
   textResultForLlm: string;
   resultType: "success" | "failure";
   error?: string;
+  content?: ProviderToolResultContent[];
 };
 
 export type ProviderToolDefinition = {

@@ -20,6 +20,7 @@ import {
   parseToolArguments,
   publishOpenAiHostContinuity,
   rollbackOpenAiTurnMessages,
+  toToolResultImageContentParts,
   toToolResultMessage,
   tryEscalateOpenAiSession,
 } from "./session-state.js";
@@ -255,6 +256,13 @@ const runOpenAiTurnOnce = async (
             tool_call_id: toolCall.id,
             content: toToolResultMessage(result),
           });
+          const imageParts = toToolResultImageContentParts(result);
+          if (imageParts) {
+            state.messages.push({
+              role: "user",
+              content: imageParts,
+            });
+          }
           publishOpenAiHostContinuity(state);
         }
 

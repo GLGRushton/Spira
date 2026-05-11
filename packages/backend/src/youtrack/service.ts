@@ -74,7 +74,32 @@ interface YouTrackCommandPayload {
   issues: Array<{ idReadable: string }>;
 }
 
+interface YouTrackApiAttachment {
+  id?: string;
+  name?: string;
+  size?: number;
+  mimeType?: string;
+  url?: string;
+  created?: number;
+  author?: { login?: string; fullName?: string | null } | null;
+}
+
+export interface YouTrackAttachmentMetadata {
+  id: string;
+  name: string;
+  size: number;
+  mimeType: string;
+  createdAt: number | null;
+  author: string | null;
+}
+
+export interface YouTrackAttachmentContent extends YouTrackAttachmentMetadata {
+  bytes: Buffer;
+}
+
 const YOUTRACK_REQUEST_TIMEOUT_MS = 10_000;
+const YOUTRACK_ATTACHMENT_REQUEST_TIMEOUT_MS = 30_000;
+const YOUTRACK_MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
 
 const cloneStateMapping = (stateMapping: YouTrackStateMapping = DEFAULT_YOUTRACK_STATE_MAPPING): YouTrackStateMapping =>
   normalizeYouTrackStateMapping(stateMapping);
@@ -434,6 +459,88 @@ export class YouTrackService {
       .sort((left, right) => left.shortName.localeCompare(right.shortName));
   }
 
+  async listAttachments(ticketId: string): Promise<YouTrackAttachmentMetadata[]> {
+    const normalizedTicketId = ticketId.trim();
+    if (!normalizedTicketId) {
+      throw new YouTrackError("Ticket id is required to list YouTrack attachments.");
+    }
+
+    const baseUrl = this.getBaseUrl();
+    const token = this.env.YOUTRACK_TOKEN?.trim();
+    if (!baseUrl || !token) {
+      throw new YouTrackError("YouTrack is not fully configured.");
+    }
+
+    const apiBaseUrl = validateApiBaseUrl(baseUrl);
+    const fields = encodeURIComponent("id,name,size,mimeType,url,created,author(login,fullName)");
+    const attachments = await this.fetchJson<YouTrackApiAttachment[]>(
+      `${apiBaseUrl}/api/issues/${encodeURIComponent(normalizedTicketId)}/attachments?fields=${fields}`,
+      token,
+      "attachment list",
+    );
+
+    return attachments.flatMap((attachment) => {
+      if (!attachment.id || !attachment.name) {
+        return [];
+      }
+      return [
+        {
+          id: attachment.id,
+          name: attachment.name,
+          size: typeof attachment.size === "number" ? attachment.size : 0,
+          mimeType: attachment.mimeType?.trim() || "application/octet-stream",
+          createdAt: typeof attachment.created === "number" ? attachment.created : null,
+          author: attachment.author?.fullName?.trim() || attachment.author?.login?.trim() || null,
+        },
+      ];
+    });
+  }
+
+  async fetchAttachment(ticketId: string, attachmentId: string): Promise<YouTrackAttachmentContent> {
+    const normalizedTicketId = ticketId.trim();
+    const normalizedAttachmentId = attachmentId.trim();
+    if (!normalizedTicketId || !normalizedAttachmentId) {
+      throw new YouTrackError("Ticket id and attachment id are required to fetch a YouTrack attachment.");
+    }
+
+    const baseUrl = this.getBaseUrl();
+    const token = this.env.YOUTRACK_TOKEN?.trim();
+    if (!baseUrl || !token) {
+      throw new YouTrackError("YouTrack is not fully configured.");
+    }
+
+    const apiBaseUrl = validateApiBaseUrl(baseUrl);
+    const fields = encodeURIComponent("id,name,size,mimeType,url,created,author(login,fullName)");
+    const attachment = await this.fetchJson<YouTrackApiAttachment>(
+      `${apiBaseUrl}/api/issues/${encodeURIComponent(normalizedTicketId)}/attachments/${encodeURIComponent(
+        normalizedAttachmentId,
+      )}?fields=${fields}`,
+      token,
+      "attachment metadata",
+    );
+
+    if (!attachment.id || !attachment.name) {
+      throw new YouTrackError(`YouTrack attachment ${normalizedAttachmentId} did not return metadata.`);
+    }
+
+    if (!attachment.url) {
+      throw new YouTrackError(`YouTrack attachment ${normalizedAttachmentId} did not expose a download URL.`);
+    }
+
+    const downloadUrl = new URL(attachment.url, apiBaseUrl).toString();
+    const bytes = await this.fetchBinary(downloadUrl, token, "attachment content");
+
+    return {
+      id: attachment.id,
+      name: attachment.name,
+      size: typeof attachment.size === "number" ? attachment.size : bytes.byteLength,
+      mimeType: attachment.mimeType?.trim() || "application/octet-stream",
+      createdAt: typeof attachment.created === "number" ? attachment.created : null,
+      author: attachment.author?.fullName?.trim() || attachment.author?.login?.trim() || null,
+      bytes,
+    };
+  }
+
   async transitionTicketToInProgress(ticketId: string): Promise<void> {
     const normalizedTicketId = ticketId.trim();
     if (!normalizedTicketId) {
@@ -486,6 +593,53 @@ export class YouTrackService {
   private async fetchJson<T>(url: string, token: string, operation: string): Promise<T> {
     const response = await this.request(url, token, operation);
     return (await response.json()) as T;
+  }
+
+  private async fetchBinary(url: string, token: string, operation: string): Promise<Buffer> {
+    installSystemCertificateAuthorities();
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), YOUTRACK_ATTACHMENT_REQUEST_TIMEOUT_MS);
+
+    try {
+      const response = await fetch(url, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: "*/*",
+        },
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        const body = (await response.text()).slice(0, 1000);
+        throw new YouTrackError(`YouTrack ${operation} failed with status ${response.status}: ${body}`);
+      }
+
+      const declaredLength = Number(response.headers.get("content-length") ?? "");
+      if (Number.isFinite(declaredLength) && declaredLength > YOUTRACK_MAX_ATTACHMENT_BYTES) {
+        throw new YouTrackError(
+          `YouTrack ${operation} aborted: attachment is ${declaredLength} bytes which exceeds the ${YOUTRACK_MAX_ATTACHMENT_BYTES}-byte safety limit.`,
+        );
+      }
+
+      const arrayBuffer = await response.arrayBuffer();
+      if (arrayBuffer.byteLength > YOUTRACK_MAX_ATTACHMENT_BYTES) {
+        throw new YouTrackError(
+          `YouTrack ${operation} aborted: attachment is ${arrayBuffer.byteLength} bytes which exceeds the ${YOUTRACK_MAX_ATTACHMENT_BYTES}-byte safety limit.`,
+        );
+      }
+      return Buffer.from(arrayBuffer);
+    } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") {
+        throw new YouTrackError(
+          `YouTrack ${operation} timed out after ${YOUTRACK_ATTACHMENT_REQUEST_TIMEOUT_MS}ms.`,
+          error,
+        );
+      }
+
+      throw error;
+    } finally {
+      clearTimeout(timeoutId);
+    }
   }
 
   private async sendJson(url: string, token: string, body: YouTrackCommandPayload, operation: string): Promise<void> {

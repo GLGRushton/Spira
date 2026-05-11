@@ -26,23 +26,46 @@ interface McpClientEntry {
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
-const serializeContentBlock = (block: Record<string, unknown>): string => {
+export type RichMcpToolResult = {
+  __spiraMultimodal: true;
+  text: string;
+  images: Array<{ mimeType: string; base64: string }>;
+};
+
+export const isRichMcpToolResult = (value: unknown): value is RichMcpToolResult =>
+  isRecord(value) && (value as { __spiraMultimodal?: unknown }).__spiraMultimodal === true;
+
+type ParsedContentBlock =
+  | { kind: "text"; text: string }
+  | { kind: "image"; mimeType: string; base64: string };
+
+const parseContentBlock = (block: Record<string, unknown>): ParsedContentBlock => {
   if (block.type === "text" && typeof block.text === "string") {
-    return block.text;
+    return { kind: "text", text: block.text };
+  }
+
+  if (block.type === "image" && typeof block.data === "string" && typeof block.mimeType === "string") {
+    return { kind: "image", mimeType: block.mimeType, base64: block.data };
   }
 
   if (block.type === "resource") {
     const resource = block.resource;
     if (isRecord(resource)) {
       if (typeof resource.text === "string") {
-        return resource.text;
+        return { kind: "text", text: resource.text };
       }
-
-      return JSON.stringify(resource);
+      if (
+        typeof resource.blob === "string" &&
+        typeof resource.mimeType === "string" &&
+        resource.mimeType.startsWith("image/")
+      ) {
+        return { kind: "image", mimeType: resource.mimeType, base64: resource.blob };
+      }
+      return { kind: "text", text: JSON.stringify(resource) };
     }
   }
 
-  return JSON.stringify(block);
+  return { kind: "text", text: JSON.stringify(block) };
 };
 
 const normalizeEnv = (env: NodeJS.ProcessEnv & Record<string, string | undefined>): Record<string, string> =>
@@ -258,7 +281,26 @@ export class McpClientPool {
       }
 
       if (Array.isArray(result.content)) {
-        return result.content.map((block) => serializeContentBlock(block)).join("\n");
+        const parsedBlocks = result.content.map((block) => parseContentBlock(block));
+        const textParts: string[] = [];
+        const images: Array<{ mimeType: string; base64: string }> = [];
+        for (const block of parsedBlocks) {
+          if (block.kind === "text") {
+            textParts.push(block.text);
+          } else {
+            images.push({ mimeType: block.mimeType, base64: block.base64 });
+          }
+        }
+        const joinedText = textParts.join("\n");
+        if (images.length === 0) {
+          return joinedText;
+        }
+        const richResult: RichMcpToolResult = {
+          __spiraMultimodal: true,
+          text: joinedText,
+          images,
+        };
+        return richResult;
       }
 
       return null;

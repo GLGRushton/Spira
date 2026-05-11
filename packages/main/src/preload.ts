@@ -74,6 +74,7 @@ const TICKET_RUN_SUBMODULE_PULL_REQUEST_CREATE_CHANNEL = "missions:ticket-run:su
 const TICKET_RUN_SERVICES_GET_CHANNEL = "missions:ticket-run:services:get";
 const TICKET_RUN_SERVICE_START_CHANNEL = "missions:ticket-run:service:start";
 const TICKET_RUN_SERVICE_STOP_CHANNEL = "missions:ticket-run:service:stop";
+const TICKET_RUN_SERVICE_DISMISS_CHANNEL = "missions:ticket-run:service:dismiss";
 const DIRECTORY_PICK_CHANNEL = "dialog:pick-directory";
 const OPEN_EXTERNAL_CHANNEL = "shell:open-external";
 const RUNTIME_CONFIG_GET_CHANNEL = "runtime-config:get";
@@ -427,6 +428,9 @@ const electronAPI: ElectronApi = {
   },
   stopTicketRunService(runId, serviceId) {
     return ipcRenderer.invoke(TICKET_RUN_SERVICE_STOP_CHANNEL, { runId, serviceId });
+  },
+  dismissTicketRunService(runId, serviceId) {
+    return ipcRenderer.invoke(TICKET_RUN_SERVICE_DISMISS_CHANNEL, { runId, serviceId });
   },
   pickDirectory(title) {
     return ipcRenderer.invoke(DIRECTORY_PICK_CHANNEL, { title });

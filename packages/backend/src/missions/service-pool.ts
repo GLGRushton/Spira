@@ -1,11 +1,14 @@
 import { type ChildProcess, execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import type { EventEmitter } from "node:events";
+import { cpus } from "node:os";
 import { promisify } from "node:util";
 import type {
   MissionServiceChildProcessSummary,
   MissionServiceLogLine,
   MissionServiceLogSource,
+  MissionServiceMetrics,
+  MissionServiceMetricsSample,
   MissionServiceProcessSummary,
   MissionServiceProfileSummary,
 } from "@spira/shared";
@@ -16,6 +19,8 @@ const MAX_LOG_LINES = 80;
 const PROCESS_TREE_POLL_INTERVAL_MS = 5_000;
 const START_SETTLE_DELAY_MS = 250;
 const STOP_TIMEOUT_MS = 8_000;
+const METRICS_HISTORY_LIMIT = 12;
+const SYSTEM_CPU_COUNT = Math.max(1, cpus().length);
 
 export interface MissionServiceLaunchPlan {
   command: string;
@@ -37,6 +42,11 @@ export interface MissionServicePoolOptions {
   onUpdate?: (runId: string) => void;
 }
 
+interface PreviousCpuSample {
+  timestamp: number;
+  cpuTimeNs: number;
+}
+
 interface MissionServiceHandle {
   serviceId: string;
   runId: string;
@@ -48,6 +58,8 @@ interface MissionServiceHandle {
   processTreePoll: NodeJS.Timeout | null;
   processTreeRefreshPromise: Promise<void> | null;
   stopPromise: Promise<void> | null;
+  previousCpuByPid: Map<number, PreviousCpuSample>;
+  metricsHistory: MissionServiceMetricsSample[];
 }
 
 interface RawProcessRecord {
@@ -55,6 +67,14 @@ interface RawProcessRecord {
   parentPid: number;
   name: string | null;
   commandLine: string | null;
+  cpuTimeNs: number | null;
+  memoryBytes: number | null;
+  cpuPercentHint: number | null;
+}
+
+interface MetricsAggregation {
+  cpuPercent: number;
+  memoryBytes: number;
 }
 
 const ACTIVE_STATES = new Set<MissionServiceProcessSummary["state"]>(["starting", "running", "stopping"]);
@@ -106,18 +126,24 @@ const killPosixProcessGroup = (pid: number): void => {
 
 const PROCESS_LIST_MAX_BUFFER = 4 * 1024 * 1024;
 
-const buildChildProcessSummaries = (
-  processRecords: RawProcessRecord[],
-  rootPid: number,
-): MissionServiceChildProcessSummary[] => {
+interface ProcessTreeWalk {
+  descendantSummaries: MissionServiceChildProcessSummary[];
+  treePids: number[];
+  recordsByPid: Map<number, RawProcessRecord>;
+}
+
+const walkProcessTree = (processRecords: RawProcessRecord[], rootPid: number): ProcessTreeWalk => {
+  const recordsByPid = new Map<number, RawProcessRecord>();
   const childrenByParent = new Map<number, RawProcessRecord[]>();
   for (const record of processRecords) {
+    recordsByPid.set(record.pid, record);
     const siblings = childrenByParent.get(record.parentPid) ?? [];
     siblings.push(record);
     childrenByParent.set(record.parentPid, siblings);
   }
 
-  const descendants: MissionServiceChildProcessSummary[] = [];
+  const descendantSummaries: MissionServiceChildProcessSummary[] = [];
+  const treePids: number[] = [rootPid];
   const queue = [rootPid];
   const seen = new Set<number>(queue);
   while (queue.length > 0) {
@@ -134,7 +160,8 @@ const buildChildProcessSummaries = (
       }
       seen.add(child.pid);
       queue.push(child.pid);
-      descendants.push({
+      treePids.push(child.pid);
+      descendantSummaries.push({
         pid: child.pid,
         parentPid: child.parentPid,
         name: child.name?.trim() || `PID ${child.pid}`,
@@ -143,7 +170,15 @@ const buildChildProcessSummaries = (
     }
   }
 
-  return descendants;
+  return { descendantSummaries, treePids, recordsByPid };
+};
+
+const coerceFiniteNumber = (value: unknown): number | null => {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  const numeric = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
 };
 
 const parseWindowsProcessRecords = (stdout: string): RawProcessRecord[] => {
@@ -161,31 +196,38 @@ const parseWindowsProcessRecords = (stdout: string): RawProcessRecord[] => {
 
   const entries = Array.isArray(parsed) ? parsed : [parsed];
   return entries
-    .map((entry) => {
+    .map((entry): RawProcessRecord | null => {
       if (!entry || typeof entry !== "object") {
         return null;
       }
 
-      const processIdValue =
-        typeof (entry as { ProcessId?: unknown }).ProcessId === "number"
-          ? (entry as { ProcessId: number }).ProcessId
-          : Number((entry as { ProcessId?: unknown }).ProcessId);
-      const parentProcessIdValue =
-        typeof (entry as { ParentProcessId?: unknown }).ParentProcessId === "number"
-          ? (entry as { ParentProcessId: number }).ParentProcessId
-          : Number((entry as { ParentProcessId?: unknown }).ParentProcessId);
-      if (!Number.isInteger(processIdValue) || processIdValue <= 0 || !Number.isInteger(parentProcessIdValue)) {
+      const record = entry as Record<string, unknown>;
+      const processIdValue = coerceFiniteNumber(record.ProcessId);
+      const parentProcessIdValue = coerceFiniteNumber(record.ParentProcessId);
+      if (
+        processIdValue === null ||
+        !Number.isInteger(processIdValue) ||
+        processIdValue <= 0 ||
+        parentProcessIdValue === null ||
+        !Number.isInteger(parentProcessIdValue)
+      ) {
         return null;
       }
+
+      // KernelModeTime / UserModeTime arrive as cumulative 100ns ticks → convert to ns.
+      const kernelTicks = coerceFiniteNumber(record.KernelModeTime);
+      const userTicks = coerceFiniteNumber(record.UserModeTime);
+      const cpuTimeNs = kernelTicks !== null && userTicks !== null ? (kernelTicks + userTicks) * 100 : null;
+      const memoryBytes = coerceFiniteNumber(record.WorkingSetSize);
 
       return {
         pid: processIdValue,
         parentPid: parentProcessIdValue,
-        name: typeof (entry as { Name?: unknown }).Name === "string" ? (entry as { Name: string }).Name : null,
-        commandLine:
-          typeof (entry as { CommandLine?: unknown }).CommandLine === "string"
-            ? (entry as { CommandLine: string }).CommandLine
-            : null,
+        name: typeof record.Name === "string" ? record.Name : null,
+        commandLine: typeof record.CommandLine === "string" ? record.CommandLine : null,
+        cpuTimeNs,
+        memoryBytes,
+        cpuPercentHint: null,
       } satisfies RawProcessRecord;
     })
     .filter((entry): entry is RawProcessRecord => entry !== null);
@@ -196,15 +238,18 @@ const parsePosixProcessRecords = (stdout: string): RawProcessRecord[] =>
     .split(/\r?\n/gu)
     .map((line) => line.trim())
     .filter((line) => line.length > 0)
-    .map((line) => {
-      const match = line.match(/^(\d+)\s+(\d+)\s+(.*)$/u);
+    .map((line): RawProcessRecord | null => {
+      // Format: "pid ppid rss pcpu command…"
+      const match = line.match(/^(\d+)\s+(\d+)\s+(\d+)\s+([\d.]+)\s+(.*)$/u);
       if (!match) {
         return null;
       }
 
       const pid = Number(match[1]);
       const parentPid = Number(match[2]);
-      const commandLine = match[3]?.trim() || null;
+      const rssKb = Number(match[3]);
+      const pcpu = Number(match[4]);
+      const commandLine = match[5]?.trim() || null;
       if (!Number.isInteger(pid) || pid <= 0 || !Number.isInteger(parentPid)) {
         return null;
       }
@@ -215,37 +260,40 @@ const parsePosixProcessRecords = (stdout: string): RawProcessRecord[] =>
         parentPid,
         name: executable ? (executable.split(/[\\/]/u).pop() ?? executable) : null,
         commandLine,
+        cpuTimeNs: null,
+        memoryBytes: Number.isFinite(rssKb) ? rssKb * 1024 : null,
+        cpuPercentHint: Number.isFinite(pcpu) ? pcpu : null,
       } satisfies RawProcessRecord;
     })
     .filter((entry): entry is RawProcessRecord => entry !== null);
 
-const listWindowsChildProcesses = async (rootPid: number): Promise<MissionServiceChildProcessSummary[]> => {
+const listWindowsProcessTree = async (rootPid: number): Promise<ProcessTreeWalk> => {
   const { stdout } = await execFileAsync(
     "powershell.exe",
     [
       "-NoLogo",
       "-NoProfile",
       "-Command",
-      "Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name,CommandLine | ConvertTo-Json -Compress",
+      "Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name,CommandLine,KernelModeTime,UserModeTime,WorkingSetSize | ConvertTo-Json -Compress",
     ],
     {
       maxBuffer: PROCESS_LIST_MAX_BUFFER,
       windowsHide: true,
     },
   );
-  return buildChildProcessSummaries(parseWindowsProcessRecords(stdout), rootPid);
+  return walkProcessTree(parseWindowsProcessRecords(stdout), rootPid);
 };
 
-const listPosixChildProcesses = async (rootPid: number): Promise<MissionServiceChildProcessSummary[]> => {
-  const { stdout } = await execFileAsync("ps", ["-axo", "pid=,ppid=,command="], {
+const listPosixProcessTree = async (rootPid: number): Promise<ProcessTreeWalk> => {
+  const { stdout } = await execFileAsync("ps", ["-axo", "pid=,ppid=,rss=,pcpu=,command="], {
     maxBuffer: PROCESS_LIST_MAX_BUFFER,
     windowsHide: true,
   });
-  return buildChildProcessSummaries(parsePosixProcessRecords(stdout), rootPid);
+  return walkProcessTree(parsePosixProcessRecords(stdout), rootPid);
 };
 
-const listChildProcesses = (rootPid: number): Promise<MissionServiceChildProcessSummary[]> =>
-  process.platform === "win32" ? listWindowsChildProcesses(rootPid) : listPosixChildProcesses(rootPid);
+const listProcessTree = (rootPid: number): Promise<ProcessTreeWalk> =>
+  process.platform === "win32" ? listWindowsProcessTree(rootPid) : listPosixProcessTree(rootPid);
 
 const areChildProcessesEqual = (
   left: MissionServiceChildProcessSummary[],
@@ -325,6 +373,7 @@ export class MissionServicePool {
         errorMessage: null,
         recentLogLines: [],
         childProcesses: [],
+        metrics: { current: null, history: [] },
       },
       logs: [],
       logRemainders: {
@@ -334,6 +383,8 @@ export class MissionServicePool {
       processTreePoll: null,
       processTreeRefreshPromise: null,
       stopPromise: null,
+      previousCpuByPid: new Map(),
+      metricsHistory: [],
     };
 
     this.handles.set(serviceId, handle);
@@ -371,6 +422,31 @@ export class MissionServicePool {
   async stopRun(runId: string): Promise<void> {
     const handles = this.getRunHandles(runId).filter((handle) => ACTIVE_STATES.has(handle.summary.state));
     await Promise.all(handles.map((handle) => this.stopHandle(handle)));
+  }
+
+  dismiss(runId: string, serviceId: string): void {
+    const handle = this.handles.get(serviceId);
+    if (!handle || handle.runId !== runId) {
+      return;
+    }
+    if (ACTIVE_STATES.has(handle.summary.state)) {
+      throw new ConfigError(
+        `${handle.profile.profileName} is still ${handle.summary.state}. Stop it before dismissing.`,
+      );
+    }
+
+    this.stopProcessTreePolling(handle);
+    handle.previousCpuByPid.clear();
+    handle.metricsHistory = [];
+    this.handles.delete(serviceId);
+    const serviceIds = this.runServiceIds.get(runId);
+    if (serviceIds) {
+      serviceIds.delete(serviceId);
+      if (serviceIds.size === 0) {
+        this.runServiceIds.delete(runId);
+      }
+    }
+    this.emitUpdate(runId);
   }
 
   clearRun(runId: string): void {
@@ -440,9 +516,12 @@ export class MissionServicePool {
 
     handle.child.on("error", (error: Error) => {
       this.flushLogRemainders(handle);
+      handle.previousCpuByPid.clear();
+      handle.metricsHistory = [];
       handle.summary = {
         ...handle.summary,
         childProcesses: [],
+        metrics: { current: null, history: [] },
         state: "error",
         stoppedAt: this.now(),
         updatedAt: this.now(),
@@ -463,11 +542,14 @@ export class MissionServicePool {
 
     handle.child.on("exit", (code: number | null) => {
       this.flushLogRemainders(handle);
+      handle.previousCpuByPid.clear();
+      handle.metricsHistory = [];
       const finishedAt = this.now();
       const stoppedByUser = handle.summary.state === "stopping";
       handle.summary = {
         ...handle.summary,
         childProcesses: [],
+        metrics: { current: null, history: [] },
         state: stoppedByUser || code === 0 ? "stopped" : "error",
         stoppedAt: finishedAt,
         updatedAt: finishedAt,
@@ -609,15 +691,32 @@ export class MissionServicePool {
 
     handle.processTreeRefreshPromise = (async () => {
       try {
-        const childProcesses = await listChildProcesses(pid);
-        if (areChildProcessesEqual(handle.summary.childProcesses, childProcesses)) {
+        const walk = await listProcessTree(pid);
+        const sampledAt = this.now();
+        const metricsSample = this.aggregateMetrics(handle, walk, sampledAt);
+        const treeChanged = !areChildProcessesEqual(handle.summary.childProcesses, walk.descendantSummaries);
+        const metricsChanged =
+          metricsSample !== null &&
+          (handle.summary.metrics.current?.timestamp !== metricsSample.timestamp ||
+            handle.summary.metrics.current?.cpuPercent !== metricsSample.cpuPercent ||
+            handle.summary.metrics.current?.memoryBytes !== metricsSample.memoryBytes);
+
+        if (!treeChanged && !metricsChanged) {
           return;
         }
 
+        const nextMetrics: MissionServiceMetrics = metricsSample
+          ? {
+              current: metricsSample,
+              history: [...handle.metricsHistory],
+            }
+          : handle.summary.metrics;
+
         handle.summary = {
           ...handle.summary,
-          childProcesses,
-          updatedAt: this.now(),
+          childProcesses: treeChanged ? walk.descendantSummaries : handle.summary.childProcesses,
+          metrics: nextMetrics,
+          updatedAt: sampledAt,
         };
         this.emitUpdate(handle.runId);
       } catch (error) {
@@ -640,6 +739,62 @@ export class MissionServicePool {
     })();
 
     await handle.processTreeRefreshPromise;
+  }
+
+  private aggregateMetrics(
+    handle: MissionServiceHandle,
+    walk: ProcessTreeWalk,
+    sampledAt: number,
+  ): MissionServiceMetricsSample | null {
+    let cpuPercent = 0;
+    let cpuPercentObserved = false;
+    let memoryBytes = 0;
+    let memoryObserved = false;
+    const nextCpuByPid = new Map<number, PreviousCpuSample>();
+
+    for (const pid of walk.treePids) {
+      const record = walk.recordsByPid.get(pid);
+      if (record === undefined) {
+        continue;
+      }
+
+      if (record.memoryBytes !== null) {
+        memoryBytes += record.memoryBytes;
+        memoryObserved = true;
+      }
+
+      if (record.cpuTimeNs !== null) {
+        const previous = handle.previousCpuByPid.get(pid);
+        nextCpuByPid.set(pid, { timestamp: sampledAt, cpuTimeNs: record.cpuTimeNs });
+        if (previous !== undefined) {
+          const wallclockDeltaMs = sampledAt - previous.timestamp;
+          const cpuDeltaNs = record.cpuTimeNs - previous.cpuTimeNs;
+          if (wallclockDeltaMs > 0 && cpuDeltaNs >= 0) {
+            const percentPerCore = (cpuDeltaNs / (wallclockDeltaMs * 1_000_000)) * 100;
+            cpuPercent += percentPerCore / SYSTEM_CPU_COUNT;
+            cpuPercentObserved = true;
+          }
+        }
+      } else if (record.cpuPercentHint !== null) {
+        cpuPercent += record.cpuPercentHint / SYSTEM_CPU_COUNT;
+        cpuPercentObserved = true;
+      }
+    }
+
+    handle.previousCpuByPid = nextCpuByPid;
+
+    if (!cpuPercentObserved && !memoryObserved) {
+      return null;
+    }
+
+    const clampedCpu = Math.max(0, Math.min(100, Number(cpuPercent.toFixed(2))));
+    const sample: MissionServiceMetricsSample = {
+      timestamp: sampledAt,
+      cpuPercent: cpuPercentObserved ? clampedCpu : 0,
+      memoryBytes: memoryObserved ? memoryBytes : 0,
+    };
+    handle.metricsHistory = [...handle.metricsHistory, sample].slice(-METRICS_HISTORY_LIMIT);
+    return sample;
   }
 
   private async stopHandle(handle: MissionServiceHandle): Promise<void> {
@@ -732,6 +887,10 @@ export class MissionServicePool {
       childProcesses: handle.summary.childProcesses.map((child) => ({ ...child })),
       recentLogLines: [...handle.summary.recentLogLines],
       urls: [...handle.summary.urls],
+      metrics: {
+        current: handle.summary.metrics.current ? { ...handle.summary.metrics.current } : null,
+        history: handle.summary.metrics.history.map((sample) => ({ ...sample })),
+      },
     };
   }
 

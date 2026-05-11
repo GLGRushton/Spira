@@ -77,6 +77,7 @@ export const IPC_CHANNELS = {
     servicesGet: "missions:ticket-run:services:get",
     serviceStart: "missions:ticket-run:service:start",
     serviceStop: "missions:ticket-run:service:stop",
+    serviceDismiss: "missions:ticket-run:service:dismiss",
   },
   dialog: {
     pickDirectory: "dialog:pick-directory",

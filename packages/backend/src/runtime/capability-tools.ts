@@ -4,6 +4,7 @@ import type { ProviderId, ProviderToolDefinition, ProviderToolResultObject } fro
 import { createLogger } from "../util/logger.js";
 import { createHostTools } from "./host-tools.js";
 import type { RuntimeCapabilitySource } from "./runtime-contract.js";
+import { createYouTrackAttachmentTools } from "./youtrack-attachment-tools.js";
 import {
   type ToolBridgeOptions,
   buildDelegationTool,
@@ -131,6 +132,33 @@ export const buildRuntimeCapabilityDefinitions = (
           },
         } satisfies RuntimeCapabilityDefinition;
       }),
+    );
+  }
+
+  if (options.youTrackService) {
+    const youTrackTools = createYouTrackAttachmentTools(options.youTrackService);
+    const wrappedYouTrackTools = options.wrapHostToolExecution
+      ? youTrackTools.map((tool) => ({
+          ...tool,
+          handler: async (args: Record<string, unknown>, ...rest: unknown[]) => {
+            if (options.wrapHostToolExecution) {
+              return options.wrapHostToolExecution(
+                tool,
+                args,
+                () => tool.handler(args, ...rest) as Promise<ProviderToolResultObject>,
+              );
+            }
+            return tool.handler(args, ...rest) as Promise<ProviderToolResultObject>;
+          },
+        }))
+      : youTrackTools;
+    definitions.push(
+      ...wrappedYouTrackTools.map((tool) => ({
+        capabilityId: tool.name,
+        source: "host-tool" as const,
+        tool,
+        suppressForProviders: [] as ProviderId[],
+      })),
     );
   }
 

@@ -20,6 +20,7 @@ import {
   parseToolArguments,
   publishAzureHostContinuity,
   rollbackAzureTurnMessages,
+  toToolResultImageContentParts,
   toToolResultMessage,
   tryEscalateAzureSession,
 } from "./session-state.js";
@@ -256,6 +257,13 @@ const runAzureOpenAiTurnOnce = async (
             tool_call_id: toolCall.id,
             content: toToolResultMessage(result),
           });
+          const imageParts = toToolResultImageContentParts(result);
+          if (imageParts) {
+            state.messages.push({
+              role: "user",
+              content: imageParts,
+            });
+          }
           publishAzureHostContinuity(state);
         }
 

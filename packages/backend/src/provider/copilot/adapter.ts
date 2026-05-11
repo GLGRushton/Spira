@@ -18,6 +18,7 @@ import type {
   ProviderSessionConfig,
   ProviderSessionEvent,
   ProviderToolDefinition,
+  ProviderToolResultObject,
   ProviderUsageSnapshot,
 } from "../types.js";
 
@@ -117,6 +118,33 @@ const toCopilotPermissionResult = (result: ProviderPermissionResult): Permission
   }
 };
 
+const toCopilotToolResult = (
+  result: ProviderToolResultObject,
+): {
+  textResultForLlm: string;
+  resultType: "success" | "failure";
+  error?: string;
+  binaryResultsForLlm?: Array<{ data: string; mimeType: string; type: string }>;
+} => {
+  const imageBlocks = (result.content ?? []).filter(
+    (block): block is { type: "image"; mimeType: string; base64: string } => block.type === "image",
+  );
+  return {
+    textResultForLlm: result.textResultForLlm,
+    resultType: result.resultType,
+    ...(result.error ? { error: result.error } : {}),
+    ...(imageBlocks.length > 0
+      ? {
+          binaryResultsForLlm: imageBlocks.map((block) => ({
+            data: block.base64,
+            mimeType: block.mimeType,
+            type: "image",
+          })),
+        }
+      : {}),
+  };
+};
+
 const toCopilotTools = (tools: readonly ProviderToolDefinition[]): Tool[] =>
   tools.map(
     (tool) =>
@@ -125,7 +153,8 @@ const toCopilotTools = (tools: readonly ProviderToolDefinition[]): Tool[] =>
         parameters: tool.parameters,
         ...(tool.skipPermission !== undefined ? { skipPermission: tool.skipPermission } : {}),
         ...(tool.overridesBuiltInTool !== undefined ? { overridesBuiltInTool: tool.overridesBuiltInTool } : {}),
-        handler: tool.handler,
+        handler: async (args, invocation) =>
+          toCopilotToolResult(await tool.handler(args as Record<string, unknown>, invocation)),
       }) as unknown as Tool,
   );
 

@@ -15,11 +15,19 @@ import type {
 export type FetchLike = typeof fetch;
 export type OpenAiProviderId = Extract<ProviderId, "openai" | "openai-escalation">;
 
+export type OpenAiContentPart =
+  | { type: "text"; text: string }
+  | { type: "image_url"; image_url: { url: string } };
+
 export type OpenAiMessage =
   | {
-      role: "system" | "user" | "tool";
+      role: "system" | "tool";
       content: string;
       tool_call_id?: string;
+    }
+  | {
+      role: "user";
+      content: string | OpenAiContentPart[];
     }
   | {
       role: "assistant";
@@ -192,6 +200,19 @@ export const createOpenAiSessionState = (
   onHostContinuitySnapshot: config.onHostContinuitySnapshot ?? null,
 });
 
+const flattenContentForContinuity = (content: string | OpenAiContentPart[]): string => {
+  if (typeof content === "string") {
+    return content;
+  }
+  return content
+    .map((part) =>
+      part.type === "text"
+        ? part.text
+        : "[image attachment dropped from continuity to save space]",
+    )
+    .join("\n");
+};
+
 const toHostContinuityMessage = (message: OpenAiMessage): ProviderHostContinuityMessage =>
   message.role === "assistant"
     ? {
@@ -213,10 +234,15 @@ const toHostContinuityMessage = (message: OpenAiMessage): ProviderHostContinuity
           toolCallId: message.tool_call_id ?? "",
           content: message.content,
         }
-      : {
-          role: message.role,
-          content: message.content,
-        };
+      : message.role === "user"
+        ? {
+            role: "user",
+            content: flattenContentForContinuity(message.content),
+          }
+        : {
+            role: message.role,
+            content: message.content,
+          };
 
 export const publishOpenAiHostContinuity = (state: OpenAiSessionState): void => {
   state.onHostContinuitySnapshot?.({
@@ -389,6 +415,28 @@ export const toToolResultMessage = (result: ProviderToolResultObject): string =>
     textResultForLlm: result.textResultForLlm,
     ...(result.error ? { error: result.error } : {}),
   });
+
+export const toToolResultImageContentParts = (result: ProviderToolResultObject): OpenAiContentPart[] | null => {
+  const imageBlocks = (result.content ?? []).filter(
+    (block): block is { type: "image"; mimeType: string; base64: string } => block.type === "image",
+  );
+  if (imageBlocks.length === 0) {
+    return null;
+  }
+  const parts: OpenAiContentPart[] = [
+    {
+      type: "text",
+      text: "Attached image(s) returned by the previous tool call.",
+    },
+  ];
+  for (const block of imageBlocks) {
+    parts.push({
+      type: "image_url",
+      image_url: { url: `data:${block.mimeType};base64,${block.base64}` },
+    });
+  }
+  return parts;
+};
 
 export const getUsageSnapshot = (
   response: OpenAiChatResponse,

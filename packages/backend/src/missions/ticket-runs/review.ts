@@ -74,19 +74,15 @@ export const isRepoVisibleInReview = (gitState: Pick<TicketRunGitState, "hasDiff
   isRepoBlockingClose(gitState);
 
 export const isSubmoduleBlockingClose = (
-  gitState: Pick<TicketRunSubmoduleGitState, "hasDiff" | "reconcileRequired" | "pushAction" | "parents">,
-): boolean =>
-  gitState.hasDiff ||
-  gitState.reconcileRequired ||
-  gitState.pushAction !== "none" ||
-  gitState.parents.some((parentState) => !parentState.isAligned);
-
-export const isSubmoduleBlockingRepoWorkflow = (
   gitState: Pick<TicketRunSubmoduleGitState, "hasDiff" | "reconcileRequired" | "pushAction">,
 ): boolean => gitState.hasDiff || gitState.reconcileRequired || gitState.pushAction !== "none";
 
+export const isSubmoduleBlockingRepoWorkflow = (
+  gitState: Pick<TicketRunSubmoduleGitState, "hasDiff" | "reconcileRequired" | "pushAction">,
+): boolean => isSubmoduleBlockingClose(gitState);
+
 export const isSubmoduleVisibleInReview = (
-  gitState: Pick<TicketRunSubmoduleGitState, "hasDiff" | "reconcileRequired" | "pushAction" | "parents">,
+  gitState: Pick<TicketRunSubmoduleGitState, "hasDiff" | "reconcileRequired" | "pushAction">,
 ): boolean => isSubmoduleBlockingClose(gitState);
 
 export const toReviewRepoState = ({ files: _files, ...gitState }: TicketRunGitState): TicketRunReviewRepoState =>

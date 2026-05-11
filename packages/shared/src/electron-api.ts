@@ -260,6 +260,7 @@ export interface ElectronApi {
   getTicketRunServices(runId: string): Promise<MissionServiceSnapshot>;
   startTicketRunService(runId: string, profileId: string): Promise<MissionServiceSnapshot>;
   stopTicketRunService(runId: string, serviceId: string): Promise<MissionServiceSnapshot>;
+  dismissTicketRunService(runId: string, serviceId: string): Promise<MissionServiceSnapshot>;
   pickDirectory(title?: string): Promise<string | null>;
   openExternal(url: string): Promise<void>;
   getRuntimeConfig(): Promise<RuntimeConfigSummary>;
